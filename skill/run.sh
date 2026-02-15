@@ -7,6 +7,10 @@
 
 set -euo pipefail
 
+# Load secrets
+# shellcheck source=/dev/null
+[ -f "$HOME/social-autoposter/.env" ] && source "$HOME/social-autoposter/.env"
+
 LOG_DIR="$HOME/.claude/skills/social-autoposter/logs"
 SKILL_FILE="$HOME/.claude/skills/social-autoposter/SKILL.md"
 mkdir -p "$LOG_DIR"
@@ -21,7 +25,7 @@ Read $SKILL_FILE for content rules and platform details.
 ## Step 1: Find recent successful work
 
 Query prompt-db for recent turns (last 6 hours):
-  GEMINI_API_KEY=\"REDACTED\" prompt-db search \"completed feature OR bug fix OR deployment\" --mode keyword --min-specificity 3 --date-from \$(date -v-6H +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d '6 hours ago' +%Y-%m-%dT%H:%M:%S) --limit 20
+  GEMINI_API_KEY=\"\$GEMINI_API_KEY\" prompt-db search \"completed feature OR bug fix OR deployment\" --mode keyword --min-specificity 3 --date-from \$(date -v-6H +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d '6 hours ago' +%Y-%m-%dT%H:%M:%S) --limit 20
 
 ## Step 2: Check what we already posted
 
