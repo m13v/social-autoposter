@@ -9,7 +9,7 @@ Automates finding, posting, and tracking social media comments across Reddit, X/
 
 ## Prerequisites
 
-- **Database**: `~/.claude/social_posts.db` (SQLite) with `posts`, `threads`, `our_posts`, `thread_comments` tables
+- **Database**: `~/social-autoposter/social_posts.db` (SQLite, also symlinked at `~/.claude/social_posts.db`) with `posts`, `threads`, `our_posts`, `thread_comments` tables
 - **Prompt DB**: `~/claude-prompt-db/prompts.db` for finding recent successful work
 - **Browser**: Playwright MCP for visiting platforms and posting
 - **Logged-in accounts**: Reddit (u/Deep_Ad1959), X (@m13v_), LinkedIn (Matthew Diakonov)
