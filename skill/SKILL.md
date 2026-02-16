@@ -68,24 +68,29 @@ Use this to discover what recent work is worth posting about.
 
 5. **Output a ranked list** of candidates with suggested tone for each.
 
-### Fallback: No New Work? Comment on Familiar Topics
+### Fallback: No New Work? Browse What's Trending
 
-If no new candidates are found from prompt-db (or none have a good angle), don't stop. Instead, find new threads on topics we've already commented about:
+If no new candidates are found from prompt-db (or none have a good angle), browse latest threads and find one where we genuinely have something to say.
 
-1. **Load our topic history:**
+1. **Rate limit check first:**
    ```sql
-   SELECT DISTINCT thread_title, our_content, upvotes, platform
-   FROM posts WHERE status='active'
-   ORDER BY upvotes DESC LIMIT 15
+   SELECT COUNT(*) FROM posts WHERE posted_at >= datetime('now', '-24 hours')
    ```
+   If 4+ posts in the last 24 hours, **stop**. Max 4 posts per day.
 
-2. **Identify topic clusters** from past comments (e.g. Claude Code usage, AI agents, vipassana, dev tooling, token costs, parallel agents, CLAUDE.md specs).
+2. **Browse `/new` across our subreddits** (r/ClaudeAI, r/ClaudeCode, r/AI_Agents, r/ExperiencedDevs, r/macapps, r/vipassana). Scan titles, find interesting threads.
 
-3. **Search for a new thread** on one of those topics (posted in the last 24 hours) that we haven't commented on. Cross-check against existing `thread_url` values in the DB.
+3. **Pick the thread where Matthew has a genuine angle** — not just "I run 5 agents in parallel." Look for threads about debugging production issues, desktop app dev, meditation, dev tooling, workflow automation. Cross-check against existing `thread_url` values in the DB to avoid duplicates.
 
-4. **Comment using the same rules** as Workflow 2 — reply to a top comment, first person, casual, specific. Draw on Matthew's real experience with that topic. Don't invent new stories; reuse angles from past comments that performed well.
+4. **Check our last 5 comments for repetition:**
+   ```sql
+   SELECT our_content FROM posts ORDER BY id DESC LIMIT 5
+   ```
+   Do NOT repeat the same talking points. Vary the content.
 
-5. **Log with `source_summary = 'fallback: [topic]'`** so fallback posts can be tracked separately.
+5. **If no thread fits naturally, stop.** Better to skip a run than force a bad comment.
+
+6. **Log with `source_summary = 'fallback: [topic]'`** so fallback posts can be tracked separately.
 
 ---
 

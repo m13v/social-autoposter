@@ -44,21 +44,45 @@ Study these examples. Notice: they are short, direct, first-person, and bluntly 
 
 From what's left in Step 2, pick the single best candidate. Only pick it if you can connect it to something specific from Matthew's work (running 5 Claude agents in parallel on Swift/Rust/Flutter, CLAUDE.md specs, Playwright MCP, token costs, rate limits). If no real angle exists, go to Step 2b (fallback).
 
-## Step 2b: Fallback — comment on familiar topics
+## Step 2b: Fallback — browse what's trending and comment
 
-If Steps 1-2 found nothing new, don't stop. Instead, practice commenting on topics we already know about.
+If Steps 1-2 found nothing new, browse the latest threads across our subreddits and find one where we genuinely have something to say.
 
-1. Load our past topics and best comments:
-   sqlite3 ~/social-autoposter/social_posts.db \"SELECT DISTINCT thread_title, our_content, upvotes, platform FROM posts WHERE status='active' ORDER BY upvotes DESC LIMIT 15\"
+### Rate limit check FIRST
 
-2. Identify 2-3 topic clusters from our history (e.g. Claude Code usage, AI agents, vipassana, dev tooling, token costs).
+Count how many posts we made today:
+  sqlite3 ~/social-autoposter/social_posts.db \"SELECT COUNT(*) FROM posts WHERE posted_at >= datetime('now', '-24 hours')\"
 
-3. Pick ONE topic cluster. Use Playwright to search Reddit for a NEW thread on that topic (posted in the last 24 hours) that we haven't commented on yet. Cross-check against:
+If 4 or more posts in the last 24 hours, say '## Daily limit reached (max 4/day)' and STOP. Do not post.
+
+### Browse latest threads
+
+1. Use Playwright to browse the NEW page (last few hours) of these subreddits — open each, scan titles, close tab before opening next:
+   - old.reddit.com/r/ClaudeAI/new
+   - old.reddit.com/r/ClaudeCode/new
+   - old.reddit.com/r/AI_Agents/new
+   - old.reddit.com/r/ExperiencedDevs/new
+   - old.reddit.com/r/macapps/new
+   - old.reddit.com/r/vipassana/new
+
+2. From ALL threads you see, pick the most interesting one where Matthew has a GENUINE angle — not just 'I run 5 agents in parallel'. Look for threads about:
+   - Debugging production issues across multiple platforms (Swift/Flutter/Rust)
+   - Desktop app development on macOS
+   - Meditation/vipassana practice
+   - Dev tooling and workflow automation
+   - Anything where a real, specific story from Matthew's work fits naturally
+
+3. Cross-check the thread URL against what we already commented on:
    sqlite3 ~/social-autoposter/social_posts.db \"SELECT thread_url FROM posts\"
+   Skip threads we've already posted in.
 
-4. If you find a good thread, comment on it following the same rules as Step 4 (reply to a top comment, first person, casual, specific). Draw on Matthew's real experience with that topic — don't invent new experiences, reuse angles from past comments that worked.
+4. Also check what angle we used in our LAST 5 comments:
+   sqlite3 ~/social-autoposter/social_posts.db \"SELECT our_content FROM posts ORDER BY id DESC LIMIT 5\"
+   DO NOT repeat the same talking points. If the last 5 comments all mention 'parallel agents' or 'CLAUDE.md', find a completely different angle. Vary the content.
 
-5. Log to DB with source_summary set to 'fallback: [topic cluster]' so we can track these separately.
+5. If no thread fits naturally, say '## No good thread found' and STOP. It is better to skip a run than to force a bad comment.
+
+6. Log to DB with source_summary set to 'fallback: [brief topic]'.
 
 Then:
 1. Use Playwright to search Reddit, X, or LinkedIn for a relevant active thread
