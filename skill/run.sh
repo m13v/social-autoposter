@@ -31,7 +31,7 @@ Query prompt-db for recent turns (last 6 hours):
 
 Run: sqlite3 ~/social-autoposter/social_posts.db \"SELECT source_turn_id, source_summary FROM posts WHERE source_turn_id IS NOT NULL OR source_summary IS NOT NULL\"
 
-Skip anything we already posted about (match by turn ID or similar topic). If nothing new, say '## No new candidates' and stop.
+Skip anything we already posted about (match by turn ID or similar topic). If nothing new, go to Step 2b (fallback).
 
 ## Step 3: Load examples of what works
 
@@ -42,7 +42,23 @@ Study these examples. Notice: they are short, direct, first-person, and bluntly 
 
 ## Step 4: Pick the best candidate and post it
 
-From what's left in Step 2, pick the single best candidate. Only pick it if you can connect it to something specific from Matthew's work (running 5 Claude agents in parallel on Swift/Rust/Flutter, CLAUDE.md specs, Playwright MCP, token costs, rate limits). If no real angle exists, say '## No good angle' and stop.
+From what's left in Step 2, pick the single best candidate. Only pick it if you can connect it to something specific from Matthew's work (running 5 Claude agents in parallel on Swift/Rust/Flutter, CLAUDE.md specs, Playwright MCP, token costs, rate limits). If no real angle exists, go to Step 2b (fallback).
+
+## Step 2b: Fallback — comment on familiar topics
+
+If Steps 1-2 found nothing new, don't stop. Instead, practice commenting on topics we already know about.
+
+1. Load our past topics and best comments:
+   sqlite3 ~/social-autoposter/social_posts.db \"SELECT DISTINCT thread_title, our_content, upvotes, platform FROM posts WHERE status='active' ORDER BY upvotes DESC LIMIT 15\"
+
+2. Identify 2-3 topic clusters from our history (e.g. Claude Code usage, AI agents, vipassana, dev tooling, token costs).
+
+3. Pick ONE topic cluster. Use Playwright to search Reddit for a NEW thread on that topic (posted in the last 24 hours) that we haven't commented on yet. Cross-check against:
+   sqlite3 ~/social-autoposter/social_posts.db \"SELECT thread_url FROM posts\"
+
+4. If you find a good thread, comment on it following the same rules as Step 4 (reply to a top comment, first person, casual, specific). Draw on Matthew's real experience with that topic — don't invent new experiences, reuse angles from past comments that worked.
+
+5. Log to DB with source_summary set to 'fallback: [topic cluster]' so we can track these separately.
 
 Then:
 1. Use Playwright to search Reddit, X, or LinkedIn for a relevant active thread

@@ -68,6 +68,25 @@ Use this to discover what recent work is worth posting about.
 
 5. **Output a ranked list** of candidates with suggested tone for each.
 
+### Fallback: No New Work? Comment on Familiar Topics
+
+If no new candidates are found from prompt-db (or none have a good angle), don't stop. Instead, find new threads on topics we've already commented about:
+
+1. **Load our topic history:**
+   ```sql
+   SELECT DISTINCT thread_title, our_content, upvotes, platform
+   FROM posts WHERE status='active'
+   ORDER BY upvotes DESC LIMIT 15
+   ```
+
+2. **Identify topic clusters** from past comments (e.g. Claude Code usage, AI agents, vipassana, dev tooling, token costs, parallel agents, CLAUDE.md specs).
+
+3. **Search for a new thread** on one of those topics (posted in the last 24 hours) that we haven't commented on. Cross-check against existing `thread_url` values in the DB.
+
+4. **Comment using the same rules** as Workflow 2 — reply to a top comment, first person, casual, specific. Draw on Matthew's real experience with that topic. Don't invent new stories; reuse angles from past comments that performed well.
+
+5. **Log with `source_summary = 'fallback: [topic]'`** so fallback posts can be tracked separately.
+
 ---
 
 ## Workflow 2: Post to Platforms
