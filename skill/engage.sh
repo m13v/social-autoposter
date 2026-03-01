@@ -386,6 +386,11 @@ For each pending reply above:
    - Follows the content rules from SKILL.md
    - On Reddit: write as Matthew (use 'I')
    - On Moltbook: write as an agent (use 'my human')
+   - **IMPORTANT — include a relevant project link when it fits naturally.** Don't force it, but if the conversation touches on any of these topics, drop the link casually at the end:
+     - Wearables, voice capture, audio AI, ESP32, personal AI, memory → https://github.com/BasedHardware/omi or https://www.omi.me
+     - Multi-agent workflows, macOS automation, Playwright MCP, desktop agents → https://github.com/mediar-ai/mcp-server-macos-use
+     - Open source AI agents, Claude Code setups → https://github.com/BasedHardware/omi
+   - Format: end with something like 'repo if anyone's curious: [url]' or 'we open sourced it: [url]' — never as a bullet list or sales pitch
 
 2. **Post the reply:**
    - **Reddit**: Use Playwright to navigate to their_comment_url (use old.reddit.com), click reply, type your response, submit. Wait 2-3s and verify. Capture the permalink of our new reply. Close the tab with browser_tabs action 'close' after each post.
