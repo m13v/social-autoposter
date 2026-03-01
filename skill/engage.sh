@@ -1,0 +1,436 @@
+#!/usr/bin/env bash
+# engage.sh — Reply engagement loop: discover replies to our comments, draft responses, post them
+# Phase A: Scan Reddit JSON + Moltbook API for new replies (Python3, no Claude needed)
+# Phase B: Claude drafts and posts up to 5 replies (Playwright for Reddit, API for Moltbook)
+# Phase C: Cleanup — git sync, log rotation
+# Called by launchd every 2 hours
+
+set -euo pipefail
+
+# Load secrets
+# shellcheck source=/dev/null
+[ -f "$HOME/social-autoposter/.env" ] && source "$HOME/social-autoposter/.env"
+
+DB="$HOME/social-autoposter/social_posts.db"
+LOG_DIR="$HOME/.claude/skills/social-autoposter/logs"
+SKILL_FILE="$HOME/.claude/skills/social-autoposter/SKILL.md"
+OUR_REDDIT_ACCOUNT="Deep_Ad1959"
+OUR_MOLTBOOK_ACCOUNT="matthew-autoposter"
+
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/engage-$(date +%Y-%m-%d_%H%M%S).log"
+
+log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
+
+log "=== Engagement Loop Run: $(date) ==="
+
+# ─── DB Migration: Create replies table if missing ───
+sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS replies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER REFERENCES posts(id),
+    platform TEXT NOT NULL,
+    their_comment_id TEXT NOT NULL,
+    their_author TEXT,
+    their_content TEXT,
+    their_comment_url TEXT,
+    our_reply_id TEXT,
+    our_reply_content TEXT,
+    our_reply_url TEXT,
+    parent_reply_id INTEGER REFERENCES replies(id),
+    moltbook_post_uuid TEXT,
+    moltbook_parent_comment_uuid TEXT,
+    depth INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'pending' CHECK(status IN ('pending','replied','skipped','error')),
+    skip_reason TEXT,
+    discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    replied_at TIMESTAMP
+);"
+
+# ═══════════════════════════════════════════════════════
+# PHASE A: Scan for replies (Python3, no Claude needed)
+# ═══════════════════════════════════════════════════════
+log "Phase A: Scanning for replies..."
+
+python3 - "$DB" "$OUR_REDDIT_ACCOUNT" "$OUR_MOLTBOOK_ACCOUNT" "${MOLTBOOK_API_KEY:-}" <<'PYTHON_SCAN' 2>&1 | tee -a "$LOG_FILE"
+import sys, json, sqlite3, urllib.request, time, re
+from datetime import datetime, timezone, timedelta
+
+DB_PATH = sys.argv[1]
+OUR_REDDIT = sys.argv[2]
+OUR_MOLTBOOK = sys.argv[3]
+MOLTBOOK_KEY = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else ""
+
+STALENESS_DAYS = 7
+MIN_WORDS = 5
+SKIP_AUTHORS = {"AutoModerator", "[deleted]", OUR_REDDIT}
+USER_AGENT = "social-engage/1.0 (u/Deep_Ad1959)"
+
+db = sqlite3.connect(DB_PATH)
+db.row_factory = sqlite3.Row
+
+discovered = 0
+skipped = 0
+errors = 0
+
+def word_count(text):
+    return len(text.split()) if text else 0
+
+def is_too_old(created_utc):
+    if not created_utc:
+        return False
+    try:
+        comment_time = datetime.fromtimestamp(float(created_utc), tz=timezone.utc)
+        return (datetime.now(timezone.utc) - comment_time) > timedelta(days=STALENESS_DAYS)
+    except (ValueError, TypeError):
+        return False
+
+def already_tracked(platform, comment_id):
+    row = db.execute(
+        "SELECT COUNT(*) FROM replies WHERE platform=? AND their_comment_id=?",
+        (platform, str(comment_id))
+    ).fetchone()
+    return row[0] > 0
+
+def insert_reply(post_id, platform, comment_id, author, content, comment_url,
+                 parent_reply_id=None, depth=1, status='pending', skip_reason=None,
+                 moltbook_post_uuid=None, moltbook_parent_comment_uuid=None):
+    global discovered, skipped
+    comment_id = str(comment_id)
+
+    if already_tracked(platform, comment_id):
+        return
+
+    db.execute("""INSERT INTO replies
+        (post_id, platform, their_comment_id, their_author, their_content, their_comment_url,
+         parent_reply_id, depth, status, skip_reason, moltbook_post_uuid, moltbook_parent_comment_uuid)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (post_id, platform, comment_id, author, content, comment_url,
+         parent_reply_id, depth, status, skip_reason, moltbook_post_uuid, moltbook_parent_comment_uuid))
+
+    if status == 'pending':
+        discovered += 1
+    else:
+        skipped += 1
+
+def fetch_json(url, headers=None):
+    hdrs = {"User-Agent": USER_AGENT}
+    if headers:
+        hdrs.update(headers)
+    req = urllib.request.Request(url, headers=hdrs)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        print(f"  ERROR fetching {url}: {e}")
+        return None
+
+def process_reddit_replies(children, post_id, parent_reply_id=None, depth=1):
+    """Process a list of Reddit comment children, filtering and inserting."""
+    for child in children:
+        if child.get('kind') != 't1':
+            continue
+        cdata = child.get('data', {})
+        author = cdata.get('author', '')
+        body = cdata.get('body', '')
+        comment_id = cdata.get('id', '')
+        created = cdata.get('created_utc')
+        permalink = cdata.get('permalink', '')
+        comment_url = f"https://old.reddit.com{permalink}" if permalink else ""
+
+        # Determine status
+        if author in SKIP_AUTHORS:
+            insert_reply(post_id, 'reddit', comment_id, author, body, comment_url,
+                        parent_reply_id=parent_reply_id, depth=depth,
+                        status='skipped', skip_reason='filtered_author')
+            continue
+        if body in ('[deleted]', '[removed]'):
+            insert_reply(post_id, 'reddit', comment_id, author, body, comment_url,
+                        parent_reply_id=parent_reply_id, depth=depth,
+                        status='skipped', skip_reason='deleted')
+            continue
+        if word_count(body) < MIN_WORDS:
+            insert_reply(post_id, 'reddit', comment_id, author, body, comment_url,
+                        parent_reply_id=parent_reply_id, depth=depth,
+                        status='skipped', skip_reason=f'too_short ({word_count(body)} words)')
+            continue
+        if is_too_old(created):
+            insert_reply(post_id, 'reddit', comment_id, author, body, comment_url,
+                        parent_reply_id=parent_reply_id, depth=depth,
+                        status='skipped', skip_reason='too_old')
+            continue
+
+        insert_reply(post_id, 'reddit', comment_id, author, body, comment_url,
+                    parent_reply_id=parent_reply_id, depth=depth)
+        print(f"  NEW (depth {depth}): [{post_id}] u/{author}: {body[:80]}...")
+
+
+# ─── Reddit: Scan replies to our comments (depth 1) ───
+print("Scanning Reddit posts for replies...")
+reddit_posts = db.execute(
+    "SELECT id, our_url, thread_title FROM posts "
+    "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL"
+).fetchall()
+
+for post in reddit_posts:
+    post_id = post['id']
+    our_url = post['our_url']
+
+    # Normalize to old.reddit.com and append .json
+    json_url = re.sub(r'www\.reddit\.com', 'old.reddit.com', our_url).rstrip('/') + '.json'
+
+    data = fetch_json(json_url)
+    if not data or not isinstance(data, list) or len(data) < 2:
+        errors += 1
+        continue
+
+    # Our comment is .[1].data.children[0].data
+    children = data[1].get('data', {}).get('children', [])
+    if not children:
+        continue
+
+    our_comment = children[0].get('data', {})
+    replies_obj = our_comment.get('replies')
+
+    if not replies_obj or not isinstance(replies_obj, dict):
+        continue
+
+    reply_children = replies_obj.get('data', {}).get('children', [])
+    process_reddit_replies(reply_children, post_id, parent_reply_id=None, depth=1)
+
+    time.sleep(1)  # Rate limit
+
+
+# ─── Moltbook: Scan comments on our posts (where we're OP) ───
+if MOLTBOOK_KEY:
+    print("\nScanning Moltbook posts for comments...")
+
+    moltbook_posts = db.execute(
+        "SELECT id, our_url FROM posts "
+        "WHERE platform='moltbook' AND status='active' AND our_url IS NOT NULL"
+    ).fetchall()
+
+    for post in moltbook_posts:
+        post_id = post['id']
+        our_url = post['our_url']
+
+        # Extract UUID from URL
+        uuid_match = re.search(
+            r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', our_url)
+        if not uuid_match:
+            continue
+        post_uuid = uuid_match.group()
+
+        headers = {"Authorization": f"Bearer {MOLTBOOK_KEY}"}
+
+        # Try the comments endpoint first, fall back to post endpoint
+        data = fetch_json(
+            f"https://www.moltbook.com/api/v1/posts/{post_uuid}/comments", headers)
+        if not data:
+            data = fetch_json(
+                f"https://www.moltbook.com/api/v1/posts/{post_uuid}", headers)
+            if not data:
+                errors += 1
+                continue
+
+        def walk_moltbook_comments(comments, parent_reply_id=None, depth=1):
+            """Recursively walk Moltbook comment tree."""
+            if not isinstance(comments, list):
+                return
+            for comment in comments:
+                if not isinstance(comment, dict):
+                    continue
+
+                author_obj = comment.get('author', {})
+                if isinstance(author_obj, dict):
+                    author_name = author_obj.get('name', author_obj.get('username', ''))
+                else:
+                    author_name = str(author_obj)
+
+                # Skip our own comments
+                if author_name == OUR_MOLTBOOK:
+                    # But still recurse to find replies to our replies
+                    child_replies = comment.get('replies', comment.get('children', []))
+                    if child_replies:
+                        walk_moltbook_comments(child_replies, parent_reply_id=None, depth=depth+1)
+                    continue
+
+                content = comment.get('content', '')
+                comment_id = str(comment.get('id', comment.get('uuid', '')))
+                comment_uuid = str(comment.get('uuid', comment.get('id', '')))
+
+                if not comment_id:
+                    continue
+
+                comment_url = f"https://www.moltbook.com/post/{post_uuid}#comment-{comment_uuid}"
+
+                # Filter
+                status_val = 'pending'
+                skip_reason = None
+                if word_count(content) < MIN_WORDS:
+                    status_val = 'skipped'
+                    skip_reason = f'too_short ({word_count(content)} words)'
+
+                insert_reply(post_id, 'moltbook', comment_id, author_name, content,
+                           comment_url, parent_reply_id=parent_reply_id, depth=depth,
+                           status=status_val, skip_reason=skip_reason,
+                           moltbook_post_uuid=post_uuid,
+                           moltbook_parent_comment_uuid=comment_uuid)
+
+                if status_val == 'pending':
+                    print(f"  NEW (depth {depth}): [{post_id}] {author_name}: {content[:80]}...")
+
+                # Recurse into child replies
+                child_replies = comment.get('replies', comment.get('children', []))
+                if child_replies:
+                    walk_moltbook_comments(child_replies, parent_reply_id=None, depth=depth+1)
+
+        # Handle different API response formats
+        comments = (data.get('comments', [])
+                   or data.get('post', {}).get('comments', [])
+                   or data.get('data', {}).get('comments', []))
+        walk_moltbook_comments(comments)
+
+
+# ─── Level N: Scan replies to our previous replies (infinite depth BFS) ───
+print("\nLevel N: Scanning replies to our previous replies...")
+replied_rows = db.execute(
+    "SELECT id, platform, our_reply_url, post_id, depth "
+    "FROM replies WHERE status='replied' AND our_reply_url IS NOT NULL"
+).fetchall()
+
+for row in replied_rows:
+    reply_id = row['id']
+    platform = row['platform']
+    our_reply_url = row['our_reply_url']
+    post_id = row['post_id']
+    current_depth = row['depth']
+
+    if platform == 'reddit':
+        json_url = re.sub(r'www\.reddit\.com', 'old.reddit.com', our_reply_url).rstrip('/') + '.json'
+        data = fetch_json(json_url)
+        if not data or not isinstance(data, list) or len(data) < 2:
+            continue
+
+        children = data[1].get('data', {}).get('children', [])
+        if not children:
+            continue
+
+        our_reply_data = children[0].get('data', {})
+        replies_obj = our_reply_data.get('replies')
+
+        if not replies_obj or not isinstance(replies_obj, dict):
+            continue
+
+        reply_children = replies_obj.get('data', {}).get('children', [])
+        process_reddit_replies(reply_children, post_id,
+                             parent_reply_id=reply_id, depth=current_depth+1)
+
+        time.sleep(1)
+
+    elif platform == 'moltbook' and MOLTBOOK_KEY:
+        # For Moltbook Level N, the recursive walk above already handles nested replies
+        # when scanning the post's full comment tree. This handles the case where
+        # our reply was to a comment on someone else's post (not covered by OP scan).
+        pass
+
+db.commit()
+db.close()
+
+print(f"\nPhase A complete: {discovered} new pending, {skipped} skipped, {errors} errors")
+PYTHON_SCAN
+
+
+# ═══════════════════════════════════════════════════════
+# PHASE B: Claude drafts and posts replies
+# ═══════════════════════════════════════════════════════
+PENDING_COUNT=$(sqlite3 "$DB" "SELECT COUNT(*) FROM replies WHERE status='pending';")
+log "Phase B: $PENDING_COUNT pending replies to handle"
+
+if [ "$PENDING_COUNT" -gt 0 ]; then
+    # Collect up to 5 pending replies with full context
+    PENDING_DATA=$(sqlite3 -json "$DB" "
+        SELECT r.id, r.platform, r.their_author, r.their_content, r.their_comment_url,
+               r.their_comment_id, r.depth, r.moltbook_post_uuid, r.moltbook_parent_comment_uuid,
+               p.thread_title, p.thread_url, p.our_content, p.our_url
+        FROM replies r
+        JOIN posts p ON r.post_id = p.id
+        WHERE r.status='pending'
+        ORDER BY r.discovered_at ASC
+        LIMIT 5;
+    ")
+
+    claude -p "You are the Social Autoposter engagement bot. You have Playwright MCP for browser automation.
+
+Read $SKILL_FILE for tone and content rules. Apply them to your replies.
+
+## Your task
+
+Reply to the following comments that people left on our posts/comments. Keep replies conversational, 2-4 sentences, expand the subject, ask follow-up questions when natural. Include links when relevant.
+
+## Platform accounts
+- Reddit: u/Deep_Ad1959 (logged in via Google with matt@mediar.ai). Use old.reddit.com.
+- Moltbook: matthew-autoposter (API-based, key in ~/social-autoposter/.env)
+
+## Pending replies to respond to
+
+$PENDING_DATA
+
+## Instructions for each reply
+
+For each pending reply above:
+
+1. **Draft a reply** that:
+   - Is 2-4 sentences, casual, first-person
+   - Expands on the topic being discussed
+   - Asks a follow-up question when natural
+   - Follows the content rules from SKILL.md
+   - On Reddit: write as Matthew (use 'I')
+   - On Moltbook: write as an agent (use 'my human')
+
+2. **Post the reply:**
+   - **Reddit**: Use Playwright to navigate to their_comment_url (use old.reddit.com), click reply, type your response, submit. Wait 2-3s and verify. Capture the permalink of our new reply. Close the tab with browser_tabs action 'close' after each post.
+   - **Moltbook**: Use curl with the API:
+     source ~/social-autoposter/.env
+     curl -s -X POST -H \"Authorization: Bearer \$MOLTBOOK_API_KEY\" -H \"Content-Type: application/json\" \\
+       -d '{\"content\": \"YOUR_REPLY\", \"parent_comment_id\": \"PARENT_UUID\"}' \\
+       \"https://www.moltbook.com/api/v1/posts/POST_UUID/comments\"
+
+3. **Update the database** after each successful reply:
+   sqlite3 ~/social-autoposter/social_posts.db \"UPDATE replies SET status='replied', our_reply_content='ESCAPED_CONTENT', our_reply_url='URL', our_reply_id='ID', replied_at=datetime('now') WHERE id=REPLY_ID;\"
+
+4. If posting fails after 3 retries, update status to 'error':
+   sqlite3 ~/social-autoposter/social_posts.db \"UPDATE replies SET status='error', skip_reason='posting_failed' WHERE id=REPLY_ID;\"
+
+## CRITICAL: Browser Tab Management
+- Use browser_tabs with action 'close' to close tabs. Do NOT use browser_close.
+- Close the tab after EVERY page visit.
+- At the end, call browser_tabs close one final time.
+
+Process all pending replies, then report what you did." --max-turns 80 2>&1 | tee -a "$LOG_FILE"
+else
+    log "No pending replies — skipping Phase B"
+fi
+
+
+# ═══════════════════════════════════════════════════════
+# PHASE C: Cleanup
+# ═══════════════════════════════════════════════════════
+log "Phase C: Cleanup"
+
+# Summary
+TOTAL_PENDING=$(sqlite3 "$DB" "SELECT COUNT(*) FROM replies WHERE status='pending';")
+TOTAL_REPLIED=$(sqlite3 "$DB" "SELECT COUNT(*) FROM replies WHERE status='replied';")
+TOTAL_SKIPPED=$(sqlite3 "$DB" "SELECT COUNT(*) FROM replies WHERE status='skipped';")
+TOTAL_ERRORS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM replies WHERE status='error';")
+
+log "Replies summary: pending=$TOTAL_PENDING replied=$TOTAL_REPLIED skipped=$TOTAL_SKIPPED errors=$TOTAL_ERRORS"
+
+# Git sync
+cd "$HOME/social-autoposter"
+git add social_posts.db
+git diff --cached --quiet || git commit -m "engage $(date '+%Y-%m-%d %H:%M')" && git push 2>/dev/null || true
+
+# Delete old logs
+find "$LOG_DIR" -name "engage-*.log" -mtime +7 -delete 2>/dev/null || true
+
+log "=== Engagement loop complete: $(date) ==="

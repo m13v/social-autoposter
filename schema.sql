@@ -59,3 +59,24 @@ CREATE TABLE IF NOT EXISTS thread_comments (
     engagement TEXT,
     discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS replies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER REFERENCES posts(id),
+    platform TEXT NOT NULL,
+    their_comment_id TEXT NOT NULL,
+    their_author TEXT,
+    their_content TEXT,
+    their_comment_url TEXT,
+    our_reply_id TEXT,
+    our_reply_content TEXT,
+    our_reply_url TEXT,
+    parent_reply_id INTEGER REFERENCES replies(id),
+    moltbook_post_uuid TEXT,
+    moltbook_parent_comment_uuid TEXT,
+    depth INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'pending' CHECK(status IN ('pending','replied','skipped','error')),
+    skip_reason TEXT,
+    discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    replied_at TIMESTAMP
+);
