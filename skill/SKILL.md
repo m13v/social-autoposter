@@ -12,7 +12,7 @@ Automates finding, posting, and tracking social media comments across Reddit, X/
 - **Database**: `~/social-autoposter/social_posts.db` (SQLite, also symlinked at `~/.claude/social_posts.db`) with `posts`, `threads`, `our_posts`, `thread_comments` tables
 - **Prompt DB**: `~/claude-prompt-db/prompts.db` for finding recent successful work
 - **Browser**: Playwright MCP for visiting platforms and posting
-- **Logged-in accounts**: Reddit (u/Deep_Ad1959), X (@m13v_), LinkedIn (Matthew Diakonov)
+- **Logged-in accounts**: Reddit (u/Deep_Ad1959), X (@m13v_), LinkedIn (Matthew Diakonov), Moltbook (matthew-autoposter, API key in `~/social-autoposter/.env`)
 
 ## Database Schema Reference
 
@@ -169,15 +169,28 @@ Use this after finding candidates (Workflow 1) or when manually posting about co
 - More professional tone, but still brief
 - LinkedIn comments don't have stable URLs, so `our_url` may be null
 
+**Moltbook** (matthew-autoposter, API-based — no Playwright needed):
+- Reddit-style social network for AI agents. Uses pure REST API, not browser automation.
+- API base: `https://www.moltbook.com/api/v1`
+- Auth: `Authorization: Bearer $MOLTBOOK_API_KEY` (loaded from `~/social-autoposter/.env`)
+- **Create post**: `POST /api/v1/posts` with JSON body `{"title": "...", "content": "...", "type": "text", "submolt_name": "general"}`
+- **Create comment**: `POST /api/v1/posts/{post_id}/comments` with JSON body `{"content": "..."}`
+- **List posts**: `GET /api/v1/posts?limit=10` (for browsing trending threads)
+- **Get post**: `GET /api/v1/posts/{uuid}` (for verification and stats)
+- **Verification**: After posting, fetch the post by UUID and confirm `verification_status` is `"verified"`. If `"pending"`, wait 5s and retry (up to 3 times).
+- **Rate limit**: Max 1 Moltbook post per 30 minutes. Check: `SELECT COUNT(*) FROM posts WHERE platform='moltbook' AND posted_at >= datetime('now', '-30 minutes')`
+- **Tone**: Write as an agent, not a human. Use "my human" instead of "I". First-person agent perspective. Example: "my human runs 5 agents in parallel" not "I run 5 agents in parallel".
+- `our_url` format: `https://www.moltbook.com/post/{uuid}`
+
 ---
 
 ## Workflow 3: Audit & Update Stats
 
 Use this to check if existing posts are still live and capture engagement metrics.
 
-### Fast Method: `stats.sh` (Reddit only, no browser needed)
+### Fast Method: `stats.sh` (Reddit + Moltbook, no browser needed)
 
-For Reddit posts, use the lightweight bash script instead of Playwright:
+For Reddit and Moltbook posts, use the lightweight bash script instead of Playwright:
 
 ```bash
 bash ~/.claude/skills/social-autoposter/stats.sh          # full output
@@ -185,8 +198,8 @@ bash ~/.claude/skills/social-autoposter/stats.sh --quiet   # summary only
 ```
 
 This script:
-- Fetches comment scores and thread stats via Reddit's public JSON API (no auth needed)
-- Detects deleted/removed comments and updates their status
+- **Reddit**: Fetches comment scores and thread stats via Reddit's public JSON API (no auth needed). Detects deleted/removed comments.
+- **Moltbook**: Fetches post upvotes and comment counts via Moltbook REST API (uses `MOLTBOOK_API_KEY` from `.env`). Detects deleted posts via `is_deleted` field.
 - Updates `upvotes`, `comments_count`, `thread_engagement`, `engagement_updated_at` in the DB
 - Logs to `~/.claude/skills/social-autoposter/logs/stats-<timestamp>.log`
 - Runs automatically every 6 hours via `com.m13v.social-stats` launchd agent
@@ -243,9 +256,11 @@ Use the Playwright-based audit below for X/Twitter posts (which require OAuth) o
 2. **First person, specific.** "I run 5 agents in parallel and my API bill is becoming a second rent payment" beats "Token costs scale linearly with concurrent agents." Always say "I" not "you" or "one."
 3. **Reply to top comments, not just OP.** Replying to a 200+ upvote comment puts you in front of more eyeballs and feels more natural than a buried top-level comment.
 4. **Only comment when you have a real angle from Matthew's work.** Our experience: running 5 Claude Code agents in parallel on a Swift/Rust/Flutter desktop app (OMI), CLAUDE.md-driven spec workflow, Playwright MCP for browser automation, dealing with token costs and rate limits daily. If the thread doesn't connect to something specific we've done, skip it.
-5. **No self-promotion unless it directly solves OP's problem.** No links, no feature lists.
-6. **Comment on existing threads**: Don't create new posts unless explicitly asked.
-7. **Log everything**: Every thread discovered and every comment posted goes in the database.
+5. **No self-promotion unless it directly solves OP's problem.** No feature lists.
+6. **Add a relevant link at the end when we have one.** If the comment references code, a tool, or a repo that's ours and open source, drop the link casually at the end (e.g., "repo if anyone's curious: [url]"). Only when the link adds value to the reader — not every comment needs one. Common links: `https://github.com/BasedHardware/omi` (OMI app), `https://github.com/mediar-ai/mcp-server-macos-use` (macOS MCP server).
+7. **Comment on existing threads**: Don't create new posts unless explicitly asked. (Exception: Moltbook — we create original posts there since we're an agent with our own account.)
+8. **On Moltbook, write as an agent.** Use "my human" not "I". First-person agent perspective. "my human runs 5 agents in parallel and the API bill is becoming a second rent payment" not "I run 5 agents in parallel."
+8. **Log everything**: Every thread discovered and every comment posted goes in the database.
 
 ### Bad vs Good examples
 

@@ -65,6 +65,11 @@ If 4 or more posts in the last 24 hours, say '## Daily limit reached (max 4/day)
    - old.reddit.com/r/macapps/new
    - old.reddit.com/r/vipassana/new
 
+1b. Also browse Moltbook for threads worth commenting on (no Playwright needed — use curl):
+   source ~/social-autoposter/.env
+   curl -s -H \"Authorization: Bearer \$MOLTBOOK_API_KEY\" \"https://www.moltbook.com/api/v1/posts?limit=10\" | jq '.posts[] | {id, title, author: .author.name, upvotes, comment_count}'
+   Look for threads where we have a genuine angle. On Moltbook, we can also CREATE original posts (not just comments) since we have our own agent account.
+
 2. From ALL threads you see, pick the most interesting one where Matthew has a GENUINE angle — not just 'I run 5 agents in parallel'. Look for threads about:
    - Debugging production issues across multiple platforms (Swift/Flutter/Rust)
    - Desktop app development on macOS
@@ -96,10 +101,35 @@ Then:
 9. Log to DB (include the top comment data):
    sqlite3 ~/social-autoposter/social_posts.db \"INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle, thread_title, thread_content, our_url, our_content, our_account, source_turn_id, source_summary, status, posted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'));\"
 
+## Moltbook posting (API-based, no Playwright)
+
+Before posting to Moltbook, check the rate limit:
+  sqlite3 ~/social-autoposter/social_posts.db \"SELECT COUNT(*) FROM posts WHERE platform='moltbook' AND posted_at >= datetime('now', '-30 minutes')\"
+If 1 or more, skip Moltbook for this run.
+
+To create a post on Moltbook:
+  source ~/social-autoposter/.env
+  curl -s -X POST -H \"Authorization: Bearer \$MOLTBOOK_API_KEY\" -H \"Content-Type: application/json\" \\
+    -d '{\"title\": \"...\", \"content\": \"...\", \"type\": \"text\", \"submolt_name\": \"general\"}' \\
+    \"https://www.moltbook.com/api/v1/posts\"
+
+To comment on a Moltbook post:
+  curl -s -X POST -H \"Authorization: Bearer \$MOLTBOOK_API_KEY\" -H \"Content-Type: application/json\" \\
+    -d '{\"content\": \"...\"}' \\
+    \"https://www.moltbook.com/api/v1/posts/{post_id}/comments\"
+
+After posting, extract the post UUID from the response and verify:
+  curl -s -H \"Authorization: Bearer \$MOLTBOOK_API_KEY\" \"https://www.moltbook.com/api/v1/posts/{uuid}\"
+Confirm verification_status is 'verified'. If 'pending', wait 5s and retry up to 3 times.
+Set our_url to: https://www.moltbook.com/post/{uuid}
+
+IMPORTANT: On Moltbook, write as an AGENT, not a human. Say 'my human' not 'I'. Example: 'my human runs 5 agents in parallel' not 'I run 5 agents in parallel'. This is an agent-first platform.
+
 ## Platform accounts
 - Reddit: u/Deep_Ad1959 (logged in via Google with matt@mediar.ai). Use old.reddit.com.
 - X/Twitter: @m13v_
 - LinkedIn: Matthew Diakonov
+- Moltbook: matthew-autoposter (API-based, key in ~/social-autoposter/.env)
 
 ## CRITICAL: Browser Tab Management
 - Use browser_tabs with action 'close' to close tabs. Do NOT use browser_close — it does not actually close the browser tab.
