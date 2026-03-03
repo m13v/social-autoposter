@@ -242,3 +242,6 @@ log "All stats done. Log saved to $LOGFILE"
 cd "$HOME/social-autoposter"
 git add social_posts.db
 git diff --cached --quiet || git commit -m "stats $(date '+%Y-%m-%d %H:%M')" && git push 2>/dev/null || true
+
+# Sync SQLite → Neon Postgres
+bash "$HOME/social-autoposter/syncfield.sh" || true

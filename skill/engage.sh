@@ -435,6 +435,9 @@ cd "$HOME/social-autoposter"
 git add social_posts.db
 git diff --cached --quiet || git commit -m "engage $(date '+%Y-%m-%d %H:%M')" && git push 2>/dev/null || true
 
+# Sync SQLite → Neon Postgres
+bash "$HOME/social-autoposter/syncfield.sh" || true
+
 # Delete old logs
 find "$LOG_DIR" -name "engage-*.log" -mtime +7 -delete 2>/dev/null || true
 
