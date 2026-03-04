@@ -1,3 +1,8 @@
+---
+name: social-autoposter
+description: "Automate social media posting across Reddit, X/Twitter, LinkedIn, and Moltbook. Find threads, post comments, track engagement stats. Use when: 'post to social', 'social autoposter', 'find threads to comment on', 'audit social posts', 'update post stats', or after completing any task (mandatory per CLAUDE.md)."
+---
+
 # Social Autoposter Skill
 
 Automates finding, posting, and tracking social media comments across Reddit, X/Twitter, and LinkedIn. Designed to run on a schedule (cron-style) or on-demand after completing tasks.
@@ -150,7 +155,13 @@ Use this after finding candidates (Workflow 1) or when manually posting about co
    ```
    Also insert into `threads` and `our_posts` tables for backward compatibility.
 
-7. **Report back** with: what was posted, where (URLs), on which platforms.
+7. **Sync to remote database** after finishing a posting session (if configured):
+   ```bash
+   bash ~/social-autoposter/syncfield.sh
+   ```
+   This ensures posts made via Playwright (outside shell scripts) are reflected in the production database.
+
+8. **Report back** with: what was posted, where (URLs), on which platforms.
 
 ### Platform-specific notes
 
