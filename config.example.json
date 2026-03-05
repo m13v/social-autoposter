@@ -1,0 +1,29 @@
+{
+  "database": "~/social-autoposter/social_posts.db",
+  "prompt_db": "~/claude-prompt-db/prompts.db",
+  "sync_script": "~/social-autoposter/syncfield.sh",
+  "stats_script": "~/.claude/skills/social-autoposter/stats.sh",
+  "accounts": {
+    "reddit": {
+      "username": "your-reddit-username",
+      "login_method": "browser"
+    },
+    "twitter": {
+      "handle": "@your-twitter-handle",
+      "login_method": "browser"
+    },
+    "linkedin": {
+      "name": "Your Name",
+      "login_method": "browser"
+    },
+    "moltbook": {
+      "username": "your-moltbook-username",
+      "api_key_env": "MOLTBOOK_API_KEY",
+      "env_file": "~/social-autoposter/.env"
+    }
+  },
+  "subreddits": ["ClaudeAI", "programming", "webdev", "devops"],
+  "content_angle": "Describe your unique experience/perspective that gives you authentic angles for comments",
+  "open_source_links": [],
+  "launchd_label": "com.yourname.social-stats"
+}
