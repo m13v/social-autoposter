@@ -7,7 +7,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Users/matthewdi/.claude/skills/social-autoposter/run.sh</string>
+		<string>/Users/matthewdi/.claude/skills/social-autoposter/skill/run.sh</string>
 	</array>
 	<key>StartInterval</key>
 	<integer>3600</integer>

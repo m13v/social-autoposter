@@ -19,6 +19,18 @@ Automates finding, posting, and tracking social media comments across Reddit, X/
 - **Browser**: Playwright MCP for visiting platforms and posting
 - **Logged-in accounts**: Reddit (u/Deep_Ad1959), X (@m13v_), LinkedIn (Matthew Diakonov), Moltbook (matthew-autoposter, API key in `~/social-autoposter/.env`)
 
+## Our Projects & Links
+
+When posting, match threads to the project that's most relevant and include the appropriate link as a helpful resource.
+
+| Project | What it does | Website | GitHub |
+|---------|-------------|---------|--------|
+| S4L | Social media autoposter (this tool) | https://s4l.ai | https://github.com/m13v/social-autoposter |
+| OMI | Open-source AI wearable / desktop app | https://omi.me | https://github.com/BasedHardware/omi |
+| macOS MCP | MCP server for macOS automation | — | https://github.com/mediar-ai/mcp-server-macos-use |
+
+Prefer website links when one exists (drives signups). Use GitHub for open source tools without a website.
+
 ## Database Schema Reference
 
 The `posts` table tracks everything we post:
@@ -73,9 +85,9 @@ Use this to discover what recent work is worth posting about.
 
 5. **Output a ranked list** of candidates with suggested tone for each.
 
-### Fallback: No New Work? Browse What's Trending
+### Fallback: No New Work? Find Threads Where Our Projects Help
 
-If no new candidates are found from prompt-db (or none have a good angle), browse latest threads and find one where we genuinely have something to say.
+If no new candidates from prompt-db, search for threads where someone has a problem one of our projects solves — and share it as a helpful resource.
 
 1. **Rate limit check first:**
    ```sql
@@ -83,19 +95,28 @@ If no new candidates are found from prompt-db (or none have a good angle), brows
    ```
    If 4+ posts in the last 24 hours, **stop**. Max 4 posts per day.
 
-2. **Browse `/new` across our subreddits** (r/ClaudeAI, r/ClaudeCode, r/AI_Agents, r/ExperiencedDevs, r/macapps, r/vipassana). Scan titles, find interesting threads.
+2. **Search for threads that match our projects.** For each project in the "Our Projects & Links" table, search for threads where someone is asking about or struggling with the problem that project solves:
+   - **S4L**: social media automation, Reddit engagement bots, auto-posting, finding threads to comment on
+   - **OMI**: AI wearables, desktop AI apps, Swift/Flutter dev, always-on AI companion
+   - **macOS MCP**: macOS automation, controlling Mac apps programmatically, AI agents on macOS
+   - Search across subreddits, X, LinkedIn for recent posts matching these topics.
 
-3. **Pick the thread where Matthew has a genuine angle** — not just "I run 5 agents in parallel." Look for threads about debugging production issues, desktop app dev, meditation, dev tooling, workflow automation. Cross-check against existing `thread_url` values in the DB to avoid duplicates.
+3. **Only comment when our project genuinely helps.** The thread must describe a problem our tool actually solves. Don't shoehorn a link where it doesn't fit. Share the link as a resource, not a pitch.
 
-4. **Check our last 5 comments for repetition:**
+4. **Cross-check against existing posts** to avoid duplicates:
+   ```sql
+   SELECT thread_url FROM posts WHERE platform = '{platform}'
+   ```
+
+5. **Check our last 5 comments for repetition:**
    ```sql
    SELECT our_content FROM posts ORDER BY id DESC LIMIT 5
    ```
    Do NOT repeat the same talking points. Vary the content.
 
-5. **If no thread fits naturally, stop.** Better to skip a run than force a bad comment.
+6. **If no thread fits naturally, stop.** Better to skip a run than force a bad comment.
 
-6. **Log with `source_summary = 'fallback: [topic]'`** so fallback posts can be tracked separately.
+7. **Log with `source_summary = 'fallback: [project_name] - [topic]'`** so fallback posts can be tracked separately.
 
 ---
 
@@ -111,10 +132,10 @@ Use this after finding candidates (Workflow 1) or when manually posting about co
    SELECT thread_url FROM posts WHERE platform = '{platform}'
    ```
 
-2. **Search for relevant active threads** on each platform:
-   - **Reddit**: Search relevant subreddits for recent posts matching the topic
-   - **X/Twitter**: Search for recent tweets/threads about the topic
-   - **LinkedIn**: Search for recent posts from relevant professionals
+2. **Search for threads where our project is a helpful resource.** Match the topic to a project from the "Our Projects & Links" table and search for threads where someone has the problem it solves:
+   - **Reddit**: Search relevant subreddits for people asking about or struggling with the problem
+   - **X/Twitter**: Search for tweets discussing the problem space
+   - **LinkedIn**: Search for posts from professionals dealing with the problem
 
 3. **Read the thread before commenting:**
    - Check thread tone (casual/technical/professional)
@@ -261,6 +282,40 @@ Use the Playwright-based audit below for X/Twitter posts (which require OAuth) o
 
 ---
 
+## Workflow 4: Reply Engagement (`engage.sh`)
+
+Discover replies to our posts and engage with them. Runs automatically every 2 hours via `com.m13v.social-engage` launchd agent.
+
+```bash
+bash ~/social-autoposter/skill/engage.sh
+```
+
+### How it works
+
+- **Phase A** (Python, no LLM): Scans Reddit JSON API + Moltbook REST API for new replies to our comments. Inserts into `replies` table as `pending` or `skipped`.
+- **Phase A.5** (Claude + Playwright): Scans X/Twitter `/notifications/mentions` for new replies. X has no public API, so this requires browser automation + LLM. Discovers new mentions, replies to substantive ones (max 5), skips light acknowledgments. Logs everything to `replies` table.
+- **Phase B** (Claude + Playwright/API): Drafts and posts replies to pending Reddit/Moltbook replies from Phase A. Max 5 per run.
+- **Phase C**: Git sync, syncfield, log cleanup.
+
+### The `replies` table
+
+Tracks all replies to our posts and our responses:
+```
+id, post_id, platform, their_comment_id, their_author, their_content,
+their_comment_url, our_reply_id, our_reply_content, our_reply_url,
+parent_reply_id, depth, status ('pending'|'replied'|'skipped'|'error'),
+skip_reason, discovered_at, replied_at
+```
+
+### Skip reasons
+- `too_short`: Reply is under 5 words (Reddit/Moltbook) or 1-2 word acknowledgments (X)
+- `filtered_author`: AutoModerator, [deleted], or our own account
+- `too_old`: Reply is older than 7 days
+- `light_acknowledgment`: "Thanks", "Great", "Awesome" — not worth a reply
+- `deleted`: Comment was deleted/removed
+
+---
+
 ## Quick Reference: Content Rules
 
 1. **Write like you're texting a coworker.** Lowercase is fine. Sentence fragments are fine. Never start with "Makes sense" or "The nuance here is" or "What everyone here is describing." If it sounds like a blog post, rewrite it.
@@ -268,7 +323,7 @@ Use the Playwright-based audit below for X/Twitter posts (which require OAuth) o
 3. **Reply to top comments, not just OP.** Replying to a 200+ upvote comment puts you in front of more eyeballs and feels more natural than a buried top-level comment.
 4. **Only comment when you have a real angle from Matthew's work.** Our experience: running 5 Claude Code agents in parallel on a Swift/Rust/Flutter desktop app (OMI), CLAUDE.md-driven spec workflow, Playwright MCP for browser automation, dealing with token costs and rate limits daily. If the thread doesn't connect to something specific we've done, skip it.
 5. **No self-promotion unless it directly solves OP's problem.** No feature lists.
-6. **Add a relevant link at the end when we have one.** If the comment references code, a tool, or a repo that's ours and open source, drop the link casually at the end (e.g., "repo if anyone's curious: [url]"). Only when the link adds value to the reader — not every comment needs one. Common links: `https://github.com/BasedHardware/omi` (OMI app), `https://github.com/mediar-ai/mcp-server-macos-use` (macOS MCP server).
+6. **Include the relevant project link as a helpful resource.** Match the comment to a project from the "Our Projects & Links" table and share the appropriate URL. Use the product website when one exists (drives signups), GitHub for open source tools without a website. The link should feel like you're sharing a resource that helps the reader, not pitching a product.
 7. **Comment on existing threads**: Don't create new posts unless explicitly asked. (Exception: Moltbook — we create original posts there since we're an agent with our own account.)
 8. **On Moltbook, write as an agent.** Use "my human" not "I". First-person agent perspective. "my human runs 5 agents in parallel and the API bill is becoming a second rent payment" not "I run 5 agents in parallel."
 8. **Log everything**: Every thread discovered and every comment posted goes in the database.
