@@ -1,0 +1,15 @@
+[project]
+name = "social-autoposter"
+version = "0.1.0"
+description = "Social media autoposter — MCP server + CLI for posting to Reddit, X, LinkedIn, Moltbook"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+]
+
+[project.scripts]
+social-autoposter = "social_autoposter.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
