@@ -1,360 +1,304 @@
 ---
 name: social-autoposter
-description: "Automate social media posting across Reddit, X/Twitter, LinkedIn, and Moltbook. Find threads, post comments, track engagement stats, and run reply engagement loops."
+description: "Automate social media posting across Reddit, X/Twitter, LinkedIn, and Moltbook. Find threads, post comments, track engagement stats, and handle reply engagement. Use when: 'post to social', 'social autoposter', 'find threads', 'audit social posts', 'update post stats', 'engage replies'. Run /social-autoposter to start."
+user_invocable: true
 ---
 
-# Social Autoposter Skill
+# Social Autoposter
 
-Automates finding, posting, and tracking social media comments across Reddit, X/Twitter, LinkedIn, and Moltbook. Designed to run on a schedule (cron-style) or on-demand after completing tasks.
+Automates finding, posting, and tracking social media comments. Works with any agent that has browser automation and shell access.
 
-## Setup
+## Quick Start
 
-1. Copy `config.example.json` to `config.json` in your skill directory
-2. Fill in your account handles, database paths, subreddits, and content angle
-3. Create the SQLite database (see schema below)
-4. Log into your social accounts in the browser (for Playwright MCP)
-5. For Moltbook: set `MOLTBOOK_API_KEY` in your `.env` file
+| Command | What it does |
+|---------|-------------|
+| `/social-autoposter` | Full posting run (find threads + post + log) |
+| `/social-autoposter stats` | Update engagement stats via API |
+| `/social-autoposter engage` | Scan and reply to responses on our posts |
+| `/social-autoposter audit` | Full browser audit of all posts |
 
-The skill reads `config.json` at runtime for all personal settings — accounts, paths, subreddits, and content angle. Never hardcode personal data in the skill itself.
+## Config
 
-## Trigger phrases
+All personal settings live in `config.json` (copy from `config.example.json`). The skill reads this at runtime.
 
-- "post to social", "social autoposter", "find threads to comment on", "audit social posts", "update post stats"
+Key fields:
+- `accounts` — platform usernames/handles
+- `subreddits` — target subreddits to monitor
+- `content_angle` — your unique perspective for authentic comments
+- `projects` — your products/repos to mention when relevant (with topic keywords)
+- `database` — path to SQLite DB
 
-## Prerequisites
+## Helper Scripts
 
-- **Database**: SQLite database (path from `config.json`) with `posts`, `threads`, `our_posts`, `thread_comments` tables
-- **Prompt DB**: SQLite prompt database (path from `config.json`) for finding recent successful work
-- **Browser**: Playwright MCP for visiting platforms and posting
-- **Logged-in accounts**: Reddit, X/Twitter, LinkedIn accounts logged in via browser (handles from `config.json`)
-- **Moltbook**: API key in `.env` file (path from `config.json`)
+Standalone Python scripts any agent can call directly. No LLM needed for these.
 
-## Database Schema Reference
+| Script | What it does |
+|--------|-------------|
+| `scripts/find_threads.py` | Find candidate threads via Reddit JSON + Moltbook API |
+| `scripts/scan_replies.py` | Scan for new replies to our posts via API |
+| `scripts/update_stats.py` | Fetch engagement stats via API, update DB |
 
-The `posts` table tracks everything we post:
-
+Examples:
+```bash
+python3 scripts/find_threads.py --topic "macOS automation" --limit 5
+python3 scripts/scan_replies.py
+python3 scripts/update_stats.py --quiet
 ```
-id, platform, thread_url, thread_author, thread_author_handle,
-thread_title, thread_content, thread_engagement,
-our_url, our_content, our_account,
-posted_at, discovered_at,
-status ('active'|'inactive'|'deleted'|'removed'),
-status_checked_at, engagement_updated_at,
-upvotes, comments_count, views,
-source_turn_id, source_summary
+
+---
+
+## Workflow: Post (`/social-autoposter`)
+
+Find a thread, draft a comment, post it, log it.
+
+### 1. Rate limit check
+
+```sql
+SELECT COUNT(*) FROM posts WHERE posted_at >= datetime('now', '-24 hours')
+```
+If 10+ posts in the last 24 hours, stop. Max 10/day.
+
+### 2. Find candidate threads
+
+**Option A — Use the helper script (preferred, no browser needed):**
+```bash
+python3 scripts/find_threads.py --include-moltbook
+```
+This returns a JSON list of candidate threads with dedup already applied.
+
+**Option B — Browse manually with browser automation:**
+Browse `/new` and `/hot` across target subreddits (from `config.json`). Also check Moltbook via API.
+
+### 3. Pick the best thread
+
+Requirements:
+- You have a genuine angle from your `content_angle` in `config.json`
+- The thread hasn't been posted in before (check `thread_url` in DB)
+- Your last 5 comments don't repeat the same talking points:
+  ```sql
+  SELECT our_content FROM posts ORDER BY id DESC LIMIT 5
+  ```
+- If no thread fits naturally, **stop**. Better to skip than force a bad comment.
+
+### 4. Read the thread
+
+Before commenting, read the full thread:
+- Check tone (casual/technical/professional)
+- Read top comments for length and style cues
+- Note thread age (skip stale threads)
+- Identify the best comment to reply to (high-upvote comments get more visibility)
+
+### 5. Draft the comment
+
+Follow the **Content Rules** section below. Key points:
+- 2-3 sentences max, match thread energy
+- First person, specific details from your experience
+- No product links in top-level comments (use Tiered Reply Strategy for that)
+- If it sounds like a blog post, rewrite it
+
+### 6. Post it
+
+**Reddit** (browser automation):
+- Navigate to `old.reddit.com` thread URL
+- Find the reply box (textarea with class `usertext-edit`)
+- Type the comment, click submit
+- Wait 2-3 seconds, verify the comment appeared
+- Capture the permalink of the new comment
+- Close the tab
+
+**X/Twitter** (browser automation):
+- Navigate to the tweet
+- Type reply in the reply box, click Reply
+- Verify the reply posted
+- Capture the URL
+
+**LinkedIn** (browser automation):
+- Navigate to the post
+- Type comment, click Post
+- No stable URL available, note as posted
+
+**Moltbook** (API — no browser needed):
+```bash
+source ~/social-autoposter/.env
+curl -s -X POST -H "Authorization: Bearer $MOLTBOOK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "...", "content": "...", "type": "text", "submolt_name": "general"}' \
+  "https://www.moltbook.com/api/v1/posts"
+```
+Verify: fetch post by UUID, check `verification_status` is `"verified"`.
+On Moltbook, write as an agent: "my human" not "I".
+Rate limit: max 1 post per 30 minutes.
+
+### 7. Log to database
+
+```sql
+INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
+  thread_title, thread_content, our_url, our_content, our_account,
+  source_summary, status, posted_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'));
 ```
 
----
+### 8. Sync (if configured)
 
-## Workflow 1: Find Postable Content
-
-Use this to discover what recent work is worth posting about.
-
-### Steps
-
-1. **Query prompt-db for recent successful turns:**
-   ```sql
-   SELECT id, timestamp, summary, tags, specificity_score
-   FROM turns
-   WHERE tags LIKE '%success%'
-     AND (tags LIKE '%feature%' OR tags LIKE '%deployment%' OR tags LIKE '%bug_fix%' OR tags LIKE '%security%')
-     AND specificity_score >= 3
-     AND timestamp >= datetime('now', '-24 hours')
-   ORDER BY specificity_score DESC, timestamp DESC
-   ```
-
-2. **Cross-reference against already-posted content:**
-   ```sql
-   SELECT source_turn_id, source_summary FROM posts
-   WHERE source_turn_id IS NOT NULL
-   ```
-   Skip any turn IDs already in the posts table. Also do fuzzy matching on `source_summary` to avoid duplicates with different turn IDs.
-
-3. **Rank candidates by postability:**
-   - Humor potential (funny edge cases, unexpected behaviors, relatable dev pain)
-   - Relatability (common problems other devs face)
-   - Novelty (something genuinely new or surprising)
-   - Thread fit (is there an active thread where this fits naturally?)
-
-4. **Apply the 70/30 content mix for top-level comments:**
-   - 70% humor/relatable: Make people laugh. Self-deprecating dev stories, funny bugs, unexpected outcomes
-   - 30% inspirational/technical: Cool technical achievements, elegant solutions, "look what's possible"
-   - 0% promotional in top-level comments: NEVER drop product links in initial comments. Data shows 0 engagement on promotional comments vs 5-100+ on authentic ones. Product mentions happen organically in reply conversations (see Tiered Reply Strategy).
-
-5. **Output a ranked list** of candidates with suggested tone for each.
-
-### Fallback: No New Work? Browse What's Trending
-
-If no new candidates from prompt-db, browse latest threads and find ones where you genuinely have something to say from your experience building projects listed in `config.json`.
-
-1. **Rate limit check first:**
-   ```sql
-   SELECT COUNT(*) FROM posts WHERE posted_at >= datetime('now', '-24 hours')
-   ```
-   If 10+ posts in the last 24 hours, **stop**. Max 10 posts per day.
-
-2. **Browse `/new` and `/hot` across target subreddits** (from `config.json`). Scan titles, find threads where you have a genuine angle based on your `content_angle` from `config.json`.
-
-3. **Pick threads where you have a real story to tell.** NOT threads where you can shoehorn a product link.
-
-4. **Write authentic top-level comments with NO product links.** The product mention happens later, organically, when people reply and show interest (Tiered Reply Strategy).
-
-5. **Cross-check against existing posts** to avoid duplicates:
-   ```sql
-   SELECT thread_url FROM posts WHERE platform = '{platform}'
-   ```
-
-6. **Check our last 5 comments for repetition:**
-   ```sql
-   SELECT our_content FROM posts ORDER BY id DESC LIMIT 5
-   ```
-   Do NOT repeat the same talking points. Vary the content.
-
-7. **If no thread fits naturally, stop.** Better to skip a run than force a bad comment.
-
-8. **Log with `source_summary = 'fallback: [topic]'`** so fallback posts can be tracked separately.
+If `sync_script` is set in `config.json`, run it to push data to a remote database.
 
 ---
 
-## Workflow 2: Post to Platforms
+## Workflow: Stats (`/social-autoposter stats`)
 
-Use this after finding candidates (Workflow 1) or when manually posting about completed work.
+Update engagement metrics for all posts. No browser needed.
 
-### Steps
+**Preferred: use the helper script:**
+```bash
+python3 scripts/update_stats.py
+python3 scripts/update_stats.py --quiet   # summary only
+python3 scripts/update_stats.py --json    # machine-readable output
+```
 
-1. **Check the database first** to avoid duplicate threads:
-   ```sql
-   SELECT url FROM threads WHERE platform = '{platform}'
-   SELECT thread_url FROM posts WHERE platform = '{platform}'
-   ```
+This fetches:
+- **Reddit**: comment scores and thread stats via public JSON API. Detects deleted/removed.
+- **Moltbook**: upvotes and comment counts via REST API. Detects deleted posts.
 
-2. **Search for relevant active threads** on each platform:
-   - **Reddit**: Search subreddits from `config.json` for recent posts matching the topic
-   - **X/Twitter**: Search for recent tweets/threads about the topic
-   - **LinkedIn**: Search for recent posts from relevant professionals
+Updates `upvotes`, `comments_count`, `thread_engagement`, `engagement_updated_at` in the DB.
 
-3. **Read the thread before commenting:**
-   - Check thread tone (casual/technical/professional)
-   - Read top comments for length and style cues
-   - Note the thread age (don't comment on stale threads)
-
-4. **Draft the comment:**
-   - Match thread energy and length (2-3 sentences max, shorter if thread is casual)
-   - Be authentic and value-adding, not spammy
-   - Never list features. One key benefit relevant to the thread is enough
-   - Apply the content mix principle (humor > inspiration > promotion)
-
-5. **Post via Playwright MCP (with verification):**
-   - Navigate to the thread URL
-   - Find the reply/comment box
-   - Type the comment text
-   - Click the submit/reply button
-   - **VERIFY the post went through:**
-     - Wait 2-3 seconds after clicking submit
-     - Take a snapshot of the page
-     - Look for your comment text appearing in the thread (not just in the input box)
-     - If the comment is still in the input box or a spinner is showing, wait and retry the submit click
-     - If an error message appears (rate limit, "something went wrong", etc.), wait 10-30 seconds and retry
-     - Retry up to 3 times before marking as failed
-   - **Capture the URL of your posted comment:**
-     - On Reddit: look for the permalink of your new comment
-     - On X: the page URL after successful reply, or find your reply in the thread
-     - On LinkedIn: no stable URL available, note as posted
-   - If verification fails after retries, log the attempt with `status='failed'` and move to the next platform
-   - **CLOSE THE TAB when done** — after capturing the URL and verifying, close the tab. Do NOT leave tabs open. Close the tab after EVERY page visit — audits, searches, and posts.
-
-6. **Log to database:**
-   ```sql
-   INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
-     thread_title, thread_content, our_url, our_content, our_account,
-     source_turn_id, source_summary, status)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active');
-   ```
-   Also insert into `threads` and `our_posts` tables for backward compatibility.
-
-7. **Sync to remote database** after finishing a posting session (if `sync_script` is configured in `config.json`):
-   ```bash
-   bash <sync_script_path>
-   ```
-
-8. **Report back** with: what was posted, where (URLs), on which platforms.
-
-### Platform-specific notes
-
-**Reddit:**
-- Use old.reddit.com for more reliable automation
-- Comment box is usually a textarea with class `usertext-edit`
-- Target subreddits from `config.json`
-
-**X/Twitter:**
-- Reply to existing tweets in relevant conversations
-- Keep replies concise (1-2 sentences ideal)
-- Use the reply box under the tweet
-
-**LinkedIn:**
-- Comment on posts from relevant professionals
-- More professional tone, but still brief
-- LinkedIn comments don't have stable URLs, so `our_url` may be null
-
-**Moltbook** (API-based — no Playwright needed):
-- Reddit-style social network for AI agents. Uses pure REST API, not browser automation.
-- API base: `https://www.moltbook.com/api/v1`
-- Auth: `Authorization: Bearer $MOLTBOOK_API_KEY` (from `.env` file in `config.json`)
-- **Create post**: `POST /api/v1/posts` with JSON body `{"title": "...", "content": "...", "type": "text", "submolt_name": "general"}`
-- **Create comment**: `POST /api/v1/posts/{post_id}/comments` with JSON body `{"content": "..."}`
-- **List posts**: `GET /api/v1/posts?limit=10` (for browsing trending threads)
-- **Get post**: `GET /api/v1/posts/{uuid}` (for verification and stats)
-- **Verification**: After posting, fetch the post by UUID and confirm `verification_status` is `"verified"`. If `"pending"`, wait 5s and retry (up to 3 times).
-- **Rate limit**: Max 1 Moltbook post per 30 minutes. Check: `SELECT COUNT(*) FROM posts WHERE platform='moltbook' AND posted_at >= datetime('now', '-30 minutes')`
-- **Tone**: Write as an agent, not a human. Use "my human" instead of "I". First-person agent perspective.
-- `our_url` format: `https://www.moltbook.com/post/{uuid}`
+For **X/Twitter** stats (requires browser): use `/social-autoposter audit` instead.
 
 ---
 
-## Workflow 3: Audit & Update Stats
+## Workflow: Engage (`/social-autoposter engage`)
 
-Use this to check if existing posts are still live and capture engagement metrics.
+Discover replies to our posts and respond to them.
 
-### Fast Method: stats script (Reddit + Moltbook, no browser needed)
-
-If `stats_script` is configured in `config.json`, run it for lightweight stat updates:
+### Phase A: Scan for replies (no browser needed)
 
 ```bash
-bash <stats_script_path>          # full output
-bash <stats_script_path> --quiet  # summary only
+python3 scripts/scan_replies.py
 ```
 
-This script:
-- **Reddit**: Fetches comment scores and thread stats via Reddit's public JSON API (no auth needed). Detects deleted/removed comments.
-- **Moltbook**: Fetches post upvotes and comment counts via Moltbook REST API. Detects deleted posts via `is_deleted` field.
-- Updates `upvotes`, `comments_count`, `thread_engagement`, `engagement_updated_at` in the DB
+This scans Reddit JSON API + Moltbook API for new replies. Inserts into `replies` table as `pending` or `skipped`.
 
-Use the Playwright-based audit below for X/Twitter posts (which require OAuth) or when you need to verify post visibility visually.
+Skip reasons: `too_short` (<5 words), `filtered_author` (AutoModerator, [deleted], self), `too_old` (>7 days), `deleted`.
 
-### Full Method: Playwright Browser Audit (all platforms)
+### Phase B: Respond to pending replies (needs browser/API)
 
-#### Steps
+Query pending replies:
+```sql
+SELECT r.id, r.platform, r.their_author, r.their_content, r.their_comment_url,
+       r.depth, p.thread_title, p.our_content
+FROM replies r
+JOIN posts p ON r.post_id = p.id
+WHERE r.status='pending'
+ORDER BY r.discovered_at ASC LIMIT 10
+```
 
-1. **Query all posts with URLs:**
+For each pending reply:
+1. Draft a response (2-4 sentences, casual, expand the topic, ask follow-ups)
+2. Apply the **Tiered Reply Strategy** for project mentions
+3. Post via browser (Reddit/X) or API (Moltbook)
+4. Update the reply record:
    ```sql
-   SELECT id, platform, our_url, our_content, status, upvotes, views, comments_count,
-          status_checked_at, engagement_updated_at
-   FROM posts
-   WHERE our_url IS NOT NULL
-   ORDER BY posted_at DESC
+   UPDATE replies SET status='replied', our_reply_content=?, our_reply_url=?,
+     replied_at=datetime('now') WHERE id=?
    ```
 
-2. **Visit each URL via Playwright:**
-   - For X posts: Look for view count, likes, reposts, replies, bookmarks
-   - For Reddit comments (use old.reddit.com): Look for point count and child comments
-   - For LinkedIn: Skip if no URL
+Max 5 replies per run.
 
-3. **Determine post status:**
-   - `active`: Post/comment is visible and accessible
-   - `deleted`: Returns 404 or "this tweet has been deleted"
-   - `removed`: Visible on the page but marked as removed by moderator
-   - `inactive`: Thread is locked or archived
+### Phase C: X/Twitter replies (browser required)
 
-4. **Update the database:**
+X has no public API for notifications. To discover X replies:
+1. Navigate to `https://x.com/notifications/mentions`
+2. Extract mentions replying to your account
+3. Filter out already-tracked reply IDs, light acknowledgments, and your own replies
+4. Respond to substantive replies (max 5)
+5. Log everything to `replies` table
+
+---
+
+## Workflow: Audit (`/social-autoposter audit`)
+
+Full browser-based audit of all posts. Use for X/Twitter stats or visual verification.
+
+1. Query all posts with URLs:
    ```sql
-   UPDATE posts SET
-     status = ?,
-     status_checked_at = datetime('now'),
-     upvotes = ?,
-     comments_count = ?,
-     views = ?,
-     engagement_updated_at = datetime('now')
-   WHERE id = ?
+   SELECT id, platform, our_url, status, upvotes, views, comments_count
+   FROM posts WHERE our_url IS NOT NULL ORDER BY posted_at DESC
    ```
 
-5. **Report summary:**
-   - Total posts checked
-   - Posts by status (active/deleted/removed/inactive)
-   - Top performing posts by engagement
-   - Posts with declining engagement (may need follow-up)
+2. Visit each URL via browser automation. Check:
+   - `active`: visible and accessible
+   - `deleted`: 404 or "this tweet has been deleted"
+   - `removed`: marked as removed by moderator
+   - `inactive`: thread locked or archived
+
+3. Capture engagement metrics (upvotes, views, comments) and update DB.
+
+4. Report summary: total checked, by status, top performers.
 
 ---
 
-## Our Projects & Links
+## Content Rules
 
-Projects are defined in `config.json` under the `projects` array. Each project has: `name`, `description`, `website`, `github`, and `topics` (keywords that trigger mentioning this project).
+1. **Write like you're texting a coworker.** Lowercase fine. Sentence fragments fine. Never start with "Makes sense" or "The nuance here is." If it sounds like a blog post, rewrite it.
 
-**At runtime, read `config.json` to get the project list.** Match conversation topics to project `topics` arrays to decide which project to mention. Prefer website links when one exists (drives signups). Use GitHub for open source tools without a website.
+2. **First person, specific.** Use concrete numbers and real experiences, not generalizations. Say "I" not "you" or "one."
 
-### Reply Engagement Strategy (Tiered)
+3. **Reply to top comments, not just OP.** High-upvote comments get more eyeballs.
 
-When replying to comments on our posts, use this tiered approach based on conversation context:
+4. **Only comment when you have a real angle from your work.** Use `content_angle` from `config.json`. If the thread doesn't connect to your experience, skip it.
 
-**Tier 1 — Default (no link):** Reply with genuine engagement. Expand the topic, share a specific detail, ask a follow-up question. Build the conversation. Most replies should be Tier 1.
+5. **No product links in top-level comments.** Earn attention first. Links come later via the Tiered Reply Strategy.
 
-**Tier 2 — Natural mention (mention project, maybe link):** When the conversation touches on something we're building and it would sound natural to mention it — do so. Match conversation keywords against project `topics` from `config.json`. Examples: they ask about your setup, they're curious what you're working on, they mention a problem one of your projects solves, or the conversation naturally leads to "yeah I'm actually building something like this." Drop the project name casually. Include the link only if it adds value.
+6. **On Moltbook, write as an agent.** Use "my human" not "I". First-person agent perspective.
 
-**Tier 3 — Direct ask (give the link):** They explicitly ask "what are you building?", "link?", "can I try it?", "is it open source?" — give them the link immediately and naturally.
+7. **Log everything.** Every thread and comment goes in the database.
 
-**Interest signals that trigger Tier 2:**
-- "what are you working on" / "what do you build"
-- "how do you do that" / "what tool do you use"
-- "is there an app for this" / "I wish something like this existed"
-- They describe a problem that matches a project's `topics` from `config.json`
-- They're curious about your workflow details
-- They compliment or ask to learn more about something you mentioned
-- The conversation has gone 2+ replies deep (they're genuinely engaged)
+### Bad vs Good
 
----
-
-## Workflow 4: Reply Engagement (`engage.sh`)
-
-Discover replies to our posts and engage with them. Set up via launchd/cron to run every 2 hours.
-
-```bash
-bash <skill_dir>/skill/engage.sh
-```
-
-### How it works
-
-- **Phase A** (Python, no LLM): Scans Reddit JSON API + Moltbook REST API for new replies to our comments. Inserts into `replies` table as `pending` or `skipped`.
-- **Phase A.5** (Claude + Playwright): Scans X/Twitter notifications for new replies. X has no public API, so this requires browser automation + LLM.
-- **Phase B** (Claude + Playwright/API): Drafts and posts replies to pending Reddit/Moltbook replies. Max 5 per run.
-- **Phase C**: Git sync, log cleanup.
-
-### The `replies` table
-
-Tracks all replies to our posts and our responses:
-```
-id, post_id, platform, their_comment_id, their_author, their_content,
-their_comment_url, our_reply_id, our_reply_content, our_reply_url,
-parent_reply_id, depth, status ('pending'|'replied'|'skipped'|'error'),
-skip_reason, discovered_at, replied_at
-```
-
-### Skip reasons
-- `too_short`: Reply is under 5 words (Reddit/Moltbook) or 1-2 word acknowledgments (X)
-- `filtered_author`: AutoModerator, [deleted], or our own account
-- `too_old`: Reply is older than 7 days
-- `light_acknowledgment`: "Thanks", "Great", "Awesome" — not worth a reply
-- `deleted`: Comment was deleted/removed
-
----
-
-## Quick Reference: Content Rules
-
-1. **Write like you're texting a coworker.** Lowercase is fine. Sentence fragments are fine. Never start with "Makes sense" or "The nuance here is" or "What everyone here is describing." If it sounds like a blog post, rewrite it.
-2. **First person, specific.** Use concrete numbers and real experiences, not abstract generalizations.
-3. **Reply to top comments, not just OP.** Replying to a high-upvote comment puts you in front of more eyeballs and feels more natural than a buried top-level comment.
-4. **Only comment when you have a real angle from your own work.** Use your `content_angle` from `config.json`. If the thread doesn't connect to something specific you've done, skip it.
-5. **No self-promotion in top-level comments.** Never drop a product link in your initial comment on a thread. Earn attention first — share a genuine experience, be helpful, be funny. Let people come to you.
-6. **Mention projects naturally in replies (Tiered Strategy).** When people reply to your comments and show interest, use the Tiered Reply Strategy. Default to Tier 1. Move to Tier 2 when the conversation naturally leads there. Tier 3 when they ask directly.
-7. **Comment on existing threads**: Don't create new posts unless explicitly asked. (Exception: Moltbook — create original posts there since you're an agent with your own account.)
-8. **On Moltbook, write as an agent.** Use "my human" not "I". First-person agent perspective.
-9. **Log everything**: Every thread discovered and every comment posted goes in the database.
-
-### Bad vs Good examples
-
-BAD: "Makes sense — Claude already tries to `| tail -n 50` on its own but by then the tokens are already in context. Intercepting at the proxy layer is the right call."
+BAD: "Makes sense — Claude already tries to `| tail -n 50` on its own but by then the tokens are already in context."
 GOOD: "gonna try this — I run 5 agents in parallel and my API bill is becoming a second rent payment"
 
-BAD: "What everyone here is describing is basically specification-driven development — write a detailed enough spec and Claude can one-shot the feature."
+BAD: "What everyone here is describing is basically specification-driven development."
 GOOD: "I spend more time writing CLAUDE.md specs than I ever spent writing code. the irony is I'm basically doing waterfall now and shipping faster than ever."
 
-BAD: "The gap isn't the AI, it's that nobody wants to be the person who broke the sales pipeline by plugging in an agent that hallucinated a discount."
-GOOD: "we let an agent loose on our deploy pipeline last week. it worked perfectly. nobody trusts it anyway."
+---
+
+## Tiered Reply Strategy
+
+When replying to comments on our posts, escalate project mentions based on conversation context.
+
+**Tier 1 — Default (no link):** Genuine engagement. Expand the topic, ask follow-ups. Most replies.
+
+**Tier 2 — Natural mention:** Conversation touches something you're building. Mention the project casually. Include link only if it adds value. Triggers:
+- "what are you working on" / "what tool do you use"
+- They describe a problem matching a project's `topics` from `config.json`
+- Conversation is 2+ replies deep (genuine interest)
+
+**Tier 3 — Direct ask:** They explicitly ask for a link, to try it, if it's open source. Give it immediately.
+
+---
+
+## Database Schema
+
+```sql
+-- Core tables (see schema.sql for full DDL)
+posts        -- everything we post (platform, urls, content, engagement, status)
+threads      -- threads we've discovered
+our_posts    -- backward-compat post tracking
+replies      -- replies to our posts and our responses
+```
+
+Key fields in `posts`: `id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary`
+
+Key fields in `replies`: `id, post_id, platform, their_author, their_content, our_reply_content, status (pending|replied|skipped|error), depth`
+
+---
+
+## Platform Reference
+
+**Reddit:** Use `old.reddit.com` for reliable automation. Comment box: textarea with class `usertext-edit`. No posting API — browser only.
+
+**X/Twitter:** Reply to existing tweets. 1-2 sentences ideal. No public API for notifications — browser only.
+
+**LinkedIn:** Professional tone, brief. Comments don't have stable URLs. Browser only.
+
+**Moltbook:** Full REST API, no browser needed. Base: `https://www.moltbook.com/api/v1`. Auth: `Bearer $MOLTBOOK_API_KEY`. Agent-first platform — write as an agent.
