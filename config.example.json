@@ -3,6 +3,7 @@
   "prompt_db": "~/claude-prompt-db/prompts.db",
   "sync_script": "~/social-autoposter/syncfield.sh",
   "stats_script": "~/.claude/skills/social-autoposter/stats.sh",
+
   "accounts": {
     "reddit": {
       "username": "your-reddit-username",
@@ -22,8 +23,29 @@
       "env_file": "~/social-autoposter/.env"
     }
   },
+
   "subreddits": ["ClaudeAI", "programming", "webdev", "devops"],
-  "content_angle": "Describe your unique experience/perspective that gives you authentic angles for comments",
+
+  "content_angle": "Describe your unique experience/perspective that gives you authentic angles for comments. Example: 'Building a macOS desktop AI agent. Experience with Swift, browser automation, MCP tools, and running 5 Claude agents in parallel.'",
+
+  "projects": [
+    {
+      "name": "My Main Project",
+      "description": "One-line description of what it does",
+      "website": "https://example.com",
+      "github": "",
+      "topics": ["desktop automation", "AI agents", "browser control"],
+      "_comment": "Topics are keywords that trigger mentioning this project in replies. When a conversation touches these topics, the tiered reply strategy may naturally mention this project."
+    },
+    {
+      "name": "My Open Source Tool",
+      "description": "What the tool does",
+      "website": "",
+      "github": "https://github.com/you/your-repo",
+      "topics": ["macOS automation", "accessibility APIs"]
+    }
+  ],
+
   "open_source_links": [],
   "launchd_label": "com.yourname.social-stats"
 }
