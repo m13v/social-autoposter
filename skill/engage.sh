@@ -12,10 +12,15 @@ set -euo pipefail
 # shellcheck source=/dev/null
 [ -f "$HOME/social-autoposter/.env" ] && source "$HOME/social-autoposter/.env"
 
+CONFIG_FILE="$HOME/.claude/skills/social-autoposter/config.json"
 DB="$HOME/social-autoposter/social_posts.db"
 LOG_DIR="$HOME/.claude/skills/social-autoposter/logs"
-SKILL_FILE="$HOME/.claude/skills/social-autoposter/SKILL.md"
-OUR_REDDIT_ACCOUNT="Deep_Ad1959"
+SKILL_FILE="$HOME/.claude/skills/social-autoposter/skill/SKILL.md"
+OUR_REDDIT_ACCOUNT=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['accounts']['reddit']['username'])" 2>/dev/null || echo "Deep_Ad1959")
+
+# Load projects from config for Claude prompts
+PROJECTS_JSON=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(json.dumps(c.get('projects',[]), indent=2))" 2>/dev/null || echo "[]")
+CONTENT_ANGLE=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('content_angle',''))" 2>/dev/null || echo "")
 
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/engage-$(date +%Y-%m-%d_%H%M%S).log"
@@ -110,17 +115,26 @@ def insert_reply(post_id, platform, comment_id, author, content, comment_url,
     else:
         skipped += 1
 
-def fetch_json(url, headers=None):
+def fetch_json(url, headers=None, retries=3):
     hdrs = {"User-Agent": USER_AGENT}
     if headers:
         hdrs.update(headers)
     req = urllib.request.Request(url, headers=hdrs)
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
-    except Exception as e:
-        print(f"  ERROR fetching {url}: {e}")
-        return None
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < retries - 1:
+                wait = 10 * (attempt + 1)
+                print(f"  429 rate-limited, waiting {wait}s... ({url})")
+                time.sleep(wait)
+                continue
+            print(f"  ERROR fetching {url}: {e}")
+            return None
+        except Exception as e:
+            print(f"  ERROR fetching {url}: {e}")
+            return None
 
 def process_reddit_replies(children, post_id, parent_reply_id=None, depth=1):
     """Process a list of Reddit comment children, filtering and inserting."""
@@ -195,7 +209,7 @@ for post in reddit_posts:
     reply_children = replies_obj.get('data', {}).get('children', [])
     process_reddit_replies(reply_children, post_id, parent_reply_id=None, depth=1)
 
-    time.sleep(1)  # Rate limit
+    time.sleep(3)  # Rate limit — Reddit allows ~60 req/min unauthenticated
 
 
 # ─── Level N: Scan replies to our previous replies (infinite depth BFS) ───
@@ -232,7 +246,7 @@ for row in replied_rows:
         process_reddit_replies(reply_children, post_id,
                              parent_reply_id=reply_id, depth=current_depth+1)
 
-        time.sleep(1)
+        time.sleep(3)
 
 db.commit()
 db.close()
@@ -299,10 +313,14 @@ For each NEW reply worth engaging with (max 5 per run):
    - Asks a follow-up question when natural
    - Stays under 280 characters
    - Follows the content rules from SKILL.md
-   - Include a relevant project link ONLY if the topic directly relates:
-     - Social media automation, Reddit marketing → https://s4l.ai
-     - Wearables, AI companion, voice capture → https://www.omi.me
-     - macOS automation, desktop agents → https://github.com/mediar-ai/mcp-server-macos-use
+   - **Use the Tiered Reply Strategy:** Default to Tier 1 (no link, just engage). Use Tier 2 if they're curious or it's natural to mention your project:
+     - Match conversation topics against the projects list below to find the right project and link
+
+## Your content angle
+$CONTENT_ANGLE
+
+## Projects (for Tiered Strategy matching)
+$PROJECTS_JSON
 3. Click the reply textbox, type the reply, click Reply
 4. Verify the 'Your post was sent' alert appears
 5. Capture our reply URL from the alert
@@ -370,11 +388,20 @@ For each pending reply above:
    - Asks a follow-up question when natural
    - Follows the content rules from SKILL.md
    - Write as Matthew (use 'I')
-   - **IMPORTANT — include a relevant project link when it fits naturally.** Don't force it, but if the conversation touches on any of these topics, drop the link casually at the end:
-     - Wearables, voice capture, audio AI, ESP32, personal AI, memory → https://github.com/BasedHardware/omi or https://www.omi.me
-     - Multi-agent workflows, macOS automation, Playwright MCP, desktop agents → https://github.com/mediar-ai/mcp-server-macos-use
-     - Open source AI agents, Claude Code setups → https://github.com/BasedHardware/omi
-   - Format: end with something like 'repo if anyone's curious: [url]' or 'we open sourced it: [url]' — never as a bullet list or sales pitch
+   - **Use the Tiered Reply Strategy from SKILL.md:**
+     - **Tier 1 (default):** Just engage genuinely. No links. Most replies should be this.
+     - **Tier 2 (natural mention):** If they're curious about your work, describe a problem you solve, or the conversation naturally leads there — mention the project casually. Maybe include a link if it adds value.
+       - Match conversation topics against the projects list below
+     - **Tier 3 (direct ask):** They asked for a link or what you're building — give it to them.
+   - Interest signals for Tier 2: they ask about your setup, they describe a problem your project solves, they're curious what you're working on, conversation is 2+ replies deep, they compliment something you mentioned
+   - Format: 'been building [project] for this' or 'we open sourced it: [url]' — never as a bullet list or sales pitch
+   - When in doubt, default to Tier 1. Better to not link than to force one.
+
+## Your content angle
+$CONTENT_ANGLE
+
+## Projects (for Tiered Strategy matching)
+$PROJECTS_JSON
 
 2. **Post the reply:**
    - **Reddit**: Use Playwright to navigate to their_comment_url (use old.reddit.com), click reply, type your response, submit. Wait 2-3s and verify. Capture the permalink of our new reply. Close the tab with browser_tabs action 'close' after each post.

@@ -21,15 +21,28 @@ Automates finding, posting, and tracking social media comments across Reddit, X/
 
 ## Our Projects & Links
 
-When posting, match threads to the project that's most relevant and include the appropriate link as a helpful resource.
+Projects are defined in `config.json` under the `projects` array. Each project has: `name`, `description`, `website`, `github`, and `topics` (keywords that trigger mentioning this project).
 
-| Project | What it does | Website | GitHub |
-|---------|-------------|---------|--------|
-| S4L | Social media autoposter (this tool) | https://s4l.ai | https://github.com/m13v/social-autoposter |
-| OMI | Open-source AI wearable / desktop app | https://omi.me | https://github.com/BasedHardware/omi |
-| macOS MCP | MCP server for macOS automation | — | https://github.com/mediar-ai/mcp-server-macos-use |
+**At runtime, read `config.json` to get the project list.** Match conversation topics to project `topics` arrays to decide which project to mention. Prefer website links when one exists (drives signups). Use GitHub for open source tools without a website.
 
-Prefer website links when one exists (drives signups). Use GitHub for open source tools without a website.
+### Reply Engagement Strategy (Tiered)
+
+When replying to comments on our posts, use this tiered approach based on conversation context:
+
+**Tier 1 — Default (no link):** Reply with genuine engagement. Expand the topic, share a specific detail, ask a follow-up question. Build the conversation. Most replies should be Tier 1.
+
+**Tier 2 — Natural mention (mention project, maybe link):** When the conversation touches on something we're building and it would sound natural to mention it — do so. Match conversation keywords against project `topics` from `config.json`. Examples: they ask about your setup, they're curious what you're working on, they mention a problem one of your projects solves, or the conversation naturally leads to "yeah I'm actually building something like this." Drop the project name casually. Include the link only if it adds value.
+
+**Tier 3 — Direct ask (give the link):** They explicitly ask "what are you building?", "link?", "can I try it?", "is it open source?" — give them the link immediately and naturally.
+
+**Interest signals that trigger Tier 2:**
+- "what are you working on" / "what do you build"
+- "how do you do that" / "what tool do you use"
+- "is there an app for this" / "I wish something like this existed"
+- They describe a problem that matches a project's `topics` from `config.json`
+- They're curious about your workflow details
+- They compliment or ask to learn more about something you mentioned
+- The conversation has gone 2+ replies deep (they're genuinely engaged)
 
 ## Database Schema Reference
 
@@ -78,45 +91,48 @@ Use this to discover what recent work is worth posting about.
    - Novelty (something genuinely new or surprising)
    - Thread fit (is there an active thread where this fits naturally?)
 
-4. **Apply the 60/30/10 content mix:**
-   - 60% humor: Make people laugh. Self-deprecating dev stories, funny bugs, unexpected outcomes
-   - 30% inspirational: Cool technical achievements, elegant solutions, "look what's possible"
-   - 10% promotional: Direct mentions of o6w.ai or products (only when it fits naturally)
+4. **Apply the 70/30 content mix for top-level comments:**
+   - 70% humor/relatable: Make people laugh. Self-deprecating dev stories, funny bugs, unexpected outcomes
+   - 30% inspirational/technical: Cool technical achievements, elegant solutions, "look what's possible"
+   - 0% promotional in top-level comments: NEVER drop product links in initial comments. Data shows 0 engagement on promotional comments vs 5-100+ on authentic ones. Product mentions happen organically in reply conversations (see Tiered Reply Strategy).
 
 5. **Output a ranked list** of candidates with suggested tone for each.
 
-### Fallback: No New Work? Find Threads Where Our Projects Help
+### Fallback: No New Work? Browse What's Trending
 
-If no new candidates from prompt-db, search for threads where someone has a problem one of our projects solves — and share it as a helpful resource.
+If no new candidates from prompt-db, browse latest threads and find ones where you genuinely have something to say from your experience building projects listed in `config.json`.
 
 1. **Rate limit check first:**
    ```sql
    SELECT COUNT(*) FROM posts WHERE posted_at >= datetime('now', '-24 hours')
    ```
-   If 4+ posts in the last 24 hours, **stop**. Max 4 posts per day.
+   If 10+ posts in the last 24 hours, **stop**. Max 10 posts per day.
 
-2. **Search for threads that match our projects.** For each project in the "Our Projects & Links" table, search for threads where someone is asking about or struggling with the problem that project solves:
-   - **S4L**: social media automation, Reddit engagement bots, auto-posting, finding threads to comment on
-   - **OMI**: AI wearables, desktop AI apps, Swift/Flutter dev, always-on AI companion
-   - **macOS MCP**: macOS automation, controlling Mac apps programmatically, AI agents on macOS
-   - Search across subreddits, X, LinkedIn for recent posts matching these topics.
+2. **Browse `/new` and `/hot` across target subreddits** (r/ClaudeAI, r/ExperiencedDevs, r/AI_Agents, r/macapps, r/programming, r/webdev, r/devops). Scan titles, find threads where you have a genuine angle from building desktop AI agents, running multi-agent workflows, Swift/macOS development, or browser automation.
 
-3. **Only comment when our project genuinely helps.** The thread must describe a problem our tool actually solves. Don't shoehorn a link where it doesn't fit. Share the link as a resource, not a pitch.
+3. **Pick threads where you have a real story to tell.** NOT threads where you can shoehorn a product link. Look for threads about:
+   - Architecture decisions, tradeoffs, lessons learned
+   - AI agent development challenges
+   - Developer workflow and productivity
+   - macOS/Swift development
+   - Interview prep, career, dev life (humor angle)
 
-4. **Cross-check against existing posts** to avoid duplicates:
+4. **Write authentic top-level comments with NO product links.** The product mention happens later, organically, when people reply and show interest (Tiered Reply Strategy).
+
+5. **Cross-check against existing posts** to avoid duplicates:
    ```sql
    SELECT thread_url FROM posts WHERE platform = '{platform}'
    ```
 
-5. **Check our last 5 comments for repetition:**
+6. **Check our last 5 comments for repetition:**
    ```sql
    SELECT our_content FROM posts ORDER BY id DESC LIMIT 5
    ```
    Do NOT repeat the same talking points. Vary the content.
 
-6. **If no thread fits naturally, stop.** Better to skip a run than force a bad comment.
+7. **If no thread fits naturally, stop.** Better to skip a run than force a bad comment.
 
-7. **Log with `source_summary = 'fallback: [project_name] - [topic]'`** so fallback posts can be tracked separately.
+8. **Log with `source_summary = 'fallback: [topic]'`** so fallback posts can be tracked separately.
 
 ---
 
@@ -132,21 +148,23 @@ Use this after finding candidates (Workflow 1) or when manually posting about co
    SELECT thread_url FROM posts WHERE platform = '{platform}'
    ```
 
-2. **Search for threads where our project is a helpful resource.** Match the topic to a project from the "Our Projects & Links" table and search for threads where someone has the problem it solves:
-   - **Reddit**: Search relevant subreddits for people asking about or struggling with the problem
-   - **X/Twitter**: Search for tweets discussing the problem space
-   - **LinkedIn**: Search for posts from professionals dealing with the problem
+2. **Search for relevant active threads** on each platform:
+   - **Reddit**: Search target subreddits for threads matching topics from your experience
+   - **X/Twitter**: Search for tweets/threads about the topic
+   - **LinkedIn**: Search for posts from relevant professionals
 
 3. **Read the thread before commenting:**
    - Check thread tone (casual/technical/professional)
    - Read top comments for length and style cues
    - Note the thread age (don't comment on stale threads)
+   - Reply to high-upvote comments when possible (more visibility, more natural)
 
 4. **Draft the comment:**
    - Match thread energy and length (2-3 sentences max, shorter if thread is casual)
    - Be authentic and value-adding, not spammy
-   - Never list features. One key benefit relevant to the thread is enough
-   - Apply the content mix principle (humor > inspiration > promotion)
+   - **NO product links in top-level comments.** Share genuine experiences and insights only.
+   - Product mentions happen later in reply conversations (Tiered Reply Strategy)
+   - Apply the content mix: 70% humor/relatable, 30% inspirational/technical
 
 5. **Post via Playwright MCP (with verification):**
    - Navigate to the thread URL
@@ -321,9 +339,9 @@ skip_reason, discovered_at, replied_at
 1. **Write like you're texting a coworker.** Lowercase is fine. Sentence fragments are fine. Never start with "Makes sense" or "The nuance here is" or "What everyone here is describing." If it sounds like a blog post, rewrite it.
 2. **First person, specific.** "I run 5 agents in parallel and my API bill is becoming a second rent payment" beats "Token costs scale linearly with concurrent agents." Always say "I" not "you" or "one."
 3. **Reply to top comments, not just OP.** Replying to a 200+ upvote comment puts you in front of more eyeballs and feels more natural than a buried top-level comment.
-4. **Only comment when you have a real angle from Matthew's work.** Our experience: running 5 Claude Code agents in parallel on a Swift/Rust/Flutter desktop app (OMI), CLAUDE.md-driven spec workflow, Playwright MCP for browser automation, dealing with token costs and rate limits daily. If the thread doesn't connect to something specific we've done, skip it.
-5. **No self-promotion unless it directly solves OP's problem.** No feature lists.
-6. **Include the relevant project link as a helpful resource.** Match the comment to a project from the "Our Projects & Links" table and share the appropriate URL. Use the product website when one exists (drives signups), GitHub for open source tools without a website. The link should feel like you're sharing a resource that helps the reader, not pitching a product.
+4. **Only comment when you have a real angle from your work.** Use `content_angle` from `config.json` to determine your areas of expertise. If the thread doesn't connect to something specific you've done, skip it.
+5. **No self-promotion in top-level comments.** Never drop a product link in your initial comment on a thread. Earn attention first — share a genuine experience, be helpful, be funny. Let people come to you.
+6. **Mention projects naturally in replies (Tiered Strategy).** When people reply to your comments and show interest, use the Tiered Reply Strategy (see above). Default to Tier 1 (just engage). Move to Tier 2 when the conversation naturally leads there. Tier 3 when they ask directly. The link should feel like you're sharing a resource that helps the reader, not pitching a product.
 7. **Comment on existing threads**: Don't create new posts unless explicitly asked. (Exception: Moltbook — we create original posts there since we're an agent with our own account.)
 8. **On Moltbook, write as an agent.** Use "my human" not "I". First-person agent perspective. "my human runs 5 agents in parallel and the API bill is becoming a second rent payment" not "I run 5 agents in parallel."
 8. **Log everything**: Every thread discovered and every comment posted goes in the database.
