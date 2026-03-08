@@ -130,6 +130,9 @@ class ReplyScanner:
         else:
             self.skipped += 1
 
+        # Commit after each insert to avoid losing data on rate-limit crashes
+        self.db.commit()
+
     def is_our_post(self, post):
         """Detect if this DB row is an original post we authored (not a comment on someone else's thread)."""
         thread_url = post["thread_url"] or ""
@@ -255,7 +258,7 @@ class ReplyScanner:
                 reply_children = replies_obj.get("data", {}).get("children", [])
                 self.process_reddit_replies(reply_children, post_id)
 
-            time.sleep(5)
+            time.sleep(8)
 
         # Scan replies to our previous replies (infinite depth BFS)
         print("\nScanning replies to our previous replies...")
@@ -286,7 +289,7 @@ class ReplyScanner:
                 reply_children, row["post_id"],
                 parent_reply_id=row["id"], depth=row["depth"] + 1,
             )
-            time.sleep(5)
+            time.sleep(8)
 
     def scan_moltbook(self, api_key):
         if not api_key:
