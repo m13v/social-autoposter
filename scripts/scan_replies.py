@@ -218,7 +218,7 @@ class ReplyScanner:
         print("Scanning Reddit posts for replies...")
         posts = self.db.execute(
             "SELECT id, our_url, thread_url, thread_title, thread_author FROM posts "
-            "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL"
+            "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL AND our_url != '' AND our_url LIKE 'http%'"
         ).fetchall()
 
         for post in posts:
