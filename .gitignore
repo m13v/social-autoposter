@@ -3,3 +3,5 @@ skill/logs/
 .env
 config.json
 .playwright-mcp/
+__pycache__/
+*.db-journal
