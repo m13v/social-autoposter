@@ -52,12 +52,15 @@ def update_reddit(db, user_agent, quiet=False):
     for post in posts:
         total += 1
         post_id, our_url = post[0], post[1]
+        if not our_url or not our_url.startswith("http"):
+            errors += 1
+            continue
         json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
 
         response = fetch_json(json_url, user_agent=user_agent)
         if not response or not isinstance(response, list) or len(response) < 2:
             # Retry once
-            time.sleep(3)
+            time.sleep(5)
             response = fetch_json(json_url, user_agent=user_agent)
             if not response or not isinstance(response, list) or len(response) < 2:
                 errors += 1
@@ -103,7 +106,7 @@ def update_reddit(db, user_agent, quiet=False):
         updated += 1
         results.append({"id": post_id, "score": score, "thread_score": thread_score,
                         "thread_comments": thread_comments, "title": thread_title})
-        time.sleep(1)
+        time.sleep(5)
 
     db.commit()
     return {"total": total, "updated": updated, "deleted": deleted, "removed": removed,
@@ -174,7 +177,7 @@ def main():
     reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "")
     user_agent = f"social-autoposter/1.0 (u/{reddit_username})" if reddit_username else "social-autoposter/1.0"
 
-    db = sqlite3.connect(db_path)
+    db = sqlite3.connect(db_path, timeout=30)
 
     reddit_stats = update_reddit(db, user_agent, quiet=args.quiet)
     moltbook_stats = update_moltbook(db, os.environ.get("MOLTBOOK_API_KEY", ""), quiet=args.quiet)
