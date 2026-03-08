@@ -20,7 +20,7 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-STALENESS_DAYS = 7
+STALENESS_DAYS = 30
 MIN_WORDS = 5
 DEFAULT_DB = os.path.expanduser("~/social-autoposter/social_posts.db")
 CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
@@ -71,7 +71,7 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0", retries=3)
 
 class ReplyScanner:
     def __init__(self, db_path, reddit_account, user_agent="social-autoposter/1.0"):
-        self.db = sqlite3.connect(db_path)
+        self.db = sqlite3.connect(db_path, timeout=30)
         self.db.row_factory = sqlite3.Row
         self.reddit_account = reddit_account
         self.user_agent = user_agent
@@ -130,72 +130,132 @@ class ReplyScanner:
         else:
             self.skipped += 1
 
-    def process_reddit_replies(self, children, post_id, parent_reply_id=None, depth=1):
+    def is_our_post(self, post):
+        """Detect if this DB row is an original post we authored (not a comment on someone else's thread)."""
+        thread_url = post["thread_url"] or ""
+        our_url = post["our_url"] or ""
+        try:
+            thread_author = post["thread_author"] or ""
+        except (IndexError, KeyError):
+            thread_author = ""
+        # Original post: thread_url == our_url, or thread_author is our account
+        if thread_url and our_url and thread_url.rstrip("/") == our_url.rstrip("/"):
+            return True
+        if thread_author and thread_author.lower() in (self.reddit_account.lower(), f"u/{self.reddit_account}".lower()):
+            return True
+        return False
+
+    def process_reddit_comment(self, cdata, post_id, parent_reply_id=None, depth=1):
+        """Process a single Reddit comment and return whether it was added as pending."""
+        author = cdata.get("author", "")
+        body = cdata.get("body", "")
+        comment_id = cdata.get("id", "")
+        created = cdata.get("created_utc")
+        permalink = cdata.get("permalink", "")
+        comment_url = f"https://old.reddit.com{permalink}" if permalink else ""
+
+        if author in self.skip_authors:
+            self.insert_reply(post_id, "reddit", comment_id, author, body, comment_url,
+                              parent_reply_id=parent_reply_id, depth=depth,
+                              status="skipped", skip_reason="filtered_author")
+            return False
+        if body in ("[deleted]", "[removed]"):
+            self.insert_reply(post_id, "reddit", comment_id, author, body, comment_url,
+                              parent_reply_id=parent_reply_id, depth=depth,
+                              status="skipped", skip_reason="deleted")
+            return False
+        if word_count(body) < MIN_WORDS:
+            self.insert_reply(post_id, "reddit", comment_id, author, body, comment_url,
+                              parent_reply_id=parent_reply_id, depth=depth,
+                              status="skipped", skip_reason=f"too_short ({word_count(body)} words)")
+            return False
+        if is_too_old(created):
+            self.insert_reply(post_id, "reddit", comment_id, author, body, comment_url,
+                              parent_reply_id=parent_reply_id, depth=depth,
+                              status="skipped", skip_reason="too_old")
+            return False
+
+        self.insert_reply(post_id, "reddit", comment_id, author, body, comment_url,
+                          parent_reply_id=parent_reply_id, depth=depth)
+        print(f"  NEW (depth {depth}): [{post_id}] u/{author}: {body[:80]}...")
+        return True
+
+    def walk_comment_tree(self, children, post_id, parent_reply_id=None, depth=1, max_depth=5):
+        """Recursively walk a Reddit comment tree, processing all non-our comments."""
         for child in children:
             if child.get("kind") != "t1":
                 continue
             cdata = child.get("data", {})
             author = cdata.get("author", "")
-            body = cdata.get("body", "")
-            comment_id = cdata.get("id", "")
-            created = cdata.get("created_utc")
-            permalink = cdata.get("permalink", "")
-            comment_url = f"https://old.reddit.com{permalink}" if permalink else ""
 
-            if author in self.skip_authors:
-                self.insert_reply(post_id, "reddit", comment_id, author, body, comment_url,
-                                  parent_reply_id=parent_reply_id, depth=depth,
-                                  status="skipped", skip_reason="filtered_author")
-                continue
-            if body in ("[deleted]", "[removed]"):
-                self.insert_reply(post_id, "reddit", comment_id, author, body, comment_url,
-                                  parent_reply_id=parent_reply_id, depth=depth,
-                                  status="skipped", skip_reason="deleted")
-                continue
-            if word_count(body) < MIN_WORDS:
-                self.insert_reply(post_id, "reddit", comment_id, author, body, comment_url,
-                                  parent_reply_id=parent_reply_id, depth=depth,
-                                  status="skipped", skip_reason=f"too_short ({word_count(body)} words)")
-                continue
-            if is_too_old(created):
-                self.insert_reply(post_id, "reddit", comment_id, author, body, comment_url,
-                                  parent_reply_id=parent_reply_id, depth=depth,
-                                  status="skipped", skip_reason="too_old")
-                continue
+            # For original posts: our own comments in the tree are not replies to track,
+            # but we still want to recurse into their children (replies to our replies)
+            is_ours = author.lower() == self.reddit_account.lower()
 
-            self.insert_reply(post_id, "reddit", comment_id, author, body, comment_url,
-                              parent_reply_id=parent_reply_id, depth=depth)
-            print(f"  NEW (depth {depth}): [{post_id}] u/{author}: {body[:80]}...")
+            if not is_ours:
+                self.process_reddit_comment(cdata, post_id, parent_reply_id=parent_reply_id, depth=depth)
+
+            # Recurse into nested replies
+            if depth < max_depth:
+                replies_obj = cdata.get("replies")
+                if replies_obj and isinstance(replies_obj, dict):
+                    nested = replies_obj.get("data", {}).get("children", [])
+                    if nested:
+                        self.walk_comment_tree(nested, post_id, parent_reply_id=parent_reply_id, depth=depth + 1, max_depth=max_depth)
+
+    def process_reddit_replies(self, children, post_id, parent_reply_id=None, depth=1):
+        """Process a flat list of Reddit comments (non-recursive, used for comment-post scanning)."""
+        for child in children:
+            if child.get("kind") != "t1":
+                continue
+            cdata = child.get("data", {})
+            self.process_reddit_comment(cdata, post_id, parent_reply_id=parent_reply_id, depth=depth)
 
     def scan_reddit(self):
         print("Scanning Reddit posts for replies...")
         posts = self.db.execute(
-            "SELECT id, our_url, thread_title FROM posts "
+            "SELECT id, our_url, thread_url, thread_title, thread_author FROM posts "
             "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL"
         ).fetchall()
 
         for post in posts:
             post_id = post["id"]
             our_url = post["our_url"]
-            json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
+            is_original = self.is_our_post(post)
 
-            data = fetch_json(json_url, user_agent=self.user_agent)
-            if not data or not isinstance(data, list) or len(data) < 2:
-                self.errors += 1
-                continue
+            if is_original:
+                # Original post: fetch the post URL and scan ALL top-level comments + their trees
+                json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
+                data = fetch_json(json_url, user_agent=self.user_agent)
+                if not data or not isinstance(data, list) or len(data) < 2:
+                    self.errors += 1
+                    continue
 
-            children = data[1].get("data", {}).get("children", [])
-            if not children:
-                continue
+                children = data[1].get("data", {}).get("children", [])
+                if children:
+                    print(f"  Scanning original post [{post_id}]: {post['thread_title'][:60]}... ({len(children)} top-level comments)")
+                    self.walk_comment_tree(children, post_id, depth=1)
+            else:
+                # Comment on someone else's thread: fetch our comment URL and scan replies to it
+                json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
+                data = fetch_json(json_url, user_agent=self.user_agent)
+                if not data or not isinstance(data, list) or len(data) < 2:
+                    self.errors += 1
+                    continue
 
-            our_comment = children[0].get("data", {})
-            replies_obj = our_comment.get("replies")
-            if not replies_obj or not isinstance(replies_obj, dict):
-                continue
+                children = data[1].get("data", {}).get("children", [])
+                if not children:
+                    continue
 
-            reply_children = replies_obj.get("data", {}).get("children", [])
-            self.process_reddit_replies(reply_children, post_id)
-            time.sleep(3)
+                our_comment = children[0].get("data", {})
+                replies_obj = our_comment.get("replies")
+                if not replies_obj or not isinstance(replies_obj, dict):
+                    continue
+
+                reply_children = replies_obj.get("data", {}).get("children", [])
+                self.process_reddit_replies(reply_children, post_id)
+
+            time.sleep(5)
 
         # Scan replies to our previous replies (infinite depth BFS)
         print("\nScanning replies to our previous replies...")
@@ -226,7 +286,7 @@ class ReplyScanner:
                 reply_children, row["post_id"],
                 parent_reply_id=row["id"], depth=row["depth"] + 1,
             )
-            time.sleep(3)
+            time.sleep(5)
 
     def scan_moltbook(self, api_key):
         if not api_key:
