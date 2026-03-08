@@ -47,7 +47,7 @@ def is_too_old(created_utc):
         return False
 
 
-def fetch_json(url, headers=None, user_agent="social-autoposter/1.0", retries=3):
+def fetch_json(url, headers=None, user_agent="social-autoposter/1.0", retries=5):
     hdrs = {"User-Agent": user_agent}
     if headers:
         hdrs.update(headers)
@@ -58,7 +58,7 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0", retries=3)
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < retries - 1:
-                wait = 10 * (attempt + 1)
+                wait = 30 * (attempt + 1)
                 print(f"  429 rate-limited, waiting {wait}s... ({url})")
                 time.sleep(wait)
                 continue
