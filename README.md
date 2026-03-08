@@ -1,61 +1,80 @@
 # social-autoposter
 
-Automated social posting pipeline for Reddit, X/Twitter, and LinkedIn. Runs as a Claude Code skill with launchd scheduling.
+Automated social posting pipeline for Reddit, X/Twitter, LinkedIn, and Moltbook. Install as an AI agent skill or use the standalone Python scripts.
 
-## Browse the data
+[**Browse the data in Datasette Lite**](https://lite.datasette.io/?url=https://raw.githubusercontent.com/m13v/social-autoposter/main/social_posts.db)
 
-[**Open in Datasette Lite**](https://lite.datasette.io/?url=https://raw.githubusercontent.com/m13v/social-autoposter/main/social_posts.db)
+## Install as a skill
+
+```bash
+git clone https://github.com/m13v/social-autoposter ~/social-autoposter
+```
+
+Then tell your agent: **"set up social autoposter"** — the setup skill walks you through config, DB creation, browser logins, and a test run.
+
+Or set up manually:
+```bash
+cp config.example.json config.json   # edit with your accounts
+sqlite3 social_posts.db < schema.sql # create the database
+bash setup.sh                        # symlinks + launchd (macOS)
+```
 
 ## How it works
 
 ```
-launchd (hourly)          launchd (every 6h)
-      │                         │
-      ▼                         ▼
-   run.sh                   stats.sh
-      │                         │
-      ├─ prompt-db search       ├─ Reddit JSON API
-      ├─ check DB for dupes     ├─ update scores
-      ├─ find thread            ├─ detect deleted
-      ├─ post via Playwright    └─ git push DB
-      └─ log to DB
+SKILL.md (the playbook)
+    │
+    ├── /social-autoposter        → find thread, draft, post, log
+    ├── /social-autoposter stats  → update engagement via API
+    ├── /social-autoposter engage → scan replies, respond
+    └── /social-autoposter audit  → browser-based full audit
+    │
+    ├── scripts/find_threads.py   → thread discovery (no browser)
+    ├── scripts/scan_replies.py   → reply scanning (no browser)
+    └── scripts/update_stats.py   → stats fetching (no browser)
+    │
+    ├── skill/run.sh              → launchd wrapper (hourly)
+    ├── skill/stats.sh            → launchd wrapper (6-hourly)
+    └── skill/engage.sh           → launchd wrapper (2-hourly)
 ```
-
-- **run.sh** — Finds recent dev work via prompt-db, searches for relevant threads, posts a comment via Playwright MCP, logs to SQLite
-- **stats.sh** — Fetches Reddit engagement stats via public JSON API, updates the DB, pushes to GitHub so Datasette Lite stays fresh
 
 ## Structure
 
 ```
 social-autoposter/
-├── social_posts.db          ← SQLite database (committed, browsable via Datasette Lite)
-├── schema.sql               ← DB schema for reproducibility
-├── setup.sh                 ← creates symlinks, loads launchd agents
+├── SKILL.md               <- skill playbook (generic, publishable)
+├── config.example.json    <- config template (accounts, subreddits, content angle)
+├── schema.sql             <- DB schema
+├── setup.sh               <- creates symlinks, loads launchd agents
+├── setup/
+│   └── SKILL.md           <- interactive setup wizard skill
+├── scripts/
+│   ├── find_threads.py    <- find candidate threads via Reddit/Moltbook API
+│   ├── scan_replies.py    <- scan for new replies to our posts via API
+│   └── update_stats.py    <- fetch engagement stats via API
 ├── skill/
-│   ├── SKILL.md             ← skill documentation + content rules
-│   ├── run.sh               ← hourly posting script
-│   ├── stats.sh             ← 6-hourly stats updater
-│   ├── candidates.md        ← historical candidate log
-│   └── logs/                ← gitignored runtime logs
-└── launchd/
-    ├── com.m13v.social-autoposter.plist
-    └── com.m13v.social-stats.plist
+│   ├── SKILL.md           <- personal skill (hardcoded accounts)
+│   ├── run.sh             <- hourly posting (launchd wrapper)
+│   ├── stats.sh           <- 6-hourly stats (launchd wrapper)
+│   ├── engage.sh          <- 2-hourly engagement (launchd wrapper)
+│   └── logs/              <- runtime logs (gitignored)
+├── social_posts.db        <- SQLite database (committed for Datasette)
+├── syncfield.sh           <- sync SQLite -> Neon Postgres
+└── launchd/               <- macOS LaunchAgent plists
 ```
 
-## Setup
+## For other AI agents
 
-```bash
-git clone https://github.com/m13v/social-autoposter ~/social-autoposter
-bash ~/social-autoposter/setup.sh
-```
+The skill is designed to work with any agent that has:
+- **Shell access** (to run Python scripts and sqlite3)
+- **Browser automation** (Playwright, Selenium, etc. for posting)
+- **An LLM** (for drafting comments in the right tone)
 
-This creates symlinks so everything works from its original location:
-- `~/.claude/skills/social-autoposter` → `~/social-autoposter/skill/`
-- `~/.claude/social_posts.db` → `~/social-autoposter/social_posts.db`
-- LaunchAgent plists symlinked into `~/Library/LaunchAgents/`
+The Python scripts handle thread discovery, reply scanning, and stats updates without needing a browser or LLM. The SKILL.md is the playbook — any agent reads it and executes the workflows with its own tools.
 
 ## Accounts
 
 - **Reddit**: u/Deep_Ad1959
 - **X/Twitter**: @m13v_
 - **LinkedIn**: Matthew Diakonov
+- **Moltbook**: matthew-autoposter
