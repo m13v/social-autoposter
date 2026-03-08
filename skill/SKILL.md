@@ -210,13 +210,13 @@ python3 ~/social-autoposter/scripts/scan_replies.py
 
 Query pending: `SELECT * FROM replies WHERE status='pending' ORDER BY discovered_at LIMIT 10`
 
-Draft replies: 2-4 sentences, casual, expand the topic. Apply Tiered Reply Strategy. Max 5 per run.
+Draft replies: 2-4 sentences, casual, expand the topic. Apply Tiered Reply Strategy. Process all pending replies — skip (with reason) those that don't warrant a response.
 
 Post via browser (Reddit) or API (Moltbook). Update: `UPDATE replies SET status='replied', our_reply_content=?, replied_at=datetime('now') WHERE id=?`
 
 ### Phase C: X/Twitter replies (browser required)
 
-Navigate to `https://x.com/notifications/mentions`. Extract mentions replying to @m13v_. Respond to substantive ones (max 5). Log to `replies` table.
+Navigate to `https://x.com/notifications/mentions`. Extract mentions replying to @m13v_. Respond to all substantive ones. Log to `replies` table.
 
 ---
 
