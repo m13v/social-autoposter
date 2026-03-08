@@ -46,27 +46,40 @@ Run the **Workflow: Engage** section:
 1. Navigate to https://x.com/notifications/mentions
 2. Extract mentions replying to @m13v_
 3. Skip already-tracked IDs, light acknowledgments, and your own replies
-4. Respond to substantive new replies (max 5)
+4. Respond to all substantive new replies
 5. Log everything to the replies table
 
 ## Phase B from SKILL.md: Respond to pending replies
 There are $PENDING_COUNT pending replies in the database.
 
+### Priority order:
+1. **Replies on our original posts** (we authored the thread) — these are highest priority since no engagement = bot signal
+2. **Direct questions** ("what tool", "how do you", "can you share") — opportunity to naturally mention our projects (Tiered Reply Strategy from SKILL.md)
+3. **Everything else** — general engagement
+
+### Tiered link strategy (from SKILL.md):
+- **Tier 1 (default):** No link. Genuine engagement, expand topic.
+- **Tier 2 (natural mention):** Conversation touches something we build. Mention casually, link only if it adds value.
+- **Tier 3 (direct ask):** They ask for link/tool/source. Give it immediately.
+
 $(if [ "$PENDING_COUNT" -gt 0 ]; then
     sqlite3 -json "$DB" "
         SELECT r.id, r.platform, r.their_author, r.their_content, r.their_comment_url,
                r.their_comment_id, r.depth,
-               p.thread_title, p.thread_url, p.our_content, p.our_url
+               p.thread_title, p.thread_url, p.our_content, p.our_url,
+               CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post
         FROM replies r
         JOIN posts p ON r.post_id = p.id
         WHERE r.status='pending'
-        ORDER BY r.discovered_at ASC
-        LIMIT 10;"
+        ORDER BY
+            CASE WHEN p.thread_url = p.our_url THEN 0 ELSE 1 END,
+            r.discovered_at ASC;"
 else
     echo "No pending replies."
 fi)
 
-For each reply: draft response, post it, update DB. Max 5 replies.
+Process ALL pending replies. For each: draft response (follow Content Rules + anti-AI-detection rules), post it, update DB.
+Skip replies that don't warrant a response (light acknowledgments like 'thanks', 'so good', troll comments) — mark those as 'skipped' with a skip_reason.
 
 CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close)." --max-turns 80 2>&1 | tee -a "$LOG_FILE"
 
