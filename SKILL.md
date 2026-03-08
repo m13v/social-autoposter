@@ -47,6 +47,19 @@ python3 scripts/update_stats.py --quiet
 
 ---
 
+## Critical: No Parallel Posting
+
+**NEVER launch multiple agents or parallel tasks for posting.** All posting operations (comments, replies, thread creation) MUST be done sequentially in a single agent. Reasons:
+- There is only one shared browser — parallel agents fight over it and cause timeouts
+- Parallel agents cause duplicate posts (same comment posted twice on the same thread)
+- Browser lock conflicts lead to unpredictable failures
+
+This applies to ALL posting workflows: comments on existing threads, self-replies with links, new thread creation, and reply engagement. Even if you have 5 threads to post on, do them one at a time in the same agent.
+
+**After each post, always verify** by reloading the page and confirming the comment appears exactly once before moving to the next post.
+
+---
+
 ## Workflow: Post (`/social-autoposter`)
 
 Find a thread, draft a comment, post it, log it.
