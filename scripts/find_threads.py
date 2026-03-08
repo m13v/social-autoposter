@@ -96,7 +96,7 @@ def fetch_reddit_threads(subreddits, sort="new", limit=10, user_agent="social-au
                 "age_hours": round(age_hours, 1),
                 "selftext": post.get("selftext", "")[:500],
             })
-        time.sleep(1)
+        time.sleep(5)
 
     return threads
 
