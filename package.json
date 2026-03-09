@@ -10,6 +10,7 @@
     "scripts/*.py",
     "schema.sql",
     "config.example.json",
+    ".env.example",
     "SKILL.md",
     "skill/SKILL.md",
     "skill/run.sh",
