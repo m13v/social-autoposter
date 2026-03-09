@@ -97,11 +97,13 @@ function init() {
     console.log('  social_posts.db exists — skipping');
   }
 
-  // Skill symlink: ~/.claude/skills/social-autoposter -> ~/social-autoposter/skill
+  // Skill symlinks
   const skillsDir = path.join(os.homedir(), '.claude', 'skills');
   fs.mkdirSync(skillsDir, { recursive: true });
   linkOrRelink(path.join(DEST, 'skill'), path.join(skillsDir, 'social-autoposter'));
   console.log('  ~/.claude/skills/social-autoposter ->', path.join(DEST, 'skill'));
+  linkOrRelink(path.join(DEST, 'setup'), path.join(skillsDir, 'social-autoposter-setup'));
+  console.log('  ~/.claude/skills/social-autoposter-setup ->', path.join(DEST, 'setup'));
 
   // DB symlink: ~/.claude/social_posts.db -> ~/social-autoposter/social_posts.db
   const claudeDir = path.join(os.homedir(), '.claude');
@@ -143,12 +145,16 @@ function update() {
     console.log('  updated', f);
   }
 
-  // Re-symlink skill and DB in case they broke
+  // Re-symlink skill, setup skill, and DB in case they broke
   const skillsDir = path.join(os.homedir(), '.claude', 'skills');
   const claudeDir = path.join(os.homedir(), '.claude');
   try {
     linkOrRelink(path.join(DEST, 'skill'), path.join(skillsDir, 'social-autoposter'));
     console.log('  re-linked ~/.claude/skills/social-autoposter');
+  } catch {}
+  try {
+    linkOrRelink(path.join(DEST, 'setup'), path.join(skillsDir, 'social-autoposter-setup'));
+    console.log('  re-linked ~/.claude/skills/social-autoposter-setup');
   } catch {}
   try {
     linkOrRelink(path.join(DEST, 'social_posts.db'), path.join(claudeDir, 'social_posts.db'));
