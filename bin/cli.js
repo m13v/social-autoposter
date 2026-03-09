@@ -143,11 +143,16 @@ function update() {
     console.log('  updated', f);
   }
 
-  // Re-symlink skill in case it broke
+  // Re-symlink skill and DB in case they broke
   const skillsDir = path.join(os.homedir(), '.claude', 'skills');
+  const claudeDir = path.join(os.homedir(), '.claude');
   try {
     linkOrRelink(path.join(DEST, 'skill'), path.join(skillsDir, 'social-autoposter'));
     console.log('  re-linked ~/.claude/skills/social-autoposter');
+  } catch {}
+  try {
+    linkOrRelink(path.join(DEST, 'social_posts.db'), path.join(claudeDir, 'social_posts.db'));
+    console.log('  re-linked ~/.claude/social_posts.db');
   } catch {}
 
   console.log('');
