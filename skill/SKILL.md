@@ -61,7 +61,7 @@ python3 ~/social-autoposter/scripts/update_stats.py --quiet
 ```sql
 SELECT COUNT(*) FROM posts WHERE posted_at >= datetime('now', '-24 hours')
 ```
-Max 10 posts per 24 hours. Stop if at limit.
+Max 40 posts per 24 hours. Stop if at limit.
 
 ### 2. Find candidate threads
 
