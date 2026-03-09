@@ -59,7 +59,7 @@ def get_recent_posts(db_path, limit=5):
     return [row[0] for row in rows]
 
 
-def check_rate_limit(db_path, max_per_day=10):
+def check_rate_limit(db_path, max_per_day=40):
     """Return (posts_today, can_post)."""
     db = sqlite3.connect(db_path)
     row = db.execute(
