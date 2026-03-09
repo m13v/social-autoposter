@@ -14,6 +14,7 @@ const COPY_TARGETS = [
   'scripts',
   'schema.sql',
   'config.example.json',
+  '.env.example',
   'SKILL.md',
   'skill',
   'setup',
@@ -67,6 +68,15 @@ function init() {
     console.log('  created config.json from template');
   } else {
     console.log('  config.json exists — skipping');
+  }
+
+  // .env — only if it doesn't exist
+  const envDest = path.join(DEST, '.env');
+  if (!fs.existsSync(envDest)) {
+    fs.copyFileSync(path.join(PKG_ROOT, '.env.example'), envDest);
+    console.log('  created .env from template');
+  } else {
+    console.log('  .env exists — skipping');
   }
 
   // Create DB from schema if missing

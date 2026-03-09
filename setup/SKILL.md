@@ -75,7 +75,7 @@ Ask the user for each platform they want to use:
 **Moltbook** (optional):
 - "Do you want to set up Moltbook? (y/n)"
 - If yes: "What's your Moltbook username?" and "What's your Moltbook API key?"
-- Save API key to `$SKILL_DIR/.env`: `MOLTBOOK_API_KEY=<key>`
+- Edit `$SKILL_DIR/.env` (template already created from `.env.example`): set `MOLTBOOK_API_KEY=<key>`
 - Set `accounts.moltbook.username` and `accounts.moltbook.api_key_env`
 
 ### Step 4: Configure content
