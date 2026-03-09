@@ -91,20 +91,73 @@ Ask the user for each platform they want to use:
 
 ### Step 4: Configure content
 
-Ask the user:
+This step is the most important one. Take your time. The quality of every future post depends on it.
 
-**Subreddits:**
-- "Which subreddits do you want to post in? (comma-separated)"
-- Default suggestion: `ClaudeAI, ClaudeCode, programming, webdev, devops`
+---
 
-**Content angle:**
-- "Describe your unique experience/perspective in 1-2 sentences. This helps the agent write authentic comments from your point of view."
-- Example: "Building a macOS desktop AI agent. Experience with Swift, Claude API, and browser automation."
+**4a. Subreddits**
 
-**Projects** (optional):
-- "Do you have open source projects or products to mention when relevant? (y/n)"
-- If yes, for each project ask: name, description, website URL, GitHub URL, topic keywords
-- Store in `config.json` under `projects` array
+Ask: "Which subreddits do you want to post in? (comma-separated, or press enter for defaults)"
+
+Default suggestion: `ClaudeAI, ClaudeCode, programming, webdev, devops`
+
+Write the list to `config.json` under `subreddits`.
+
+---
+
+**4b. Content angle — interview the user**
+
+Don't just ask for a one-liner. Run a short interview to understand who they are, then write the angle for them.
+
+Ask these questions one at a time. Wait for each answer before asking the next.
+
+**Question 1:** "What are you currently working on or building? Be specific — what does it actually do?"
+
+**Question 2:** "What's your technical background? What languages, tools, or domains do you know well?"
+
+**Question 3:** "What's something you've learned recently from your work that most people in your field don't know yet — or that surprised you?"
+
+**Question 4:** "What's a recurring frustration or problem you've run into that you think others in your community also face?"
+
+**Question 5:** "Do you have any unusual setup or workflow? (e.g. running multiple AI agents, building on niche platforms, working solo on something usually done by teams)"
+
+After collecting all answers, synthesize them into a `content_angle` that:
+- Is 2-4 sentences
+- Is written in first person
+- Names specific tools, numbers, and experiences (not generic claims)
+- Captures what makes their perspective genuinely different from a typical developer
+
+Show the draft to the user:
+> "Here's the content angle I'll use to write comments in your voice:
+> [DRAFT]
+> Does this sound like you? Want to change anything?"
+
+Refine based on their feedback. Only save to `config.json` when they confirm it.
+
+**Example of a weak angle** (don't write like this):
+> "Software developer with experience in AI and web development."
+
+**Example of a strong angle** (aim for this):
+> "Building a macOS desktop AI agent that controls the browser and writes code via voice. Running 5 Claude agents in parallel on the same codebase — learned the hard way that they need zero file overlap or everything breaks. API costs hit $800/month before I got aggressive about caching."
+
+---
+
+**4c. Projects**
+
+Ask: "Do you have any open source projects or products you'd want to mention naturally when the topic comes up? (y/n)"
+
+If yes, for each project run through:
+- "What's the name?"
+- "One sentence: what does it do?"
+- "Website URL? (or leave blank)"
+- "GitHub URL? (or leave blank)"
+- "What topics or keywords would make it relevant to mention? (e.g. 'desktop automation, macOS, accessibility APIs')"
+
+After each project, ask: "Any more projects to add? (y/n)"
+
+Store each under `config.json` → `projects` array with fields: `name`, `description`, `website`, `github`, `topics` (array of strings).
+
+The `topics` keywords are what trigger natural mentions — when someone in a thread mentions one of these topics, the agent knows this project is relevant to bring up.
 
 ### Step 5: Verify browser logins
 
