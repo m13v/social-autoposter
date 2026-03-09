@@ -7,10 +7,15 @@ Automated social posting pipeline for Reddit, X/Twitter, LinkedIn, and Moltbook.
 ## Install as a skill
 
 ```bash
-git clone https://github.com/m13v/social-autoposter ~/social-autoposter
+npx social-autoposter init
 ```
 
 Then tell your agent: **"set up social autoposter"** — the setup skill walks you through config, DB creation, browser logins, and a test run.
+
+To update scripts without touching your config or database:
+```bash
+npx social-autoposter update
+```
 
 Or set up manually:
 ```bash

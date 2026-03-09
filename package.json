@@ -1,0 +1,42 @@
+{
+  "name": "social-autoposter",
+  "version": "1.0.0",
+  "description": "Automated social posting pipeline for Reddit, X/Twitter, LinkedIn, and Moltbook. Install as a Claude Code agent skill.",
+  "bin": {
+    "social-autoposter": "bin/cli.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/*.py",
+    "schema.sql",
+    "config.example.json",
+    "SKILL.md",
+    "skill/SKILL.md",
+    "skill/run.sh",
+    "skill/stats.sh",
+    "skill/engage.sh",
+    "setup/SKILL.md",
+    "launchd/",
+    "syncfield.sh"
+  ],
+  "keywords": [
+    "social-media",
+    "automation",
+    "claude",
+    "claude-code",
+    "ai-agent",
+    "reddit",
+    "twitter",
+    "linkedin"
+  ],
+  "author": "Matthew Diakonov",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/m13v/social-autoposter.git"
+  },
+  "homepage": "https://github.com/m13v/social-autoposter",
+  "engines": {
+    "node": ">=16"
+  }
+}

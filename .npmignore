@@ -1,0 +1,8 @@
+config.json
+social_posts.db
+social_autoposter.db
+.env
+logs/
+scripts/__pycache__/
+skill/logs/
+*.log

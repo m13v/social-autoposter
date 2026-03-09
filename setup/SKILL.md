@@ -25,18 +25,18 @@ Run these steps in order. Ask the user for input at each step. Don't skip ahead.
 
 ### Step 1: Locate the installation
 
-Check if the repo is already cloned:
+Check if already installed:
 
 ```bash
 ls ~/social-autoposter/schema.sql 2>/dev/null && echo "FOUND" || echo "NOT_FOUND"
 ```
 
-If NOT_FOUND, tell the user to clone it:
-```
-git clone https://github.com/m13v/social-autoposter ~/social-autoposter
+If NOT_FOUND, install it:
+```bash
+npx social-autoposter init
 ```
 
-Set `SKILL_DIR` to the repo location (default `~/social-autoposter`).
+Set `SKILL_DIR` to `~/social-autoposter`.
 
 ### Step 2: Create the database
 
