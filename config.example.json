@@ -1,7 +1,5 @@
 {
-  "database": "~/social-autoposter/social_posts.db",
   "prompt_db": "~/claude-prompt-db/prompts.db",
-  "sync_script": "~/social-autoposter/syncfield.sh",
   "stats_script": "~/.claude/skills/social-autoposter/stats.sh",
 
   "accounts": {

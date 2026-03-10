@@ -37,7 +37,7 @@ Key fields you'll use throughout every workflow:
 - `subreddits` — list of subreddits to monitor and post in
 - `content_angle` — the user's unique perspective for writing authentic comments
 - `projects` — products/repos to mention naturally when relevant (each has `name`, `description`, `website`, `github`, `topics`)
-- `database` — path to SQLite DB (default: `~/social-autoposter/social_posts.db`)
+- `database` — unused (DB is Neon Postgres via `DATABASE_URL` in `.env`)
 
 Use these values everywhere below instead of any hardcoded names or links.
 
@@ -60,7 +60,7 @@ python3 ~/social-autoposter/scripts/update_stats.py --quiet
 ### 1. Rate limit check
 
 ```sql
-SELECT COUNT(*) FROM posts WHERE posted_at >= datetime('now', '-24 hours')
+SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours'
 ```
 Max 40 posts per 24 hours. Stop if at limit.
 
@@ -123,7 +123,7 @@ Verify: fetch post by UUID, check `verification_status` is `"verified"`.
 INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
   thread_title, thread_content, our_url, our_content, our_account,
   source_summary, status, posted_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'));
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
 ```
 
 Use the account value from `config.json` for `our_account`.
@@ -144,7 +144,7 @@ Max 1 original post per 24 hours. Max 3 per week.
 
 ```sql
 SELECT platform, thread_title, posted_at FROM posts
-WHERE source_summary LIKE '%' || ? || '%' AND posted_at >= datetime('now', '-30 days')
+WHERE source_summary LIKE '%' || %s || '%' AND posted_at >= NOW() - INTERVAL '30 days'
 ORDER BY posted_at DESC;
 ```
 
@@ -180,7 +180,7 @@ Choose the single best subreddit from `config.json → subreddits` for this topi
 INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
   thread_title, thread_content, our_url, our_content, our_account,
   source_summary, status, posted_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'));
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
 ```
 
 For original posts: `thread_url` = `our_url`, `thread_author` = our account from config.json.
@@ -223,8 +223,8 @@ Draft replies: 2-4 sentences, casual, expand the topic. Apply Tiered Reply Strat
 
 Post via browser (Reddit/X) or API (Moltbook). Update:
 ```sql
-UPDATE replies SET status='replied', our_reply_content=?, our_reply_url=?,
-  replied_at=datetime('now') WHERE id=?
+UPDATE replies SET status='replied', our_reply_content=%s, our_reply_url=%s,
+  replied_at=NOW() WHERE id=%s
 ```
 
 ### Phase C: X/Twitter replies (browser required)

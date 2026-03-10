@@ -39,10 +39,10 @@ If NOT_FOUND, install:
 npx social-autoposter init
 ```
 
-This copies all scripts, schema, skill files, and config templates to `~/social-autoposter/`. It also:
+This copies all scripts, skill files, and config templates to `~/social-autoposter/`. It also:
 - Creates `config.json` from `config.example.json` (if missing)
-- Creates `.env` from `.env.example` (if missing) — includes pre-filled Neon DATABASE_URL
-- Creates `social_posts.db` from `schema.sql` (if missing)
+- Creates `.env` from `.env.example` (if missing) — includes pre-filled Neon `DATABASE_URL`
+- Installs `psycopg2-binary` (Python driver for Neon)
 - Symlinks `~/.claude/skills/social-autoposter` → `~/social-autoposter/skill`
 
 To update scripts later without touching config/data:
@@ -52,18 +52,27 @@ npx social-autoposter update
 
 Set `SKILL_DIR=~/social-autoposter` for the rest of this wizard.
 
-### Step 2: Verify the database
+### Step 2: Verify the Neon database connection
+
+Load the env and test the connection:
 
 ```bash
-sqlite3 "$SKILL_DIR/social_posts.db" "SELECT name FROM sqlite_master WHERE type='table';"
+source "$SKILL_DIR/.env"
+python3 -c "
+import psycopg2, os
+conn = psycopg2.connect(os.environ['DATABASE_URL'])
+cur = conn.cursor()
+cur.execute(\"SELECT COUNT(*) FROM posts\")
+print('Connected. Posts in DB:', cur.fetchone()[0])
+conn.close()
+"
 ```
 
-Expected tables: `posts`, `threads`, `our_posts`, `thread_comments`, `replies`.
+Expected: `Connected. Posts in DB: <number>` (any number is fine, including 0).
 
-If missing, create it:
-```bash
-sqlite3 "$SKILL_DIR/social_posts.db" < "$SKILL_DIR/schema.sql"
-```
+If psycopg2 is missing: `pip3 install psycopg2-binary`
+
+If the connection fails, check that `DATABASE_URL` is set in `$SKILL_DIR/.env`.
 
 ### Step 3: Configure accounts
 
@@ -232,8 +241,8 @@ Print a summary:
 ```
 Social Autoposter Setup Complete
 
-  Installed:   ~/social-autoposter  (v1.0.3 via npm)
-  Database:    ~/social-autoposter/social_posts.db
+  Installed:   ~/social-autoposter  (v1.0.8 via npm)
+  Database:    Neon Postgres (DATABASE_URL in .env)
   Config:      ~/social-autoposter/config.json
   Env:         ~/social-autoposter/.env
   Skill:       ~/.claude/skills/social-autoposter
