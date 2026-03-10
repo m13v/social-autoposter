@@ -19,7 +19,6 @@ const COPY_TARGETS = [
   'skill',
   'setup',
   'launchd',
-  'syncfield.sh',
 ];
 
 // Never overwrite these user files during update
@@ -147,7 +146,7 @@ function update() {
   } catch {}
 
   console.log('');
-  console.log('Update complete. config.json and social_posts.db were preserved.');
+  console.log('Update complete. config.json was preserved.');
 }
 
 const cmd = process.argv[2];

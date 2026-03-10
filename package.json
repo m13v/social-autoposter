@@ -17,8 +17,7 @@
     "skill/stats.sh",
     "skill/engage.sh",
     "setup/SKILL.md",
-    "launchd/",
-    "syncfield.sh"
+    "launchd/"
   ],
   "keywords": [
     "social-media",

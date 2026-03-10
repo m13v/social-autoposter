@@ -26,7 +26,7 @@ Key fields:
 - `subreddits` — target subreddits to monitor
 - `content_angle` — your unique perspective for authentic comments
 - `projects` — your products/repos to mention when relevant (with topic keywords)
-- `database` — path to SQLite DB
+- `database` — unused (DB is Neon Postgres via `DATABASE_URL` in `.env`)
 
 ## Helper Scripts
 
@@ -67,7 +67,7 @@ Find a thread, draft a comment, post it, log it.
 ### 1. Rate limit check
 
 ```sql
-SELECT COUNT(*) FROM posts WHERE posted_at >= datetime('now', '-24 hours')
+SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours'
 ```
 If 40+ posts in the last 24 hours, stop. Max 40/day.
 
@@ -148,12 +148,8 @@ Rate limit: max 1 post per 30 minutes.
 INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
   thread_title, thread_content, our_url, our_content, our_account,
   source_summary, status, posted_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'));
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
 ```
-
-### 8. Sync (if configured)
-
-If `sync_script` is set in `config.json`, run it to push data to a remote database.
 
 ---
 
@@ -210,8 +206,8 @@ For each pending reply:
 3. Post via browser (Reddit/X) or API (Moltbook)
 4. Update the reply record:
    ```sql
-   UPDATE replies SET status='replied', our_reply_content=?, our_reply_url=?,
-     replied_at=datetime('now') WHERE id=?
+   UPDATE replies SET status='replied', our_reply_content=%s, our_reply_url=%s,
+     replied_at=NOW() WHERE id=%s
    ```
 
 Max 5 replies per run.

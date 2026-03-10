@@ -41,7 +41,7 @@ Key fields you'll use throughout every workflow:
 - `subreddits` — list of subreddits to monitor and post in
 - `content_angle` — the user's unique perspective for writing authentic comments
 - `projects` — products/repos to mention naturally when relevant (each has `name`, `description`, `website`, `github`, `topics`)
-- `database` — unused (DB is Neon Postgres via `DATABASE_URL` in `.env`)
+- `database` — unused (Neon Postgres via `DATABASE_URL` in `.env`)
 
 Use these values everywhere below instead of any hardcoded names or links.
 
@@ -205,7 +205,7 @@ After posting, you MUST:
 python3 ~/social-autoposter/scripts/update_stats.py
 ```
 
-After running, view updated stats at `https://s4l.ai/stats/[handle]`. The DB syncs to Neon Postgres via `syncfield.sh` (called automatically by `stats.sh`). Changes appear on the website within ~5 minutes.
+After running, view updated stats at `https://s4l.ai/stats/[handle]`. Changes appear on the website within ~5 minutes.
 
 ---
 

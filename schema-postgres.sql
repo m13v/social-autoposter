@@ -1,4 +1,4 @@
--- schema-postgres.sql — Neon Postgres schema mirroring SQLite for SyncField
+-- schema-postgres.sql — Neon Postgres schema (primary database)
 -- Run once: psql "$DATABASE_URL" -f schema-postgres.sql
 
 CREATE TABLE IF NOT EXISTS posts (
@@ -30,6 +30,28 @@ CREATE TABLE IF NOT EXISTS posts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_posts_platform ON posts(platform);
+
+CREATE TABLE IF NOT EXISTS threads (
+    id SERIAL PRIMARY KEY,
+    platform TEXT NOT NULL,
+    url TEXT NOT NULL UNIQUE,
+    author TEXT,
+    author_handle TEXT,
+    title TEXT,
+    content TEXT,
+    engagement TEXT,
+    discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS our_posts (
+    id SERIAL PRIMARY KEY,
+    thread_id INTEGER REFERENCES threads(id),
+    platform TEXT NOT NULL,
+    url TEXT,
+    content TEXT NOT NULL,
+    account TEXT,
+    posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE IF NOT EXISTS campaigns (
     id INTEGER PRIMARY KEY,
