@@ -1,6 +1,6 @@
 {
   "name": "social-autoposter",
-  "version": "1.0.9",
+  "version": "1.1.0",
   "description": "Automated social posting pipeline for Reddit, X/Twitter, LinkedIn, and Moltbook. Install as a Claude Code agent skill.",
   "bin": {
     "social-autoposter": "bin/cli.js"
@@ -16,8 +16,7 @@
     "skill/run.sh",
     "skill/stats.sh",
     "skill/engage.sh",
-    "setup/SKILL.md",
-    "launchd/"
+    "setup/SKILL.md"
   ],
   "keywords": [
     "social-media",

@@ -8,6 +8,7 @@ const { spawnSync } = require('child_process');
 
 const DEST = path.join(os.homedir(), 'social-autoposter');
 const PKG_ROOT = path.join(__dirname, '..');
+const HOME = os.homedir();
 
 // Files/dirs to copy from npm package to ~/social-autoposter
 const COPY_TARGETS = [
@@ -18,7 +19,6 @@ const COPY_TARGETS = [
   'SKILL.md',
   'skill',
   'setup',
-  'launchd',
 ];
 
 // Never overwrite these user files during update
@@ -42,6 +42,80 @@ function linkOrRelink(target, linkPath) {
   fs.symlinkSync(target, linkPath);
 }
 
+function generatePlists() {
+  // Detect PATH for launchd (include node, homebrew, system)
+  const nodeBin = path.dirname(process.execPath);
+  const pathDirs = new Set([nodeBin, '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']);
+  const launchdPath = [...pathDirs].join(':');
+
+  const plists = [
+    {
+      file: 'com.m13v.social-autoposter.plist',
+      label: 'com.m13v.social-autoposter',
+      script: `${DEST}/skill/run.sh`,
+      interval: 3600,
+      runAtLoad: true,
+      stdoutLog: `${DEST}/skill/logs/launchd-stdout.log`,
+      stderrLog: `${DEST}/skill/logs/launchd-stderr.log`,
+    },
+    {
+      file: 'com.m13v.social-stats.plist',
+      label: 'com.m13v.social-stats',
+      script: `${DEST}/skill/stats.sh`,
+      interval: 21600,
+      runAtLoad: false,
+      stdoutLog: `${DEST}/skill/logs/launchd-stats-stdout.log`,
+      stderrLog: `${DEST}/skill/logs/launchd-stats-stderr.log`,
+    },
+    {
+      file: 'com.m13v.social-engage.plist',
+      label: 'com.m13v.social-engage',
+      script: `${DEST}/skill/engage.sh`,
+      interval: 21600,
+      runAtLoad: false,
+      stdoutLog: `${DEST}/skill/logs/launchd-engage-stdout.log`,
+      stderrLog: `${DEST}/skill/logs/launchd-engage-stderr.log`,
+    },
+  ];
+
+  const launchdDir = path.join(DEST, 'launchd');
+  fs.mkdirSync(launchdDir, { recursive: true });
+
+  for (const p of plists) {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+\t<key>Label</key>
+\t<string>${p.label}</string>
+\t<key>ProgramArguments</key>
+\t<array>
+\t\t<string>/bin/bash</string>
+\t\t<string>${p.script}</string>
+\t</array>
+\t<key>StartInterval</key>
+\t<integer>${p.interval}</integer>
+\t<key>StandardOutPath</key>
+\t<string>${p.stdoutLog}</string>
+\t<key>StandardErrorPath</key>
+\t<string>${p.stderrLog}</string>
+\t<key>EnvironmentVariables</key>
+\t<dict>
+\t\t<key>PATH</key>
+\t\t<string>${launchdPath}</string>
+\t\t<key>HOME</key>
+\t\t<string>${HOME}</string>
+\t</dict>
+\t<key>RunAtLoad</key>
+\t<${p.runAtLoad}/>
+</dict>
+</plist>
+`;
+    fs.writeFileSync(path.join(launchdDir, p.file), xml);
+  }
+  console.log('  generated launchd plists with correct paths');
+}
+
 function init() {
   console.log('Setting up social-autoposter in', DEST);
   fs.mkdirSync(DEST, { recursive: true });
@@ -59,6 +133,9 @@ function init() {
     }
     console.log('  copied', f);
   }
+
+  // Generate launchd plists with user's actual HOME
+  generatePlists();
 
   // config.json — only if it doesn't exist
   const configDest = path.join(DEST, 'config.json');
@@ -133,6 +210,9 @@ function update() {
     }
     console.log('  updated', f);
   }
+
+  // Regenerate launchd plists with correct paths
+  generatePlists();
 
   // Re-symlink skill and setup skill in case they broke
   const skillsDir = path.join(os.homedir(), '.claude', 'skills');
