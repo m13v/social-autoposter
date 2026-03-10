@@ -12,9 +12,13 @@ set -euo pipefail
 [ -f "$HOME/social-autoposter/.env" ] && source "$HOME/social-autoposter/.env"
 
 REPO_DIR="$HOME/social-autoposter"
-DB="$REPO_DIR/social_posts.db"
 SKILL_FILE="$REPO_DIR/skill/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"
+
+if [ -z "${DATABASE_URL:-}" ]; then
+    echo "ERROR: DATABASE_URL not set in ~/social-autoposter/.env"
+    exit 1
+fi
 
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/engage-$(date +%Y-%m-%d_%H%M%S).log"
@@ -27,12 +31,12 @@ log "=== Engagement Loop Run: $(date) ==="
 # PHASE A: Scan for replies (Python, no Claude needed)
 # ═══════════════════════════════════════════════════════
 log "Phase A: Scanning for replies..."
-python3 "$REPO_DIR/scripts/scan_replies.py" --db "$DB" 2>&1 | tee -a "$LOG_FILE" || true
+python3 "$REPO_DIR/scripts/scan_replies.py" 2>&1 | tee -a "$LOG_FILE" || true
 
 # ═══════════════════════════════════════════════════════
 # PHASE B: X/Twitter discovery + all reply engagement
 # ═══════════════════════════════════════════════════════
-PENDING_COUNT=$(sqlite3 "$DB" "SELECT COUNT(*) FROM replies WHERE status='pending';")
+PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending';")
 log "Phase B: $PENDING_COUNT pending replies to handle"
 
 # Always run Phase B — it handles both X/Twitter discovery and pending replies
@@ -63,17 +67,19 @@ There are $PENDING_COUNT pending replies in the database.
 - **Tier 3 (direct ask):** They ask for link/tool/source. Give it immediately.
 
 $(if [ "$PENDING_COUNT" -gt 0 ]; then
-    sqlite3 -json "$DB" "
-        SELECT r.id, r.platform, r.their_author, r.their_content, r.their_comment_url,
-               r.their_comment_id, r.depth,
-               p.thread_title, p.thread_url, p.our_content, p.our_url,
-               CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post
-        FROM replies r
-        JOIN posts p ON r.post_id = p.id
-        WHERE r.status='pending'
-        ORDER BY
-            CASE WHEN p.thread_url = p.our_url THEN 0 ELSE 1 END,
-            r.discovered_at ASC;"
+    psql "$DATABASE_URL" -t -A -c "
+        SELECT json_agg(q) FROM (
+            SELECT r.id, r.platform, r.their_author, r.their_content, r.their_comment_url,
+                   r.their_comment_id, r.depth,
+                   p.thread_title, p.thread_url, p.our_content, p.our_url,
+                   CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post
+            FROM replies r
+            JOIN posts p ON r.post_id = p.id
+            WHERE r.status='pending'
+            ORDER BY
+                CASE WHEN p.thread_url = p.our_url THEN 0 ELSE 1 END,
+                r.discovered_at ASC
+        ) q;"
 else
     echo "No pending replies."
 fi)
@@ -88,20 +94,12 @@ CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close'
 # ═══════════════════════════════════════════════════════
 log "Phase C: Cleanup"
 
-TOTAL_PENDING=$(sqlite3 "$DB" "SELECT COUNT(*) FROM replies WHERE status='pending';")
-TOTAL_REPLIED=$(sqlite3 "$DB" "SELECT COUNT(*) FROM replies WHERE status='replied';")
-TOTAL_SKIPPED=$(sqlite3 "$DB" "SELECT COUNT(*) FROM replies WHERE status='skipped';")
-TOTAL_ERRORS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM replies WHERE status='error';")
+TOTAL_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending';")
+TOTAL_REPLIED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='replied';")
+TOTAL_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='skipped';")
+TOTAL_ERRORS=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='error';")
 
 log "Replies summary: pending=$TOTAL_PENDING replied=$TOTAL_REPLIED skipped=$TOTAL_SKIPPED errors=$TOTAL_ERRORS"
-
-# Git sync
-cd "$REPO_DIR"
-git add social_posts.db
-git diff --cached --quiet || git commit -m "engage $(date '+%Y-%m-%d %H:%M')" && git push 2>/dev/null || true
-
-# Sync SQLite → Neon Postgres
-bash "$REPO_DIR/syncfield.sh" || true
 
 # Delete old logs
 find "$LOG_DIR" -name "engage-*.log" -mtime +7 -delete 2>/dev/null || true
