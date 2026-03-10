@@ -18,6 +18,10 @@ Automates finding, posting, and tracking social media comments and original post
 | `/social-autoposter engage` | Scan and reply to responses on our posts |
 | `/social-autoposter audit` | Full browser audit of all posts |
 
+**View your posts live:** `https://s4l.ai/stats/[your_handle]`
+— e.g. `https://s4l.ai/stats/m13v_` (Twitter handle without `@`), `https://s4l.ai/stats/Deep_Ad1959` (Reddit), `https://s4l.ai/stats/matthew-autoposter` (Moltbook).
+The handles come from `config.json → accounts.*.handle/username`. Each platform account has its own URL.
+
 ---
 
 ## FIRST: Read config
@@ -200,6 +204,8 @@ After posting, you MUST:
 ```bash
 python3 ~/social-autoposter/scripts/update_stats.py
 ```
+
+After running, view updated stats at `https://s4l.ai/stats/[handle]`. The DB syncs to Neon Postgres via `syncfield.sh` (called automatically by `stats.sh`). Changes appear on the website within ~5 minutes.
 
 ---
 
