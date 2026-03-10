@@ -14,15 +14,16 @@ import argparse
 import json
 import os
 import re
-import sqlite3
 import sys
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import db as dbmod
+
 STALENESS_DAYS = 30
 MIN_WORDS = 5
-DEFAULT_DB = os.path.expanduser("~/social-autoposter/social_posts.db")
 CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
 
 
@@ -70,9 +71,8 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0", retries=5)
 
 
 class ReplyScanner:
-    def __init__(self, db_path, reddit_account, user_agent="social-autoposter/1.0"):
-        self.db = sqlite3.connect(db_path, timeout=30)
-        self.db.row_factory = sqlite3.Row
+    def __init__(self, reddit_account, user_agent="social-autoposter/1.0"):
+        self.db = dbmod.get_conn()
         self.reddit_account = reddit_account
         self.user_agent = user_agent
         self.skip_authors = {"AutoModerator", "[deleted]", reddit_account}
@@ -80,31 +80,9 @@ class ReplyScanner:
         self.skipped = 0
         self.errors = 0
 
-        # Ensure replies table exists
-        self.db.execute("""CREATE TABLE IF NOT EXISTS replies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            post_id INTEGER REFERENCES posts(id),
-            platform TEXT NOT NULL,
-            their_comment_id TEXT NOT NULL,
-            their_author TEXT,
-            their_content TEXT,
-            their_comment_url TEXT,
-            our_reply_id TEXT,
-            our_reply_content TEXT,
-            our_reply_url TEXT,
-            parent_reply_id INTEGER REFERENCES replies(id),
-            moltbook_post_uuid TEXT,
-            moltbook_parent_comment_uuid TEXT,
-            depth INTEGER DEFAULT 1,
-            status TEXT DEFAULT 'pending' CHECK(status IN ('pending','replied','skipped','error')),
-            skip_reason TEXT,
-            discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            replied_at TIMESTAMP
-        )""")
-
     def already_tracked(self, platform, comment_id):
         row = self.db.execute(
-            "SELECT COUNT(*) FROM replies WHERE platform=? AND their_comment_id=?",
+            "SELECT COUNT(*) FROM replies WHERE platform=%s AND their_comment_id=%s",
             (platform, str(comment_id)),
         ).fetchone()
         return row[0] > 0
@@ -120,7 +98,7 @@ class ReplyScanner:
             """INSERT INTO replies
             (post_id, platform, their_comment_id, their_author, their_content, their_comment_url,
              parent_reply_id, depth, status, skip_reason, moltbook_post_uuid, moltbook_parent_comment_uuid)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (post_id, platform, comment_id, author, content, comment_url,
              parent_reply_id, depth, status, skip_reason, moltbook_post_uuid, moltbook_parent_comment_uuid),
         )
@@ -218,7 +196,7 @@ class ReplyScanner:
         print("Scanning Reddit posts for replies...")
         posts = self.db.execute(
             "SELECT id, our_url, thread_url, thread_title, thread_author FROM posts "
-            "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL AND our_url != '' AND our_url LIKE 'http%'"
+            "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL AND our_url != '' AND our_url LIKE 'http%%'"
         ).fetchall()
 
         for post in posts:
@@ -264,7 +242,7 @@ class ReplyScanner:
         print("\nScanning replies to our previous replies...")
         replied_rows = self.db.execute(
             "SELECT id, platform, our_reply_url, post_id, depth "
-            "FROM replies WHERE status='replied' AND our_reply_url IS NOT NULL"
+            "FROM replies WHERE status='replied' AND our_reply_url IS NOT NULL",
         ).fetchall()
 
         for row in replied_rows:
@@ -299,7 +277,7 @@ class ReplyScanner:
         print("\nScanning Moltbook posts for replies...")
         posts = self.db.execute(
             "SELECT id, our_url FROM posts "
-            "WHERE platform='moltbook' AND status='active' AND our_url IS NOT NULL"
+            "WHERE platform='moltbook' AND status='active' AND our_url IS NOT NULL",
         ).fetchall()
 
         for post in posts:
@@ -342,20 +320,19 @@ class ReplyScanner:
 
 def main():
     parser = argparse.ArgumentParser(description="Scan for replies to our social posts")
-    parser.add_argument("--db", default=None, help="Path to SQLite database")
     parser.add_argument("--reddit-account", default=None, help="Reddit username")
     args = parser.parse_args()
 
     config = load_config()
-    db_path = args.db or os.path.expanduser(config.get("database", DEFAULT_DB))
     reddit_account = args.reddit_account or config.get("accounts", {}).get("reddit", {}).get("username", "")
 
     if not reddit_account:
         print("ERROR: Reddit account not configured. Set it in config.json or pass --reddit-account")
         sys.exit(1)
 
+    dbmod.load_env()
     user_agent = f"social-autoposter/1.0 (u/{reddit_account})"
-    scanner = ReplyScanner(db_path, reddit_account, user_agent)
+    scanner = ReplyScanner(reddit_account, user_agent)
     scanner.scan_reddit()
 
     moltbook_key = os.environ.get("MOLTBOOK_API_KEY", "")
