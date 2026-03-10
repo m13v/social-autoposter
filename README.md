@@ -2,8 +2,6 @@
 
 Automated social posting pipeline for Reddit, X/Twitter, LinkedIn, and Moltbook. Install as an AI agent skill or use the standalone Python scripts.
 
-[**Browse the data in Datasette Lite**](https://lite.datasette.io/?url=https://raw.githubusercontent.com/m13v/social-autoposter/main/social_posts.db)
-
 ## Install as a skill
 
 ```bash
@@ -20,7 +18,7 @@ npx social-autoposter update
 Or set up manually:
 ```bash
 cp config.example.json config.json   # edit with your accounts
-sqlite3 social_posts.db < schema.sql # create the database
+psql "$DATABASE_URL" -f schema-postgres.sql  # initialize the Neon DB
 bash setup.sh                        # symlinks + launchd (macOS)
 ```
 
@@ -49,11 +47,12 @@ SKILL.md (the playbook)
 social-autoposter/
 ├── SKILL.md               <- skill playbook (generic, publishable)
 ├── config.example.json    <- config template (accounts, subreddits, content angle)
-├── schema.sql             <- DB schema
+├── schema-postgres.sql    <- Neon Postgres DB schema
 ├── setup.sh               <- creates symlinks, loads launchd agents
 ├── setup/
 │   └── SKILL.md           <- interactive setup wizard skill
 ├── scripts/
+│   ├── db.py              <- Neon Postgres connection wrapper
 │   ├── find_threads.py    <- find candidate threads via Reddit/Moltbook API
 │   ├── scan_replies.py    <- scan for new replies to our posts via API
 │   └── update_stats.py    <- fetch engagement stats via API
@@ -63,15 +62,13 @@ social-autoposter/
 │   ├── stats.sh           <- 6-hourly stats (launchd wrapper)
 │   ├── engage.sh          <- 2-hourly engagement (launchd wrapper)
 │   └── logs/              <- runtime logs (gitignored)
-├── social_posts.db        <- SQLite database (committed for Datasette)
-├── syncfield.sh           <- sync SQLite -> Neon Postgres
 └── launchd/               <- macOS LaunchAgent plists
 ```
 
 ## For other AI agents
 
 The skill is designed to work with any agent that has:
-- **Shell access** (to run Python scripts and sqlite3)
+- **Shell access** (to run Python scripts and psql)
 - **Browser automation** (Playwright, Selenium, etc. for posting)
 - **An LLM** (for drafting comments in the right tone)
 
