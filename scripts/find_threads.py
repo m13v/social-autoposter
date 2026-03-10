@@ -13,13 +13,14 @@ import argparse
 import json
 import os
 import re
-import sqlite3
 import sys
 import time
 import urllib.request
 from datetime import datetime, timezone
 
-DEFAULT_DB = os.path.expanduser("~/social-autoposter/social_posts.db")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import db as dbmod
+
 CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
 
 
@@ -43,29 +44,29 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0"):
         return None
 
 
-def get_already_posted(db_path):
+def get_already_posted():
     """Return set of thread URLs we've already posted in."""
-    db = sqlite3.connect(db_path)
-    rows = db.execute("SELECT thread_url FROM posts WHERE thread_url IS NOT NULL").fetchall()
-    db.close()
+    conn = dbmod.get_conn()
+    rows = conn.execute("SELECT thread_url FROM posts WHERE thread_url IS NOT NULL").fetchall()
+    conn.close()
     return {row[0] for row in rows}
 
 
-def get_recent_posts(db_path, limit=5):
+def get_recent_posts(limit=5):
     """Return our last N post contents for repetition checking."""
-    db = sqlite3.connect(db_path)
-    rows = db.execute("SELECT our_content FROM posts ORDER BY id DESC LIMIT ?", [limit]).fetchall()
-    db.close()
+    conn = dbmod.get_conn()
+    rows = conn.execute("SELECT our_content FROM posts ORDER BY id DESC LIMIT %s", [limit]).fetchall()
+    conn.close()
     return [row[0] for row in rows]
 
 
-def check_rate_limit(db_path, max_per_day=40):
+def check_rate_limit(max_per_day=40):
     """Return (posts_today, can_post)."""
-    db = sqlite3.connect(db_path)
-    row = db.execute(
-        "SELECT COUNT(*) FROM posts WHERE posted_at >= datetime('now', '-24 hours')"
+    conn = dbmod.get_conn()
+    row = conn.execute(
+        "SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours'"
     ).fetchone()
-    db.close()
+    conn.close()
     count = row[0]
     return count, count < max_per_day
 
@@ -145,7 +146,6 @@ def filter_threads(threads, already_posted, topic=None):
 
 def main():
     parser = argparse.ArgumentParser(description="Find candidate threads to comment on")
-    parser.add_argument("--db", default=None, help="Path to SQLite database")
     parser.add_argument("--subreddits", default=None, help="Comma-separated subreddits (e.g. ClaudeAI,programming)")
     parser.add_argument("--topic", default=None, help="Filter threads by topic keyword")
     parser.add_argument("--sort", default="new", choices=["new", "hot", "top"], help="Reddit sort order")
@@ -154,19 +154,18 @@ def main():
     args = parser.parse_args()
 
     config = load_config()
-    db_path = args.db or os.path.expanduser(config.get("database", DEFAULT_DB))
     subreddits = args.subreddits.split(",") if args.subreddits else config.get("subreddits", [])
     reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "")
     user_agent = f"social-autoposter/1.0 (u/{reddit_username})" if reddit_username else "social-autoposter/1.0"
 
     # Rate limit check
-    posts_today, can_post = check_rate_limit(db_path)
+    posts_today, can_post = check_rate_limit()
     if not can_post:
         print(json.dumps({"error": "rate_limit", "posts_today": posts_today, "threads": []}))
         sys.exit(1)
 
-    already_posted = get_already_posted(db_path)
-    recent_posts = get_recent_posts(db_path)
+    already_posted = get_already_posted()
+    recent_posts = get_recent_posts()
 
     # Fetch threads
     threads = fetch_reddit_threads(subreddits, sort=args.sort, limit=args.limit, user_agent=user_agent)
