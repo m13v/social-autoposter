@@ -16,8 +16,7 @@ Interactive setup wizard for social-autoposter. Walk the user through configurat
 ## Prerequisites
 
 - Node.js 16+ (for `npx`)
-- `sqlite3` available on PATH
-- Python 3.9+ for running helper scripts
+- Python 3.9+ with `pip3` for running helper scripts
 - A browser automation tool (Playwright MCP, Selenium, etc.) for platform login verification
 
 ---
@@ -31,7 +30,7 @@ Run these steps in order. Ask the user for input at each step. Don't skip ahead.
 Check if already installed:
 
 ```bash
-ls ~/social-autoposter/schema.sql 2>/dev/null && echo "FOUND" || echo "NOT_FOUND"
+ls ~/social-autoposter/schema-postgres.sql 2>/dev/null && echo "FOUND" || echo "NOT_FOUND"
 ```
 
 If NOT_FOUND, install:
@@ -241,7 +240,7 @@ Print a summary:
 ```
 Social Autoposter Setup Complete
 
-  Installed:   ~/social-autoposter  (v1.0.8 via npm)
+  Installed:   ~/social-autoposter  (v1.0.9 via npm)
   Database:    Neon Postgres (DATABASE_URL in .env)
   Config:      ~/social-autoposter/config.json
   Env:         ~/social-autoposter/.env
