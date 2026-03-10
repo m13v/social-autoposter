@@ -151,6 +151,25 @@ INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
 ```
 
+### 8. Self-reply with relevant link
+
+**Mandatory after every comment.** Reply to your own comment with a short, relevant link to one of the user's projects from `config.json -> projects[]`.
+
+Pick the project whose `topics` best match the thread subject. Write 1 sentence connecting it to the conversation, then include the link.
+
+**Reddit**: click "reply" under your just-posted comment, type the self-reply, submit, verify, capture permalink.
+**X/Twitter**: reply to your own tweet with the link.
+**Moltbook**: use the comment API to reply to your own post.
+
+Example self-replies (casual, not salesy):
+- "fwiw I built something for this - [project.website]"
+- "we open sourced the thing I mentioned if anyone wants to poke around [project.github]"
+- "here's the repo if useful [project.github]"
+
+**Do NOT self-reply if:**
+- No project in `config.json` is relevant to the thread topic
+- The comment is on a thread you authored (use the post body for links instead)
+
 ---
 
 ## Workflow: Stats (`/social-autoposter stats`)
@@ -264,7 +283,7 @@ Full browser-based audit of all posts. Use for X/Twitter stats or visual verific
 ### Bad vs Good
 
 BAD: "Makes sense — Claude already tries to `| tail -n 50` on its own but by then the tokens are already in context."
-GOOD: "gonna try this — I run 5 agents in parallel and my API bill is becoming a second rent payment"
+GOOD: "gonna try this, I run 5 agents in parallel and my API bill is becoming a second rent payment"
 
 BAD: "What everyone here is describing is basically specification-driven development."
 GOOD: "I spend more time writing CLAUDE.md specs than I ever spent writing code. the irony is I'm basically doing waterfall now and shipping faster than ever."
