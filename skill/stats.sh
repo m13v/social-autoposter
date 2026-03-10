@@ -7,7 +7,6 @@
 set -euo pipefail
 
 REPO_DIR="$HOME/social-autoposter"
-DB="$REPO_DIR/social_posts.db"
 LOG_DIR="$REPO_DIR/skill/logs"
 QUIET="${1:-}"
 
@@ -22,17 +21,9 @@ echo "[$(date +%H:%M:%S)] Starting stats update" | tee "$LOGFILE"
 
 # Run the Python stats script
 if [ "$QUIET" = "--quiet" ]; then
-    python3 "$REPO_DIR/scripts/update_stats.py" --db "$DB" --quiet 2>&1 | tee -a "$LOGFILE"
+    python3 "$REPO_DIR/scripts/update_stats.py" --quiet 2>&1 | tee -a "$LOGFILE"
 else
-    python3 "$REPO_DIR/scripts/update_stats.py" --db "$DB" 2>&1 | tee -a "$LOGFILE"
+    python3 "$REPO_DIR/scripts/update_stats.py" 2>&1 | tee -a "$LOGFILE"
 fi
 
 echo "[$(date +%H:%M:%S)] Stats update complete" | tee -a "$LOGFILE"
-
-# Sync DB to GitHub for Datasette Lite
-cd "$REPO_DIR"
-git add social_posts.db
-git diff --cached --quiet || git commit -m "stats $(date '+%Y-%m-%d %H:%M')" && git push 2>/dev/null || true
-
-# Sync SQLite → Neon Postgres
-bash "$REPO_DIR/syncfield.sh" || true
