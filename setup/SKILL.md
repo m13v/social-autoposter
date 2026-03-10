@@ -236,7 +236,13 @@ If no: "You can run manually anytime with `/social-autoposter`"
 
 ### Step 8: Summary
 
-Print a summary:
+Read `config.json` accounts and compute each platform's stats URL:
+- Twitter/X handle (strip leading `@`): `https://s4l.ai/stats/HANDLE`
+- Reddit username: `https://s4l.ai/stats/USERNAME`
+- LinkedIn name (URL-encoded spaces as `%20`): `https://s4l.ai/stats/NAME`
+- Moltbook username: `https://s4l.ai/stats/MOLTBOOK_USERNAME`
+
+Print a summary with real values substituted:
 ```
 Social Autoposter Setup Complete
 
@@ -255,6 +261,14 @@ Social Autoposter Setup Complete
   Rate limit:  40 posts per 24 hours
   Automation:  launchd (hourly post, 6h stats, 2h engage)
 
+  Your live stats pages:
+    X/Twitter: https://s4l.ai/stats/HANDLE
+    Reddit:    https://s4l.ai/stats/USERNAME
+    LinkedIn:  https://s4l.ai/stats/NAME
+    Moltbook:  https://s4l.ai/stats/MOLTBOOK_USERNAME
+
   Try it:      /social-autoposter
   Update:      npx social-autoposter update
 ```
+
+Tell the user: "Your stats pages are ready — they'll show posts as soon as your first run completes and syncs to Neon (happens automatically after each post run). Bookmark the links above."
