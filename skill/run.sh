@@ -26,13 +26,14 @@ Run the **Workflow: Post** section. Follow every step in order:
 2. Find candidate threads (use the helper script: python3 $REPO_DIR/scripts/find_threads.py --include-moltbook)
 3. Pick the best thread
 4. Read the thread + top comments
-5. Draft the comment (follow Content Rules)
+5. Draft the comment (follow Content Rules - NEVER use em dashes)
 6. Post it via Playwright MCP
 7. Log to database
-8. Sync
+8. Self-reply with a relevant project link (mandatory - see SKILL.md step 8)
 
 ONE post per run max. If nothing fits, say '## No good thread found' and stop.
 
+CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
 CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close)." --max-turns 50 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
