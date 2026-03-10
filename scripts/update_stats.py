@@ -12,12 +12,13 @@ import argparse
 import json
 import os
 import re
-import sqlite3
 import sys
 import time
 import urllib.request
 
-DEFAULT_DB = os.path.expanduser("~/social-autoposter/social_posts.db")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import db as dbmod
+
 CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
 
 
@@ -80,14 +81,14 @@ def update_reddit(db, user_agent, quiet=False):
         score = comment_data.get("score", 0)
 
         if body in ("[deleted]",) or author == "[deleted]":
-            db.execute("UPDATE posts SET status='deleted', status_checked_at=datetime('now') WHERE id=?", [post_id])
+            db.execute("UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=%s", [post_id])
             deleted += 1
             if not quiet:
                 print(f"DELETED [{post_id}]")
             continue
 
         if body == "[removed]":
-            db.execute("UPDATE posts SET status='removed', status_checked_at=datetime('now') WHERE id=?", [post_id])
+            db.execute("UPDATE posts SET status='removed', status_checked_at=NOW() WHERE id=%s", [post_id])
             removed += 1
             if not quiet:
                 print(f"REMOVED [{post_id}]")
@@ -99,8 +100,8 @@ def update_reddit(db, user_agent, quiet=False):
         engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
 
         db.execute(
-            "UPDATE posts SET upvotes=?, comments_count=?, thread_engagement=?, "
-            "engagement_updated_at=datetime('now'), status_checked_at=datetime('now') WHERE id=?",
+            "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
+            "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
             [score, thread_comments, engagement, post_id],
         )
         updated += 1
@@ -142,7 +143,7 @@ def update_moltbook(db, api_key, quiet=False):
 
         post_data = data.get("post", {})
         if post_data.get("is_deleted"):
-            db.execute("UPDATE posts SET status='deleted', status_checked_at=datetime('now') WHERE id=?", [post_id])
+            db.execute("UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=%s", [post_id])
             deleted += 1
             continue
 
@@ -153,8 +154,8 @@ def update_moltbook(db, api_key, quiet=False):
         engagement = json.dumps({"score": score, "upvotes": upvotes, "comment_count": comment_count})
 
         db.execute(
-            "UPDATE posts SET upvotes=?, comments_count=?, thread_engagement=?, "
-            "engagement_updated_at=datetime('now'), status_checked_at=datetime('now') WHERE id=?",
+            "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
+            "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
             [upvotes, comment_count, engagement, post_id],
         )
         updated += 1
@@ -167,17 +168,16 @@ def update_moltbook(db, api_key, quiet=False):
 
 def main():
     parser = argparse.ArgumentParser(description="Update engagement stats for social posts")
-    parser.add_argument("--db", default=None, help="Path to SQLite database")
     parser.add_argument("--quiet", action="store_true", help="Minimal output")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
     config = load_config()
-    db_path = args.db or os.path.expanduser(config.get("database", DEFAULT_DB))
     reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "")
     user_agent = f"social-autoposter/1.0 (u/{reddit_username})" if reddit_username else "social-autoposter/1.0"
 
-    db = sqlite3.connect(db_path, timeout=30)
+    dbmod.load_env()
+    db = dbmod.get_conn()
 
     reddit_stats = update_reddit(db, user_agent, quiet=args.quiet)
     moltbook_stats = update_moltbook(db, os.environ.get("MOLTBOOK_API_KEY", ""), quiet=args.quiet)
