@@ -9,12 +9,6 @@ echo "Setting up social-autoposter..."
 # Create logs directory
 mkdir -p "$REPO_DIR/skill/logs"
 
-# Initialize DB from schema if it doesn't exist
-if [ ! -f "$REPO_DIR/social_posts.db" ]; then
-    echo "Creating database from schema.sql..."
-    sqlite3 "$REPO_DIR/social_posts.db" < "$REPO_DIR/schema.sql"
-fi
-
 # Create symlinks
 echo "Creating symlinks..."
 
@@ -22,11 +16,6 @@ echo "Creating symlinks..."
 rm -rf "$HOME/.claude/skills/social-autoposter"
 ln -s "$REPO_DIR/skill" "$HOME/.claude/skills/social-autoposter"
 echo "  ~/.claude/skills/social-autoposter -> $REPO_DIR/skill"
-
-# Database
-rm -f "$HOME/.claude/social_posts.db"
-ln -s "$REPO_DIR/social_posts.db" "$HOME/.claude/social_posts.db"
-echo "  ~/.claude/social_posts.db -> $REPO_DIR/social_posts.db"
 
 # LaunchAgent plists
 rm -f "$HOME/Library/LaunchAgents/com.m13v.social-autoposter.plist"
