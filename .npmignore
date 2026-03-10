@@ -1,6 +1,5 @@
 config.json
-social_posts.db
-social_autoposter.db
+*.db
 .env
 logs/
 scripts/__pycache__/
