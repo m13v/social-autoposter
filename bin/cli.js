@@ -12,7 +12,7 @@ const PKG_ROOT = path.join(__dirname, '..');
 // Files/dirs to copy from npm package to ~/social-autoposter
 const COPY_TARGETS = [
   'scripts',
-  'schema.sql',
+  'schema-postgres.sql',
   'config.example.json',
   '.env.example',
   'SKILL.md',
@@ -79,22 +79,19 @@ function init() {
     console.log('  .env exists — skipping');
   }
 
-  // Create DB from schema if missing
-  const dbPath = path.join(DEST, 'social_posts.db');
-  if (!fs.existsSync(dbPath)) {
-    const schemaPath = path.join(DEST, 'schema.sql');
-    const result = spawnSync('sqlite3', [dbPath], {
-      input: fs.readFileSync(schemaPath),
-      stdio: ['pipe', 'inherit', 'inherit'],
-    });
-    if (result.status === 0) {
-      console.log('  created social_posts.db');
+  // Check psycopg2-binary (required to connect to Neon DB)
+  const pip3Check = spawnSync('pip3', ['show', 'psycopg2-binary'], { stdio: 'pipe' });
+  if (pip3Check.status !== 0) {
+    console.log('  installing psycopg2-binary (required for Neon DB)...');
+    const pipInstall = spawnSync('pip3', ['install', 'psycopg2-binary', '-q'], { stdio: 'inherit' });
+    if (pipInstall.status !== 0) {
+      console.warn('  WARNING: psycopg2-binary install failed — run manually:');
+      console.warn('    pip3 install psycopg2-binary');
     } else {
-      console.warn('  WARNING: sqlite3 failed — create DB manually:');
-      console.warn('    sqlite3 ~/social-autoposter/social_posts.db < ~/social-autoposter/schema.sql');
+      console.log('  psycopg2-binary installed');
     }
   } else {
-    console.log('  social_posts.db exists — skipping');
+    console.log('  psycopg2-binary already installed');
   }
 
   // Skill symlinks
