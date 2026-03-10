@@ -23,7 +23,7 @@ const COPY_TARGETS = [
 ];
 
 // Never overwrite these user files during update
-const USER_FILES = new Set(['config.json', 'social_posts.db', '.env']);
+const USER_FILES = new Set(['config.json', '.env']);
 
 function copyDir(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
@@ -102,19 +102,12 @@ function init() {
   linkOrRelink(path.join(DEST, 'setup'), path.join(skillsDir, 'social-autoposter-setup'));
   console.log('  ~/.claude/skills/social-autoposter-setup ->', path.join(DEST, 'setup'));
 
-  // DB symlink: ~/.claude/social_posts.db -> ~/social-autoposter/social_posts.db
-  const claudeDir = path.join(os.homedir(), '.claude');
-  try {
-    linkOrRelink(dbPath, path.join(claudeDir, 'social_posts.db'));
-    console.log('  ~/.claude/social_posts.db ->', dbPath);
-  } catch {}
-
   console.log('');
   console.log('Done! Next steps:');
   console.log('  1. Edit ~/social-autoposter/config.json with your accounts');
   console.log('  2. Tell your Claude agent: "set up social autoposter"');
   console.log('     (uses the setup/SKILL.md wizard for browser login verification)');
-  console.log('  3. Or configure manually and run: bash ~/social-autoposter/setup.sh');
+  console.log('  3. Posts are logged to the shared Neon DB (DATABASE_URL in .env)');
 }
 
 function update() {
@@ -142,9 +135,8 @@ function update() {
     console.log('  updated', f);
   }
 
-  // Re-symlink skill, setup skill, and DB in case they broke
+  // Re-symlink skill and setup skill in case they broke
   const skillsDir = path.join(os.homedir(), '.claude', 'skills');
-  const claudeDir = path.join(os.homedir(), '.claude');
   try {
     linkOrRelink(path.join(DEST, 'skill'), path.join(skillsDir, 'social-autoposter'));
     console.log('  re-linked ~/.claude/skills/social-autoposter');
@@ -152,10 +144,6 @@ function update() {
   try {
     linkOrRelink(path.join(DEST, 'setup'), path.join(skillsDir, 'social-autoposter-setup'));
     console.log('  re-linked ~/.claude/skills/social-autoposter-setup');
-  } catch {}
-  try {
-    linkOrRelink(path.join(DEST, 'social_posts.db'), path.join(claudeDir, 'social_posts.db'));
-    console.log('  re-linked ~/.claude/social_posts.db');
   } catch {}
 
   console.log('');
