@@ -409,6 +409,59 @@ python3 ~/social-autoposter/scripts/scrape_reddit_views.py --from-json /tmp/redd
 
 This matches scraped URLs to DB posts by Reddit comment/post IDs (handles old.reddit vs www.reddit URL format differences).
 
+### Step 3: X/Twitter stats (browser required, logged-out)
+
+X doesn't expose view counts via API. Scrape them from individual tweet pages in **logged-out** mode (clear cookies first if needed). Logged-out view shows only the focal tweet, so stats are always correct. Logged-in view shows the parent tweet first, which gives wrong stats.
+
+1. Get all X posts needing stats:
+```sql
+SELECT id, our_url FROM posts
+WHERE platform='twitter' AND status='active' AND our_url IS NOT NULL
+  AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days')
+ORDER BY id
+```
+
+2. Use `browser_run_code` to navigate to each URL and extract stats. Process in batches of ~20. Use 8-second delays between pages to avoid rate limiting (X blocks after ~50 rapid loads):
+
+```javascript
+async (page) => {
+  const posts = [[id1, "url1"], [id2, "url2"], /* ... */];
+  const results = [];
+  for (const [id, url] of posts) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.waitForTimeout(8000);
+      const stats = await page.evaluate(() => {
+        const group = document.querySelector('[role="group"][aria-label]');
+        if (!group) return null;
+        const label = group.getAttribute('aria-label') || '';
+        if (!label.includes('view')) return null;
+        return label;
+      });
+      if (stats) {
+        const views = (stats.match(/(\d+)\s*views?/i) || [])[1] || '0';
+        const likes = (stats.match(/(\d+)\s*likes?/i) || [])[1] || '0';
+        const replies = (stats.match(/(\d+)\s*repl/i) || [])[1] || '0';
+        results.push({ id, views: parseInt(views), likes: parseInt(likes), replies: parseInt(replies) });
+      } else {
+        results.push({ id, error: 'no stats found' });
+      }
+    } catch (e) {
+      results.push({ id, error: e.message.substring(0, 100) });
+    }
+  }
+  return JSON.stringify(results);
+}
+```
+
+3. Save results to DB:
+```sql
+UPDATE posts SET views=%s, upvotes=%s, comments_count=%s,
+  engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s
+```
+
+**Rate limit note:** X rate-limits by IP after ~50 rapid page loads. If pages start loading blank (just X logo), wait 5-10 minutes before resuming. The 8-second delay between pages prevents this in most cases.
+
 After running, view updated stats at `https://s4l.ai/stats/[handle]`. Changes appear on the website within ~5 minutes.
 
 ---
@@ -503,6 +556,8 @@ GOOD body: Paragraphs, incomplete thoughts, personal details, casual tone, ends 
 
 `posts`: id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary
 
-Platform values: `reddit`, `x`, `twitter`, `linkedin`, `moltbook`, `hackernews`, `github_issues`
+Platform values: `reddit`, `twitter`, `linkedin`, `moltbook`, `hackernews`, `github_issues`
+
+**Important:** Always use `'twitter'` (not `'x'`) for X/Twitter posts. The platform was normalized to `twitter` in the DB.
 
 `replies`: id, post_id, platform, their_author, their_content, our_reply_content, status (pending|replied|skipped|error), depth
