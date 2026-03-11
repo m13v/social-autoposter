@@ -812,7 +812,7 @@ document.querySelectorAll('.tab').forEach(tab => {
   });
 });
 
-document.getElementById('log-job-filter').addEventListener('change', loadLogFiles);
+document.getElementById('log-job-filter').addEventListener('change', () => { loadLogFiles(); startLogAutoRefresh(); });
 document.getElementById('log-file-select').addEventListener('change', e => loadLogContent(e.target.value));
 document.getElementById('log-refresh-btn').addEventListener('click', loadLogFiles);
 document.getElementById('save-settings').addEventListener('click', saveSettings);
