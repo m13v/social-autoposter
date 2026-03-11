@@ -64,7 +64,7 @@ def check_rate_limit(max_per_day=40):
     """Return (posts_today, can_post)."""
     conn = dbmod.get_conn()
     row = conn.execute(
-        "SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours'"
+        "SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours' AND platform != 'github_issues'"
     ).fetchone()
     conn.close()
     count = row[0]
