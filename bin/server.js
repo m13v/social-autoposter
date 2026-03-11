@@ -390,19 +390,24 @@ const HTML = `<!DOCTYPE html>
   .tab { padding: 12px 20px; cursor: pointer; color: #a3a3a3; font-size: 14px; border-bottom: 2px solid transparent; transition: all 0.15s; }
   .tab:hover { color: #e5e5e5; }
   .tab.active { color: #e5e5e5; border-bottom-color: #7c3aed; }
-  .content { padding: 24px; max-width: 1000px; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 16px; }
-  .card { background: #171717; border: 1px solid #262626; border-radius: 12px; padding: 20px; }
-  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-  .card-title { font-size: 16px; font-weight: 600; }
-  .badge { padding: 3px 10px; border-radius: 8px; font-size: 12px; font-weight: 500; }
+  .content { padding: 24px; max-width: 100%; }
+  .job-table { width: 100%; border-collapse: collapse; background: #171717; border: 1px solid #262626; border-radius: 12px; overflow: hidden; }
+  .job-table th { text-align: left; padding: 12px 16px; font-size: 12px; font-weight: 500; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #262626; background: #0f0f0f; }
+  .job-table td { padding: 12px 16px; font-size: 14px; border-bottom: 1px solid #1f1f1f; vertical-align: middle; }
+  .job-table tr:last-child td { border-bottom: none; }
+  .job-table tr:hover { background: #1c1c1c; }
+  .job-name { font-weight: 600; }
+  .badge { padding: 3px 10px; border-radius: 8px; font-size: 12px; font-weight: 500; display: inline-block; }
   .badge.running { background: #1e3a5f; color: #60a5fa; animation: pulse 2s infinite; }
   .badge.scheduled { background: #064e3b; color: #6ee7b7; }
   .badge.stopped { background: #292524; color: #a3a3a3; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+  .job-actions { display: flex; gap: 8px; }
+  .card { background: #171717; border: 1px solid #262626; border-radius: 12px; padding: 20px; }
+  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .card-title { font-size: 16px; font-weight: 600; }
   .card-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 13px; color: #a3a3a3; }
   .card-row span:last-child { color: #e5e5e5; }
-  .card-actions { display: flex; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #262626; }
   .btn { padding: 8px 16px; border-radius: 8px; border: 1px solid #404040; background: #262626; color: #e5e5e5; cursor: pointer; font-size: 13px; transition: all 0.15s; }
   .btn:hover { background: #333; border-color: #525252; }
   .btn.primary { background: #7c3aed; border-color: #7c3aed; color: white; }
@@ -448,7 +453,12 @@ const HTML = `<!DOCTYPE html>
 </div>
 
 <div class="content" id="tab-status">
-  <div class="cards" id="job-cards"></div>
+  <table class="job-table">
+    <thead>
+      <tr><th>Job</th><th>Status</th><th>Interval</th><th>Last Run</th><th>Actions</th></tr>
+    </thead>
+    <tbody id="job-rows"></tbody>
+  </table>
   <div id="pending-section" style="margin-top: 16px;"></div>
 </div>
 
@@ -536,7 +546,7 @@ function fmtInterval(secs) {
 
 let _initialized = false;
 
-function renderJobCard(job) {
+function renderJobRow(job) {
   const intervalOptions = INTERVALS.map(i =>
     '<option value="' + i.value + '"' + (i.value === job.interval ? ' selected' : '') + '>' + i.label + '</option>'
   ).join('');
@@ -544,35 +554,30 @@ function renderJobCard(job) {
   const toggleLabel = job.loaded ? 'Unschedule' : 'Schedule';
   const toggleClass = job.loaded ? 'danger' : 'primary';
 
-  return '<div class="card" data-job="' + job.label + '">' +
-    '<div class="card-header">' +
-      '<span class="card-title">' + job.name + '</span>' +
-      '<span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span>' +
-    '</div>' +
-    '<div class="card-row"><span>Script</span><span>' + job.script + '</span></div>' +
-    '<div class="card-row"><span>Interval</span><span>' +
-      '<select onchange="setInterval_(\\''+job.label+'\\', this.value)">' + intervalOptions + '</select>' +
-    '</span></div>' +
-    '<div class="card-row"><span>Last run</span><span data-field="lastrun">' + relTime(job.lastRun) + '</span></div>' +
-    '<div class="card-actions">' +
+  return '<tr data-job="' + job.label + '">' +
+    '<td><span class="job-name">' + job.name + '</span></td>' +
+    '<td><span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span></td>' +
+    '<td><select onchange="setInterval_(\\''+job.label+'\\', this.value)">' + intervalOptions + '</select></td>' +
+    '<td data-field="lastrun">' + relTime(job.lastRun) + '</td>' +
+    '<td><div class="job-actions">' +
       '<button class="btn ' + toggleClass + '" data-field="toggle" onclick="toggleJob(\\''+job.label+'\\')">'+
         toggleLabel +
       '</button>' +
       '<button class="btn" onclick="runJob(\\''+job.label+'\\')">Run Now</button>' +
-    '</div>' +
-  '</div>';
+    '</div></td>' +
+  '</tr>';
 }
 
-function updateJobCard(card, job) {
+function updateJobRow(row, job) {
   const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
-  const badge = card.querySelector('[data-field="status"]');
+  const badge = row.querySelector('[data-field="status"]');
   badge.textContent = statusLabel;
   badge.className = 'badge ' + job.status;
 
-  const lastrun = card.querySelector('[data-field="lastrun"]');
+  const lastrun = row.querySelector('[data-field="lastrun"]');
   lastrun.textContent = relTime(job.lastRun);
 
-  const toggleBtn = card.querySelector('[data-field="toggle"]');
+  const toggleBtn = row.querySelector('[data-field="toggle"]');
   toggleBtn.textContent = job.loaded ? 'Unschedule' : 'Schedule';
   toggleBtn.className = 'btn ' + (job.loaded ? 'danger' : 'primary');
 }
@@ -589,17 +594,15 @@ async function loadStatus() {
     document.getElementById('pending-badge').textContent =
       (data.pendingReplies != null ? data.pendingReplies : '--') + ' pending';
 
-    const container = document.getElementById('job-cards');
+    const container = document.getElementById('job-rows');
 
     if (!_initialized) {
-      // First render: build all cards
-      container.innerHTML = data.jobs.map(renderJobCard).join('');
+      container.innerHTML = data.jobs.map(renderJobRow).join('');
       _initialized = true;
     } else {
-      // Subsequent updates: patch in place (no flicker, preserves dropdowns)
       data.jobs.forEach(job => {
-        const card = container.querySelector('[data-job="' + job.label + '"]');
-        if (card) updateJobCard(card, job);
+        const row = container.querySelector('[data-job="' + job.label + '"]');
+        if (row) updateJobRow(row, job);
       });
     }
 
