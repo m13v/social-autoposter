@@ -44,6 +44,13 @@ function isJobLoaded(label) {
   } catch { return false; }
 }
 
+function isJobRunning(script) {
+  try {
+    const out = execSync(`pgrep -f "${script}"`, { stdio: 'pipe' }).toString().trim();
+    return out.length > 0;
+  } catch { return false; }
+}
+
 function getPlistInterval(plistPath) {
   try {
     const xml = fs.readFileSync(plistPath, 'utf8');
@@ -119,13 +126,18 @@ function handleApi(req, res) {
     const jobs = JOBS.map(job => {
       const plistPath = path.join(LAUNCHD_DIR, job.plist);
       const loaded = isJobLoaded(job.label);
+      const running = isJobRunning(job.script);
       const interval = getPlistInterval(plistPath);
       const lastLog = getLastLog(job);
+      // status: 'running' (process active), 'scheduled' (loaded, waiting), 'stopped' (not loaded)
+      const status = running ? 'running' : loaded ? 'scheduled' : 'stopped';
       return {
         label: job.label,
         name: job.name,
         script: job.script,
         loaded,
+        running,
+        status,
         interval,
         lastRun: lastLog.time,
         lastLogFile: lastLog.file,
@@ -384,8 +396,10 @@ const HTML = `<!DOCTYPE html>
   .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
   .card-title { font-size: 16px; font-weight: 600; }
   .badge { padding: 3px 10px; border-radius: 8px; font-size: 12px; font-weight: 500; }
-  .badge.on { background: #064e3b; color: #6ee7b7; }
-  .badge.off { background: #292524; color: #a3a3a3; }
+  .badge.running { background: #1e3a5f; color: #60a5fa; animation: pulse 2s infinite; }
+  .badge.scheduled { background: #064e3b; color: #6ee7b7; }
+  .badge.stopped { background: #292524; color: #a3a3a3; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
   .card-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 13px; color: #a3a3a3; }
   .card-row span:last-child { color: #e5e5e5; }
   .card-actions { display: flex; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #262626; }
@@ -435,6 +449,7 @@ const HTML = `<!DOCTYPE html>
 
 <div class="content" id="tab-status">
   <div class="cards" id="job-cards"></div>
+  <div id="pending-section" style="margin-top: 16px;"></div>
 </div>
 
 <div class="content hidden" id="tab-logs">
@@ -533,10 +548,14 @@ async function loadStatus() {
         '<option value="' + i.value + '"' + (i.value === job.interval ? ' selected' : '') + '>' + i.label + '</option>'
       ).join('');
 
+      const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
+      const toggleLabel = job.loaded ? 'Unschedule' : 'Schedule';
+      const toggleClass = job.loaded ? 'danger' : 'primary';
+
       return '<div class="card">' +
         '<div class="card-header">' +
           '<span class="card-title">' + job.name + '</span>' +
-          '<span class="badge ' + (job.loaded ? 'on' : 'off') + '">' + (job.loaded ? 'Running' : 'Stopped') + '</span>' +
+          '<span class="badge ' + job.status + '">' + statusLabel + '</span>' +
         '</div>' +
         '<div class="card-row"><span>Script</span><span>' + job.script + '</span></div>' +
         '<div class="card-row"><span>Interval</span><span>' +
@@ -544,8 +563,8 @@ async function loadStatus() {
         '</span></div>' +
         '<div class="card-row"><span>Last run</span><span>' + relTime(job.lastRun) + '</span></div>' +
         '<div class="card-actions">' +
-          '<button class="btn ' + (job.loaded ? 'danger' : 'primary') + '" onclick="toggleJob(\\''+job.label+'\\')">'+
-            (job.loaded ? 'Stop' : 'Start') +
+          '<button class="btn ' + toggleClass + '" onclick="toggleJob(\\''+job.label+'\\')">'+
+            toggleLabel +
           '</button>' +
           '<button class="btn" onclick="runJob(\\''+job.label+'\\')">Run Now</button>' +
         '</div>' +
