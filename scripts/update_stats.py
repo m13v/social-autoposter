@@ -166,6 +166,47 @@ def update_moltbook(db, api_key, quiet=False):
     return {"total": total, "updated": updated, "deleted": deleted, "errors": errors, "results": results}
 
 
+def get_aggregate_totals(db):
+    """Get aggregate stats across all platforms."""
+    from datetime import datetime, timezone
+
+    row = db.execute(
+        "SELECT SUM(views), SUM(upvotes), SUM(comments_count), COUNT(*), MIN(posted_at) "
+        "FROM posts WHERE status='active'"
+    ).fetchone()
+
+    total_views = row[0] or 0
+    total_upvotes = row[1] or 0
+    total_comments = row[2] or 0
+    total_posts = row[3] or 0
+    first_post = row[4]
+
+    days = 0
+    if first_post:
+        now = datetime.now(first_post.tzinfo) if first_post.tzinfo else datetime.now()
+        days = max((now - first_post).days, 1)
+
+    return {
+        "total_views": total_views,
+        "total_upvotes": total_upvotes,
+        "total_comments": total_comments,
+        "total_posts": total_posts,
+        "days_active": days,
+        "views_per_day": round(total_views / days) if days else 0,
+        "first_post": str(first_post) if first_post else None,
+    }
+
+
+def print_aggregate_totals(totals):
+    """Print a summary line with aggregate totals."""
+    print(f"\n--- Totals ({totals['days_active']} days) ---")
+    print(f"Posts: {totals['total_posts']}  |  "
+          f"Views: {totals['total_views']:,}  |  "
+          f"Upvotes: {totals['total_upvotes']:,}  |  "
+          f"Comments: {totals['total_comments']:,}  |  "
+          f"Views/day: {totals['views_per_day']:,}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Update engagement stats for social posts")
     parser.add_argument("--quiet", action="store_true", help="Minimal output")
@@ -182,9 +223,12 @@ def main():
     reddit_stats = update_reddit(db, user_agent, quiet=args.quiet)
     moltbook_stats = update_moltbook(db, os.environ.get("MOLTBOOK_API_KEY", ""), quiet=args.quiet)
 
+    # Gather aggregate totals across all platforms
+    totals = get_aggregate_totals(db)
+
     db.close()
 
-    output = {"reddit": reddit_stats, "moltbook": moltbook_stats}
+    output = {"reddit": reddit_stats, "moltbook": moltbook_stats, "totals": totals}
 
     if args.json:
         print(json.dumps(output, indent=2))
@@ -202,6 +246,8 @@ def main():
             m = moltbook_stats
             print(f"\nMoltbook: {m['total']} checked, {m['updated']} updated, "
                   f"{m['deleted']} deleted, {m['errors']} errors")
+
+        print_aggregate_totals(totals)
 
 
 if __name__ == "__main__":
