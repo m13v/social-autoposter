@@ -44,11 +44,11 @@ function isJobLoaded(label) {
   } catch { return false; }
 }
 
-function isJobRunning(script) {
+function getJobPids(script) {
   try {
     const out = execSync(`pgrep -f "${script}"`, { stdio: 'pipe' }).toString().trim();
-    return out.length > 0;
-  } catch { return false; }
+    return out.length > 0 ? out.split('\n').map(p => parseInt(p, 10)) : [];
+  } catch { return []; }
 }
 
 function getPlistInterval(plistPath) {
@@ -126,7 +126,8 @@ function handleApi(req, res) {
     const jobs = JOBS.map(job => {
       const plistPath = path.join(LAUNCHD_DIR, job.plist);
       const loaded = isJobLoaded(job.label);
-      const running = isJobRunning(job.script);
+      const pids = getJobPids(job.script);
+      const running = pids.length > 0;
       const interval = getPlistInterval(plistPath);
       const lastLog = getLastLog(job);
       // status: 'running' (process active), 'scheduled' (loaded, waiting), 'stopped' (not loaded)
@@ -137,6 +138,7 @@ function handleApi(req, res) {
         script: job.script,
         loaded,
         running,
+        pids,
         status,
         interval,
         lastRun: lastLog.time,
@@ -189,6 +191,21 @@ function handleApi(req, res) {
     });
     child.unref();
     return json(res, { started: true, pid: child.pid });
+  }
+
+  // POST /api/jobs/:label/stop
+  const stopMatch = p.match(/^\/api\/jobs\/([^/]+)\/stop$/);
+  if (stopMatch && req.method === 'POST') {
+    const label = decodeURIComponent(stopMatch[1]);
+    const job = JOBS.find(j => j.label === label);
+    if (!job) return json(res, { error: 'Unknown job' }, 404);
+    const pids = getJobPids(job.script);
+    for (const pid of pids) {
+      try { process.kill(pid, 'SIGTERM'); } catch {}
+    }
+    // Also kill any child claude processes spawned by the script
+    try { execSync(`pkill -f "claude.*${job.script.replace('.sh', '')}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
+    return json(res, { stopped: true, killedPids: pids });
   }
 
   // POST /api/jobs/:label/interval
@@ -455,7 +472,7 @@ const HTML = `<!DOCTYPE html>
 <div class="content" id="tab-status">
   <table class="job-table">
     <thead>
-      <tr><th>Job</th><th>Status</th><th>Interval</th><th>Last Run</th><th>Actions</th></tr>
+      <tr><th>Job</th><th>Status</th><th></th><th>Interval</th><th>Last Run</th><th></th></tr>
     </thead>
     <tbody id="job-rows"></tbody>
   </table>
@@ -551,20 +568,20 @@ function renderJobRow(job) {
     '<option value="' + i.value + '"' + (i.value === job.interval ? ' selected' : '') + '>' + i.label + '</option>'
   ).join('');
   const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
-  const toggleLabel = job.loaded ? 'Unschedule' : 'Schedule';
-  const toggleClass = job.loaded ? 'danger' : 'primary';
+  const runStopBtn = job.running
+    ? '<button class="btn danger" data-field="runstop" onclick="stopJob(\\''+job.label+'\\')">Stop</button>'
+    : '<button class="btn" data-field="runstop" onclick="runJob(\\''+job.label+'\\')">Run Now</button>';
+  const scheduleBtn = job.loaded
+    ? '<button class="btn danger" data-field="toggle" onclick="toggleJob(\\''+job.label+'\\')">Unschedule</button>'
+    : '<button class="btn primary" data-field="toggle" onclick="toggleJob(\\''+job.label+'\\')">Schedule</button>';
 
   return '<tr data-job="' + job.label + '">' +
     '<td><span class="job-name">' + job.name + '</span></td>' +
     '<td><span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span></td>' +
+    '<td>' + runStopBtn + '</td>' +
     '<td><select onchange="setInterval_(\\''+job.label+'\\', this.value)">' + intervalOptions + '</select></td>' +
     '<td data-field="lastrun">' + relTime(job.lastRun) + '</td>' +
-    '<td><div class="job-actions">' +
-      '<button class="btn ' + toggleClass + '" data-field="toggle" onclick="toggleJob(\\''+job.label+'\\')">'+
-        toggleLabel +
-      '</button>' +
-      '<button class="btn" onclick="runJob(\\''+job.label+'\\')">Run Now</button>' +
-    '</div></td>' +
+    '<td>' + scheduleBtn + '</td>' +
   '</tr>';
 }
 
@@ -576,6 +593,17 @@ function updateJobRow(row, job) {
 
   const lastrun = row.querySelector('[data-field="lastrun"]');
   lastrun.textContent = relTime(job.lastRun);
+
+  const runStopBtn = row.querySelector('[data-field="runstop"]');
+  if (job.running) {
+    runStopBtn.textContent = 'Stop';
+    runStopBtn.className = 'btn danger';
+    runStopBtn.setAttribute('onclick', "stopJob('" + job.label + "')");
+  } else {
+    runStopBtn.textContent = 'Run Now';
+    runStopBtn.className = 'btn';
+    runStopBtn.setAttribute('onclick', "runJob('" + job.label + "')");
+  }
 
   const toggleBtn = row.querySelector('[data-field="toggle"]');
   toggleBtn.textContent = job.loaded ? 'Unschedule' : 'Schedule';
@@ -637,6 +665,15 @@ async function runJob(label) {
   try {
     await fetch('/api/jobs/' + encodeURIComponent(label) + '/run', { method: 'POST' });
     toast('Job started');
+    loadStatus();
+  } catch(e) { toast('Error: ' + e.message, true); }
+}
+
+async function stopJob(label) {
+  try {
+    await fetch('/api/jobs/' + encodeURIComponent(label) + '/stop', { method: 'POST' });
+    toast('Job stopped');
+    loadStatus();
   } catch(e) { toast('Error: ' + e.message, true); }
 }
 
