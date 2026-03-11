@@ -185,10 +185,12 @@ function handleApi(req, res) {
     const job = JOBS.find(j => j.label === label);
     if (!job) return json(res, { error: 'Unknown job' }, 404);
     const scriptPath = path.join(DEST, 'skill', job.script);
+    const jobEnv = { ...process.env, ...loadEnv(), HOME: os.homedir() };
+    delete jobEnv.CLAUDECODE;
     const child = spawn('bash', [scriptPath], {
       detached: true,
       stdio: 'ignore',
-      env: { ...process.env, ...loadEnv(), HOME: os.homedir() },
+      env: jobEnv,
     });
     child.unref();
     return json(res, { started: true, pid: child.pid });
