@@ -431,7 +431,7 @@ WHERE r.status='pending' ORDER BY r.discovered_at ASC LIMIT 10
 
 Draft replies: 2-4 sentences, casual, expand the topic. Apply Tiered Reply Strategy. Max 5 replies per run.
 
-Post via browser (Reddit/X) or API (Moltbook). Update:
+Post via browser (Reddit/X), API (Moltbook), or `gh issue comment` (GitHub Issues — no browser needed). Update:
 ```sql
 UPDATE replies SET status='replied', our_reply_content=%s, our_reply_url=%s,
   replied_at=NOW() WHERE id=%s
