@@ -534,55 +534,86 @@ function fmtInterval(secs) {
   return found ? found.label : Math.round(secs / 3600) + 'h';
 }
 
+let _initialized = false;
+
+function renderJobCard(job) {
+  const intervalOptions = INTERVALS.map(i =>
+    '<option value="' + i.value + '"' + (i.value === job.interval ? ' selected' : '') + '>' + i.label + '</option>'
+  ).join('');
+  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
+  const toggleLabel = job.loaded ? 'Unschedule' : 'Schedule';
+  const toggleClass = job.loaded ? 'danger' : 'primary';
+
+  return '<div class="card" data-job="' + job.label + '">' +
+    '<div class="card-header">' +
+      '<span class="card-title">' + job.name + '</span>' +
+      '<span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span>' +
+    '</div>' +
+    '<div class="card-row"><span>Script</span><span>' + job.script + '</span></div>' +
+    '<div class="card-row"><span>Interval</span><span>' +
+      '<select onchange="setInterval_(\\''+job.label+'\\', this.value)">' + intervalOptions + '</select>' +
+    '</span></div>' +
+    '<div class="card-row"><span>Last run</span><span data-field="lastrun">' + relTime(job.lastRun) + '</span></div>' +
+    '<div class="card-actions">' +
+      '<button class="btn ' + toggleClass + '" data-field="toggle" onclick="toggleJob(\\''+job.label+'\\')">'+
+        toggleLabel +
+      '</button>' +
+      '<button class="btn" onclick="runJob(\\''+job.label+'\\')">Run Now</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function updateJobCard(card, job) {
+  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
+  const badge = card.querySelector('[data-field="status"]');
+  badge.textContent = statusLabel;
+  badge.className = 'badge ' + job.status;
+
+  const lastrun = card.querySelector('[data-field="lastrun"]');
+  lastrun.textContent = relTime(job.lastRun);
+
+  const toggleBtn = card.querySelector('[data-field="toggle"]');
+  toggleBtn.textContent = job.loaded ? 'Unschedule' : 'Schedule';
+  toggleBtn.className = 'btn ' + (job.loaded ? 'danger' : 'primary');
+}
+
 async function loadStatus() {
   try {
-    const res = await fetch('/api/status');
-    const data = await res.json();
+    const [statusRes, pendingRes] = await Promise.all([
+      fetch('/api/status'),
+      fetch('/api/pending'),
+    ]);
+    const data = await statusRes.json();
+    const pending = await pendingRes.json();
 
     document.getElementById('pending-badge').textContent =
       (data.pendingReplies != null ? data.pendingReplies : '--') + ' pending';
 
     const container = document.getElementById('job-cards');
-    container.innerHTML = data.jobs.map(job => {
-      const intervalOptions = INTERVALS.map(i =>
-        '<option value="' + i.value + '"' + (i.value === job.interval ? ' selected' : '') + '>' + i.label + '</option>'
-      ).join('');
 
-      const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
-      const toggleLabel = job.loaded ? 'Unschedule' : 'Schedule';
-      const toggleClass = job.loaded ? 'danger' : 'primary';
+    if (!_initialized) {
+      // First render: build all cards
+      container.innerHTML = data.jobs.map(renderJobCard).join('');
+      _initialized = true;
+    } else {
+      // Subsequent updates: patch in place (no flicker, preserves dropdowns)
+      data.jobs.forEach(job => {
+        const card = container.querySelector('[data-job="' + job.label + '"]');
+        if (card) updateJobCard(card, job);
+      });
+    }
 
-      return '<div class="card">' +
-        '<div class="card-header">' +
-          '<span class="card-title">' + job.name + '</span>' +
-          '<span class="badge ' + job.status + '">' + statusLabel + '</span>' +
-        '</div>' +
-        '<div class="card-row"><span>Script</span><span>' + job.script + '</span></div>' +
-        '<div class="card-row"><span>Interval</span><span>' +
-          '<select onchange="setInterval_(\\''+job.label+'\\', this.value)">' + intervalOptions + '</select>' +
-        '</span></div>' +
-        '<div class="card-row"><span>Last run</span><span>' + relTime(job.lastRun) + '</span></div>' +
-        '<div class="card-actions">' +
-          '<button class="btn ' + toggleClass + '" onclick="toggleJob(\\''+job.label+'\\')">'+
-            toggleLabel +
-          '</button>' +
-          '<button class="btn" onclick="runJob(\\''+job.label+'\\')">Run Now</button>' +
-        '</div>' +
-      '</div>';
-    }).join('');
-
-    // Add pending replies card
-    const pendingRes = await fetch('/api/pending');
-    const pending = await pendingRes.json();
+    // Pending replies - separate full-width section
+    const pendingSection = document.getElementById('pending-section');
     if (pending.count != null) {
       const platformBreakdown = (pending.byPlatform || [])
         .map(p => '<div class="card-row"><span>' + p.platform + '</span><span>' + p.count + '</span></div>')
         .join('');
-      const recentReplies = (pending.recent || []).slice(0, 5)
-        .map(r => '<div class="reply-item"><span class="reply-platform">' + r.platform + '</span> <span class="reply-author">' + (r.their_author || 'unknown') + '</span><div class="reply-text">' + (r.their_content || '').slice(0, 120) + '</div></div>')
+      const recentReplies = (pending.recent || []).slice(0, 10)
+        .map(r => '<div class="reply-item"><span class="reply-platform">' + r.platform + '</span> <span class="reply-author">' + (r.their_author || 'unknown') + '</span><div class="reply-text">' + (r.their_content || '').slice(0, 200) + '</div></div>')
         .join('');
 
-      container.innerHTML += '<div class="card pending-card">' +
+      pendingSection.innerHTML = '<div class="card pending-card">' +
         '<div class="card-header"><span class="card-title">Pending Replies</span><span class="badge" style="background:#4c1d95;color:#c4b5fd;">' + pending.count + '</span></div>' +
         platformBreakdown +
         (recentReplies ? '<div style="margin-top:12px;border-top:1px solid #3b2d63;padding-top:12px;">' + recentReplies + '</div>' : '') +
