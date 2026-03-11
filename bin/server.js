@@ -700,12 +700,27 @@ async function loadLogFiles() {
   if (data.files.length) loadLogContent(data.files[0]);
 }
 
+let _logAutoRefresh = null;
+let _currentLogFile = null;
+
 async function loadLogContent(filename) {
+  _currentLogFile = filename;
   const res = await fetch('/api/logs/' + encodeURIComponent(filename));
   const data = await res.json();
   const el = document.getElementById('log-content');
   el.textContent = data.content || 'Empty log file';
   el.scrollTop = el.scrollHeight;
+}
+
+function startLogAutoRefresh() {
+  stopLogAutoRefresh();
+  _logAutoRefresh = setInterval(() => {
+    if (_currentLogFile) loadLogContent(_currentLogFile);
+  }, 5000);
+}
+
+function stopLogAutoRefresh() {
+  if (_logAutoRefresh) { clearInterval(_logAutoRefresh); _logAutoRefresh = null; }
 }
 
 // Settings
@@ -789,7 +804,8 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.content').forEach(c => c.classList.add('hidden'));
     tab.classList.add('active');
     document.getElementById('tab-' + tab.dataset.tab).classList.remove('hidden');
-    if (tab.dataset.tab === 'logs') loadLogFiles();
+    if (tab.dataset.tab === 'logs') { loadLogFiles(); startLogAutoRefresh(); }
+    else { stopLogAutoRefresh(); }
     if (tab.dataset.tab === 'settings') loadSettings();
   });
 });
