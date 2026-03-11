@@ -87,7 +87,7 @@ fi)
 Process ALL pending replies. For each: draft response (follow Content Rules + anti-AI-detection rules), post it, update DB.
 Skip replies that don't warrant a response (light acknowledgments like 'thanks', 'so good', troll comments) — mark those as 'skipped' with a skip_reason.
 
-CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close)." --max-turns 80 2>&1 | tee -a "$LOG_FILE"
+CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close)." 2>&1 | tee -a "$LOG_FILE"
 
 # ═══════════════════════════════════════════════════════
 # PHASE C: Cleanup
