@@ -41,7 +41,8 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0"):
         return None
 
 
-def update_reddit(db, user_agent, quiet=False):
+def update_reddit(db, user_agent, config=None, quiet=False):
+    config = config or {}
     posts = db.execute(
         "SELECT id, our_url, thread_url FROM posts "
         "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL ORDER BY id"
@@ -52,10 +53,17 @@ def update_reddit(db, user_agent, quiet=False):
 
     for post in posts:
         total += 1
-        post_id, our_url = post[0], post[1]
+        post_id, our_url, thread_url = post[0], post[1], post[2]
         if not our_url or not our_url.startswith("http"):
             errors += 1
             continue
+
+        # Detect if our_url points to a specific comment or just the thread
+        has_comment_id = bool(
+            re.search(r"/comment/[a-z0-9]+", our_url) or
+            re.search(r"/comments/[a-z0-9]+/[^/]+/[a-z0-9]+", our_url)
+        )
+
         json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
 
         response = fetch_json(json_url, user_agent=user_agent)
@@ -67,46 +75,118 @@ def update_reddit(db, user_agent, quiet=False):
                 errors += 1
                 continue
 
-        children = response[1].get("data", {}).get("children", [])
-        if not children:
-            errors += 1
-            continue
-        comment_data = children[0].get("data")
-        if not comment_data:
-            errors += 1
-            continue
+        thread_data = response[0].get("data", {}).get("children", [{}])[0].get("data", {})
+        thread_score = thread_data.get("score", 0)
+        thread_comments = thread_data.get("num_comments", 0)
+        thread_title = thread_data.get("title", "")[:60]
+        thread_author = thread_data.get("author", "")
 
-        body = comment_data.get("body", "")
-        author = comment_data.get("author", "")
-        score = comment_data.get("score", 0)
+        if has_comment_id:
+            # our_url has a comment permalink — response[1] contains the specific comment
+            children = response[1].get("data", {}).get("children", [])
+            if not children:
+                errors += 1
+                continue
+            comment_data = children[0].get("data")
+            if not comment_data:
+                errors += 1
+                continue
 
-        if body in ("[deleted]",) or author == "[deleted]":
-            db.execute("UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=%s", [post_id])
-            deleted += 1
-            if not quiet:
-                print(f"DELETED [{post_id}]")
-            continue
+            body = comment_data.get("body", "")
+            author = comment_data.get("author", "")
+            score = comment_data.get("score", 0)
 
-        if body == "[removed]":
-            db.execute("UPDATE posts SET status='removed', status_checked_at=NOW() WHERE id=%s", [post_id])
-            removed += 1
-            if not quiet:
-                print(f"REMOVED [{post_id}]")
-            continue
+            if body in ("[deleted]",) or author == "[deleted]":
+                db.execute("UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=%s", [post_id])
+                deleted += 1
+                if not quiet:
+                    print(f"DELETED [{post_id}]")
+                continue
 
-        thread_score = response[0].get("data", {}).get("children", [{}])[0].get("data", {}).get("score", 0)
-        thread_comments = response[0].get("data", {}).get("children", [{}])[0].get("data", {}).get("num_comments", 0)
-        thread_title = response[0].get("data", {}).get("children", [{}])[0].get("data", {}).get("title", "")[:60]
-        engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
+            if body == "[removed]":
+                db.execute("UPDATE posts SET status='removed', status_checked_at=NOW() WHERE id=%s", [post_id])
+                removed += 1
+                if not quiet:
+                    print(f"REMOVED [{post_id}]")
+                continue
 
-        db.execute(
-            "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
-            "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
-            [score, thread_comments, engagement, post_id],
-        )
-        updated += 1
-        results.append({"id": post_id, "score": score, "thread_score": thread_score,
-                        "thread_comments": thread_comments, "title": thread_title})
+            engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
+            db.execute(
+                "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
+                "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
+                [score, thread_comments, engagement, post_id],
+            )
+            updated += 1
+            results.append({"id": post_id, "score": score, "thread_score": thread_score,
+                            "thread_comments": thread_comments, "title": thread_title})
+        else:
+            # our_url is a thread URL without a comment ID
+            # Check if it's our original post (we are the thread author)
+            is_our_post = thread_author.lower() == config.get("accounts", {}).get("reddit", {}).get("username", "").lower()
+
+            if is_our_post:
+                # Original post — use thread-level stats (they ARE our stats)
+                if thread_data.get("removed_by_category"):
+                    db.execute("UPDATE posts SET status='removed', status_checked_at=NOW() WHERE id=%s", [post_id])
+                    removed += 1
+                    if not quiet:
+                        print(f"REMOVED (thread) [{post_id}]")
+                    continue
+
+                engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
+                db.execute(
+                    "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
+                    "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
+                    [thread_score, thread_comments, engagement, post_id],
+                )
+                updated += 1
+                results.append({"id": post_id, "score": thread_score, "thread_score": thread_score,
+                                "thread_comments": thread_comments, "title": thread_title})
+            else:
+                # Comment without permalink — we can't get comment-specific stats
+                # Only update thread engagement metadata, don't touch upvotes/comments_count
+                # Check if our comment is still visible by searching response[1]
+                our_found = False
+                our_removed = False
+                our_username = config.get("accounts", {}).get("reddit", {}).get("username", "")
+                children = response[1].get("data", {}).get("children", [])
+                for child in children:
+                    cd = child.get("data", {})
+                    if cd.get("author", "").lower() == our_username.lower():
+                        our_found = True
+                        if cd.get("body") == "[removed]":
+                            our_removed = True
+                        elif cd.get("body") in ("[deleted]",) or cd.get("author") == "[deleted]":
+                            our_removed = True
+                        else:
+                            # Found our comment with stats — update
+                            score = cd.get("score", 0)
+                            engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
+                            db.execute(
+                                "UPDATE posts SET upvotes=%s, thread_engagement=%s, "
+                                "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
+                                [score, engagement, post_id],
+                            )
+                            updated += 1
+                            results.append({"id": post_id, "score": score, "thread_score": thread_score,
+                                            "thread_comments": thread_comments, "title": thread_title})
+                        break
+
+                if our_removed:
+                    db.execute("UPDATE posts SET status='removed', status_checked_at=NOW() WHERE id=%s", [post_id])
+                    removed += 1
+                    if not quiet:
+                        print(f"REMOVED (no permalink) [{post_id}]")
+                elif not our_found:
+                    # Comment not in top-level replies — just update checked timestamp
+                    engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
+                    db.execute(
+                        "UPDATE posts SET thread_engagement=%s, status_checked_at=NOW() WHERE id=%s",
+                        [engagement, post_id],
+                    )
+                    if not quiet:
+                        print(f"SKIP (no permalink, comment not in top-level) [{post_id}]")
+
         time.sleep(5)
 
     db.commit()
@@ -220,7 +300,7 @@ def main():
     dbmod.load_env()
     db = dbmod.get_conn()
 
-    reddit_stats = update_reddit(db, user_agent, quiet=args.quiet)
+    reddit_stats = update_reddit(db, user_agent, config=config, quiet=args.quiet)
     moltbook_stats = update_moltbook(db, os.environ.get("MOLTBOOK_API_KEY", ""), quiet=args.quiet)
 
     # Gather aggregate totals across all platforms
