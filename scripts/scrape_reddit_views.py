@@ -5,6 +5,18 @@ Reddit doesn't expose view counts via API. Views are scraped from the
 profile page by Claude using MCP Playwright, then saved to a JSON file.
 This script reads that JSON and updates the `views` column in the DB.
 
+IMPORTANT — Browser scraping notes for Claude:
+  Reddit virtualizes the DOM: items scrolled off-screen get removed.
+  You MUST collect view data incrementally as you scroll — NOT after
+  scrolling to the bottom. Use this pattern:
+    1. Collect visible articles + view counts
+    2. Scroll down ~600px
+    3. Wait 800-1500ms for new content
+    4. Collect again (dedup by URL in a Map/dict)
+    5. Repeat until no new articles load (check article count, not scroll height)
+  View counts appear as text nodes matching /^\d[\d,.]*[KkMm]?\s*views?$/
+  inside <article> elements. Parse "1.3K views" -> 1300, "2 views" -> 2.
+
 Usage:
     python3 scripts/scrape_reddit_views.py --from-json /tmp/reddit_views.json
     python3 scripts/scrape_reddit_views.py --from-json /tmp/reddit_views.json --json
