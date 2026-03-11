@@ -90,7 +90,7 @@ Skip replies that don't warrant a response (light acknowledgments like 'thanks',
 For **github_issues** platform replies: post via gh issue comment NUMBER -R OWNER/REPO (no browser needed).
 Extract OWNER/REPO and issue number from the their_comment_url field.
 
-CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close)." 2>&1 | tee -a "$LOG_FILE"
+CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close)." --max-turns 500 2>&1 | tee -a "$LOG_FILE"
 
 # ═══════════════════════════════════════════════════════
 # PHASE C: Cleanup
