@@ -223,6 +223,93 @@ After posting, you MUST:
 
 ---
 
+## Workflow: GitHub Issues (`/social-autoposter github`)
+
+Find open GitHub issues across all public repos where your expertise adds value, post helpful comments, then self-reply with relevant project links.
+
+### 1. Rate limit check
+
+```sql
+SELECT COUNT(*) FROM posts WHERE platform='github_issues' AND posted_at >= NOW() - INTERVAL '24 hours'
+```
+Max 6 GitHub issue comments per 24 hours (3 issues x 2 comments each). Stop if at limit.
+
+### 2. Search for relevant issues
+
+Use `gh search issues` across all of GitHub. Search for topics from `config.json → accounts.github.search_topics` and your `content_angle`.
+
+```bash
+gh search issues "TOPIC" --limit 10 --state open --sort updated
+```
+
+Run 3-5 searches with different topic keywords. Look for issues where:
+- Your real experience from `content_angle` is directly relevant
+- The issue is active (updated recently, has discussion)
+- You haven't already commented: `SELECT thread_url FROM posts WHERE platform='github_issues'`
+- The issue is a feature request, architecture discussion, or bug you've encountered - not a simple typo/docs fix
+
+### 3. Read the issue
+
+```bash
+gh api repos/OWNER/REPO/issues/NUMBER --jq '.title,.body'
+```
+
+Also check existing comments to avoid repeating what others said:
+```bash
+gh api repos/OWNER/REPO/issues/NUMBER/comments --jq '.[].body' | head -200
+```
+
+### 4. Draft the comment
+
+Same Content Rules as other platforms. Be genuinely helpful:
+- Share specific technical details from your experience
+- Mention concrete numbers, gotchas, implementation details
+- 3-6 sentences. No fluff, no "great issue!" openers
+- First person, casual tone
+- **No project links in the main comment** - save for self-reply
+
+### 5. Post it
+
+```bash
+gh issue comment NUMBER -R OWNER/REPO --body "YOUR COMMENT"
+```
+
+Capture the returned comment URL.
+
+### 6. Log it
+
+```sql
+INSERT INTO posts (platform, thread_url, thread_author, thread_title, our_url,
+  our_content, our_account, source_summary, status, posted_at)
+VALUES ('github_issues', %s, %s, %s, %s, %s, 'm13v', %s, 'active', NOW());
+```
+
+### 7. Self-reply with relevant link
+
+Post a follow-up comment linking to the most relevant project from `config.json → projects[]`:
+
+```bash
+gh issue comment NUMBER -R OWNER/REPO --body "YOUR SELF-REPLY WITH LINK"
+```
+
+Example self-replies:
+- "btw we open-sourced our implementation of this: [project.github]"
+- "our MCP server does exactly this if you want to look at the code: [project.github]"
+- "we built something similar: [project.github] - handles the [specific thing] mentioned above"
+
+Log the self-reply too:
+```sql
+INSERT INTO posts (platform, thread_url, thread_title, our_url,
+  our_content, our_account, source_summary, status, posted_at)
+VALUES ('github_issues', %s, %s, %s, %s, 'm13v', 'GitHub issue self-reply with project links', 'active', NOW());
+```
+
+### 8. Pick next issue
+
+Repeat steps 3-7 for up to 3 issues per run. Spread across different repos/topics.
+
+---
+
 ## Workflow: Stats (`/social-autoposter stats`)
 
 ### Step 1: API stats (upvotes, comments, deleted/removed status)
@@ -390,5 +477,7 @@ GOOD body: Paragraphs, incomplete thoughts, personal details, casual tone, ends 
 ## Database Schema
 
 `posts`: id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary
+
+Platform values: `reddit`, `x`, `twitter`, `linkedin`, `moltbook`, `hackernews`, `github_issues`
 
 `replies`: id, post_id, platform, their_author, their_content, our_reply_content, status (pending|replied|skipped|error), depth

@@ -1,6 +1,6 @@
 ---
 name: social-autoposter
-description: "Automate social media posting across Reddit, X/Twitter, LinkedIn, and Moltbook. Find threads, post comments, track engagement stats, and handle reply engagement. Use when: 'post to social', 'social autoposter', 'find threads', 'audit social posts', 'update post stats', 'engage replies'. Run /social-autoposter to start."
+description: "Automate social media posting across Reddit, X/Twitter, LinkedIn, Moltbook, and GitHub Issues. Find threads, post comments, comment on GitHub issues, track engagement stats, and handle reply engagement. Use when: 'post to social', 'social autoposter', 'find threads', 'post on github issues', 'audit social posts', 'update post stats', 'engage replies'. Run /social-autoposter to start."
 user_invocable: true
 ---
 
@@ -13,6 +13,7 @@ Automates finding, posting, and tracking social media comments. Works with any a
 | Command | What it does |
 |---------|-------------|
 | `/social-autoposter` | Full posting run (find threads + post + log) |
+| `/social-autoposter github` | Find relevant GitHub issues + post helpful comments + log |
 | `/social-autoposter stats` | Update engagement stats via API |
 | `/social-autoposter engage` | Scan and reply to responses on our posts |
 | `/social-autoposter audit` | Full browser audit of all posts |
