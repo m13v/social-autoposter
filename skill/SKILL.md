@@ -506,10 +506,15 @@ python3 ~/social-autoposter/scripts/update_stats.py
 This checks deleted/removed status and updates upvotes/comments for Reddit and Moltbook posts.
 
 ### Step 2: X/Twitter audit (browser)
-Follow the same approach as Stats Step 3 above. For each X post:
-- Navigate to the tweet URL (logged-out)
-- If the page shows "This post is from a suspended account" or "This post was deleted": mark as deleted/removed
-- Otherwise: extract views/likes/replies from `[role="group"][aria-label]`
+Use the same browser scraping approach as Stats Step 3 above. Query for posts to audit:
+```sql
+SELECT id, our_url FROM posts
+WHERE platform='twitter' AND status='active' AND our_url IS NOT NULL
+ORDER BY id
+```
+Navigate to each tweet URL (logged-out, 8s delays, batches of 20). For each:
+- If the page shows "This post is from a suspended account", "This post was deleted", or no `[role="group"]` element: mark as deleted/removed
+- Otherwise: extract views/likes/replies from `[role="group"][aria-label]` and update DB
 
 ### Step 3: Mark deleted/removed posts
 ```sql
