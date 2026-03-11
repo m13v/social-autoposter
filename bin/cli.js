@@ -234,10 +234,13 @@ if (cmd === 'init') {
   init();
 } else if (cmd === 'update') {
   update();
+} else if (!cmd) {
+  require('./server.js');
 } else {
   console.log('social-autoposter — automated social posting for Claude agents');
   console.log('');
   console.log('Usage:');
-  console.log('  npx social-autoposter init    first-time setup');
-  console.log('  npx social-autoposter update  update scripts, preserve config');
+  console.log('  npx social-autoposter          open the dashboard');
+  console.log('  npx social-autoposter init      first-time setup');
+  console.log('  npx social-autoposter update    update scripts, preserve config');
 }
