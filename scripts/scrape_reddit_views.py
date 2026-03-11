@@ -121,6 +121,30 @@ def main():
     result = update_views(db, scraped_data, quiet=args.quiet)
     db.close()
 
+    # Get aggregate totals
+    from datetime import datetime
+    db = dbmod.get_conn()
+    row = db.execute(
+        "SELECT SUM(views), SUM(upvotes), SUM(comments_count), COUNT(*), MIN(posted_at) "
+        "FROM posts WHERE status='active'"
+    ).fetchone()
+    total_views = row[0] or 0
+    total_upvotes = row[1] or 0
+    total_comments = row[2] or 0
+    total_posts = row[3] or 0
+    first_post = row[4]
+    days = max((datetime.now(first_post.tzinfo) if first_post and first_post.tzinfo else datetime.now()).day, 1)
+    if first_post:
+        now = datetime.now(first_post.tzinfo) if first_post.tzinfo else datetime.now()
+        days = max((now - first_post).days, 1)
+    db.close()
+
+    result["totals"] = {
+        "total_views": total_views, "total_upvotes": total_upvotes,
+        "total_comments": total_comments, "total_posts": total_posts,
+        "days_active": days, "views_per_day": round(total_views / days) if days else 0,
+    }
+
     if args.json:
         print(json.dumps(result, indent=2))
     else:
@@ -129,6 +153,13 @@ def main():
             f"{result['matched']} DB posts updated, "
             f"{result['unmatched']} unmatched"
         )
+        t = result["totals"]
+        print(f"\n--- Totals ({t['days_active']} days) ---")
+        print(f"Posts: {t['total_posts']}  |  "
+              f"Views: {t['total_views']:,}  |  "
+              f"Upvotes: {t['total_upvotes']:,}  |  "
+              f"Comments: {t['total_comments']:,}  |  "
+              f"Views/day: {t['views_per_day']:,}")
 
 
 if __name__ == "__main__":
