@@ -218,9 +218,36 @@ After posting, you MUST:
 
 ## Workflow: Stats (`/social-autoposter stats`)
 
+### Step 1: API stats (upvotes, comments, deleted/removed status)
+
 ```bash
 python3 ~/social-autoposter/scripts/update_stats.py
 ```
+
+### Step 2: Reddit view counts (browser required)
+
+Reddit doesn't expose views via API, but they're visible on the profile page when logged in.
+Use MCP Playwright to scrape them:
+
+1. Navigate to `https://www.reddit.com/user/{username}/` (username from `config.json → accounts.reddit.username`)
+2. Scroll to bottom repeatedly to load all posts (Reddit uses infinite scroll with virtualization — collect data after EACH scroll, not just at the end):
+
+```javascript
+// Scroll+extract loop (run via browser_run_code):
+// allResults = Map()
+// while (not at bottom):
+//   scroll to bottom, wait 2s
+//   extract all <article> elements: find URL (a[href*="/comments/"]) and view count ("N views" text)
+//   merge into allResults (keyed by URL to deduplicate)
+// return allResults as JSON
+```
+
+3. Save the scraped JSON to `/tmp/reddit_views.json` and run the DB updater:
+```bash
+python3 ~/social-autoposter/scripts/scrape_reddit_views.py --from-json /tmp/reddit_views.json
+```
+
+The script matches scraped URLs to DB posts by extracting Reddit comment/post IDs (handles old.reddit vs www.reddit URL format differences).
 
 After running, view updated stats at `https://s4l.ai/stats/[handle]`. Changes appear on the website within ~5 minutes.
 
