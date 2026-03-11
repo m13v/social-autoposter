@@ -16,6 +16,7 @@
     "skill/run.sh",
     "skill/stats.sh",
     "skill/engage.sh",
+    "skill/github.sh",
     "setup/SKILL.md"
   ],
   "keywords": [
