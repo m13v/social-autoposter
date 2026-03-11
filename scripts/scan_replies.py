@@ -269,6 +269,91 @@ class ReplyScanner:
             )
             time.sleep(8)
 
+    def scan_github_issues(self):
+        """Scan GitHub issues for new comments after ours."""
+        print("\nScanning GitHub issues for replies...")
+        posts = self.db.execute(
+            "SELECT id, our_url, thread_url, thread_title FROM posts "
+            "WHERE platform='github_issues' AND status='active' AND our_url IS NOT NULL "
+            "AND our_url LIKE '%%issuecomment%%'"
+        ).fetchall()
+
+        if not posts:
+            print("  No GitHub issue comments to scan")
+            return
+
+        # Group by issue URL to avoid scanning the same issue multiple times
+        issues = {}
+        for post in posts:
+            # Extract repo and issue number from thread_url
+            # e.g. https://github.com/owner/repo/issues/123
+            match = re.match(r"https://github\.com/([^/]+/[^/]+)/issues/(\d+)", post["thread_url"])
+            if not match:
+                continue
+            repo = match.group(1)
+            issue_num = match.group(2)
+            key = f"{repo}/{issue_num}"
+            if key not in issues:
+                issues[key] = []
+            issues[key].append(post)
+
+        github_user = "m13v"
+        config = load_config()
+        github_user = config.get("accounts", {}).get("github", {}).get("username", github_user)
+
+        for issue_key, issue_posts in issues.items():
+            repo, issue_num = issue_key.rsplit("/", 1)
+
+            # Get our highest comment ID for this issue to find newer comments
+            our_comment_ids = []
+            for p in issue_posts:
+                cid_match = re.search(r"issuecomment-(\d+)", p["our_url"])
+                if cid_match:
+                    our_comment_ids.append(int(cid_match.group(1)))
+            if not our_comment_ids:
+                continue
+            max_our_id = max(our_comment_ids)
+
+            # Use the first post's ID for linking replies
+            post_id = issue_posts[0]["id"]
+            title = issue_posts[0]["thread_title"] or ""
+
+            # Fetch all comments on the issue via gh CLI
+            import subprocess
+            try:
+                result = subprocess.run(
+                    ["gh", "api", f"repos/{repo}/issues/{issue_num}/comments",
+                     "--jq", f'[.[] | select(.id > {max_our_id}) | {{id: .id, user: .user.login, body: .body, url: .html_url, created: .created_at}}]'],
+                    capture_output=True, text=True, timeout=15
+                )
+                if result.returncode != 0:
+                    self.errors += 1
+                    continue
+                comments = json.loads(result.stdout) if result.stdout.strip() else []
+            except Exception as e:
+                print(f"  ERROR scanning {issue_key}: {e}")
+                self.errors += 1
+                continue
+
+            for comment in comments:
+                author = comment.get("user", "")
+                if author == github_user:
+                    continue  # Skip our own comments
+
+                body = comment.get("body", "")
+                comment_id = str(comment.get("id", ""))
+                comment_url = comment.get("url", "")
+
+                if word_count(body) < MIN_WORDS:
+                    self.insert_reply(post_id, "github_issues", comment_id, author, body, comment_url,
+                                      status="skipped", skip_reason=f"too_short ({word_count(body)} words)")
+                    continue
+
+                self.insert_reply(post_id, "github_issues", comment_id, author, body, comment_url)
+                print(f"  NEW: [{post_id}] @{author} on {issue_key}: {body[:80]}...")
+
+            time.sleep(1)  # Light rate limiting for gh CLI
+
     def scan_moltbook(self, api_key):
         if not api_key:
             print("MOLTBOOK_API_KEY not set, skipping Moltbook scan")
@@ -334,6 +419,7 @@ def main():
     user_agent = f"social-autoposter/1.0 (u/{reddit_account})"
     scanner = ReplyScanner(reddit_account, user_agent)
     scanner.scan_reddit()
+    scanner.scan_github_issues()
 
     moltbook_key = os.environ.get("MOLTBOOK_API_KEY", "")
     scanner.scan_moltbook(moltbook_key)
