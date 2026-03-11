@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     prompt TEXT NOT NULL,
-    platforms TEXT DEFAULT 'x,reddit,moltbook',
+    platforms TEXT DEFAULT 'twitter,reddit,moltbook',
     status TEXT DEFAULT 'active',
     max_posts_per_day INTEGER DEFAULT 4,
     posts_made INTEGER DEFAULT 0,
