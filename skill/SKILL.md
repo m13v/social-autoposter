@@ -229,25 +229,66 @@ python3 ~/social-autoposter/scripts/update_stats.py
 Reddit doesn't expose views via API, but they're visible on the profile page when logged in.
 Use MCP Playwright to scrape them:
 
-1. Navigate to `https://www.reddit.com/user/{username}/` (username from `config.json → accounts.reddit.username`)
-2. Scroll to bottom repeatedly to load all posts (Reddit uses infinite scroll with virtualization — collect data after EACH scroll, not just at the end):
+1. Use MCP Playwright `browser_navigate` to go to `https://www.reddit.com/user/{username}/` (username from `config.json → accounts.reddit.username`)
+
+2. Use `browser_run_code` with this exact JavaScript to scroll and collect all views. Reddit uses virtualized scrolling (removes old DOM elements), so data MUST be collected after each scroll:
 
 ```javascript
-// Scroll+extract loop (run via browser_run_code):
-// allResults = Map()
-// while (not at bottom):
-//   scroll to bottom, wait 2s
-//   extract all <article> elements: find URL (a[href*="/comments/"]) and view count ("N views" text)
-//   merge into allResults (keyed by URL to deduplicate)
-// return allResults as JSON
+async (page) => {
+  await page.waitForTimeout(3000);
+  const allResults = new Map();
+  function extractCurrent() {
+    return page.evaluate(() => {
+      const results = [];
+      document.querySelectorAll('article').forEach(article => {
+        const links = article.querySelectorAll('a[href*="/comments/"]');
+        let url = null;
+        for (const link of links) {
+          const href = link.getAttribute('href');
+          if (href && href.includes('/comments/')) {
+            if (!url || href.includes('/comment/')) url = href;
+          }
+        }
+        let views = null;
+        for (const el of article.querySelectorAll('*')) {
+          const text = el.textContent.trim();
+          const match = text.match(/^([\d,]+)\s+views?$/);
+          if (match) { views = parseInt(match[1].replace(/,/g, '')); break; }
+        }
+        if (url) {
+          results.push({ url: url.startsWith('http') ? url : 'https://www.reddit.com' + url, views });
+        }
+      });
+      return results;
+    });
+  }
+  let items = await extractCurrent();
+  for (const item of items) allResults.set(item.url, item.views);
+  let previousHeight = 0, sameHeightCount = 0, scrollCount = 0;
+  while (sameHeightCount < 4 && scrollCount < 300) {
+    const currentHeight = await page.evaluate(() => document.body.scrollHeight);
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(2000);
+    items = await extractCurrent();
+    for (const item of items) allResults.set(item.url, item.views);
+    if (currentHeight === previousHeight) sameHeightCount++;
+    else sameHeightCount = 0;
+    previousHeight = currentHeight;
+    scrollCount++;
+  }
+  const resultsArray = Array.from(allResults.entries()).map(([url, views]) => ({ url, views }));
+  return JSON.stringify({ total: resultsArray.length, scrolls: scrollCount, results: resultsArray });
+}
 ```
 
-3. Save the scraped JSON to `/tmp/reddit_views.json` and run the DB updater:
+3. The result JSON will be large. Parse the tool output file, extract the `results` array, and save to `/tmp/reddit_views.json`.
+
+4. Run the DB updater:
 ```bash
 python3 ~/social-autoposter/scripts/scrape_reddit_views.py --from-json /tmp/reddit_views.json
 ```
 
-The script matches scraped URLs to DB posts by extracting Reddit comment/post IDs (handles old.reddit vs www.reddit URL format differences).
+This matches scraped URLs to DB posts by Reddit comment/post IDs (handles old.reddit vs www.reddit URL format differences).
 
 After running, view updated stats at `https://s4l.ai/stats/[handle]`. Changes appear on the website within ~5 minutes.
 
