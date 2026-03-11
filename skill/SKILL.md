@@ -292,10 +292,35 @@ Post a follow-up comment linking to the most relevant project from `config.json 
 gh issue comment NUMBER -R OWNER/REPO --body "YOUR SELF-REPLY WITH LINK"
 ```
 
+**Link to SPECIFIC FILES, not just repo homepages.** Map expertise to files:
+
+| Expertise area | Link to |
+|----------------|---------|
+| macOS accessibility/AX/click | `mediar-ai/mcp-server-macos-use/blob/main/Sources/MCPServer/main.swift` |
+| Desktop automation element interaction | `mediar-ai/terminator/blob/main/crates/terminator/src/element.rs` |
+| Desktop automation core (Rust) | `mediar-ai/terminator/blob/main/crates/terminator/src/lib.rs` |
+| MCP server for desktop | `mediar-ai/terminator/blob/main/crates/terminator-mcp-agent/src/server.rs` |
+| ScreenCaptureKit/screen capture | `m13v/macos-session-replay/blob/main/Sources/SessionReplay/ScreenCaptureService.swift` |
+| Video encoding/recording | `m13v/macos-session-replay/blob/main/Sources/SessionReplay/VideoChunkEncoder.swift` |
+| Voice/transcription/WhisperKit | `m13v/fazm/blob/main/Desktop/Sources/TranscriptionService.swift` |
+| Claude API/LLM provider switching | `m13v/fazm/blob/main/Desktop/Sources/Providers/ChatProvider.swift` |
+| Tool execution/function calling | `m13v/fazm/blob/main/Desktop/Sources/Providers/ChatToolExecutor.swift` |
+| Floating UI/overlay window | `m13v/fazm/blob/main/Desktop/Sources/FloatingControlBar/FloatingControlBarView.swift` |
+| Browser lock/multi-agent Playwright | `m13v/browser-lock/blob/main/playwright-lock.sh` |
+| User memory/knowledge DB | `m13v/user-memories/blob/main/user_memories/db.py` |
+| Semantic search/embeddings | `m13v/user-memories/blob/main/user_memories/embeddings.py` |
+| Browser history ingestion | `m13v/user-memories/blob/main/user_memories/ingestors/history.py` |
+| Social posting pipeline | `m13v/social-autoposter/blob/main/skill/SKILL.md` |
+| Launchd scheduling examples | `m13v/social-autoposter/tree/main/launchd` |
+| Video editing/ffmpeg | `m13v/video-edit/blob/main/SKILL.md` |
+| Tmux agent orchestration | `m13v/tmux-background-agents/blob/main/SKILL.md` |
+
+Prefix all paths with `https://github.com/` to form the full URL.
+
 Example self-replies:
-- "btw we open-sourced our implementation of this: [project.github]"
-- "our MCP server does exactly this if you want to look at the code: [project.github]"
-- "we built something similar: [project.github] - handles the [specific thing] mentioned above"
+- "our CGEvent handling is in this file: https://github.com/mediar-ai/mcp-server-macos-use/blob/main/Sources/MCPServer/main.swift"
+- "our WhisperKit integration: https://github.com/m13v/fazm/blob/main/Desktop/Sources/TranscriptionService.swift"
+- "the browser locking script: https://github.com/m13v/browser-lock/blob/main/playwright-lock.sh"
 
 Log the self-reply too:
 ```sql
