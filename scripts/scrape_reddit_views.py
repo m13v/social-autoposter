@@ -53,15 +53,18 @@ def update_views(db, scraped_data, quiet=False):
 
     # Build lookups by comment_id and post_id
     views_by_comment = {}
-    views_by_post = {}
+    views_by_post = {}  # post_id -> max views (fallback for thread-URL-only DB entries)
     for url, views in items:
         if views is None:
             continue
         post_id, comment_id = extract_ids(url)
         if comment_id:
             views_by_comment[comment_id] = views
-        elif post_id:
-            views_by_post[post_id] = views
+        # Always track max views per post_id so DB entries with only a thread URL
+        # (no comment_id) can still match via post_id fallback
+        if post_id:
+            if post_id not in views_by_post or views > views_by_post[post_id]:
+                views_by_post[post_id] = views
 
     posts = db.execute(
         "SELECT id, our_url FROM posts "
