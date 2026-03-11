@@ -24,6 +24,12 @@ The handles come from `config.json → accounts.*.handle/username`. Each platfor
 
 ---
 
+## Browser Automation: MCP Playwright ONLY
+
+All browser interactions (posting, scraping views, auditing, replying) MUST use **MCP Playwright** (`browser_navigate`, `browser_run_code`, `browser_snapshot`, `browser_click`, etc.). Do NOT use MCP macOS-use for any social-autoposter workflows.
+
+---
+
 ## FIRST: Read config
 
 Before doing anything, read `~/social-autoposter/config.json`. Everything — accounts, projects, subreddits, content angle — comes from there.
