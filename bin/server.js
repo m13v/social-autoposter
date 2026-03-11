@@ -46,7 +46,8 @@ function isJobLoaded(label) {
 
 function getJobPids(script) {
   try {
-    const out = execSync(`pgrep -f "${script}"`, { stdio: 'pipe' }).toString().trim();
+    const scriptPath = path.join(DEST, 'skill', script);
+    const out = execSync(`pgrep -f "${scriptPath}"`, { stdio: 'pipe' }).toString().trim();
     return out.length > 0 ? out.split('\n').map(p => parseInt(p, 10)) : [];
   } catch { return []; }
 }
@@ -407,7 +408,7 @@ const HTML = `<!DOCTYPE html>
   .tab { padding: 12px 20px; cursor: pointer; color: #a3a3a3; font-size: 14px; border-bottom: 2px solid transparent; transition: all 0.15s; }
   .tab:hover { color: #e5e5e5; }
   .tab.active { color: #e5e5e5; border-bottom-color: #7c3aed; }
-  .content { padding: 24px; max-width: 100%; }
+  .content { padding: 24px; }
   .job-table { width: 100%; border-collapse: collapse; background: #171717; border: 1px solid #262626; border-radius: 12px; overflow: hidden; }
   .job-table th { text-align: left; padding: 12px 16px; font-size: 12px; font-weight: 500; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #262626; background: #0f0f0f; }
   .job-table td { padding: 12px 16px; font-size: 14px; border-bottom: 1px solid #1f1f1f; vertical-align: middle; }
