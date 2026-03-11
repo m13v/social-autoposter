@@ -113,6 +113,7 @@ Follow Content Rules below. 2-3 sentences, first person, specific details from `
 **X/Twitter** (browser automation):
 - Navigate to tweet → reply box → type → Reply → verify → capture URL
 - Post as the handle in `config.json → accounts.twitter.handle`
+- Use platform value `'twitter'` (not `'x'`) when logging to DB
 
 **LinkedIn** (browser automation):
 - Navigate to post → comment box → type → Post → close tab
@@ -498,7 +499,27 @@ Navigate to `https://x.com/notifications/mentions`. Find replies to the handle i
 
 ## Workflow: Audit (`/social-autoposter audit`)
 
-Visit each post URL via browser. Check status (active/deleted/removed/inactive). Update engagement metrics. Report summary.
+### Step 1: API audit (Reddit + Moltbook)
+```bash
+python3 ~/social-autoposter/scripts/update_stats.py
+```
+This checks deleted/removed status and updates upvotes/comments for Reddit and Moltbook posts.
+
+### Step 2: X/Twitter audit (browser)
+Follow the same approach as Stats Step 3 above. For each X post:
+- Navigate to the tweet URL (logged-out)
+- If the page shows "This post is from a suspended account" or "This post was deleted": mark as deleted/removed
+- Otherwise: extract views/likes/replies from `[role="group"][aria-label]`
+
+### Step 3: Mark deleted/removed posts
+```sql
+UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=%s
+UPDATE posts SET status='removed', status_checked_at=NOW() WHERE id=%s
+```
+Deleted/removed posts are greyed out in the UI but **kept in total stats** (they already earned those views/upvotes). They are excluded from future audits (`status='active'` filter).
+
+### Step 4: Report summary
+Print totals: posts checked, updated, deleted, removed, errors per platform.
 
 ---
 
