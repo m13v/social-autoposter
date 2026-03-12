@@ -382,10 +382,12 @@ function handleApi(req, res) {
     const count = psql("SELECT COUNT(*) FROM replies WHERE status='pending'");
     const byPlatform = psql("SELECT json_agg(row_to_json(r)) FROM (SELECT platform, COUNT(*) as count FROM replies WHERE status='pending' GROUP BY platform) r");
     const recent = psql("SELECT json_agg(row_to_json(r)) FROM (SELECT id, platform, their_author, their_content, status FROM replies WHERE status='pending' ORDER BY discovered_at DESC LIMIT 20) r");
+    const statusCounts = psql("SELECT json_agg(row_to_json(r)) FROM (SELECT status, COUNT(*) as count FROM replies GROUP BY status ORDER BY status) r");
     return json(res, {
       count: count ? parseInt(count, 10) : null,
       byPlatform: byPlatform ? JSON.parse(byPlatform) : [],
       recent: recent ? JSON.parse(recent) : [],
+      statusCounts: statusCounts ? JSON.parse(statusCounts) : [],
     });
   }
 
@@ -647,8 +649,15 @@ async function loadStatus() {
         .map(r => '<div class="reply-item"><span class="reply-platform">' + r.platform + '</span> <span class="reply-author">' + (r.their_author || 'unknown') + '</span><div class="reply-text">' + (r.their_content || '').slice(0, 200) + '</div></div>')
         .join('');
 
+      const statusBreakdown = (pending.statusCounts || [])
+        .map(s => {
+          const colors = { pending: '#eab308', replied: '#22c55e', skipped: '#6b7280', error: '#ef4444' };
+          return '<span style="margin-right:16px;font-size:13px;"><span style="color:' + (colors[s.status] || '#a3a3a3') + ';">' + s.status + '</span> ' + s.count + '</span>';
+        }).join('');
+
       pendingSection.innerHTML = '<div class="card pending-card">' +
         '<div class="card-header"><span class="card-title">Pending Replies</span><span class="badge" style="background:#4c1d95;color:#c4b5fd;">' + pending.count + '</span></div>' +
+        '<div class="card-row" style="justify-content:flex-start;padding:8px 16px;border-bottom:1px solid #3b2d63;">' + statusBreakdown + '</div>' +
         platformBreakdown +
         (recentReplies ? '<div style="margin-top:12px;border-top:1px solid #3b2d63;padding-top:12px;">' + recentReplies + '</div>' : '') +
       '</div>';
