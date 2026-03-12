@@ -112,32 +112,34 @@ For **github_issues**: use gh issue comment NUMBER -R OWNER/REPO.
 For **reddit** — use this FAST posting method (browser_run_code):
 1. First, pre-compose ALL reply texts before opening the browser. Decide skip/reply and draft text for every item.
 2. For each reply, call browser_navigate to their_comment_url.
-3. Then use a SINGLE browser_run_code call to click reply, type, and submit:
+3. Then use a SINGLE browser_run_code call with this exact Playwright pattern:
 \`\`\`javascript
-// Find the target comment by its ID and click reply
-const thing = document.querySelector('#thing_t1_COMMENT_ID');
-const replyBtn = thing?.querySelector('.flat-list .reply-button a, .flat-list a[onclick*="reply"]');
-if (replyBtn) replyBtn.click();
-await new Promise(r => setTimeout(r, 800));
-const textarea = thing?.querySelector('.usertext-edit textarea');
-if (textarea) {
-  textarea.value = \`REPLY_TEXT_HERE\`;
-  textarea.dispatchEvent(new Event('input', {bubbles: true}));
-  textarea.dispatchEvent(new Event('change', {bubbles: true}));
+async (page) => {
+  const thing = await page.\$('#thing_t1_COMMENT_ID');
+  if (!thing) return 'ERROR: comment not found';
+  await thing.evaluate(el => {
+    const btn = el.querySelector('.flat-list a[onclick*="reply"]');
+    if (btn) btn.click();
+  });
+  await page.waitForSelector('#thing_t1_COMMENT_ID .usertext-edit textarea', { timeout: 3000 });
+  const textarea = await thing.\$('.usertext-edit textarea');
+  await textarea.fill(REPLY_TEXT_HERE);
+  await thing.evaluate(el => {
+    const btn = el.querySelector('.usertext-edit button.save, .usertext-edit .save');
+    if (btn) btn.click();
+  });
+  await page.waitForTimeout(2000);
+  const newComments = await thing.\$\$('.child .comment .bylink');
+  return newComments.length > 0 ? await newComments[newComments.length - 1].getAttribute('href') : 'posted';
 }
-const saveBtn = thing?.querySelector('.usertext-edit .save');
-if (saveBtn) saveBtn.click();
-await new Promise(r => setTimeout(r, 1000));
-// Return permalink of our new reply
-const newReply = thing?.querySelector('.child .comment .bylink');
-newReply?.href || 'posted';
 \`\`\`
-Replace COMMENT_ID with the Reddit comment ID (from their_comment_id, without the t1_ prefix).
-Replace REPLY_TEXT_HERE with the drafted reply text (escape backticks).
+Replace COMMENT_ID with the Reddit comment ID (from their_comment_id, without t1_ prefix).
+Replace REPLY_TEXT_HERE with a JS string literal of the reply text.
+IMPORTANT: Use thing.evaluate() for clicks — do NOT use replyBtn.click() directly as it causes Playwright timeouts.
 4. Update DB: psql "\$DATABASE_URL" -c "UPDATE replies SET status='replied', our_reply_content='...', replied_at=NOW() WHERE id=N;"
-5. Then navigate to the next reply immediately — no need to close tabs, the navigate replaces the page.
+5. Navigate directly to the next reply — no need to close tabs.
 
-Do NOT use browser_snapshot, browser_click, or browser_type for Reddit replies. The browser_run_code method above is 5x faster.
+Do NOT use browser_snapshot, browser_click, or browser_type for Reddit replies. browser_run_code is 5x faster.
 Do NOT extract permalinks from snapshots — use the JS return value or skip it.
 
 After every 10 replies, run: psql "\$DATABASE_URL" -t -A -c "SELECT status, COUNT(*) FROM replies GROUP BY status;" to report progress.
