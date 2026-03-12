@@ -23,8 +23,7 @@ Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Also read $REPO_DIR/config.json for accounts, projects, and search_topics.
 
 Run the **Workflow: GitHub Issues** section. Follow every step:
-1. Rate limit check (max 6 github_issues comments per 24h)
-2. Search for relevant issues using topics from config.json -> accounts.github.search_topics
+1. Search for relevant issues using topics from config.json -> accounts.github.search_topics
    Rotate through different search topics each run - don't always search the same keywords.
    Use: gh search issues \"TOPIC\" --limit 10 --state open --sort updated
 3. Check dedup: SELECT thread_url FROM posts WHERE platform='github_issues'
