@@ -48,7 +48,7 @@ def is_too_old(created_utc):
         return False
 
 
-def fetch_json(url, headers=None, user_agent="social-autoposter/1.0", retries=5):
+def fetch_json(url, headers=None, user_agent="social-autoposter/1.0", retries=3):
     hdrs = {"User-Agent": user_agent}
     if headers:
         hdrs.update(headers)
