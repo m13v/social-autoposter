@@ -152,7 +152,7 @@ Do NOT extract permalinks from snapshots — use the JS return value or skip it.
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
 
-    claude -p "$(cat "$PHASE_B_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE"
+    timeout 1800 claude -p "$(cat "$PHASE_B_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE"
     rm -f "$PHASE_B_PROMPT"
 
     # Check if we actually made progress (avoid infinite loop)
