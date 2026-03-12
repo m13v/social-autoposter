@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # engage.sh — Reply engagement loop
-# Phase A: Python script scans for new replies (no Claude needed)
-# Phase B: Claude drafts and posts replies via Playwright/API
+# Phase A: Python script scans for new replies (runs in background)
+# Phase B: Claude drafts and posts replies via Playwright/API (starts immediately)
 # Phase C: Cleanup
 # Called by launchd every 2 hours.
 
@@ -28,18 +28,21 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 log "=== Engagement Loop Run: $(date) ==="
 
 # ═══════════════════════════════════════════════════════
-# PHASE A: Scan for replies (Python, no Claude needed)
+# PHASE A: Scan for replies (runs in BACKGROUND)
 # ═══════════════════════════════════════════════════════
-log "Phase A: Scanning for replies..."
-PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_replies.py" 2>&1 | tee -a "$LOG_FILE" || true
+log "Phase A: Scanning for replies (background)..."
+PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_replies.py" 2>&1 | tee -a "$LOG_FILE" &
+SCAN_PID=$!
+
+# Give the scanner a head start to find new replies
+sleep 15
 
 # ═══════════════════════════════════════════════════════
 # PHASE B: X/Twitter discovery + all reply engagement
 # ═══════════════════════════════════════════════════════
 PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending';")
-log "Phase B: $PENDING_COUNT pending replies to handle"
+log "Phase B: $PENDING_COUNT pending replies to handle (scanner still running in background)"
 
-# Always run Phase B — it handles both X/Twitter discovery and pending replies
 # Build the prompt into a temp file to avoid quoting issues with script wrapper
 PHASE_B_PROMPT=$(mktemp)
 PENDING_DATA=""
@@ -105,6 +108,12 @@ PROMPT_EOF
 # Use script -q to force pseudo-tty so Claude outputs line-buffered (not block-buffered)
 script -q /dev/null claude -p "$(cat "$PHASE_B_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE"
 rm -f "$PHASE_B_PROMPT"
+
+# Wait for scanner to finish if still running
+if kill -0 "$SCAN_PID" 2>/dev/null; then
+    log "Waiting for Phase A scanner to finish..."
+    wait "$SCAN_PID" || true
+fi
 
 # ═══════════════════════════════════════════════════════
 # PHASE C: Cleanup
