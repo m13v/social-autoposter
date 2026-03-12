@@ -41,19 +41,41 @@ def _translate_sql(sql):
 class PGConn:
     """Thin psycopg2 wrapper with a sqlite3-compatible execute/commit/close API."""
 
-    def __init__(self, conn):
+    def __init__(self, conn, url=None):
         import psycopg2.extras
         self._conn = conn
+        self._url = url
         self._cursor_factory = psycopg2.extras.DictCursor
 
+    def _reconnect(self):
+        import psycopg2
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+        self._conn = psycopg2.connect(self._url, keepalives=1,
+                                       keepalives_idle=30,
+                                       keepalives_interval=10,
+                                       keepalives_count=5)
+
     def execute(self, sql, params=None):
-        cur = self._conn.cursor(cursor_factory=self._cursor_factory)
+        import psycopg2
         sql = _translate_sql(sql)
-        if params is not None:
-            cur.execute(sql, list(params))
-        else:
-            cur.execute(sql)
-        return cur
+        try:
+            cur = self._conn.cursor(cursor_factory=self._cursor_factory)
+            if params is not None:
+                cur.execute(sql, list(params))
+            else:
+                cur.execute(sql)
+            return cur
+        except psycopg2.OperationalError:
+            self._reconnect()
+            cur = self._conn.cursor(cursor_factory=self._cursor_factory)
+            if params is not None:
+                cur.execute(sql, list(params))
+            else:
+                cur.execute(sql)
+            return cur
 
     def commit(self):
         self._conn.commit()
@@ -85,5 +107,8 @@ def get_conn():
         print("ERROR: psycopg2-binary not installed.", file=sys.stderr)
         print("  Run: pip3 install psycopg2-binary", file=sys.stderr)
         sys.exit(1)
-    conn = psycopg2.connect(url)
-    return PGConn(conn)
+    conn = psycopg2.connect(url, keepalives=1,
+                            keepalives_idle=30,
+                            keepalives_interval=10,
+                            keepalives_count=5)
+    return PGConn(conn, url=url)
