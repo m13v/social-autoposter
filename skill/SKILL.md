@@ -412,7 +412,9 @@ This matches scraped URLs to DB posts by Reddit comment/post IDs (handles old.re
 
 ### Step 3: X/Twitter stats (browser required, logged-out)
 
-X doesn't expose view counts via API. Scrape them from individual tweet pages in **logged-out** mode (clear cookies first if needed). Logged-out view shows only the focal tweet, so stats are always correct. Logged-in view shows the parent tweet first, which gives wrong stats.
+X doesn't expose view counts via API. Scrape them from individual tweet pages via browser.
+
+**IMPORTANT:** When logged in, X shows parent tweets above our reply. You MUST target the specific tweet by its status ID to avoid reading the parent's stats (which can be millions of views). The script below works in both logged-in and logged-out states.
 
 1. Get all X posts needing stats:
 ```sql
@@ -432,18 +434,61 @@ async (page) => {
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
       await page.waitForTimeout(8000);
-      const stats = await page.evaluate(() => {
-        const group = document.querySelector('[role="group"][aria-label]');
+
+      // Extract the status ID from the URL to find the CORRECT tweet
+      const statusId = url.match(/status\/(\d+)/)[1];
+
+      const stats = await page.evaluate((sid) => {
+        // Find the article containing a link to THIS tweet's analytics page
+        // This ensures we get OUR tweet's stats, not the parent thread's
+        const analyticsLink = document.querySelector(`a[href*="/status/${sid}/analytics"]`);
+        const article = analyticsLink
+          ? analyticsLink.closest('article')
+          : document.querySelector(`a[href*="/status/${sid}"] time`)?.closest('article');
+        if (!article) return null;
+
+        // Find the group element within THIS article
+        const group = article.querySelector('[role="group"]');
         if (!group) return null;
+
         const label = group.getAttribute('aria-label') || '';
-        if (!label.includes('view')) return null;
-        return label;
-      });
+        let views = 0, likes = 0, replies = 0, reposts = 0;
+
+        // Parse from button aria-labels (works when logged in)
+        for (const btn of group.querySelectorAll('button')) {
+          const t = btn.getAttribute('aria-label') || '';
+          const vm = t.match(/(\d+)\s*views?/i);
+          const lm = t.match(/(\d+)\s*Likes?/i);
+          const rm = t.match(/(\d+)\s*Repl/i);
+          const rp = t.match(/(\d+)\s*repost/i);
+          if (vm) views = parseInt(vm[1]);
+          if (lm) likes = parseInt(lm[1]);
+          if (rm) replies = parseInt(rm[1]);
+          if (rp) reposts = parseInt(rp[1]);
+        }
+
+        // Also try the group's own aria-label (works when logged out)
+        if (label.includes('view')) {
+          const vm = label.match(/(\d+)\s*views?/i);
+          const lm = label.match(/(\d+)\s*likes?/i);
+          const rm = label.match(/(\d+)\s*repl/i);
+          if (vm) views = parseInt(vm[1]);
+          if (lm) likes = parseInt(lm[1]);
+          if (rm) replies = parseInt(rm[1]);
+        }
+
+        // Fallback: get views from analytics link text
+        const viewsLink = article.querySelector(`a[href*="/analytics"]`);
+        if (viewsLink && views === 0) {
+          const vt = viewsLink.textContent.match(/(\d[\d,]*)/);
+          if (vt) views = parseInt(vt[1].replace(/,/g, ''));
+        }
+
+        return { views, likes, replies };
+      }, statusId);
+
       if (stats) {
-        const views = (stats.match(/(\d+)\s*views?/i) || [])[1] || '0';
-        const likes = (stats.match(/(\d+)\s*likes?/i) || [])[1] || '0';
-        const replies = (stats.match(/(\d+)\s*repl/i) || [])[1] || '0';
-        results.push({ id, views: parseInt(views), likes: parseInt(likes), replies: parseInt(replies) });
+        results.push({ id, views: stats.views, likes: stats.likes, replies: stats.replies });
       } else {
         results.push({ id, error: 'no stats found' });
       }
