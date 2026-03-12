@@ -17,7 +17,7 @@ LOG_FILE="$LOG_DIR/$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Social Autoposter Run: $(date) ===" | tee "$LOG_FILE"
 
-claude -p "You are the Social Autoposter.
+timeout 1800 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 
