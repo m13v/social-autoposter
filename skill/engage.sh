@@ -108,11 +108,39 @@ $PENDING_DATA
 CRITICAL: Process EVERY reply in this batch. For each: either post a response and mark as 'replied', OR mark as 'skipped' with a skip_reason (light acknowledgments, trolls, crypto spam, DM requests, not directed at us).
 
 For **github_issues**: use gh issue comment NUMBER -R OWNER/REPO.
-For **reddit**: navigate to their_comment_url, click reply, type response, submit.
+
+For **reddit** — use this FAST posting method (browser_run_code):
+1. First, pre-compose ALL reply texts before opening the browser. Decide skip/reply and draft text for every item.
+2. For each reply, call browser_navigate to their_comment_url.
+3. Then use a SINGLE browser_run_code call to click reply, type, and submit:
+\`\`\`javascript
+// Find the target comment by its ID and click reply
+const thing = document.querySelector('#thing_t1_COMMENT_ID');
+const replyBtn = thing?.querySelector('.flat-list .reply-button a, .flat-list a[onclick*="reply"]');
+if (replyBtn) replyBtn.click();
+await new Promise(r => setTimeout(r, 800));
+const textarea = thing?.querySelector('.usertext-edit textarea');
+if (textarea) {
+  textarea.value = \`REPLY_TEXT_HERE\`;
+  textarea.dispatchEvent(new Event('input', {bubbles: true}));
+  textarea.dispatchEvent(new Event('change', {bubbles: true}));
+}
+const saveBtn = thing?.querySelector('.usertext-edit .save');
+if (saveBtn) saveBtn.click();
+await new Promise(r => setTimeout(r, 1000));
+// Return permalink of our new reply
+const newReply = thing?.querySelector('.child .comment .bylink');
+newReply?.href || 'posted';
+\`\`\`
+Replace COMMENT_ID with the Reddit comment ID (from their_comment_id, without the t1_ prefix).
+Replace REPLY_TEXT_HERE with the drafted reply text (escape backticks).
+4. Update DB: psql "\$DATABASE_URL" -c "UPDATE replies SET status='replied', our_reply_content='...', replied_at=NOW() WHERE id=N;"
+5. Then navigate to the next reply immediately — no need to close tabs, the navigate replaces the page.
+
+Do NOT use browser_snapshot, browser_click, or browser_type for Reddit replies. The browser_run_code method above is 5x faster.
+Do NOT extract permalinks from snapshots — use the JS return value or skip it.
 
 After every 10 replies, run: psql "\$DATABASE_URL" -t -A -c "SELECT status, COUNT(*) FROM replies GROUP BY status;" to report progress.
-
-CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close).
 PROMPT_EOF
 
     script -q /dev/null claude -p "$(cat "$PHASE_B_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE"
