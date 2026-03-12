@@ -40,7 +40,29 @@ PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHER
 log "Phase B: $PENDING_COUNT pending replies to handle"
 
 # Always run Phase B — it handles both X/Twitter discovery and pending replies
-claude -p "You are the Social Autoposter engagement bot.
+# Build the prompt into a temp file to avoid quoting issues with script wrapper
+PHASE_B_PROMPT=$(mktemp)
+PENDING_DATA=""
+if [ "$PENDING_COUNT" -gt 0 ]; then
+    PENDING_DATA=$(psql "$DATABASE_URL" -t -A -c "
+        SELECT json_agg(q) FROM (
+            SELECT r.id, r.platform, r.their_author, r.their_content, r.their_comment_url,
+                   r.their_comment_id, r.depth,
+                   p.thread_title, p.thread_url, p.our_content, p.our_url,
+                   CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post
+            FROM replies r
+            JOIN posts p ON r.post_id = p.id
+            WHERE r.status='pending'
+            ORDER BY
+                CASE WHEN p.thread_url = p.our_url THEN 0 ELSE 1 END,
+                r.discovered_at ASC
+        ) q;")
+else
+    PENDING_DATA="No pending replies."
+fi
+
+cat > "$PHASE_B_PROMPT" <<PROMPT_EOF
+You are the Social Autoposter engagement bot.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 
@@ -66,23 +88,7 @@ There are $PENDING_COUNT pending replies in the database.
 - **Tier 2 (natural mention):** Conversation touches something we build. Mention casually, link only if it adds value.
 - **Tier 3 (direct ask):** They ask for link/tool/source. Give it immediately.
 
-$(if [ "$PENDING_COUNT" -gt 0 ]; then
-    psql "$DATABASE_URL" -t -A -c "
-        SELECT json_agg(q) FROM (
-            SELECT r.id, r.platform, r.their_author, r.their_content, r.their_comment_url,
-                   r.their_comment_id, r.depth,
-                   p.thread_title, p.thread_url, p.our_content, p.our_url,
-                   CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post
-            FROM replies r
-            JOIN posts p ON r.post_id = p.id
-            WHERE r.status='pending'
-            ORDER BY
-                CASE WHEN p.thread_url = p.our_url THEN 0 ELSE 1 END,
-                r.discovered_at ASC
-        ) q;"
-else
-    echo "No pending replies."
-fi)
+$PENDING_DATA
 
 Process ALL pending replies. For each: draft response (follow Content Rules + anti-AI-detection rules), post it, update DB.
 Skip replies that don't warrant a response (light acknowledgments like 'thanks', 'so good', troll comments) — mark those as 'skipped' with a skip_reason.
@@ -90,7 +96,12 @@ Skip replies that don't warrant a response (light acknowledgments like 'thanks',
 For **github_issues** platform replies: post via gh issue comment NUMBER -R OWNER/REPO (no browser needed).
 Extract OWNER/REPO and issue number from the their_comment_url field.
 
-CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close)." --max-turns 500 2>&1 | tee -a "$LOG_FILE"
+CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close).
+PROMPT_EOF
+
+# Use script -q to force pseudo-tty so Claude outputs line-buffered (not block-buffered)
+script -q /dev/null claude -p "$(cat "$PHASE_B_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE"
+rm -f "$PHASE_B_PROMPT"
 
 # ═══════════════════════════════════════════════════════
 # PHASE C: Cleanup
