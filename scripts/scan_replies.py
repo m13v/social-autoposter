@@ -238,7 +238,7 @@ class ReplyScanner:
                 reply_children = replies_obj.get("data", {}).get("children", [])
                 self.process_reddit_replies(reply_children, post_id)
 
-            time.sleep(8)
+            time.sleep(3)
 
         # Scan replies to our previous replies (infinite depth BFS)
         print("\nScanning replies to our previous replies...")
@@ -269,7 +269,7 @@ class ReplyScanner:
                 reply_children, row["post_id"],
                 parent_reply_id=row["id"], depth=row["depth"] + 1,
             )
-            time.sleep(8)
+            time.sleep(3)
 
     def scan_github_issues(self):
         """Scan GitHub issues for new comments after ours."""
