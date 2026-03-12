@@ -136,13 +136,18 @@ async (page) => {
 Replace COMMENT_ID with the Reddit comment ID (from their_comment_id, without t1_ prefix).
 Replace REPLY_TEXT_HERE with a JS string literal of the reply text.
 IMPORTANT: Use thing.evaluate() for clicks — do NOT use replyBtn.click() directly as it causes Playwright timeouts.
-4. Update DB: psql "\$DATABASE_URL" -c "UPDATE replies SET status='replied', our_reply_content='...', replied_at=NOW() WHERE id=N;"
+4. Update DB with the helper script (fast, single connection, minimal tokens):
+   - Mark replied: python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url]
+   - Mark skipped: python3 $REPO_DIR/scripts/reply_db.py skipped ID "reason"
+   - Batch skip: python3 $REPO_DIR/scripts/reply_db.py skip_batch '{"ids":[1,2,3],"reason":"..."}'
+   - Check status: python3 $REPO_DIR/scripts/reply_db.py status
+   Do NOT use raw psql commands — always use reply_db.py.
 5. Navigate directly to the next reply — no need to close tabs.
 
 Do NOT use browser_snapshot, browser_click, or browser_type for Reddit replies. browser_run_code is 5x faster.
 Do NOT extract permalinks from snapshots — use the JS return value or skip it.
 
-After every 10 replies, run: psql "\$DATABASE_URL" -t -A -c "SELECT status, COUNT(*) FROM replies GROUP BY status;" to report progress.
+After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
 
     claude -p "$(cat "$PHASE_B_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE"
