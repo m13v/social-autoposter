@@ -31,7 +31,7 @@ log "=== Engagement Loop Run: $(date) ==="
 # PHASE A: Scan for replies (Python, no Claude needed)
 # ═══════════════════════════════════════════════════════
 log "Phase A: Scanning for replies..."
-python3 "$REPO_DIR/scripts/scan_replies.py" 2>&1 | tee -a "$LOG_FILE" || true
+PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_replies.py" 2>&1 | tee -a "$LOG_FILE" || true
 
 # ═══════════════════════════════════════════════════════
 # PHASE B: X/Twitter discovery + all reply engagement
