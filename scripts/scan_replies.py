@@ -205,7 +205,9 @@ class ReplyScanner:
             is_original = self.is_our_post(post)
 
             if is_original:
-                # Original post: fetch the post URL and scan ALL top-level comments + their trees
+                # Original post: only collect top-level comments (direct replies to our post).
+                # Do NOT recurse into reply trees — those are conversations between other users.
+                # The BFS scan below handles replies to our own replies at any depth.
                 json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
                 data = fetch_json(json_url, user_agent=self.user_agent)
                 if not data or not isinstance(data, list) or len(data) < 2:
@@ -215,7 +217,7 @@ class ReplyScanner:
                 children = data[1].get("data", {}).get("children", [])
                 if children:
                     print(f"  Scanning original post [{post_id}]: {post['thread_title'][:60]}... ({len(children)} top-level comments)")
-                    self.walk_comment_tree(children, post_id, depth=1)
+                    self.process_reddit_replies(children, post_id, depth=1)
             else:
                 # Comment on someone else's thread: fetch our comment URL and scan replies to it
                 json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
