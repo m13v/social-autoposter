@@ -90,8 +90,11 @@ There are $PENDING_COUNT pending replies in the database.
 
 $PENDING_DATA
 
-Process ALL pending replies. For each: draft response (follow Content Rules + anti-AI-detection rules), post it, update DB.
-Skip replies that don't warrant a response (light acknowledgments like 'thanks', 'so good', troll comments) — mark those as 'skipped' with a skip_reason.
+CRITICAL INSTRUCTION: You MUST process EVERY SINGLE pending reply in the list above. Do NOT stop early. Do NOT summarize and quit after a few. There are $PENDING_COUNT replies and you must handle ALL of them, one by one, until zero remain.
+
+For each reply: either post a response (follow Content Rules + anti-AI-detection rules) and mark as 'replied', OR mark as 'skipped' with a skip_reason if it doesn't warrant a response (light acknowledgments like 'thanks', 'so good', troll comments, crypto spam, DM requests).
+
+After processing each batch of 10 replies, query the database to confirm the pending count is decreasing and report progress. Do NOT stop until pending count reaches 0.
 
 For **github_issues** platform replies: post via gh issue comment NUMBER -R OWNER/REPO (no browser needed).
 Extract OWNER/REPO and issue number from the their_comment_url field.
