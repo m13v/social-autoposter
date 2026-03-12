@@ -107,6 +107,13 @@ $PENDING_DATA
 
 CRITICAL: Process EVERY reply in this batch. For each: either post a response and mark as 'replied', OR mark as 'skipped' with a skip_reason (light acknowledgments, trolls, crypto spam, DM requests, not directed at us).
 
+CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql):
+  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url]
+  python3 $REPO_DIR/scripts/reply_db.py skipped ID "reason"
+  python3 $REPO_DIR/scripts/reply_db.py skip_batch '{"ids":[1,2,3],"reason":"..."}'
+  python3 $REPO_DIR/scripts/reply_db.py status
+NEVER use psql directly. reply_db.py is faster (persistent connection, no env sourcing).
+
 For **github_issues**: use gh issue comment NUMBER -R OWNER/REPO.
 
 For **reddit** — use this FAST posting method (browser_run_code):
@@ -136,12 +143,7 @@ async (page) => {
 Replace COMMENT_ID with the Reddit comment ID (from their_comment_id, without t1_ prefix).
 Replace REPLY_TEXT_HERE with a JS string literal of the reply text.
 IMPORTANT: Use thing.evaluate() for clicks — do NOT use replyBtn.click() directly as it causes Playwright timeouts.
-4. Update DB with the helper script (fast, single connection, minimal tokens):
-   - Mark replied: python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url]
-   - Mark skipped: python3 $REPO_DIR/scripts/reply_db.py skipped ID "reason"
-   - Batch skip: python3 $REPO_DIR/scripts/reply_db.py skip_batch '{"ids":[1,2,3],"reason":"..."}'
-   - Check status: python3 $REPO_DIR/scripts/reply_db.py status
-   Do NOT use raw psql commands — always use reply_db.py.
+4. Update DB using reply_db.py (see CRITICAL section above).
 5. Navigate directly to the next reply — no need to close tabs.
 
 Do NOT use browser_snapshot, browser_click, or browser_type for Reddit replies. browser_run_code is 5x faster.
