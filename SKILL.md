@@ -27,7 +27,7 @@ Key fields:
 - `subreddits` — target subreddits to monitor
 - `content_angle` — your unique perspective for authentic comments
 - `projects` — your products/repos to mention when relevant (with topic keywords)
-- `database` — unused (DB is Neon Postgres via `DATABASE_URL` in `.env`)
+- `DATABASE_URL` in `~/social-autoposter/.env` — the live Neon Postgres connection used by all scripts
 
 ## Helper Scripts
 
