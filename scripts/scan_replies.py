@@ -421,7 +421,7 @@ def main():
     user_agent = f"social-autoposter/1.0 (u/{reddit_account})"
     scanner = ReplyScanner(reddit_account, user_agent)
     scanner.scan_reddit()
-    scanner.scan_github_issues()
+    # GitHub issues scanning moved to scripts/scan_github_replies.py (separate pipeline)
 
     moltbook_key = os.environ.get("MOLTBOOK_API_KEY", "")
     scanner.scan_moltbook(moltbook_key)
