@@ -70,10 +70,7 @@ python3 ~/social-autoposter/scripts/update_stats.py --quiet
 
 ### 1. Rate limit check
 
-```sql
-SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours'
-```
-Max 100 posts per 24 hours. Stop if at limit.
+Skip this step — the find_threads.py script handles rate limiting automatically.
 
 ### 2. Find candidate threads
 
