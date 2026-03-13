@@ -67,10 +67,7 @@ Find a thread, draft a comment, post it, log it.
 
 ### 1. Rate limit check
 
-```sql
-SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours'
-```
-If 100+ posts in the last 24 hours, stop. Max 100/day.
+Skip this step — the find_threads.py script handles rate limiting automatically.
 
 ### 2. Find candidate threads
 
