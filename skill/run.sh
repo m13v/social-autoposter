@@ -22,14 +22,11 @@ claude -p "You are the Social Autoposter.
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 
 Run the **Workflow: Post** section. Follow every step in order:
-1. Rate limit check
-2. Find candidate threads (use the helper script: python3 $REPO_DIR/scripts/find_threads.py --include-moltbook)
-3. Pick the best thread
-4. Read the thread + top comments
-5. Draft the comment (follow Content Rules - NEVER use em dashes)
-6. Post it via Playwright MCP
-7. Log to database
-8. Self-reply with a relevant project link (mandatory - see SKILL.md step 8)
+1. Find candidate threads (use the helper script: python3 $REPO_DIR/scripts/find_threads.py --include-moltbook --force). The script handles rate limiting.
+2. Pick the best thread from the script output
+3. Draft the comment (follow Content Rules - NEVER use em dashes)
+4. Post it via Playwright MCP
+5. Log to database
 
 ONE post per run max. If nothing fits, say '## No good thread found' and stop.
 
