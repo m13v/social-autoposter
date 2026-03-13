@@ -70,7 +70,7 @@ Find a thread, draft a comment, post it, log it.
 ```sql
 SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours'
 ```
-If 40+ posts in the last 24 hours, stop. Max 40/day.
+If 100+ posts in the last 24 hours, stop. Max 100/day.
 
 ### 2. Find candidate threads
 
