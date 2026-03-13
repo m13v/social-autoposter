@@ -2,6 +2,8 @@
 
 Automated social posting pipeline for Reddit, X/Twitter, LinkedIn, and Moltbook. Install as an AI agent skill or use the standalone Python scripts.
 
+The current storage backend is Neon Postgres via `DATABASE_URL` in `~/social-autoposter/.env`. Any legacy `database` key in old local configs or leftover `*.db` files are not used by the current scripts.
+
 ## Install as a skill
 
 ```bash
