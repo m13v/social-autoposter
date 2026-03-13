@@ -60,7 +60,7 @@ def get_recent_posts(limit=5):
     return [row[0] for row in rows]
 
 
-def check_rate_limit(max_per_day=40):
+def check_rate_limit(max_per_day=100):
     """Return (posts_today, can_post)."""
     conn = dbmod.get_conn()
     row = conn.execute(
