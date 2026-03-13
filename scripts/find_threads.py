@@ -151,6 +151,7 @@ def main():
     parser.add_argument("--sort", default="new", choices=["new", "hot", "top"], help="Reddit sort order")
     parser.add_argument("--limit", type=int, default=10, help="Threads per subreddit")
     parser.add_argument("--include-moltbook", action="store_true", help="Also search Moltbook")
+    parser.add_argument("--force", action="store_true", help="Skip rate limit check")
     args = parser.parse_args()
 
     config = load_config()
@@ -160,7 +161,7 @@ def main():
 
     # Rate limit check
     posts_today, can_post = check_rate_limit()
-    if not can_post:
+    if not can_post and not args.force:
         print(json.dumps({"error": "rate_limit", "posts_today": posts_today, "threads": []}))
         sys.exit(1)
 
