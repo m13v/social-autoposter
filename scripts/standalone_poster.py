@@ -14,10 +14,12 @@ Usage:
 import argparse
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 
 # Add scripts dir to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -25,6 +27,7 @@ import db as dbmod
 
 CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
 ENV_PATH = os.path.expanduser("~/social-autoposter/.env")
+PROMPT_DB_PATH = os.path.expanduser("~/claude-prompt-db/prompts.db")
 
 
 def load_config():
@@ -124,7 +127,7 @@ Or if nothing fits: {{"skip": true, "reason": "why"}}"""
         "model": model,
     }
 
-    return json.loads(text), usage
+    return json.loads(text), usage, prompt, response.content[0].text
 
 
 def post_to_reddit(thread_url, comment_text):
@@ -208,6 +211,47 @@ def get_reddit_storage_state():
     return state_path
 
 
+def log_to_prompt_db(session_id, turn_index, prompt, response_text, usage, model):
+    """Log API call to prompt-db (same DB as Claude Code conversations)."""
+    try:
+        conn = sqlite3.connect(PROMPT_DB_PATH)
+        conn.execute("PRAGMA journal_mode=WAL")
+        now = datetime.now(timezone.utc).isoformat()
+        turn_uuid = str(uuid.uuid4())
+
+        # Upsert session
+        conn.execute(
+            """INSERT INTO sessions (session_id, project_slug, project_path, first_timestamp, last_timestamp, turn_count)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(session_id) DO UPDATE SET last_timestamp=?, turn_count=turn_count+1""",
+            (session_id, "standalone-poster", os.path.expanduser("~/social-autoposter"),
+             now, now, 1, now)
+        )
+
+        # Insert turn
+        conn.execute(
+            """INSERT OR IGNORE INTO turns (
+                uuid, session_id, turn_index, user_prompt, user_prompt_length,
+                assistant_response, assistant_response_length, timestamp,
+                project_slug, project_path, model,
+                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                backfilled_at, source_file
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (turn_uuid, session_id, turn_index,
+             prompt, len(prompt),
+             response_text, len(response_text),
+             now,
+             "standalone-poster", os.path.expanduser("~/social-autoposter"), model,
+             usage.get("input_tokens", 0), usage.get("output_tokens", 0),
+             usage.get("cache_read_tokens", 0), usage.get("cache_creation_tokens", 0),
+             now, "standalone_poster.py")
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"  Warning: could not log to prompt-db: {e}", file=sys.stderr)
+
+
 def log_to_db(conn, platform, thread, our_url, our_content, account):
     """Log post to database."""
     conn.execute(
@@ -242,6 +286,8 @@ def main():
     posts_made = 0
     skipped = 0
     start_time = time.time()
+    session_id = f"standalone-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    turn_index = 0
 
     print(f"=== Standalone Poster ===")
     print(f"Target: {args.count} comments | Model: {args.model} | Dry run: {args.dry_run}")
@@ -279,7 +325,7 @@ def main():
         print("[2/3] Picking thread + drafting comment...")
         t0 = time.time()
         try:
-            result, usage = pick_and_draft(available, recent_posts, config, model=args.model)
+            result, usage, raw_prompt, raw_response = pick_and_draft(available, recent_posts, config, model=args.model)
         except Exception as e:
             print(f"  ERROR: {e}")
             skipped += 1
@@ -288,6 +334,10 @@ def main():
         # Accumulate usage
         for k in total_usage:
             total_usage[k] += usage.get(k, 0)
+
+        # Log to prompt-db
+        log_to_prompt_db(session_id, turn_index, raw_prompt, raw_response, usage, args.model)
+        turn_index += 1
 
         api_time = time.time() - t0
         print(f"  API call: {usage['input_tokens']}in + {usage['output_tokens']}out = "
