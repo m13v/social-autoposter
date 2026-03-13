@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Scan GitHub issues for new replies to our comments.
+
+Finds all issues we've commented on, checks for new comments from other users,
+inserts into `replies` table as 'pending' or 'skipped'.
+
+Works by scanning via thread_url + gh API - doesn't require our_url to be set.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import db as dbmod
+
+MIN_WORDS = 5
+CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
+
+
+def load_config():
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    return {}
+
+
+def word_count(text):
+    return len(text.split()) if text else 0
+
+
+def main():
+    dbmod.load_env()
+    conn = dbmod.get_conn()
+    config = load_config()
+    github_user = config.get("accounts", {}).get("github", {}).get("username", "m13v")
+
+    # Get all unique GitHub issues we've commented on
+    rows = conn.execute(
+        "SELECT DISTINCT thread_url FROM posts WHERE platform='github_issues' AND status='active'"
+    ).fetchall()
+
+    issues = {}
+    for row in rows:
+        url = row["thread_url"]
+        match = re.match(r"https://github\.com/([^/]+/[^/]+)/issues/(\d+)", url)
+        if match:
+            repo = match.group(1)
+            issue_num = match.group(2)
+            issues[f"{repo}/{issue_num}"] = url
+
+    print(f"Scanning {len(issues)} GitHub issues for replies...")
+
+    discovered = 0
+    skipped = 0
+    errors = 0
+
+    for issue_key, thread_url in issues.items():
+        repo, issue_num = issue_key.rsplit("/", 1)
+
+        # Get the post_id for this issue (use the first one)
+        post_row = conn.execute(
+            "SELECT id FROM posts WHERE platform='github_issues' AND thread_url=%s LIMIT 1",
+            (thread_url,)
+        ).fetchone()
+        if not post_row:
+            continue
+        post_id = post_row["id"]
+
+        # Fetch all comments on the issue
+        try:
+            result = subprocess.run(
+                ["gh", "api", f"repos/{repo}/issues/{issue_num}/comments",
+                 "--jq", f'[.[] | {{id: .id, user: .user.login, body: .body, url: .html_url, created: .created_at}}]'],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode != 0:
+                errors += 1
+                continue
+            comments = json.loads(result.stdout) if result.stdout.strip() else []
+        except Exception as e:
+            print(f"  ERROR scanning {issue_key}: {e}")
+            errors += 1
+            continue
+
+        # Find our comments to know their timestamps
+        our_comments = [c for c in comments if c.get("user") == github_user]
+        other_comments = [c for c in comments if c.get("user") != github_user]
+
+        if not our_comments:
+            continue
+
+        # Get the timestamp of our first comment
+        our_first_ts = min(c["created"] for c in our_comments)
+
+        # Only look at comments after our first comment
+        replies_to_us = [c for c in other_comments if c["created"] > our_first_ts]
+
+        for comment in replies_to_us:
+            author = comment.get("user", "")
+            body = comment.get("body", "")
+            comment_id = str(comment.get("id", ""))
+            comment_url = comment.get("url", "")
+
+            # Check if already tracked
+            existing = conn.execute(
+                "SELECT COUNT(*) FROM replies WHERE platform='github_issues' AND their_comment_id=%s",
+                (comment_id,)
+            ).fetchone()
+            if existing[0] > 0:
+                continue
+
+            if word_count(body) < MIN_WORDS:
+                conn.execute(
+                    """INSERT INTO replies
+                    (post_id, platform, their_comment_id, their_author, their_content,
+                     their_comment_url, depth, status, skip_reason)
+                    VALUES (%s, 'github_issues', %s, %s, %s, %s, 1, 'skipped', %s)""",
+                    (post_id, comment_id, author, body, comment_url,
+                     f"too_short ({word_count(body)} words)")
+                )
+                conn.commit()
+                skipped += 1
+                continue
+
+            conn.execute(
+                """INSERT INTO replies
+                (post_id, platform, their_comment_id, their_author, their_content,
+                 their_comment_url, depth, status)
+                VALUES (%s, 'github_issues', %s, %s, %s, %s, 1, 'pending')""",
+                (post_id, comment_id, author, body, comment_url)
+            )
+            conn.commit()
+            discovered += 1
+            print(f"  NEW: @{author} on {issue_key}: {body[:80]}...")
+
+        time.sleep(1)  # Light rate limiting
+
+    conn.close()
+    print(f"\nGitHub scan complete: {discovered} new pending, {skipped} skipped, {errors} errors")
+
+
+if __name__ == "__main__":
+    main()
