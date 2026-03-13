@@ -114,7 +114,7 @@ CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql)
   python3 $REPO_DIR/scripts/reply_db.py status
 NEVER use psql directly. reply_db.py is faster (persistent connection, no env sourcing).
 
-For **github_issues**: use gh issue comment NUMBER -R OWNER/REPO.
+GitHub issues engagement is handled by a separate pipeline (github-engage.sh). Skip any github_issues replies in this batch.
 
 For **reddit** — use this FAST posting method (browser_run_code):
 1. First, pre-compose ALL reply texts before opening the browser. Decide skip/reply and draft text for every item.
