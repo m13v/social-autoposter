@@ -250,7 +250,11 @@ class ReplyScanner:
         for row in replied_rows:
             if row["platform"] != "reddit":
                 continue
-            json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", row["our_reply_url"]).rstrip("/") + ".json"
+            # Skip non-URL values like 'posted' that would crash urllib
+            our_reply_url = row["our_reply_url"] or ""
+            if not our_reply_url.startswith("http"):
+                continue
+            json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_reply_url).rstrip("/") + ".json"
             data = fetch_json(json_url, user_agent=self.user_agent)
             if not data or not isinstance(data, list) or len(data) < 2:
                 continue
