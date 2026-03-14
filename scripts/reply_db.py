@@ -7,7 +7,14 @@ load_env()
 db = get_conn()
 
 cmd = sys.argv[1]
-if cmd == "replied":
+if cmd == "processing":
+    # reply_db.py processing ID
+    # Mark as in-progress BEFORE browser action to prevent re-processing on crash
+    rid = int(sys.argv[2])
+    db.execute("UPDATE replies SET status='processing' WHERE id=%s AND status='pending'", [rid])
+    db.commit()
+    print(f"ok {rid}")
+elif cmd == "replied":
     # reply_db.py replied ID "content" [url]
     rid, content = int(sys.argv[2]), sys.argv[3]
     url = sys.argv[4] if len(sys.argv) > 4 else None
