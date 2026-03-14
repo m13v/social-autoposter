@@ -26,8 +26,14 @@ CREATE TABLE IF NOT EXISTS posts (
     top_comment_author TEXT,
     top_comment_content TEXT,
     top_comment_upvotes INTEGER,
-    top_comment_url TEXT
+    top_comment_url TEXT,
+    link_edited_at TIMESTAMP,
+    link_edit_content TEXT
 );
+
+-- Add columns to existing deployments (safe to re-run)
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS link_edited_at TIMESTAMP;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS link_edit_content TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_posts_platform ON posts(platform);
 
