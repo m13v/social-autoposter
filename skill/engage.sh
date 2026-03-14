@@ -48,7 +48,7 @@ sleep 15
 # The in-browser already-replied check (below) prevents re-posting duplicates.
 RESET_COUNT=$(psql "$DATABASE_URL" -t -A -c "
     UPDATE replies SET status='pending'
-    WHERE status='processing' AND discovered_at < NOW() - INTERVAL '2 hours'
+    WHERE status='processing' AND processing_at < NOW() - INTERVAL '2 hours'
     RETURNING id;" | wc -l | tr -d ' ')
 [ "$RESET_COUNT" -gt 0 ] && log "Phase B: Reset $RESET_COUNT stuck 'processing' items back to pending"
 
