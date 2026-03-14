@@ -42,6 +42,16 @@ sleep 15
 # PHASE B: X/Twitter discovery + all reply engagement
 # Process in batches of $BATCH_SIZE to avoid prompt size limits
 # ═══════════════════════════════════════════════════════
+
+# Reset any 'processing' items older than 2 hours back to 'pending'
+# These are items the agent physically posted but crashed before marking 'replied'.
+# The in-browser already-replied check (below) prevents re-posting duplicates.
+RESET_COUNT=$(psql "$DATABASE_URL" -t -A -c "
+    UPDATE replies SET status='pending'
+    WHERE status='processing' AND discovered_at < NOW() - INTERVAL '2 hours'
+    RETURNING id;" | wc -l | tr -d ' ')
+[ "$RESET_COUNT" -gt 0 ] && log "Phase B: Reset $RESET_COUNT stuck 'processing' items back to pending"
+
 BATCH_NUM=0
 
 while true; do
@@ -84,9 +94,17 @@ cat <<'TWITTER_EOF'
 ## X/Twitter replies
 1. Navigate to https://x.com/notifications/mentions
 2. Extract mentions replying to @m13v_
-3. Skip already-tracked IDs, light acknowledgments, and your own replies
-4. Respond to all substantive new replies
-5. Log everything to the replies table
+3. Before logging or replying to any mention: query the DB to check if it's already tracked:
+   python3 $REPO_DIR/scripts/reply_db.py status
+   Also run: psql "$DATABASE_URL" -t -A -c "SELECT their_comment_id FROM replies WHERE platform='x';"
+   Skip any mention whose numeric tweet ID appears in that list.
+4. Skip light acknowledgments and your own replies
+5. Respond to all substantive new replies
+6. Log everything to the replies table
+
+CRITICAL — Twitter comment ID format: always store ONLY the numeric tweet ID as their_comment_id.
+Extract it from the tweet URL: x.com/username/status/NUMERIC_ID → store just NUMERIC_ID.
+NEVER prefix with username or any other text (e.g. store '2030180353625948573', NOT 'TisDad_2030180353625948573').
 TWITTER_EOF
 fi)
 
@@ -108,22 +126,38 @@ $PENDING_DATA
 CRITICAL: Process EVERY reply in this batch. For each: either post a response and mark as 'replied', OR mark as 'skipped' with a skip_reason (light acknowledgments, trolls, crypto spam, DM requests, not directed at us).
 
 CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql):
-  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url]
+  python3 $REPO_DIR/scripts/reply_db.py processing ID          # BEFORE browser action
+  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url]   # AFTER posting
   python3 $REPO_DIR/scripts/reply_db.py skipped ID "reason"
   python3 $REPO_DIR/scripts/reply_db.py skip_batch '{"ids":[1,2,3],"reason":"..."}'
   python3 $REPO_DIR/scripts/reply_db.py status
 NEVER use psql directly. reply_db.py is faster (persistent connection, no env sourcing).
 
+MANDATORY reply flow for every item:
+  Step 1: python3 reply_db.py processing ID      ← mark BEFORE touching browser
+  Step 2: post reply via browser
+  Step 3: python3 reply_db.py replied ID "text" [url]   ← mark AFTER success
+If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run — safe to retry.
+
 GitHub issues engagement is handled by a separate pipeline (github-engage.sh). Skip any github_issues replies in this batch.
 
 For **reddit** — use this FAST posting method (browser_run_code):
 1. First, pre-compose ALL reply texts before opening the browser. Decide skip/reply and draft text for every item.
-2. For each reply, call browser_navigate to their_comment_url.
+2. For each reply: run python3 reply_db.py processing ID, then call browser_navigate to their_comment_url.
 3. Then use a SINGLE browser_run_code call with this exact Playwright pattern:
 \`\`\`javascript
 async (page) => {
+  const OUR_USERNAME = 'Deep_Ad1959';
   const thing = await page.\$('#thing_t1_COMMENT_ID');
   if (!thing) return 'ERROR: comment not found';
+
+  // Check if we already replied (handles crash-recovery re-runs)
+  const existingReplies = await thing.\$\$('.child .comment');
+  for (const reply of existingReplies) {
+    const author = await reply.\$eval('.author', el => el.textContent).catch(() => '');
+    if (author === OUR_USERNAME) return 'already_replied';
+  }
+
   await thing.evaluate(el => {
     const btn = el.querySelector('.flat-list a[onclick*="reply"]');
     if (btn) btn.click();
@@ -137,17 +171,20 @@ async (page) => {
   });
   await page.waitForTimeout(2000);
   const newComments = await thing.\$\$('.child .comment .bylink');
-  return newComments.length > 0 ? await newComments[newComments.length - 1].getAttribute('href') : 'posted';
+  return newComments.length > 0 ? await newComments[newComments.length - 1].getAttribute('href') : null;
 }
 \`\`\`
 Replace COMMENT_ID with the Reddit comment ID (from their_comment_id, without t1_ prefix).
 Replace REPLY_TEXT_HERE with a JS string literal of the reply text.
 IMPORTANT: Use thing.evaluate() for clicks — do NOT use replyBtn.click() directly as it causes Playwright timeouts.
+If the JS returns 'already_replied': call reply_db.py replied ID "" to clean up without posting again.
+If the JS returns null (no permalink found): call reply_db.py replied ID "text" with no URL — do NOT store the string 'posted' or their_comment_url as the URL.
 4. Update DB using reply_db.py (see CRITICAL section above).
 5. Navigate directly to the next reply — no need to close tabs.
 
 Do NOT use browser_snapshot, browser_click, or browser_type for Reddit replies. browser_run_code is 5x faster.
 Do NOT extract permalinks from snapshots — use the JS return value or skip it.
+Do NOT store 'posted' or their_comment_url as our_reply_url — store null/no URL if the permalink is unavailable.
 
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
