@@ -55,7 +55,7 @@ python3 scripts/update_stats.py --quiet
 - Parallel agents cause duplicate posts (same comment posted twice on the same thread)
 - Browser lock conflicts lead to unpredictable failures
 
-This applies to ALL posting workflows: comments on existing threads, self-replies with links, new thread creation, and reply engagement. Even if you have 5 threads to post on, do them one at a time in the same agent.
+This applies to ALL posting workflows: comments on existing threads, new thread creation, and reply engagement. Even if you have 5 threads to post on, do them one at a time in the same agent.
 
 **After each post, always verify** by reloading the page and confirming the comment appears exactly once before moving to the next post.
 
@@ -149,25 +149,6 @@ INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
 ```
 
-### 8. Self-reply with relevant link
-
-**Mandatory after every comment.** Reply to your own comment with a short, relevant link to one of the user's projects from `config.json -> projects[]`.
-
-Pick the project whose `topics` best match the thread subject. Write 1 sentence connecting it to the conversation, then include the link.
-
-**Reddit**: click "reply" under your just-posted comment, type the self-reply, submit, verify, capture permalink.
-**X/Twitter**: reply to your own tweet with the link.
-**Moltbook**: use the comment API to reply to your own post.
-
-Example self-replies (casual, not salesy):
-- "fwiw I built something for this - [project.website]"
-- "we open sourced the thing I mentioned if anyone wants to poke around [project.github]"
-- "here's the repo if useful [project.github]"
-
-**Do NOT self-reply if:**
-- No project in `config.json` is relevant to the thread topic
-- The comment is on a thread you authored (use the post body for links instead)
-
 ---
 
 ## Workflow: Stats (`/social-autoposter stats`)
@@ -237,6 +218,57 @@ X has no public API for notifications. To discover X replies:
 3. Filter out already-tracked reply IDs, light acknowledgments, and your own replies
 4. Respond to substantive replies (max 5)
 5. Log everything to `replies` table
+
+### Phase D: Edit high-performing posts with project link
+
+Find posts that earned >2 upvotes but haven't had a link appended yet:
+
+```sql
+SELECT id, platform, our_url, our_content, thread_title, source_summary
+FROM posts
+WHERE status='active'
+  AND upvotes > 2
+  AND posted_at < NOW() - INTERVAL '6 hours'
+  AND link_edited_at IS NULL
+  AND our_url IS NOT NULL
+ORDER BY upvotes DESC
+```
+
+For each post:
+1. Pick the project from `config.json → projects[]` whose `topics` best match the thread. If no project fits, skip.
+2. Write 1 sentence + link (same style as old self-replies):
+   - "fwiw I built something for this - [project.website]"
+   - "we open sourced the thing I mentioned if anyone wants to poke around [project.github]"
+   - "here's the repo if useful [project.github]"
+3. Edit the original comment to append a blank line + the link text at the bottom.
+
+**Platform-specific editing:**
+
+**Reddit** (browser):
+- Navigate to `old.reddit.com` comment permalink
+- Click "edit" under the comment
+- Append `\n\n[link text]` to the existing content
+- Save, verify the edit appeared
+
+**Moltbook** (API):
+```bash
+source ~/social-autoposter/.env
+curl -s -X PATCH -H "Authorization: Bearer $MOLTBOOK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "[original content]\n\n[link text]"}' \
+  "https://www.moltbook.com/api/v1/posts/[uuid]"
+```
+
+**X/Twitter:** Skip — editing is not supported.
+
+**LinkedIn:** Skip — editing is unreliable via automation.
+
+4. After a successful edit, update the DB:
+```sql
+UPDATE posts SET link_edited_at=NOW(), link_edit_content=%s WHERE id=%s
+```
+
+Max 5 edits per engage run.
 
 ---
 
@@ -313,7 +345,7 @@ our_posts    -- backward-compat post tracking
 replies      -- replies to our posts and our responses
 ```
 
-Key fields in `posts`: `id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary`
+Key fields in `posts`: `id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary, link_edited_at, link_edit_content`
 
 Key fields in `replies`: `id, post_id, platform, their_author, their_content, our_reply_content, status (pending|replied|skipped|error), depth`
 
