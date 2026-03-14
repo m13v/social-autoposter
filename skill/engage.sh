@@ -3,6 +3,7 @@
 # Phase A: Python script scans for new replies (runs in background)
 # Phase B: Claude drafts and posts replies via Playwright/API (batched, 50 at a time)
 # Phase C: Cleanup
+# Phase D: Edit high-performing posts (>2 upvotes, 6h+ old) with a project link
 # Called by launchd every 2 hours.
 
 set -euo pipefail
@@ -205,6 +206,55 @@ done
 if kill -0 "$SCAN_PID" 2>/dev/null; then
     log "Waiting for Phase A scanner to finish..."
     wait "$SCAN_PID" || true
+fi
+
+# ═══════════════════════════════════════════════════════
+# PHASE D: Edit high-performing posts with project link
+# ═══════════════════════════════════════════════════════
+EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
+    SELECT json_agg(q) FROM (
+        SELECT id, platform, our_url, our_content, thread_title, upvotes
+        FROM posts
+        WHERE status='active'
+          AND upvotes > 2
+          AND posted_at < NOW() - INTERVAL '6 hours'
+          AND link_edited_at IS NULL
+          AND our_url IS NOT NULL
+        ORDER BY upvotes DESC
+        LIMIT 5
+    ) q;")
+
+if [ "$EDITABLE" != "null" ] && [ -n "$EDITABLE" ]; then
+    EDITABLE_COUNT=$(echo "$EDITABLE" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
+    log "Phase D: $EDITABLE_COUNT posts eligible for link edit"
+
+    PHASE_D_PROMPT=$(mktemp)
+    cat > "$PHASE_D_PROMPT" <<PROMPT_EOF
+Read $SKILL_FILE for the full workflow. Execute **Phase D only** (Edit high-performing posts with project link).
+
+Posts eligible for editing:
+$EDITABLE
+
+For each post:
+1. Pick the project from ~/social-autoposter/config.json whose topics best match thread_title + our_content. If nothing fits, skip.
+2. Write 1 casual sentence + project link (website or github).
+3. Append it to our_content with a blank line separator.
+4. For Moltbook: extract comment UUID from our_url (after #comment-), PATCH via:
+   curl -s -X PATCH -H "Authorization: Bearer \$MOLTBOOK_API_KEY" \\
+     -H "Content-Type: application/json" \\
+     -d '{"content": "FULL_CONTENT"}' \\
+     "https://www.moltbook.com/api/v1/comments/COMMENT_UUID"
+5. For Reddit: navigate to our_url via browser, click edit, append text, save.
+6. After each successful edit, update the DB:
+   psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='LINK_TEXT' WHERE id=POST_ID"
+
+Max 5 edits this run.
+PROMPT_EOF
+
+    timeout 600 claude -p "$(cat "$PHASE_D_PROMPT")" --max-turns 50 2>&1 | tee -a "$LOG_FILE"
+    rm -f "$PHASE_D_PROMPT"
+else
+    log "Phase D: No posts eligible for link edit"
 fi
 
 # ═══════════════════════════════════════════════════════
