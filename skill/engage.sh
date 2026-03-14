@@ -82,7 +82,7 @@ For each post:
 Max 5 edits this run.
 PROMPT_EOF
 
-    timeout 600 claude -p "$(cat "$PHASE_D_PROMPT")" --max-turns 50 2>&1 | tee -a "$LOG_FILE"
+    gtimeout 600 claude -p "$(cat "$PHASE_D_PROMPT")" --max-turns 50 2>&1 | tee -a "$LOG_FILE"
     rm -f "$PHASE_D_PROMPT"
 else
     log "Phase D: No posts eligible for link edit"
@@ -242,7 +242,7 @@ Do NOT store 'posted' or their_comment_url as our_reply_url — store null/no UR
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
 
-    timeout 1800 claude -p "$(cat "$PHASE_B_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE"
+    gtimeout 1800 claude -p "$(cat "$PHASE_B_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE"
     rm -f "$PHASE_B_PROMPT"
 
     # Check if we actually made progress (avoid infinite loop)
