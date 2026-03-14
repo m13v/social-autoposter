@@ -137,25 +137,6 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
 
 Use the account value from `config.json` for `our_account`.
 
-### 8. Self-reply with relevant link
-
-**Mandatory after every comment.** Reply to your own comment with a short, relevant link to one of the user's projects from `config.json -> projects[]`.
-
-Pick the project whose `topics` best match the thread subject. Write 1 sentence connecting it to the conversation, then include the link.
-
-**Reddit**: click "reply" under your just-posted comment, type the self-reply, submit, verify, capture permalink.
-**X/Twitter**: reply to your own tweet with the link.
-**Moltbook**: use the comment API to reply to your own post.
-
-Example self-replies (casual, not salesy):
-- "fwiw I built something for this - [project.website]"
-- "we open sourced the thing I mentioned if anyone wants to poke around [project.github]"
-- "here's the repo if useful [project.github]"
-
-**Do NOT self-reply if:**
-- No project in `config.json` is relevant to the thread topic
-- The comment is on a thread you authored (use the post body for links instead)
-
 ---
 
 ## Workflow: Create Post (`/social-autoposter post`)
@@ -537,6 +518,56 @@ UPDATE replies SET status='replied', our_reply_content=%s, our_reply_url=%s,
 
 Navigate to `https://x.com/notifications/mentions`. Find replies to the handle in config.json. Respond to substantive ones (max 5). Log to `replies` table.
 
+### Phase D: Edit high-performing posts with project link
+
+Find posts that earned >2 upvotes but haven't had a link appended yet:
+
+```sql
+SELECT id, platform, our_url, our_content, thread_title, source_summary
+FROM posts
+WHERE status='active'
+  AND upvotes > 2
+  AND posted_at < NOW() - INTERVAL '6 hours'
+  AND link_edited_at IS NULL
+  AND our_url IS NOT NULL
+ORDER BY upvotes DESC
+```
+
+For each post:
+1. Pick the project from `config.json → projects[]` whose `topics` best match the thread. If no project fits, skip.
+2. Write 1 sentence + link:
+   - "fwiw I built something for this - [project.website]"
+   - "we open sourced the thing I mentioned if anyone wants to poke around [project.github]"
+   - "here's the repo if useful [project.github]"
+3. Edit the original comment to append `\n\n[link text]` at the bottom.
+
+**Platform-specific editing:**
+
+**Reddit** (browser):
+- Navigate to `old.reddit.com` comment permalink
+- Click "edit" under the comment
+- Append `\n\n[link text]` to existing content
+- Save, verify edit appeared
+
+**Moltbook** (API):
+```bash
+source ~/social-autoposter/.env
+curl -s -X PATCH -H "Authorization: Bearer $MOLTBOOK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "[original content]\n\n[link text]"}' \
+  "https://www.moltbook.com/api/v1/posts/[uuid]"
+```
+
+**X/Twitter:** Skip — editing not supported.
+**LinkedIn:** Skip — unreliable via automation.
+
+4. Update DB after successful edit:
+```sql
+UPDATE posts SET link_edited_at=NOW(), link_edit_content=%s WHERE id=%s
+```
+
+Max 5 edits per engage run.
+
 ---
 
 ## Workflow: Audit (`/social-autoposter audit`)
@@ -622,7 +653,7 @@ GOOD body: Paragraphs, incomplete thoughts, personal details, casual tone, ends 
 
 ## Database Schema
 
-`posts`: id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary
+`posts`: id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary, link_edited_at, link_edit_content
 
 Platform values: `reddit`, `twitter`, `linkedin`, `moltbook`, `hackernews`, `github_issues`
 
