@@ -89,8 +89,14 @@ CREATE TABLE IF NOT EXISTS replies (
     status TEXT DEFAULT 'pending',
     skip_reason TEXT,
     discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    replied_at TIMESTAMP
+    processing_at TIMESTAMP,
+    replied_at TIMESTAMP,
+    CONSTRAINT replies_platform_comment_id_unique UNIQUE (platform, their_comment_id)
 );
+
+-- Add columns to existing deployments (safe to re-run)
+ALTER TABLE replies ADD COLUMN IF NOT EXISTS processing_at TIMESTAMP;
+ALTER TABLE replies ADD CONSTRAINT IF NOT EXISTS replies_platform_comment_id_unique UNIQUE (platform, their_comment_id);
 
 CREATE TABLE IF NOT EXISTS thread_comments (
     id SERIAL PRIMARY KEY,
