@@ -60,15 +60,15 @@ def get_recent_posts(limit=5):
     return [row[0] for row in rows]
 
 
-def check_rate_limit(max_per_day=100):
-    """Return (posts_today, can_post)."""
+def check_rate_limit(max_per_day=None):
+    """Return (posts_today, can_post). No limit by default."""
     conn = dbmod.get_conn()
     row = conn.execute(
         "SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours' AND platform != 'github_issues'"
     ).fetchone()
     conn.close()
     count = row[0]
-    return count, count < max_per_day
+    return count, True
 
 
 def fetch_reddit_threads(subreddits, sort="new", limit=10, user_agent="social-autoposter/1.0"):
