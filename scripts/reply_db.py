@@ -11,7 +11,7 @@ if cmd == "processing":
     # reply_db.py processing ID
     # Mark as in-progress BEFORE browser action to prevent re-processing on crash
     rid = int(sys.argv[2])
-    db.execute("UPDATE replies SET status='processing' WHERE id=%s AND status='pending'", [rid])
+    db.execute("UPDATE replies SET status='processing', processing_at=NOW() WHERE id=%s AND status='pending'", [rid])
     db.commit()
     print(f"ok {rid}")
 elif cmd == "replied":
