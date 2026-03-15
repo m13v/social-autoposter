@@ -17,10 +17,19 @@ LOG_FILE="$LOG_DIR/github-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== GitHub Issues Run: $(date) ===" | tee "$LOG_FILE"
 
+# Load exclusions from config
+EXCLUDED_REPOS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('github_repos',[])))" 2>/dev/null || echo "")
+EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('authors',[])))" 2>/dev/null || echo "")
+
 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Also read $REPO_DIR/config.json for accounts, projects, and search_topics.
+
+EXCLUSIONS — do NOT interact with these:
+- Excluded repos/orgs: $EXCLUDED_REPOS
+- Excluded authors: $EXCLUDED_AUTHORS
+Skip any issues from excluded repos/orgs. Do not reply to excluded authors. Do not post on issues owned by excluded orgs.
 
 Run the **Workflow: GitHub Issues** section. Follow every step:
 1. Search for relevant issues using topics from config.json -> accounts.github.search_topics
