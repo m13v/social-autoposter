@@ -195,14 +195,27 @@ class ReplyScanner:
     def scan_reddit(self):
         print("Scanning Reddit posts for replies...")
         posts = self.db.execute(
-            "SELECT id, our_url, thread_url, thread_title, thread_author FROM posts "
+            "SELECT id, our_url, thread_url, thread_title, thread_author, "
+            "posted_at, COALESCE(scan_no_change_count, 0) as scan_no_change_count FROM posts "
             "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL AND our_url != '' AND our_url LIKE 'http%%'"
         ).fetchall()
 
+        skipped = 0
         for post in posts:
             post_id = post["id"]
             our_url = post["our_url"]
             is_original = self.is_our_post(post)
+
+            # Skip posts where the last 2+ scans found no new replies AND post is older than 3 days
+            posted_at = post.get("posted_at")
+            no_change = post["scan_no_change_count"]
+            if no_change >= 2 and posted_at:
+                age = datetime.now(timezone.utc) - (posted_at.replace(tzinfo=timezone.utc) if posted_at.tzinfo is None else posted_at)
+                if age > timedelta(days=3):
+                    skipped += 1
+                    continue
+
+            pre_count = self.discovered
 
             if is_original:
                 # Original post: only collect top-level comments (direct replies to our post).
@@ -238,7 +251,18 @@ class ReplyScanner:
                 reply_children = replies_obj.get("data", {}).get("children", [])
                 self.process_reddit_replies(reply_children, post_id)
 
+            # Track whether this scan found new replies for this post
+            found_new = self.discovered - pre_count
+            if found_new > 0:
+                self.db.execute("UPDATE posts SET scan_no_change_count = 0 WHERE id = %s", (post_id,))
+            else:
+                self.db.execute("UPDATE posts SET scan_no_change_count = COALESCE(scan_no_change_count, 0) + 1 WHERE id = %s", (post_id,))
+            self.db.commit()
+
             time.sleep(3)
+
+        if skipped:
+            print(f"  Skipped {skipped} stable posts (2+ scans with no new replies, older than 3 days)")
 
         # Scan replies to our previous replies (infinite depth BFS)
         print("\nScanning replies to our previous replies...")
