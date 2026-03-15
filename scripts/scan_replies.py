@@ -71,11 +71,13 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0", retries=3)
 
 
 class ReplyScanner:
-    def __init__(self, reddit_account, user_agent="social-autoposter/1.0"):
+    def __init__(self, reddit_account, user_agent="social-autoposter/1.0", excluded_authors=None):
         self.db = dbmod.get_conn()
         self.reddit_account = reddit_account
         self.user_agent = user_agent
         self.skip_authors = {"AutoModerator", "[deleted]", reddit_account}
+        if excluded_authors:
+            self.skip_authors.update(excluded_authors)
         self.discovered = 0
         self.skipped = 0
         self.errors = 0
@@ -447,7 +449,8 @@ def main():
 
     dbmod.load_env()
     user_agent = f"social-autoposter/1.0 (u/{reddit_account})"
-    scanner = ReplyScanner(reddit_account, user_agent)
+    excluded_authors = {a.lower() for a in config.get("exclusions", {}).get("authors", [])}
+    scanner = ReplyScanner(reddit_account, user_agent, excluded_authors=excluded_authors)
     scanner.scan_reddit()
     # GitHub issues scanning moved to scripts/scan_github_replies.py (separate pipeline)
 
