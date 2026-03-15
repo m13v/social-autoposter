@@ -49,7 +49,9 @@
     "subreddits": ["subreddit_to_skip"],
     "urls": ["reddit.com/r/some/specific/thread"],
     "keywords": ["keyword_to_avoid"],
-    "_comment": "authors: skip threads by these users and don't reply to them. subreddits: skip entirely during search. urls: skip threads whose URL contains this substring. keywords: skip threads containing these words in title/body."
+    "github_repos": ["org/repo-to-skip"],
+    "twitter_accounts": ["twitter_handle_to_skip"],
+    "_comment": "authors: skip threads by these users and don't reply to them (applies to ALL platforms). subreddits: skip entirely during search. urls: skip threads whose URL contains this substring. keywords: skip threads containing these words in title/body. github_repos: skip issues from these repos/orgs. twitter_accounts: skip mentions from these X accounts."
   },
 
   "open_source_links": [],
