@@ -52,6 +52,14 @@ def main():
             issue_num = match.group(2)
             issues[f"{repo}/{issue_num}"] = url
 
+    # Load exclusions
+    excluded_authors = {a.lower() for a in config.get("exclusions", {}).get("authors", [])}
+    excluded_repos = {r.lower() for r in config.get("exclusions", {}).get("github_repos", [])}
+
+    # Filter out issues from excluded repos
+    issues = {k: v for k, v in issues.items()
+              if not any(repo_pat in k.lower() for repo_pat in excluded_repos)}
+
     print(f"Scanning {len(issues)} GitHub issues for replies...")
 
     discovered = 0
@@ -111,6 +119,18 @@ def main():
                 (comment_id,)
             ).fetchone()
             if existing[0] > 0:
+                continue
+
+            if author.lower() in excluded_authors:
+                conn.execute(
+                    """INSERT INTO replies
+                    (post_id, platform, their_comment_id, their_author, their_content,
+                     their_comment_url, depth, status, skip_reason)
+                    VALUES (%s, 'github_issues', %s, %s, %s, %s, 1, 'skipped', 'excluded_author')""",
+                    (post_id, comment_id, author, body, comment_url)
+                )
+                conn.commit()
+                skipped += 1
                 continue
 
             if word_count(body) < MIN_WORDS:
