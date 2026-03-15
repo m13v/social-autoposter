@@ -104,6 +104,11 @@ RESET_COUNT=$(psql "$DATABASE_URL" -t -A -c "
     RETURNING id;" | wc -l | tr -d ' ')
 [ "$RESET_COUNT" -gt 0 ] && log "Phase B: Reset $RESET_COUNT stuck 'processing' items back to pending"
 
+# Load exclusions from config for injection into Claude prompts
+EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('authors',[])))" 2>/dev/null || echo "")
+EXCLUDED_TWITTER=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('twitter_accounts',[])))" 2>/dev/null || echo "")
+EXCLUDED_LINKEDIN=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('linkedin_profiles',[])))" 2>/dev/null || echo "")
+
 BATCH_NUM=0
 
 while true; do
@@ -140,6 +145,11 @@ while true; do
 You are the Social Autoposter engagement bot.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
+
+EXCLUSIONS — do NOT engage with these accounts (skip and mark as 'skipped' with reason 'excluded_author'):
+- Excluded authors: $EXCLUDED_AUTHORS
+- Excluded Twitter accounts: $EXCLUDED_TWITTER
+- Excluded LinkedIn profiles: $EXCLUDED_LINKEDIN
 
 $(if [ "$BATCH_NUM" -eq 1 ]; then
 cat <<'TWITTER_EOF'
