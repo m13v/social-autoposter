@@ -137,7 +137,7 @@ class ReplyScanner:
         permalink = cdata.get("permalink", "")
         comment_url = f"https://old.reddit.com{permalink}" if permalink else ""
 
-        if author in self.skip_authors:
+        if author in self.skip_authors or author.lower() in self.skip_authors:
             self.insert_reply(post_id, "reddit", comment_id, author, body, comment_url,
                               parent_reply_id=parent_reply_id, depth=depth,
                               status="skipped", skip_reason="filtered_author")
