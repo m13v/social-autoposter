@@ -56,10 +56,18 @@ PENDING_DATA=$(psql "$DATABASE_URL" -t -A -c "
         LIMIT 50
     ) q;")
 
+# Load exclusions
+EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('authors',[])))" 2>/dev/null || echo "")
+EXCLUDED_REPOS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('github_repos',[])))" 2>/dev/null || echo "")
+
 timeout 1800 claude -p "You are the Social Autoposter GitHub engagement bot.
 
 Read $SKILL_FILE for content rules (especially: NEVER use em dashes).
 Also read $REPO_DIR/config.json for projects and their channel_links.
+
+EXCLUSIONS — do NOT engage with these (skip and mark as 'skipped' with reason 'excluded_author' or 'excluded_repo'):
+- Excluded authors: $EXCLUDED_AUTHORS
+- Excluded repos/orgs: $EXCLUDED_REPOS
 
 ## Respond to GitHub issue replies
 
