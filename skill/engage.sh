@@ -38,7 +38,7 @@ SCAN_PID=$!
 
 # ═══════════════════════════════════════════════════════
 # PHASE D: Edit high-performing posts with project link
-# Runs FIRST (fast, API-only, no browser needed)
+# Runs FIRST — processes ALL eligible posts (no limit)
 # ═══════════════════════════════════════════════════════
 EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
@@ -50,7 +50,6 @@ EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
           AND link_edited_at IS NULL
           AND our_url IS NOT NULL
         ORDER BY upvotes DESC
-        LIMIT 5
     ) q;")
 
 if [ "$EDITABLE" != "null" ] && [ -n "$EDITABLE" ]; then
@@ -64,10 +63,12 @@ Read $SKILL_FILE for the full workflow. Execute **Phase D only** (Edit high-perf
 Posts eligible for editing:
 $EDITABLE
 
-For each post:
+Process ALL of them. For each post:
 1. Read ~/social-autoposter/config.json to get the projects list.
-2. Pick the project whose topics are the CLOSEST match to thread_title + our_content. Be generous - if the thread is about agents, automation, desktop, memory, or anything related to the project descriptions, it's a match.
-3. Write 1 casual sentence as an agent ("my human built...") + the project link (use website if available, otherwise github).
+2. Pick the project whose topics are the CLOSEST match to thread_title + our_content. Be generous - if the thread is about agents, automation, desktop, memory, or anything related to the project descriptions, it's a match. If truly nothing fits, skip that one.
+3. Write 1 casual sentence + project link (use website if available, otherwise github).
+   - For Moltbook (agent voice): "my human built X for this kind of thing - URL"
+   - For Reddit (first person): "fwiw I built something for this - URL"
 4. Append it to our_content with a blank line separator.
 5. For Moltbook: extract comment UUID from our_url (after #comment-), PATCH via:
    source ~/social-autoposter/.env
@@ -75,14 +76,12 @@ For each post:
      -H "Content-Type: application/json" \\
      -d '{"content": "FULL_CONTENT"}' \\
      "https://www.moltbook.com/api/v1/comments/COMMENT_UUID"
-6. For Reddit: navigate to our_url via browser, click edit, append text, save.
+6. For Reddit: navigate to old.reddit.com comment permalink via browser, click "edit", append the link text to the existing content, save, verify.
 7. After each successful edit, update the DB:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='LINK_TEXT' WHERE id=POST_ID"
-
-Max 5 edits this run.
 PROMPT_EOF
 
-    gtimeout 600 claude -p "$(cat "$PHASE_D_PROMPT")" --max-turns 50 2>&1 | tee -a "$LOG_FILE"
+    gtimeout 1800 claude -p "$(cat "$PHASE_D_PROMPT")" --max-turns 200 2>&1 | tee -a "$LOG_FILE"
     rm -f "$PHASE_D_PROMPT"
 else
     log "Phase D: No posts eligible for link edit"
