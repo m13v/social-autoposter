@@ -18,7 +18,7 @@ Automates finding, posting, and tracking social media comments and original post
 | `/social-autoposter engage` | Scan and reply to responses on our posts |
 | `/social-autoposter audit` | Full browser audit of all posts |
 
-**View your posts live:** `https://s4l.ai/stats/[your_handle]`
+**View your posts live:** `https://yourapp.com/stats/[your_handle]`
 The handles come from `config.json → accounts.*.handle/username`. Each platform account has its own URL.
 
 ---
@@ -108,7 +108,7 @@ Check tone, length cues, thread age. Find best comment to reply to (high-upvote 
 
 ### 5. Draft the comment
 
-Follow Content Rules below. 2-3 sentences, first person, specific details from `content_angle`. No product links in top-level comments. When mentioning a project, always use the platform-specific tracking link (e.g. `s4l.ai/x` on X, `s4l.ai/r` on Reddit).
+Follow Content Rules below. 2-3 sentences, first person, specific details from `content_angle`. No product links in top-level comments. When mentioning a project, always use the platform-specific tracking link (e.g. `yourapp.com/x` on X, `yourapp.com/r` on Reddit).
 
 ### 6. Post it
 
@@ -248,9 +248,9 @@ UPDATE replies SET status='replied', our_reply_content=%s, our_reply_url=%s,
 
 Use `twitter-agent` MCP tools to navigate to `https://x.com/notifications/mentions`. Find replies to the handle in config.json. Respond to substantive ones (max 5). Log to `replies` table.
 
-**Notification replies default to Tier 2.** When someone replies to your comment, they've already shown interest. This is the ideal moment to naturally mention the product. Don't hard-sell, but do weave in a reference with the tracking link (e.g. `s4l.ai/x`). Examples:
-- "yeah thats basically what we built at s4l.ai/x - agent that [does the thing they're describing]"
-- "agreed, we use the same approach for [topic] at s4l.ai/x"
+**Notification replies default to Tier 2.** When someone replies to your comment, they've already shown interest. This is the ideal moment to naturally mention the product. Don't hard-sell, but do weave in a reference with the tracking link (e.g. `yourapp.com/x`). Examples:
+- "yeah thats basically what we built at yourapp.com/x - agent that [does the thing they're describing]"
+- "agreed, we use the same approach for [topic] at yourapp.com/x"
 
 Skip Tier 2 only if the reply is off-topic, a one-word response ("Cool"), or crypto/spam.
 
@@ -321,7 +321,7 @@ Visit each post URL via the appropriate agent: `reddit-agent` MCP for Reddit pos
 2. **First person, specific.** Use concrete details from `content_angle` in config.json. Real numbers, real experiences, not generalizations.
 3. **Reply to top comments, not just OP.**
 4. **Only comment when there's a genuine angle from the user's work.** Use `content_angle` from config.json. If the thread doesn't connect, skip it.
-5. **When mentioning a project, use the platform-specific tracking link** from `config.json → projects[].links`. For example, mention `s4l.ai/x` on X/Twitter, `s4l.ai/r` on Reddit, `s4l.ai/li` on LinkedIn. Never use bare domains like `s4l.ai` — always use the tracking path so PostHog can attribute the traffic. If a project has no `links` entry, use the bare `website` URL.
+5. **When mentioning a project, use the platform-specific tracking link** from `config.json → projects[].links`. For example, mention `yourapp.com/x` on X/Twitter, `yourapp.com/r` on Reddit, `yourapp.com/li` on LinkedIn. Never use bare domains like `s4l.ai` — always use the tracking path so PostHog can attribute the traffic. If a project has no `links` entry, use the bare `website` URL.
 6. **No product links in top-level comments or original posts.** Earn attention first. When you do mention a project (naturally, in context), use the tracking link above.
 7. **On Moltbook, write as an agent.** "my human" not "I".
 8. **Log everything.**
