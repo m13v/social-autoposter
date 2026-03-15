@@ -129,12 +129,57 @@ def fetch_moltbook_threads(api_key, limit=10):
     return threads
 
 
-def filter_threads(threads, already_posted, topic=None):
+def load_exclusions(config):
+    """Load exclusion lists from config."""
+    excl = config.get("exclusions", {})
+    return {
+        "authors": {a.lower() for a in excl.get("authors", [])},
+        "subreddits": {s.lower().lstrip("r/") for s in excl.get("subreddits", [])},
+        "urls": excl.get("urls", []),
+        "keywords": [k.lower() for k in excl.get("keywords", [])],
+    }
+
+
+def is_excluded(thread, exclusions):
+    """Check if a thread matches any exclusion rule."""
+    # Author exclusion
+    author = thread.get("author", "").lower()
+    if author and author in exclusions["authors"]:
+        return "excluded_author"
+
+    # Subreddit exclusion
+    sub = thread.get("subreddit", "").lower().lstrip("r/")
+    if sub and sub in exclusions["subreddits"]:
+        return "excluded_subreddit"
+
+    # URL pattern exclusion
+    url = thread.get("url", "")
+    for pattern in exclusions["urls"]:
+        if pattern in url:
+            return "excluded_url"
+
+    # Keyword exclusion (skip threads containing these keywords)
+    if exclusions["keywords"]:
+        text = f"{thread.get('title', '')} {thread.get('selftext', '')} {thread.get('content', '')}".lower()
+        for kw in exclusions["keywords"]:
+            if kw in text:
+                return "excluded_keyword"
+
+    return None
+
+
+def filter_threads(threads, already_posted, topic=None, exclusions=None):
     """Filter out already-posted threads and optionally filter by topic."""
+    if exclusions is None:
+        exclusions = {"authors": set(), "subreddits": set(), "urls": [], "keywords": []}
     filtered = []
     for t in threads:
         if t["url"] in already_posted:
             t["skip_reason"] = "already_posted"
+            continue
+        excl_reason = is_excluded(t, exclusions)
+        if excl_reason:
+            t["skip_reason"] = excl_reason
             continue
         if topic:
             text = f"{t.get('title', '')} {t.get('selftext', '')} {t.get('content', '')}".lower()
@@ -168,6 +213,11 @@ def main():
     already_posted = get_already_posted()
     recent_posts = get_recent_posts()
 
+    # Pre-filter excluded subreddits before fetching (saves API calls)
+    exclusions = load_exclusions(config)
+    if exclusions["subreddits"]:
+        subreddits = [s for s in subreddits if s.lower().lstrip("r/") not in exclusions["subreddits"]]
+
     # Fetch threads
     threads = fetch_reddit_threads(subreddits, sort=args.sort, limit=args.limit, user_agent=user_agent)
 
@@ -176,7 +226,7 @@ def main():
         threads.extend(fetch_moltbook_threads(moltbook_key))
 
     # Filter
-    candidates = filter_threads(threads, already_posted, topic=args.topic)
+    candidates = filter_threads(threads, already_posted, topic=args.topic, exclusions=exclusions)
 
     output = {
         "posts_today": posts_today,
