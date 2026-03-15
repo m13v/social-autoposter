@@ -44,6 +44,14 @@
     }
   ],
 
+  "exclusions": {
+    "authors": ["spambot123", "annoying_user"],
+    "subreddits": ["subreddit_to_skip"],
+    "urls": ["reddit.com/r/some/specific/thread"],
+    "keywords": ["keyword_to_avoid"],
+    "_comment": "authors: skip threads by these users and don't reply to them. subreddits: skip entirely during search. urls: skip threads whose URL contains this substring. keywords: skip threads containing these words in title/body."
+  },
+
   "open_source_links": [],
   "launchd_label": "com.yourname.social-stats"
 }
