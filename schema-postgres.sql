@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS posts (
 -- Add columns to existing deployments (safe to re-run)
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS link_edited_at TIMESTAMP;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS link_edit_content TEXT;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS scan_no_change_count INTEGER DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_posts_platform ON posts(platform);
 
