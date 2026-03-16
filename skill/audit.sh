@@ -6,7 +6,7 @@
 #   Step 4: Report summary
 # Called by launchd every 24 hours.
 
-set -euo pipefail
+set -uo pipefail
 
 # Load secrets
 # shellcheck source=/dev/null
@@ -24,7 +24,7 @@ fi
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/audit-$(date +%Y-%m-%d_%H%M%S).log"
 
-log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
+log() { echo "[$(date +%H:%M:%S)] $*" >> "$LOG_FILE"; echo "[$(date +%H:%M:%S)] $*"; }
 
 log "=== Audit Pipeline Run: $(date) ==="
 
@@ -32,7 +32,13 @@ log "=== Audit Pipeline Run: $(date) ==="
 # STEP 1: API audit (Reddit + Moltbook)
 # ═══════════════════════════════════════════════════════
 log "Step 1: API audit (Python — checks deleted/removed + updates stats)"
-python3 "$REPO_DIR/scripts/update_stats.py" 2>&1 | tee -a "$LOG_FILE"
+python3 "$REPO_DIR/scripts/update_stats.py" >> "$LOG_FILE" 2>&1
+STEP1_EXIT=$?
+if [ "$STEP1_EXIT" -ne 0 ]; then
+    log "Step 1: FAILED (exit $STEP1_EXIT) — continuing to Step 2"
+else
+    log "Step 1: Done"
+fi
 
 # ═══════════════════════════════════════════════════════
 # STEP 2: X/Twitter audit (browser required)
@@ -77,7 +83,15 @@ Follow these steps exactly:
 
 CRITICAL: Use 8-second delays between page loads to avoid X rate limiting.
 CRITICAL: Target the specific tweet by status ID to avoid reading parent tweet stats.
-CRITICAL: Close browser tabs after you're done (browser_tabs action 'close', NOT browser_close)." --max-turns 80 2>&1 | tee -a "$LOG_FILE"
+CRITICAL: Close browser tabs after you're done (browser_tabs action 'close', NOT browser_close)." --max-turns 80 >> "$LOG_FILE" 2>&1
+    STEP2_EXIT=$?
+    if [ "$STEP2_EXIT" -eq 124 ]; then
+        log "Step 2: TIMEOUT (40 min limit reached)"
+    elif [ "$STEP2_EXIT" -ne 0 ]; then
+        log "Step 2: FAILED (exit $STEP2_EXIT)"
+    else
+        log "Step 2: Done"
+    fi
 else
     log "Step 2: SKIPPED — no active Twitter posts to audit"
 fi
