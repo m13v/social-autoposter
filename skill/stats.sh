@@ -5,7 +5,7 @@
 #   Step 3: X/Twitter stats via Claude + Playwright (browser required)
 # Called by launchd every 6 hours.
 
-set -euo pipefail
+set -uo pipefail
 
 REPO_DIR="$HOME/social-autoposter"
 SKILL_FILE="$REPO_DIR/skill/SKILL.md"
@@ -19,7 +19,7 @@ QUIET="${1:-}"
 mkdir -p "$LOG_DIR"
 LOGFILE="$LOG_DIR/stats-$(date +%Y-%m-%d_%H%M%S).log"
 
-log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOGFILE"; }
+log() { echo "[$(date +%H:%M:%S)] $*" >> "$LOGFILE"; echo "[$(date +%H:%M:%S)] $*"; }
 
 log "=== Stats Pipeline Run: $(date) ==="
 
@@ -28,9 +28,15 @@ log "=== Stats Pipeline Run: $(date) ==="
 # ═══════════════════════════════════════════════════════
 log "Step 1: API stats (Python)"
 if [ "$QUIET" = "--quiet" ]; then
-    python3 "$REPO_DIR/scripts/update_stats.py" --quiet 2>&1 | tee -a "$LOGFILE"
+    python3 "$REPO_DIR/scripts/update_stats.py" --quiet >> "$LOGFILE" 2>&1
 else
-    python3 "$REPO_DIR/scripts/update_stats.py" 2>&1 | tee -a "$LOGFILE"
+    python3 "$REPO_DIR/scripts/update_stats.py" >> "$LOGFILE" 2>&1
+fi
+STEP1_EXIT=$?
+if [ "$STEP1_EXIT" -ne 0 ]; then
+    log "Step 1: FAILED (exit $STEP1_EXIT) — continuing to Step 2"
+else
+    log "Step 1: Done"
 fi
 
 # ═══════════════════════════════════════════════════════
@@ -56,7 +62,15 @@ Follow these steps exactly:
 4. Run: python3 $REPO_DIR/scripts/scrape_reddit_views.py --from-json /tmp/reddit_views.json
 5. Report how many posts were matched/updated
 
-CRITICAL: Close browser tabs after you're done (browser_tabs action 'close', NOT browser_close)." --max-turns 30 2>&1 | tee -a "$LOGFILE"
+CRITICAL: Close browser tabs after you're done (browser_tabs action 'close', NOT browser_close)." --max-turns 30 >> "$LOGFILE" 2>&1
+    STEP2_EXIT=$?
+    if [ "$STEP2_EXIT" -eq 124 ]; then
+        log "Step 2: TIMEOUT (20 min limit reached)"
+    elif [ "$STEP2_EXIT" -ne 0 ]; then
+        log "Step 2: FAILED (exit $STEP2_EXIT)"
+    else
+        log "Step 2: Done"
+    fi
 else
     log "Step 2: SKIPPED — no Reddit username in config.json"
 fi
@@ -89,9 +103,17 @@ Follow these steps exactly:
 
 CRITICAL: Use 8-second delays between page loads to avoid X rate limiting.
 CRITICAL: Target the specific tweet by status ID to avoid reading parent tweet stats.
-CRITICAL: Close browser tabs after you're done (browser_tabs action 'close', NOT browser_close)." --max-turns 50 2>&1 | tee -a "$LOGFILE"
+CRITICAL: Close browser tabs after you're done (browser_tabs action 'close', NOT browser_close)." --max-turns 50 >> "$LOGFILE" 2>&1
+    STEP3_EXIT=$?
+    if [ "$STEP3_EXIT" -eq 124 ]; then
+        log "Step 3: TIMEOUT (30 min limit reached)"
+    elif [ "$STEP3_EXIT" -ne 0 ]; then
+        log "Step 3: FAILED (exit $STEP3_EXIT)"
+    else
+        log "Step 3: Done"
+    fi
 else
-    log "Step 3: SKIPPED — no Twitter posts need stats update"
+    log "Step 3: SKIPPED — no Twitter posts need stats update ($TWITTER_POSTS found)"
 fi
 
 log "=== Stats Pipeline complete: $(date) ==="
