@@ -242,7 +242,7 @@ def filter_threads(threads, already_posted, topic=None, exclusions=None):
         if excl_reason:
             t["skip_reason"] = excl_reason
             continue
-        if topic:
+        if topic and t.get("discovery_method") != "search_url":
             text = f"{t.get('title', '')} {t.get('selftext', '')} {t.get('content', '')}".lower()
             if topic.lower() not in text:
                 continue
@@ -287,6 +287,20 @@ def main():
     if args.include_moltbook:
         moltbook_key = os.environ.get("MOLTBOOK_API_KEY", "")
         threads.extend(fetch_moltbook_threads(moltbook_key))
+
+    if args.include_twitter:
+        twitter_topics = config.get("twitter_topics", [])
+        if args.topic:
+            twitter_topics = [t for t in twitter_topics if args.topic.lower() in t.lower()]
+        raw_excl = config.get("exclusions", {})
+        threads.extend(generate_twitter_search_urls(twitter_topics, exclusions=raw_excl))
+
+    if args.include_linkedin:
+        linkedin_topics = config.get("linkedin_topics", [])
+        if args.topic:
+            linkedin_topics = [t for t in linkedin_topics if args.topic.lower() in t.lower()]
+        raw_excl = config.get("exclusions", {})
+        threads.extend(generate_linkedin_search_urls(linkedin_topics, exclusions=raw_excl))
 
     # Filter
     candidates = filter_threads(threads, already_posted, topic=args.topic, exclusions=exclusions)
