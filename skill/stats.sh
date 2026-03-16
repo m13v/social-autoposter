@@ -62,7 +62,7 @@ Follow these steps exactly:
 4. Run: python3 $REPO_DIR/scripts/scrape_reddit_views.py --from-json /tmp/reddit_views.json
 5. Report how many posts were matched/updated
 
-CRITICAL: Close browser tabs after you're done (browser_tabs action 'close', NOT browser_close)." --max-turns 30 >> "$LOGFILE" 2>&1
+CRITICAL: Close browser tabs after you're done (browser_tabs action 'close', NOT browser_close)." --max-turns 50 >> "$LOGFILE" 2>&1
     STEP2_EXIT=$?
     if [ "$STEP2_EXIT" -eq 124 ]; then
         log "Step 2: TIMEOUT (20 min limit reached)"
