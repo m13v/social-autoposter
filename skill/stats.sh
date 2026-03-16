@@ -1,29 +1,100 @@
 #!/usr/bin/env bash
-# stats.sh — Fetch engagement stats via APIs and update the DB.
-# Thin wrapper around scripts/update_stats.py.
-# Usage: bash stats.sh [--quiet]
+# stats.sh — Full stats pipeline:
+#   Step 1: API stats (upvotes, comments, deleted/removed) via Python
+#   Step 2: Reddit view counts via Claude + Playwright (browser required)
+#   Step 3: X/Twitter stats via Claude + Playwright (browser required)
 # Called by launchd every 6 hours.
 
 set -euo pipefail
 
 REPO_DIR="$HOME/social-autoposter"
+SKILL_FILE="$REPO_DIR/skill/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"
 QUIET="${1:-}"
 
-# Load secrets (MOLTBOOK_API_KEY, etc.)
+# Load secrets (MOLTBOOK_API_KEY, DATABASE_URL, etc.)
 # shellcheck source=/dev/null
 [ -f "$REPO_DIR/.env" ] && source "$REPO_DIR/.env"
 
 mkdir -p "$LOG_DIR"
 LOGFILE="$LOG_DIR/stats-$(date +%Y-%m-%d_%H%M%S).log"
 
-echo "[$(date +%H:%M:%S)] Starting stats update" | tee "$LOGFILE"
+log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOGFILE"; }
 
-# Run the Python stats script
+log "=== Stats Pipeline Run: $(date) ==="
+
+# ═══════════════════════════════════════════════════════
+# STEP 1: API stats (upvotes, comments, deleted/removed)
+# ═══════════════════════════════════════════════════════
+log "Step 1: API stats (Python)"
 if [ "$QUIET" = "--quiet" ]; then
     python3 "$REPO_DIR/scripts/update_stats.py" --quiet 2>&1 | tee -a "$LOGFILE"
 else
     python3 "$REPO_DIR/scripts/update_stats.py" 2>&1 | tee -a "$LOGFILE"
 fi
 
-echo "[$(date +%H:%M:%S)] Stats update complete" | tee -a "$LOGFILE"
+# ═══════════════════════════════════════════════════════
+# STEP 2: Reddit view counts (browser required)
+# ═══════════════════════════════════════════════════════
+log "Step 2: Reddit view counts (Claude + Playwright)"
+
+REDDIT_USERNAME=$(python3 -c "import json; print(json.load(open('$REPO_DIR/config.json'))['accounts']['reddit']['username'])" 2>/dev/null || echo "")
+
+if [ -n "$REDDIT_USERNAME" ]; then
+    gtimeout 1200 claude -p "You are the Social Autoposter stats bot.
+
+Read $SKILL_FILE for the full workflow.
+
+Execute **Workflow: Stats → Step 2: Reddit view counts** ONLY.
+
+The Reddit username is: $REDDIT_USERNAME
+
+Follow these steps exactly:
+1. Use MCP Playwright browser_navigate to go to https://www.reddit.com/user/$REDDIT_USERNAME/
+2. Use the exact browser_run_code JavaScript from SKILL.md Step 2 to scroll and collect all view counts
+3. Save the results array to /tmp/reddit_views.json
+4. Run: python3 $REPO_DIR/scripts/scrape_reddit_views.py --from-json /tmp/reddit_views.json
+5. Report how many posts were matched/updated
+
+CRITICAL: Close browser tabs after you're done (browser_tabs action 'close', NOT browser_close)." --max-turns 30 2>&1 | tee -a "$LOGFILE"
+else
+    log "Step 2: SKIPPED — no Reddit username in config.json"
+fi
+
+# ═══════════════════════════════════════════════════════
+# STEP 3: X/Twitter stats (browser required)
+# ═══════════════════════════════════════════════════════
+log "Step 3: X/Twitter stats (Claude + Playwright)"
+
+TWITTER_POSTS=$(psql "$DATABASE_URL" -t -A -c "
+    SELECT COUNT(*) FROM posts
+    WHERE platform='twitter' AND status='active' AND our_url IS NOT NULL
+      AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days');" 2>/dev/null || echo "0")
+
+if [ "$TWITTER_POSTS" -gt 0 ]; then
+    gtimeout 1800 claude -p "You are the Social Autoposter stats bot.
+
+Read $SKILL_FILE for the full workflow.
+
+Execute **Workflow: Stats → Step 3: X/Twitter stats** ONLY.
+
+There are $TWITTER_POSTS tweets needing stats updates.
+
+Follow these steps exactly:
+1. Query the DB for tweets needing stats (the SQL is in SKILL.md Step 3)
+2. Use browser_run_code with the exact JavaScript from SKILL.md Step 3 to scrape each tweet page
+3. Process in batches of 20 with 8-second delays between pages
+4. Update the DB with views, likes, replies for each tweet
+5. Report how many tweets were updated
+
+CRITICAL: Use 8-second delays between page loads to avoid X rate limiting.
+CRITICAL: Target the specific tweet by status ID to avoid reading parent tweet stats.
+CRITICAL: Close browser tabs after you're done (browser_tabs action 'close', NOT browser_close)." --max-turns 50 2>&1 | tee -a "$LOGFILE"
+else
+    log "Step 3: SKIPPED — no Twitter posts need stats update"
+fi
+
+log "=== Stats Pipeline complete: $(date) ==="
+
+# Clean up old logs (keep last 7 days)
+find "$LOG_DIR" -name "stats-*.log" -mtime +7 -delete 2>/dev/null || true
