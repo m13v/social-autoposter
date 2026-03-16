@@ -47,23 +47,74 @@ log "Step 2: Reddit view counts (Claude + Playwright)"
 REDDIT_USERNAME=$(python3 -c "import json; print(json.load(open('$REPO_DIR/config.json'))['accounts']['reddit']['username'])" 2>/dev/null || echo "")
 
 if [ -n "$REDDIT_USERNAME" ]; then
-    gtimeout 1200 claude -p "You are the Social Autoposter stats bot.
+    STEP2_PROMPT=$(mktemp)
+    cat > "$STEP2_PROMPT" <<'STEP2_EOF'
+Scrape Reddit view counts. Do these steps in order, no deviations:
 
-Read $SKILL_FILE for the full workflow.
+Step 1: browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/
 
-Execute **Workflow: Stats → Step 2: Reddit view counts** ONLY.
+Step 2: browser_run_code with this EXACT JavaScript:
+async (page) => {
+  await page.waitForTimeout(3000);
+  const allResults = new Map();
+  function extractCurrent() {
+    return page.evaluate(() => {
+      const results = [];
+      document.querySelectorAll('article').forEach(article => {
+        const links = article.querySelectorAll('a[href*="/comments/"]');
+        let url = null;
+        for (const link of links) {
+          const href = link.getAttribute('href');
+          if (href && href.includes('/comments/')) {
+            if (!url || href.includes('/comment/')) url = href;
+          }
+        }
+        let views = null;
+        for (const el of article.querySelectorAll('*')) {
+          const text = el.textContent.trim();
+          const match = text.match(/^([\d,]+)\s+views?$/);
+          if (match) { views = parseInt(match[1].replace(/,/g, '')); break; }
+        }
+        if (url) {
+          results.push({ url: url.startsWith('http') ? url : 'https://www.reddit.com' + url, views });
+        }
+      });
+      return results;
+    });
+  }
+  let items = await extractCurrent();
+  for (const item of items) allResults.set(item.url, item.views);
+  let previousHeight = 0, sameHeightCount = 0, scrollCount = 0;
+  while (sameHeightCount < 4 && scrollCount < 300) {
+    const currentHeight = await page.evaluate(() => document.body.scrollHeight);
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(2000);
+    items = await extractCurrent();
+    for (const item of items) allResults.set(item.url, item.views);
+    if (currentHeight === previousHeight) sameHeightCount++;
+    else sameHeightCount = 0;
+    previousHeight = currentHeight;
+    scrollCount++;
+  }
+  const resultsArray = Array.from(allResults.entries()).map(([url, views]) => ({ url, views }));
+  return JSON.stringify({ total: resultsArray.length, scrolls: scrollCount, results: resultsArray });
+}
 
-The Reddit username is: $REDDIT_USERNAME
+Step 3: The result is a JSON string. Parse out the "results" array and save it to /tmp/reddit_views.json
 
-Follow these steps exactly:
-1. Use MCP Playwright browser_navigate to go to https://www.reddit.com/user/$REDDIT_USERNAME/
-2. Use the exact browser_run_code JavaScript from SKILL.md Step 2 to scroll and collect all view counts
-3. Save the results array to /tmp/reddit_views.json
-4. Run: python3 $REPO_DIR/scripts/scrape_reddit_views.py --from-json /tmp/reddit_views.json
-5. Report how many posts were matched/updated
+Step 4: Run: python3 REPO_DIR_PLACEHOLDER/scripts/scrape_reddit_views.py --from-json /tmp/reddit_views.json
 
-CRITICAL: Close browser tabs after you're done (browser_tabs action 'close', NOT browser_close)." --max-turns 50 >> "$LOGFILE" 2>&1
+Step 5: Close the browser tab (browser_tabs action 'close', NOT browser_close).
+
+Done. Report totals. Do NOT read any other files. Do NOT deviate from these steps.
+STEP2_EOF
+    # Inject actual values
+    sed -i '' "s|REDDIT_USERNAME_PLACEHOLDER|$REDDIT_USERNAME|g" "$STEP2_PROMPT"
+    sed -i '' "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP2_PROMPT"
+
+    gtimeout 1200 claude -p "$(cat "$STEP2_PROMPT")" --max-turns 10 >> "$LOGFILE" 2>&1
     STEP2_EXIT=$?
+    rm -f "$STEP2_PROMPT"
     if [ "$STEP2_EXIT" -eq 124 ]; then
         log "Step 2: TIMEOUT (20 min limit reached)"
     elif [ "$STEP2_EXIT" -ne 0 ]; then
