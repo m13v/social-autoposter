@@ -15,6 +15,7 @@ import re
 import sys
 import time
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
@@ -44,16 +45,29 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0"):
 def update_reddit(db, user_agent, config=None, quiet=False):
     config = config or {}
     posts = db.execute(
-        "SELECT id, our_url, thread_url FROM posts "
+        "SELECT id, our_url, thread_url, upvotes, comments_count, "
+        "COALESCE(scan_no_change_count, 0) as scan_no_change_count, posted_at "
+        "FROM posts "
         "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL ORDER BY id"
     ).fetchall()
 
-    total = updated = deleted = removed = errors = 0
+    total = updated = deleted = removed = errors = skipped = 0
     results = []
 
     for post in posts:
         total += 1
         post_id, our_url, thread_url = post[0], post[1], post[2]
+        prev_upvotes, prev_comments = post[3], post[4]
+        no_change = post[5]
+        posted_at = post[6]
+
+        # Skip stable posts: 2+ scans with no change AND older than 3 days
+        if no_change >= 2 and posted_at:
+            age = datetime.now(timezone.utc) - (posted_at.replace(tzinfo=timezone.utc) if posted_at.tzinfo is None else posted_at)
+            if age > timedelta(days=3):
+                skipped += 1
+                continue
+
         if not our_url or not our_url.startswith("http"):
             errors += 1
             continue
@@ -187,11 +201,22 @@ def update_reddit(db, user_agent, config=None, quiet=False):
                     if not quiet:
                         print(f"SKIP (no permalink, comment not in top-level) [{post_id}]")
 
+        # Track whether stats changed for skip optimization
+        # Compare current score to previous — if same, increment no-change counter
+        if results and results[-1]["id"] == post_id:
+            new_score = results[-1]["score"]
+            if new_score == prev_upvotes:
+                db.execute("UPDATE posts SET scan_no_change_count = COALESCE(scan_no_change_count, 0) + 1 WHERE id = %s", [post_id])
+            else:
+                db.execute("UPDATE posts SET scan_no_change_count = 0 WHERE id = %s", [post_id])
+
         time.sleep(5)
 
     db.commit()
+    if skipped and not quiet:
+        print(f"  Skipped {skipped} stable posts (2+ scans unchanged, older than 3 days)")
     return {"total": total, "updated": updated, "deleted": deleted, "removed": removed,
-            "errors": errors, "results": results}
+            "errors": errors, "skipped": skipped, "results": results}
 
 
 def update_moltbook(db, api_key, quiet=False):
@@ -314,7 +339,8 @@ def main():
         print(json.dumps(output, indent=2))
     else:
         r = reddit_stats
-        print(f"\nReddit: {r['total']} checked, {r['updated']} updated, "
+        print(f"\nReddit: {r['total']} total, {r.get('skipped', 0)} skipped, "
+              f"{r['total'] - r.get('skipped', 0)} checked, {r['updated']} updated, "
               f"{r['deleted']} deleted, {r['removed']} removed, {r['errors']} errors")
         if not args.quiet and r["results"]:
             print(f"{'ID':>4} {'Score':>5} {'Thread':>7} {'Comments':>8}  Title")
