@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Find candidate threads to comment on via Reddit JSON API + Moltbook API.
 
-No browser needed — uses public APIs only.
-Outputs JSON array of candidate threads.
+Also generates Twitter/LinkedIn search URLs for browser-based discovery.
 
 Usage:
-    python3 scripts/find_threads.py [--db PATH] [--subreddits r/ClaudeAI,r/programming]
+    python3 scripts/find_threads.py [--subreddits r/ClaudeAI,r/programming]
     python3 scripts/find_threads.py --topic "macOS automation"
+    python3 scripts/find_threads.py --include-twitter --include-linkedin
+    python3 scripts/find_threads.py --include-moltbook --include-twitter --include-linkedin
 """
 
 import argparse
@@ -129,6 +130,66 @@ def fetch_moltbook_threads(api_key, limit=10):
     return threads
 
 
+def generate_twitter_search_urls(topics, exclusions=None):
+    """Generate X/Twitter search URLs for browser-based discovery.
+
+    Twitter has no free public search API, so we generate search URLs
+    that the agent browses via Playwright to find threads.
+    """
+    import urllib.parse
+
+    excluded_accounts = set()
+    if exclusions:
+        excluded_accounts = {a.lower() for a in exclusions.get("twitter_accounts", [])}
+
+    threads = []
+    for topic in topics:
+        # Build exclusion string for the query
+        exclude_str = " ".join(f"-from:{acct}" for acct in excluded_accounts)
+        query = f"{topic} {exclude_str}".strip()
+        # min_faves:5 filters to tweets with some engagement
+        search_url = f"https://x.com/search?q={urllib.parse.quote(query + ' min_faves:5')}&f=live"
+
+        threads.append({
+            "platform": "twitter",
+            "url": search_url,
+            "title": f"Search: {topic}",
+            "author": "",
+            "score": 0,
+            "num_comments": 0,
+            "discovery_method": "search_url",
+            "search_topic": topic,
+        })
+
+    return threads
+
+
+def generate_linkedin_search_urls(topics, exclusions=None):
+    """Generate LinkedIn search URLs for browser-based discovery.
+
+    LinkedIn has no public search API, so we generate content search URLs
+    that the agent browses via Playwright to find posts.
+    """
+    import urllib.parse
+
+    threads = []
+    for topic in topics:
+        search_url = f"https://www.linkedin.com/search/results/content/?keywords={urllib.parse.quote(topic)}&sortBy=%22date_posted%22"
+
+        threads.append({
+            "platform": "linkedin",
+            "url": search_url,
+            "title": f"Search: {topic}",
+            "author": "",
+            "score": 0,
+            "num_comments": 0,
+            "discovery_method": "search_url",
+            "search_topic": topic,
+        })
+
+    return threads
+
+
 def load_exclusions(config):
     """Load exclusion lists from config."""
     excl = config.get("exclusions", {})
@@ -196,6 +257,8 @@ def main():
     parser.add_argument("--sort", default="new", choices=["new", "hot", "top"], help="Reddit sort order")
     parser.add_argument("--limit", type=int, default=10, help="Threads per subreddit")
     parser.add_argument("--include-moltbook", action="store_true", help="Also search Moltbook")
+    parser.add_argument("--include-twitter", action="store_true", help="Generate X/Twitter search URLs")
+    parser.add_argument("--include-linkedin", action="store_true", help="Generate LinkedIn search URLs")
     parser.add_argument("--force", action="store_true", help="Skip rate limit check")
     args = parser.parse_args()
 
