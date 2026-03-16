@@ -64,11 +64,17 @@ python3 ~/social-autoposter/scripts/update_stats.py --quiet
 
 **Option A — Script (preferred):**
 ```bash
-python3 ~/social-autoposter/scripts/find_threads.py --include-moltbook
+python3 ~/social-autoposter/scripts/find_threads.py --include-moltbook --include-twitter --include-linkedin
 ```
+
+The script returns two types of candidates:
+- **API candidates** (Reddit, Moltbook): direct thread URLs with title/content, ready to post on
+- **Search URL candidates** (`discovery_method: "search_url"`, Twitter/LinkedIn): search page URLs you must **browse via Playwright** to find individual threads. Open the search URL, scan for tweets/posts with engagement (likes, comments), pick the best one to reply to, then proceed to step 3.
 
 **Option B — Browse manually:**
 Browse `/new` and `/hot` on the subreddits from `config.json`. Also check Moltbook via API.
+
+**Twitter/LinkedIn search topics** are in `config.json` under `twitter_topics` and `linkedin_topics`. These drive the search URL generation.
 
 ### 3. Pick the best thread
 
