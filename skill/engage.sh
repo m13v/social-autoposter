@@ -168,6 +168,58 @@ CRITICAL — Twitter comment ID format: always store ONLY the numeric tweet ID a
 Extract it from the tweet URL: x.com/username/status/NUMERIC_ID → store just NUMERIC_ID.
 NEVER prefix with username or any other text (e.g. store '2030180353625948573', NOT 'TisDad_2030180353625948573').
 TWITTER_EOF
+
+cat <<'LINKEDIN_EOF'
+## LinkedIn replies/mentions discovery
+Scan LinkedIn notifications for new comments, mentions, and replies on our posts. Insert them as 'pending' in the replies table so the generic reply loop below handles them.
+
+1. Navigate to https://www.linkedin.com/notifications/ using the linkedin-agent browser
+2. Scroll down several times to load ~50 notifications
+3. Extract actionable notifications - ONLY these types:
+   - Comments on our posts (e.g. "X commented on your post")
+   - Mentions in comments (e.g. "X mentioned you in a comment")
+   - Replies to our comments (e.g. "X replied to your comment")
+   SKIP these types (they are not engageable):
+   - Profile views, search appearances, impressions/analytics
+   - Job changes, birthdays, work anniversaries
+   - "X was live", "X posted", suggested posts
+   - New followers (handle separately)
+   - Scheduled post confirmations
+
+4. For each actionable notification, navigate to the post/comment to get full context:
+   a. Click the notification link to open the post
+   b. Find the specific comment using JavaScript:
+      document.querySelectorAll('article.comments-comment-entity').forEach(el => {
+        const dataId = el.getAttribute('data-id');
+        const author = el.querySelector('.comments-post-meta__name-text')?.innerText;
+        const content = el.querySelector('.comments-comment-item__main-content')?.innerText;
+        console.log(JSON.stringify({dataId, author, content}));
+      });
+   c. Extract the comment URN from data-id attribute: urn:li:comment:(activity:XXXXX,YYYYY)
+
+5. Before inserting: check if already tracked:
+   psql "$DATABASE_URL" -t -A -c "SELECT their_comment_id FROM replies WHERE platform='linkedin';"
+   Skip any comment whose URN is already in the list.
+
+6. To find the post_id: match the activity URL against our LinkedIn posts:
+   psql "$DATABASE_URL" -t -A -c "SELECT id, our_url FROM posts WHERE platform='linkedin' AND status='active';"
+   If no matching post exists, create one with:
+   psql "$DATABASE_URL" -c "INSERT INTO posts (platform, thread_url, thread_author, thread_title, our_url, our_content, our_account, status, posted_at) VALUES ('linkedin', 'THREAD_URL', 'THREAD_AUTHOR', 'THREAD_TITLE', 'OUR_POST_URL', 'OUR_POST_CONTENT', 'm13v', 'active', NOW()) RETURNING id;"
+
+7. Insert each new reply:
+   psql "$DATABASE_URL" -c "INSERT INTO replies (post_id, platform, their_comment_id, their_author, their_content, their_comment_url, depth, status) VALUES (POST_ID, 'linkedin', 'URN_FROM_DATA_ID', 'AUTHOR_NAME', 'COMMENT_TEXT', 'COMMENT_PERMALINK_URL', 1, 'pending');"
+
+CRITICAL - LinkedIn comment ID format: always store the FULL URN from the data-id attribute as their_comment_id.
+Format: urn:li:comment:(activity:ACTIVITY_ID,COMMENT_ID)
+Example: urn:li:comment:(activity:7438226125077549056,7438815640536170496)
+
+CRITICAL - LinkedIn comment permalink URL format:
+https://www.linkedin.com/feed/update/urn:li:activity:ACTIVITY_ID?commentUrn=urn%3Ali%3Acomment%3A%28activity%3AACTIVITY_ID%2CCOMMENT_ID%29
+
+CRITICAL - Excluded LinkedIn profiles: $EXCLUDED_LINKEDIN — skip comments from these profiles and mark as 'skipped' with reason 'excluded_author'.
+
+CRITICAL - Skip comments by "Matthew Diakonov" or "m13v" (our own account).
+LINKEDIN_EOF
 fi)
 
 ## Respond to pending replies (batch $BATCH_NUM: $BATCH_ACTUAL of $PENDING_COUNT total)
@@ -247,6 +299,13 @@ If the JS returns null (no permalink found): call reply_db.py replied ID "text" 
 Do NOT use browser_snapshot, browser_click, or browser_type for Reddit replies. browser_run_code is 5x faster.
 Do NOT extract permalinks from snapshots — use the JS return value or skip it.
 Do NOT store 'posted' or their_comment_url as our_reply_url — store null/no URL if the permalink is unavailable.
+
+For **linkedin** — use the linkedin-agent browser (mcp__linkedin-agent__* tools):
+1. Navigate to their_comment_url (the post with commentUrn query param).
+2. Find the specific comment in the page. Take a snapshot to locate it.
+3. Click "Reply" on that comment, type the reply text, and submit.
+4. After posting, construct the permalink URL for our reply and store it.
+5. If you can't find the comment or it's been deleted, mark as 'skipped' with reason 'comment_not_found'.
 
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
