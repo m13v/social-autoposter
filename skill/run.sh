@@ -22,7 +22,7 @@ claude -p "You are the Social Autoposter.
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 
 Run the **Workflow: Post** section. Follow every step in order:
-1. Find candidate threads (use the helper script: python3 $REPO_DIR/scripts/find_threads.py --include-moltbook --force). The script handles rate limiting.
+1. Find candidate threads (use the helper script: python3 $REPO_DIR/scripts/find_threads.py --include-moltbook --include-twitter --include-linkedin --force). The script handles rate limiting. For Twitter/LinkedIn candidates (discovery_method: search_url), browse the search URL via Playwright to find actual threads.
 2. Pick the best thread from the script output
 3. Draft the comment (follow Content Rules - NEVER use em dashes)
 4. Post it via Playwright MCP
