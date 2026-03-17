@@ -85,12 +85,14 @@ def solve_challenge(challenge_text):
     if len(candidates) < 2:
         candidates = [n for n in nums if n > 0]
 
-    # Detect primary operation (check both raw and stripped text)
+    # Detect primary operation (check raw, stripped, and deduped text)
     lower = challenge_text.lower()
     stripped_lower = nospace  # already lowercase stripped
-    if any(w in lower or w in stripped_lower for w in ['multipl', 'product', 'times']):
+    deduped_lower = re.sub(r'(.)\1+', r'\1', stripped_lower)
+    check_texts = [lower, stripped_lower, deduped_lower]
+    if any(any(w in t for t in check_texts) for w in ['multipl', 'product', 'times', 'triple', 'double']) or '*' in challenge_text:
         primary = 'mul'
-    elif any(w in lower or w in stripped_lower for w in ['differ', 'subtract', 'less', 'minus', 'remain']):
+    elif any(any(w in t for t in check_texts) for w in ['differ', 'subtract', 'less', 'minus', 'remain', 'reduc', 'loses', 'lose', 'lost', 'slow']):
         primary = 'sub'
     else:
         primary = 'add'
