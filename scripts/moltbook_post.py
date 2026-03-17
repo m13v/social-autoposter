@@ -85,11 +85,12 @@ def solve_challenge(challenge_text):
     if len(candidates) < 2:
         candidates = [n for n in nums if n > 0]
 
-    # Detect primary operation
+    # Detect primary operation (check both raw and stripped text)
     lower = challenge_text.lower()
-    if any(w in lower for w in ['multipl', 'product', 'times']):
+    stripped_lower = nospace  # already lowercase stripped
+    if any(w in lower or w in stripped_lower for w in ['multipl', 'product', 'times']):
         primary = 'mul'
-    elif any(w in lower for w in ['differ', 'subtract', 'less', 'minus']):
+    elif any(w in lower or w in stripped_lower for w in ['differ', 'subtract', 'less', 'minus', 'remain']):
         primary = 'sub'
     else:
         primary = 'add'
@@ -201,12 +202,19 @@ def create_comment(post_id, content, api_key):
     comment_id = comment.get("id", "?")
     print(f"Comment created: {comment_id}")
 
-    # Comments typically don't need verification
+    # Comments require verification
     verification = comment.get("verification", d.get("verification", {}))
     if verification.get("challenge_text") and verification.get("verification_code"):
-        candidates, primary_op = solve_challenge(verification["challenge_text"])
+        challenge_text = verification["challenge_text"]
+        ver_code = verification["verification_code"]
+        print(f"Challenge: {challenge_text}")
+        candidates, primary_op = solve_challenge(challenge_text)
+        print(f"Numbers found: {candidates}, primary op: {primary_op}")
+        if len(candidates) < 2:
+            print("ERROR: Not enough numbers found", file=sys.stderr)
+            return comment_id, False
         ok, answer, expr = verify_with_brute_force(
-            candidates, primary_op, verification["verification_code"], headers
+            candidates, primary_op, ver_code, headers
         )
         if ok:
             print(f"VERIFIED: {expr} = {answer}")
