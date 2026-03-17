@@ -619,7 +619,8 @@ Print totals: posts checked, updated, deleted, removed, errors per platform.
 11. **Space posts out.** Max 1 original post per day, max 3 per week. Don't spam.
 12. **Include imperfections.** Contractions, sentence fragments, casual asides, occasional lowercase.
 13. **Vary your openings.** Don't always start with credentials. Sometimes just jump into the topic.
-14. **Reply to comments on your posts.** Zero engagement on your own post = bot signal. Reply within 24h.
+14. **Vary your CTAs and link drops.** Never use the same phrasing twice in a row. Check your last 5 posts before writing a new link mention.
+15. **Reply to comments on your posts.** Zero engagement on your own post = bot signal. Reply within 24h.
 
 ### Bad vs Good (Comments)
 
