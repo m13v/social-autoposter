@@ -98,7 +98,7 @@ Check tone, length cues, thread age. Find best comment to reply to (high-upvote 
 
 ### 5. Draft the comment
 
-Follow Content Rules below. 2-3 sentences, first person, specific details from `content_angle`. No product links in top-level comments.
+Follow Content Rules below. 2-3 sentences, first person, specific details from `content_angle`. No product links in top-level comments. Vary your hook - don't open the same way as your last 5 comments.
 
 ### 6. Post it
 
@@ -174,6 +174,7 @@ Choose the single best subreddit from `config.json → subreddits` for this topi
 - [ ] Reads like a real person writing on their phone, not an essay
 - [ ] Does NOT link to any project in the post body — earn attention first
 - [ ] Not too long — 2-4 short paragraphs max for Reddit
+- [ ] Structure differs from your last 3 posts — don't always use the same flow (problem → solution → result)
 
 **Read it out loud.** If it sounds like a blog post or a ChatGPT response, rewrite it.
 
@@ -535,10 +536,7 @@ ORDER BY upvotes DESC
 
 For each post:
 1. Pick the project from `config.json → projects[]` whose `topics` best match the thread. If no project fits, skip.
-2. Write 1 sentence + link:
-   - "fwiw I built something for this - [project.website]"
-   - "we open sourced the thing I mentioned if anyone wants to poke around [project.github]"
-   - "here's the repo if useful [project.github]"
+2. Write 1 sentence + link. Never reuse the same phrasing as your recent edits - check `link_edit_content` from last 5 edited posts and write something different each time.
 3. Edit the original comment to append `\n\n[link text]` at the bottom.
 
 **Platform-specific editing:**
