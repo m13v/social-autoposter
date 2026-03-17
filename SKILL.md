@@ -306,7 +306,8 @@ Visit each post URL via browser. Check status (active/deleted/removed/inactive).
 10. **Never cross-post.** One post per topic per community.
 11. **Include imperfections.** Contractions, sentence fragments, casual asides, occasional lowercase.
 13. **Vary your openings.** Don't always start with credentials. Sometimes just jump into the topic.
-14. **Reply to comments on your posts.** Zero engagement on your own post = bot signal. Reply within 24h.
+14. **Vary your CTAs and link drops.** Never use the same phrasing twice in a row. Check your last 5 posts before writing a new link mention.
+15. **Reply to comments on your posts.** Zero engagement on your own post = bot signal. Reply within 24h.
 
 ### Bad vs Good (Comments)
 
