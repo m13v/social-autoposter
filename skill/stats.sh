@@ -100,23 +100,25 @@ async (page) => {
   return JSON.stringify({ total: resultsArray.length, scrolls: scrollCount, results: resultsArray });
 }
 
-Step 1: browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/comments/?sort=top
-Then browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_1.json
+CRITICAL: Use the reddit-agent browser (mcp__reddit-agent__* tools) for ALL steps below. NEVER use generic mcp__playwright-extension__* tools.
 
-Step 2: browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/comments/?sort=new
-Then browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_2.json
+Step 1: mcp__reddit-agent__browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/comments/?sort=top
+Then mcp__reddit-agent__browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_1.json
 
-Step 3: browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/submitted/?sort=top&t=all
-Then browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_3.json
+Step 2: mcp__reddit-agent__browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/comments/?sort=new
+Then mcp__reddit-agent__browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_2.json
 
-Step 4: browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/submitted/?sort=new
-Then browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_4.json
+Step 3: mcp__reddit-agent__browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/submitted/?sort=top&t=all
+Then mcp__reddit-agent__browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_3.json
+
+Step 4: mcp__reddit-agent__browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/submitted/?sort=new
+Then mcp__reddit-agent__browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_4.json
 
 Step 5: Merge all 4 JSON files into one, deduplicating by URL (keep the entry with non-null views if both exist). Save to /tmp/reddit_views.json
 
 Step 6: Run: python3 REPO_DIR_PLACEHOLDER/scripts/scrape_reddit_views.py --from-json /tmp/reddit_views.json
 
-Step 7: Close the browser tab (browser_tabs action 'close', NOT browser_close).
+Step 7: Close the browser tab (mcp__reddit-agent__browser_tabs action 'close', NOT browser_close).
 
 Done. Report totals. Do NOT read any other files. Do NOT deviate from these steps.
 STEP2_EOF
@@ -159,14 +161,15 @@ There are $TWITTER_POSTS tweets needing stats updates.
 
 Follow these steps exactly:
 1. Query the DB for tweets needing stats (the SQL is in SKILL.md Step 3)
-2. Use browser_run_code with the exact JavaScript from SKILL.md Step 3 to scrape each tweet page
+2. Use mcp__twitter-agent__browser_run_code with the exact JavaScript from SKILL.md Step 3 to scrape each tweet page
 3. Process in batches of 20 with 8-second delays between pages
 4. Update the DB with views, likes, replies for each tweet
 5. Report how many tweets were updated
 
+CRITICAL: Use the twitter-agent browser (mcp__twitter-agent__* tools) for ALL Twitter operations. NEVER use generic mcp__playwright-extension__* tools.
 CRITICAL: Use 8-second delays between page loads to avoid X rate limiting.
 CRITICAL: Target the specific tweet by status ID to avoid reading parent tweet stats.
-CRITICAL: Close browser tabs after you're done (browser_tabs action 'close', NOT browser_close)." --max-turns 50 >> "$LOGFILE" 2>&1
+CRITICAL: Close browser tabs after you're done (mcp__twitter-agent__browser_tabs action 'close', NOT browser_close)." --max-turns 50 >> "$LOGFILE" 2>&1
     STEP3_EXIT=$?
     if [ "$STEP3_EXIT" -eq 124 ]; then
         log "Step 3: TIMEOUT (30 min limit reached)"
