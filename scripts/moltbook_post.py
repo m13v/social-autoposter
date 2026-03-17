@@ -45,26 +45,28 @@ def solve_challenge(challenge_text):
     # Strip non-alpha, join everything
     nospace = re.sub(r'[^a-zA-Z]', '', challenge_text).lower()
 
-    # Deduplicate consecutive chars (handles "fIiVe" -> "five", "tWeEnTy" -> "twenty")
-    deduped = re.sub(r'(.)\1+', r'\1', nospace)
+    # Build regex patterns that match each number word with optional repeated chars
+    # e.g., "three" -> "t+h+r+e+e+" matches "tthhrreeee"
+    def make_fuzzy_pattern(word):
+        return ''.join(c + '+' for c in word)
 
-    # Try both deduped and original (some words legitimately have doubles like "fifteen")
-    for text in [deduped, nospace]:
-        sorted_words = sorted(NUMBER_WORDS.keys(), key=len, reverse=True)
-        nums_raw = []
-        remaining = text
-        while remaining:
-            found = False
-            for word in sorted_words:
-                if remaining.startswith(word):
-                    nums_raw.append(NUMBER_WORDS[word])
-                    remaining = remaining[len(word):]
-                    found = True
-                    break
-            if not found:
-                remaining = remaining[1:]
-        if len(nums_raw) >= 2:
-            break  # Found enough numbers, use this result
+    sorted_words = sorted(NUMBER_WORDS.keys(), key=len, reverse=True)
+    fuzzy_patterns = [(w, re.compile(make_fuzzy_pattern(w))) for w in sorted_words]
+
+    # Scan for number words using fuzzy matching on the raw stripped text
+    nums_raw = []
+    remaining = nospace
+    while remaining:
+        found = False
+        for word, pattern in fuzzy_patterns:
+            m = pattern.match(remaining)
+            if m:
+                nums_raw.append(NUMBER_WORDS[word])
+                remaining = remaining[m.end():]
+                found = True
+                break
+        if not found:
+            remaining = remaining[1:]
 
     # Combine tens+ones (e.g., twenty + three = 23)
     nums = []
