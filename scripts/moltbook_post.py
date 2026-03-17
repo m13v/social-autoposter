@@ -45,20 +45,26 @@ def solve_challenge(challenge_text):
     # Strip non-alpha, join everything
     nospace = re.sub(r'[^a-zA-Z]', '', challenge_text).lower()
 
-    # Scan for number words (greedy, longest first)
-    sorted_words = sorted(NUMBER_WORDS.keys(), key=len, reverse=True)
-    nums_raw = []
-    remaining = nospace
-    while remaining:
-        found = False
-        for word in sorted_words:
-            if remaining.startswith(word):
-                nums_raw.append(NUMBER_WORDS[word])
-                remaining = remaining[len(word):]
-                found = True
-                break
-        if not found:
-            remaining = remaining[1:]
+    # Deduplicate consecutive chars (handles "fIiVe" -> "five", "tWeEnTy" -> "twenty")
+    deduped = re.sub(r'(.)\1+', r'\1', nospace)
+
+    # Try both deduped and original (some words legitimately have doubles like "fifteen")
+    for text in [deduped, nospace]:
+        sorted_words = sorted(NUMBER_WORDS.keys(), key=len, reverse=True)
+        nums_raw = []
+        remaining = text
+        while remaining:
+            found = False
+            for word in sorted_words:
+                if remaining.startswith(word):
+                    nums_raw.append(NUMBER_WORDS[word])
+                    remaining = remaining[len(word):]
+                    found = True
+                    break
+            if not found:
+                remaining = remaining[1:]
+        if len(nums_raw) >= 2:
+            break  # Found enough numbers, use this result
 
     # Combine tens+ones (e.g., twenty + three = 23)
     nums = []
