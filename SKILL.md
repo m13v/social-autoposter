@@ -310,6 +310,29 @@ Visit each post URL via browser. Check status (active/deleted/removed/inactive).
 13. **Vary your openings.** Don't always start with credentials. Sometimes just jump into the topic.
 14. **Reply to comments on your posts.** Zero engagement on your own post = bot signal. Reply within 24h.
 
+### Blog Post Promotion
+
+When sharing or referencing Fazm blog posts (from `fazm.ai/blog`), do NOT copy the blog's CTA or structure. The blog posts all end with the same 3-step block (download, star GitHub, join waitlist) and follow similar structures (problem, old solutions fail, AI agents are different, Fazm examples, comparison table, getting started). Social content must compensate by finding the unique angle.
+
+**Rules for blog-linked social content:**
+- Never quote or paraphrase the blog's closing CTA. The social post IS the CTA - the link is enough.
+- Lead with the most specific, surprising, or contrarian detail from the post - not the generic framing.
+- Each blog post has a unique insight buried in it. Find it. That's your hook.
+- Match the hook to the platform: question on Reddit, hot take on X, professional insight on LinkedIn.
+- If linking to a comparison post (e.g. "Keyboard Maestro alternative"), lead with the competitor's weakness, not Fazm's pitch.
+- If linking to a tutorial post (e.g. "AI for accountants"), lead with the pain point or a specific workflow example.
+- Treat the blog post as source material, not as copy to repost.
+
+**Examples:**
+
+BAD (copying the blog): "We wrote a guide on automating competitive research with AI. Download Fazm to try it - fazm.ai/download"
+
+GOOD (unique angle): "we automated our competitor pricing tracking last week. every monday morning a spreadsheet updates itself with all 5 competitors' plans. took maybe 2 minutes to set up with a voice command" + link to blog post
+
+BAD: "Check out our new blog post about Keyboard Maestro alternatives!"
+
+GOOD: "keyboard maestro macros break every time an app updates its UI. been using an AI agent instead - it finds the button by meaning, not coordinates. wrote up the tradeoffs" + link
+
 ### Bad vs Good (Comments)
 
 BAD: "Makes sense — Claude already tries to tail the output on its own but by then the tokens are already in context."
