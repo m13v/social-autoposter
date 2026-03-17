@@ -25,9 +25,19 @@ The handles come from `config.json → accounts.*.handle/username`. Each platfor
 
 ---
 
-## Browser Automation: MCP Playwright ONLY
+## Browser Automation: Platform-Specific Agents ONLY
 
-All browser interactions (posting, scraping views, auditing, replying) MUST use **MCP Playwright** (`browser_navigate`, `browser_run_code`, `browser_snapshot`, `browser_click`, etc.). Do NOT use MCP macOS-use for any social-autoposter workflows.
+Each platform has a dedicated browser agent with its own lock. You MUST use the correct agent for each platform to prevent concurrent browser conflicts:
+
+| Platform | Agent | Tool prefix | Example |
+|----------|-------|-------------|---------|
+| Reddit | reddit-agent | `mcp__reddit-agent__*` | `mcp__reddit-agent__browser_navigate` |
+| X/Twitter | twitter-agent | `mcp__twitter-agent__*` | `mcp__twitter-agent__browser_navigate` |
+| LinkedIn | linkedin-agent | `mcp__linkedin-agent__*` | `mcp__linkedin-agent__browser_navigate` |
+
+**NEVER use generic `mcp__playwright-extension__*` or `mcp__isolated-browser__*` tools for any platform-specific action** (posting, replying, editing, scraping stats, auditing). Each agent has its own browser lock - using the wrong agent bypasses the lock and causes session conflicts.
+
+Do NOT use MCP macOS-use for any social-autoposter workflows.
 
 ---
 
