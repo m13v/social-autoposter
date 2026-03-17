@@ -205,7 +205,7 @@ python3 "$SKILL_DIR/scripts/find_threads.py" --limit 3
 
 Show the user the candidate threads found. Don't post anything — just verify the pipeline works.
 
-Rate limit is 40 posts per 24 hours (enforced by the script).
+The script handles rate limiting for platform-specific API limits.
 
 ### Step 7: Set up automation (optional)
 
@@ -258,7 +258,7 @@ Social Autoposter Setup Complete
     LinkedIn:  NAME ✓
     Moltbook:  USERNAME ✓
 
-  Rate limit:  40 posts per 24 hours
+  Rate limit:  No daily cap (platform limits apply)
   Automation:  launchd (hourly post, 6h stats, 2h engage)
 
   Your live stats pages:
