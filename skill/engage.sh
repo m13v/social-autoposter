@@ -77,7 +77,7 @@ Process ALL of them. For each post:
      -H "Content-Type: application/json" \\
      -d '{"content": "FULL_CONTENT"}' \\
      "https://www.moltbook.com/api/v1/comments/COMMENT_UUID"
-6. For Reddit: navigate to old.reddit.com comment permalink via browser, click "edit", append the link text to the existing content, save, verify.
+6. For Reddit: navigate to old.reddit.com comment permalink via the reddit-agent browser (mcp__reddit-agent__* tools), click "edit", append the link text to the existing content, save, verify.
 7. For LinkedIn: navigate to the post URL via the linkedin-agent browser (mcp__linkedin-agent__* tools), find our comment, click the three-dot menu (⋯) on it, click "Edit", append the link text to the existing content, save, verify.
    - For LinkedIn (professional tone): "I've been building something related - URL"
 8. After each successful edit, update the DB:
@@ -154,10 +154,16 @@ EXCLUSIONS — do NOT engage with these accounts (skip and mark as 'skipped' wit
 - Excluded Twitter accounts: $EXCLUDED_TWITTER
 - Excluded LinkedIn profiles: $EXCLUDED_LINKEDIN
 
+CRITICAL — Browser agent rule: Each platform MUST use its dedicated browser agent. NEVER use generic mcp__playwright-extension__* or mcp__isolated-browser__* tools.
+- Reddit: mcp__reddit-agent__* tools (e.g. mcp__reddit-agent__browser_navigate)
+- Twitter: mcp__twitter-agent__* tools (e.g. mcp__twitter-agent__browser_navigate)
+- LinkedIn: mcp__linkedin-agent__* tools (e.g. mcp__linkedin-agent__browser_navigate)
+Each agent has its own browser lock. Using the wrong agent bypasses the lock and causes session conflicts.
+
 $(if [ "$BATCH_NUM" -eq 1 ]; then
 cat <<'TWITTER_EOF'
-## X/Twitter replies
-1. Navigate to https://x.com/notifications/mentions
+## X/Twitter replies — use the twitter-agent browser (mcp__twitter-agent__* tools)
+1. Navigate to https://x.com/notifications/mentions via the twitter-agent browser
 2. Extract mentions replying to @m13v_
 3. Before logging or replying to any mention: query the DB to check if it's already tracked:
    python3 $REPO_DIR/scripts/reply_db.py status
@@ -258,9 +264,9 @@ If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on t
 
 GitHub issues engagement is handled by a separate pipeline (github-engage.sh). Skip any github_issues replies in this batch.
 
-For **reddit** — use this FAST posting method (browser_run_code):
+For **reddit** — use the reddit-agent browser (mcp__reddit-agent__* tools) with this FAST posting method (browser_run_code):
 1. First, pre-compose ALL reply texts before opening the browser. Decide skip/reply and draft text for every item.
-2. For each reply: run python3 reply_db.py processing ID, then call browser_navigate to their_comment_url.
+2. For each reply: run python3 reply_db.py processing ID, then call mcp__reddit-agent__browser_navigate to their_comment_url.
 3. Then use a SINGLE browser_run_code call with this exact Playwright pattern:
 \`\`\`javascript
 async (page) => {
@@ -302,6 +308,7 @@ If the JS returns null (no permalink found): call reply_db.py replied ID "text" 
 Do NOT use browser_snapshot, browser_click, or browser_type for Reddit replies. browser_run_code is 5x faster.
 Do NOT extract permalinks from snapshots — use the JS return value or skip it.
 Do NOT store 'posted' or their_comment_url as our_reply_url — store null/no URL if the permalink is unavailable.
+CRITICAL: ALL Reddit browser calls MUST use mcp__reddit-agent__* tools (e.g. mcp__reddit-agent__browser_run_code, mcp__reddit-agent__browser_navigate). NEVER use generic mcp__playwright-extension__* tools for Reddit.
 
 For **linkedin** — use the linkedin-agent browser (mcp__linkedin-agent__* tools):
 1. Navigate to their_comment_url (the post with commentUrn query param).
