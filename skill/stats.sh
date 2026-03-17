@@ -72,8 +72,14 @@ async (page) => {
         let views = null;
         for (const el of article.querySelectorAll('*')) {
           const text = el.textContent.trim();
-          const match = text.match(/^([\d,]+)\s+views?$/);
-          if (match) { views = parseInt(match[1].replace(/,/g, '')); break; }
+          const match = text.match(/^([\d,.]+)\s*([KkMm])?\s+views?$/);
+          if (match) {
+            let v = parseFloat(match[1].replace(/,/g, ''));
+            if (match[2] && match[2].toLowerCase() === 'k') v *= 1000;
+            if (match[2] && match[2].toLowerCase() === 'm') v *= 1000000;
+            views = Math.round(v);
+            break;
+          }
         }
         if (url) {
           results.push({ url: url.startsWith('http') ? url : 'https://www.reddit.com' + url, views });
