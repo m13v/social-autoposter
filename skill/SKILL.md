@@ -286,9 +286,9 @@ gh issue comment NUMBER -R OWNER/REPO --body "YOUR SELF-REPLY WITH LINK"
 | Tool execution/function calling | `m13v/fazm/blob/main/Desktop/Sources/Providers/ChatToolExecutor.swift` |
 | Floating UI/overlay window | `m13v/fazm/blob/main/Desktop/Sources/FloatingControlBar/FloatingControlBarView.swift` |
 | Browser lock/multi-agent Playwright | `m13v/browser-lock/blob/main/playwright-lock.sh` |
-| User memory/knowledge DB | `m13v/user-memories/blob/main/user_memories/db.py` |
-| Semantic search/embeddings | `m13v/user-memories/blob/main/user_memories/embeddings.py` |
-| Browser history ingestion | `m13v/user-memories/blob/main/user_memories/ingestors/history.py` |
+| User memory/knowledge DB | `m13v/ai-browser-profile/blob/main/user_memories/db.py` |
+| Semantic search/embeddings | `m13v/ai-browser-profile/blob/main/user_memories/embeddings.py` |
+| Browser history ingestion | `m13v/ai-browser-profile/blob/main/user_memories/ingestors/history.py` |
 | Social posting pipeline | `m13v/social-autoposter/blob/main/skill/SKILL.md` |
 | Launchd scheduling examples | `m13v/social-autoposter/tree/main/launchd` |
 | Video editing/ffmpeg | `m13v/video-edit/blob/main/SKILL.md` |
