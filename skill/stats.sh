@@ -49,11 +49,11 @@ REDDIT_USERNAME=$(python3 -c "import json; print(json.load(open('$REPO_DIR/confi
 if [ -n "$REDDIT_USERNAME" ]; then
     STEP2_PROMPT=$(mktemp)
     cat > "$STEP2_PROMPT" <<'STEP2_EOF'
-Scrape Reddit view counts. Do these steps in order, no deviations:
+Scrape Reddit view counts from 4 profile pages. Do these steps in order, no deviations:
 
-Step 1: browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/
+The JavaScript below scrapes view counts from a Reddit profile page. You will run it on 4 different URLs.
 
-Step 2: browser_run_code with this EXACT JavaScript:
+SCRAPE_JS:
 async (page) => {
   await page.waitForTimeout(3000);
   const allResults = new Map();
@@ -72,14 +72,8 @@ async (page) => {
         let views = null;
         for (const el of article.querySelectorAll('*')) {
           const text = el.textContent.trim();
-          const match = text.match(/^([\d,.]+)\s*([KkMm])?\s+views?$/);
-          if (match) {
-            let v = parseFloat(match[1].replace(/,/g, ''));
-            if (match[2] && match[2].toLowerCase() === 'k') v *= 1000;
-            if (match[2] && match[2].toLowerCase() === 'm') v *= 1000000;
-            views = Math.round(v);
-            break;
-          }
+          const match = text.match(/^([\d,]+)\s+views?$/);
+          if (match) { views = parseInt(match[1].replace(/,/g, '')); break; }
         }
         if (url) {
           results.push({ url: url.startsWith('http') ? url : 'https://www.reddit.com' + url, views });
@@ -106,11 +100,23 @@ async (page) => {
   return JSON.stringify({ total: resultsArray.length, scrolls: scrollCount, results: resultsArray });
 }
 
-Step 3: The result is a JSON string. Parse out the "results" array and save it to /tmp/reddit_views.json
+Step 1: browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/comments/?sort=top
+Then browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_1.json
 
-Step 4: Run: python3 REPO_DIR_PLACEHOLDER/scripts/scrape_reddit_views.py --from-json /tmp/reddit_views.json
+Step 2: browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/comments/?sort=new
+Then browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_2.json
 
-Step 5: Close the browser tab (browser_tabs action 'close', NOT browser_close).
+Step 3: browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/submitted/?sort=top&t=all
+Then browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_3.json
+
+Step 4: browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/submitted/?sort=new
+Then browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_4.json
+
+Step 5: Merge all 4 JSON files into one, deduplicating by URL (keep the entry with non-null views if both exist). Save to /tmp/reddit_views.json
+
+Step 6: Run: python3 REPO_DIR_PLACEHOLDER/scripts/scrape_reddit_views.py --from-json /tmp/reddit_views.json
+
+Step 7: Close the browser tab (browser_tabs action 'close', NOT browser_close).
 
 Done. Report totals. Do NOT read any other files. Do NOT deviate from these steps.
 STEP2_EOF
@@ -118,7 +124,7 @@ STEP2_EOF
     sed -i '' "s|REDDIT_USERNAME_PLACEHOLDER|$REDDIT_USERNAME|g" "$STEP2_PROMPT"
     sed -i '' "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP2_PROMPT"
 
-    gtimeout 1200 claude -p "$(cat "$STEP2_PROMPT")" --max-turns 12 >> "$LOGFILE" 2>&1
+    gtimeout 1200 claude -p "$(cat "$STEP2_PROMPT")" --max-turns 18 >> "$LOGFILE" 2>&1
     STEP2_EXIT=$?
     rm -f "$STEP2_PROMPT"
     if [ "$STEP2_EXIT" -eq 124 ]; then
