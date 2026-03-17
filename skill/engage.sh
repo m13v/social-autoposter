@@ -33,7 +33,7 @@ log "=== Engagement Loop Run: $(date) ==="
 # PHASE A: Scan for replies (runs in BACKGROUND)
 # ═══════════════════════════════════════════════════════
 log "Phase A: Scanning for replies (background)..."
-PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_replies.py" 2>&1 | tee -a "$LOG_FILE" &
+(PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_replies.py" 2>&1 || true) | tee -a "$LOG_FILE" &
 SCAN_PID=$!
 
 # ═══════════════════════════════════════════════════════
@@ -51,6 +51,7 @@ EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
           AND (upvotes > 2 OR platform = 'linkedin')
           AND platform IN ('reddit', 'moltbook', 'linkedin')
         ORDER BY upvotes DESC NULLS LAST
+        LIMIT 30
     ) q;")
 
 if [ "$EDITABLE" != "null" ] && [ -n "$EDITABLE" ]; then
@@ -84,7 +85,7 @@ Process ALL of them. For each post:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='LINK_TEXT' WHERE id=POST_ID"
 PROMPT_EOF
 
-    gtimeout 1800 claude -p "$(cat "$PHASE_D_PROMPT")" --max-turns 200 2>&1 | tee -a "$LOG_FILE"
+    gtimeout 2700 claude -p "$(cat "$PHASE_D_PROMPT")" --max-turns 200 2>&1 | tee -a "$LOG_FILE"
     rm -f "$PHASE_D_PROMPT"
 else
     log "Phase D: No posts eligible for link edit"
