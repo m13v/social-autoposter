@@ -170,6 +170,12 @@ function init() {
     console.log('  psycopg2-binary already installed');
   }
 
+  // Ensure skill/SKILL.md is a symlink to the root SKILL.md (single source of truth)
+  const skillMd = path.join(DEST, 'skill', 'SKILL.md');
+  try { fs.rmSync(skillMd, { force: true }); } catch {}
+  fs.symlinkSync(path.join(DEST, 'SKILL.md'), skillMd);
+  console.log('  skill/SKILL.md -> SKILL.md (single source of truth)');
+
   // Skill symlinks
   const skillsDir = path.join(os.homedir(), '.claude', 'skills');
   fs.mkdirSync(skillsDir, { recursive: true });
@@ -213,6 +219,12 @@ function update() {
 
   // Regenerate launchd plists with correct paths
   generatePlists();
+
+  // Ensure skill/SKILL.md is a symlink to the root SKILL.md (single source of truth)
+  const skillMd = path.join(DEST, 'skill', 'SKILL.md');
+  try { fs.rmSync(skillMd, { force: true }); } catch {}
+  fs.symlinkSync(path.join(DEST, 'SKILL.md'), skillMd);
+  console.log('  skill/SKILL.md -> SKILL.md (single source of truth)');
 
   // Re-symlink skill and setup skill in case they broke
   const skillsDir = path.join(os.homedir(), '.claude', 'skills');
