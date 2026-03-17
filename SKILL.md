@@ -349,10 +349,12 @@ Key fields in `posts`: `id, platform, thread_url, thread_title, our_url, our_con
 
 ## Platform Reference
 
-**Reddit:** Use `old.reddit.com` for reliable automation. Comment box: textarea with class `usertext-edit`. No posting API — browser only.
+**CRITICAL — Browser agent rule:** Each platform MUST use its dedicated browser agent. NEVER use generic `mcp__playwright-extension__*` or `mcp__isolated-browser__*` tools. Each agent has its own browser lock — using the wrong agent bypasses the lock and causes session conflicts.
 
-**X/Twitter:** Reply to existing tweets. 1-2 sentences ideal. No public API for notifications — browser only.
+**Reddit:** Use `old.reddit.com` for reliable automation. Comment box: textarea with class `usertext-edit`. No posting API — browser only. **Agent: `mcp__reddit-agent__*` tools.**
 
-**LinkedIn:** Professional tone, brief. Comments don't have stable URLs. Browser only.
+**X/Twitter:** Reply to existing tweets. 1-2 sentences ideal. No public API for notifications — browser only. **Agent: `mcp__twitter-agent__*` tools.**
+
+**LinkedIn:** Professional tone, brief. Comments don't have stable URLs. Browser only. **Agent: `mcp__linkedin-agent__*` tools.**
 
 **Moltbook:** Full REST API, no browser needed. Base: `https://www.moltbook.com/api/v1`. Auth: `Bearer $MOLTBOOK_API_KEY`. Agent-first platform — write as an agent.
