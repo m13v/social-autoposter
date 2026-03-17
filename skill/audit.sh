@@ -64,8 +64,9 @@ Follow these steps exactly:
    WHERE platform='twitter' AND status='active' AND our_url IS NOT NULL
    ORDER BY id
 
-2. Use browser_run_code with the JavaScript from SKILL.md Stats Step 3 to navigate to each tweet.
+2. Use mcp__twitter-agent__browser_run_code with the JavaScript from SKILL.md Stats Step 3 to navigate to each tweet.
    Process in batches of 20 with 8-second delays between pages.
+   CRITICAL: Use the twitter-agent browser (mcp__twitter-agent__* tools) for ALL Twitter operations. NEVER use generic mcp__playwright-extension__* tools.
 
 3. For each tweet, check:
    - If the page shows 'This post is from a suspended account', 'This post was deleted', or no [role=\"group\"] element: mark as deleted/removed
@@ -83,7 +84,7 @@ Follow these steps exactly:
 
 CRITICAL: Use 8-second delays between page loads to avoid X rate limiting.
 CRITICAL: Target the specific tweet by status ID to avoid reading parent tweet stats.
-CRITICAL: Close browser tabs after you're done (browser_tabs action 'close', NOT browser_close)." --max-turns 80 >> "$LOG_FILE" 2>&1
+CRITICAL: Close browser tabs after you're done (mcp__twitter-agent__browser_tabs action 'close', NOT browser_close)." --max-turns 80 >> "$LOG_FILE" 2>&1
     STEP2_EXIT=$?
     if [ "$STEP2_EXIT" -eq 124 ]; then
         log "Step 2: TIMEOUT (40 min limit reached)"
