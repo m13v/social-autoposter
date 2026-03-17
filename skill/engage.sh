@@ -45,11 +45,12 @@ EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
         SELECT id, platform, our_url, our_content, thread_title, upvotes
         FROM posts
         WHERE status='active'
-          AND upvotes > 2
           AND posted_at < NOW() - INTERVAL '6 hours'
           AND link_edited_at IS NULL
           AND our_url IS NOT NULL
-        ORDER BY upvotes DESC
+          AND (upvotes > 2 OR platform = 'linkedin')
+          AND platform IN ('reddit', 'moltbook', 'linkedin')
+        ORDER BY upvotes DESC NULLS LAST
     ) q;")
 
 if [ "$EDITABLE" != "null" ] && [ -n "$EDITABLE" ]; then
@@ -77,7 +78,9 @@ Process ALL of them. For each post:
      -d '{"content": "FULL_CONTENT"}' \\
      "https://www.moltbook.com/api/v1/comments/COMMENT_UUID"
 6. For Reddit: navigate to old.reddit.com comment permalink via browser, click "edit", append the link text to the existing content, save, verify.
-7. After each successful edit, update the DB:
+7. For LinkedIn: navigate to the post URL via the linkedin-agent browser (mcp__linkedin-agent__* tools), find our comment, click the three-dot menu (⋯) on it, click "Edit", append the link text to the existing content, save, verify.
+   - For LinkedIn (professional tone): "I've been building something related - URL"
+8. After each successful edit, update the DB:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='LINK_TEXT' WHERE id=POST_ID"
 PROMPT_EOF
 
