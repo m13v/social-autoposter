@@ -231,7 +231,7 @@ class ReplyScanner:
 
                 children = data[1].get("data", {}).get("children", [])
                 if children:
-                    print(f"  Scanning original post [{post_id}]: {post['thread_title'][:60]}... ({len(children)} top-level comments)")
+                    print(f"  Scanning original post [{post_id}]: {(post['thread_title'] or '')[:60]}... ({len(children)} top-level comments)")
                     self.process_reddit_replies(children, post_id, depth=1)
             else:
                 # Comment on someone else's thread: fetch our comment URL and scan replies to it
