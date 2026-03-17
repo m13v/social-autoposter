@@ -132,7 +132,7 @@ STEP2_EOF
     sed -i '' "s|REDDIT_USERNAME_PLACEHOLDER|$REDDIT_USERNAME|g" "$STEP2_PROMPT"
     sed -i '' "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP2_PROMPT"
 
-    gtimeout 1200 claude -p "$(cat "$STEP2_PROMPT")" --max-turns 18 >> "$LOGFILE" 2>&1
+    gtimeout 1200 claude -p "$(cat "$STEP2_PROMPT")" --max-turns 50 >> "$LOGFILE" 2>&1
     STEP2_EXIT=$?
     rm -f "$STEP2_PROMPT"
     if [ "$STEP2_EXIT" -eq 124 ]; then
