@@ -10,7 +10,7 @@ set -euo pipefail
 [ -f "$HOME/social-autoposter/.env" ] && source "$HOME/social-autoposter/.env"
 
 REPO_DIR="$HOME/social-autoposter"
-SKILL_FILE="$REPO_DIR/skill/SKILL.md"
+SKILL_FILE="$REPO_DIR/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/$(date +%Y-%m-%d_%H%M%S).log"
