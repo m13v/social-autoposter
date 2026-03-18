@@ -239,6 +239,122 @@ Navigate to `https://x.com/notifications/mentions`. Find replies to the handle i
 
 ---
 
+## Workflow: GitHub Issues (`/social-autoposter github`)
+
+Post helpful comments on open GitHub issues where our expertise adds value, then self-reply with links to specific files in our repos. No browser needed - uses `gh` CLI.
+
+### Automated (launchd)
+
+Runs every 4 hours via `com.m13v.social-github` launchd agent:
+```bash
+~/social-autoposter/skill/github.sh      # posting (every 4h)
+~/social-autoposter/skill/github-engage.sh  # reply engagement (every 6h)
+```
+
+### Manual run
+
+```bash
+/social-autoposter github
+```
+
+### 1. Rate limit check
+
+```sql
+SELECT COUNT(*) FROM posts WHERE platform='github_issues' AND posted_at >= NOW() - INTERVAL '24 hours'
+```
+Max 6 comments per 24 hours for automated runs. Manual runs can go higher.
+
+### 2. Search for issues
+
+Use topics from `config.json -> accounts.github.search_topics`. Rotate through different topics each run.
+
+```bash
+gh search issues "TOPIC" --limit 10 --state open --sort updated
+```
+
+Or use the discovery script:
+```bash
+python3 ~/social-autoposter/scripts/find_threads.py --include-github
+```
+
+### 3. Dedup check
+
+```sql
+SELECT thread_url FROM posts WHERE platform='github_issues'
+```
+
+Skip any issue URL already in the database.
+
+### 4. Pick 2-3 issues
+
+Choose issues where our experience from `content_angle` genuinely adds value. Spread across different repos and topics.
+
+### 5. Read the issue fully
+
+Read the issue body + all existing comments. Understand the problem before commenting.
+
+### 6. Draft the comment
+
+Follow Content Rules. Be genuinely helpful - answer questions, share working solutions, reference specific experience. NEVER use em dashes.
+
+### 7. Post via gh CLI
+
+```bash
+gh issue comment NUMBER -R OWNER/REPO --body "..."
+```
+
+Post as `config.json -> accounts.github.username` (m13v).
+
+### 8. Self-reply with specific file links
+
+After posting the helpful comment, reply to your own comment with a link to a SPECIFIC FILE in our repos (not just the repo homepage). Map the issue topic to the most relevant source file:
+
+| Topic | File |
+|-------|------|
+| macOS accessibility/AX/click/screen control | mediar-ai/mcp-server-macos-use/Sources/MCPServer/main.swift |
+| Desktop automation framework/element interaction | mediar-ai/terminator/crates/terminator/src/element.rs |
+| Desktop automation core/Rust | mediar-ai/terminator/crates/terminator/src/lib.rs |
+| MCP server for desktop | mediar-ai/terminator/crates/terminator-mcp-agent/src/server.rs |
+| Screen capture/ScreenCaptureKit | m13v/macos-session-replay/Sources/SessionReplay/ScreenCaptureService.swift |
+| Video encoding/recording | m13v/macos-session-replay/Sources/SessionReplay/VideoChunkEncoder.swift |
+| Voice/transcription/WhisperKit | m13v/fazm/Desktop/Sources/TranscriptionService.swift |
+| Claude API/LLM provider | m13v/fazm/Desktop/Sources/Providers/ChatProvider.swift |
+| Tool execution/function calling | m13v/fazm/Desktop/Sources/Providers/ChatToolExecutor.swift |
+| Floating UI/overlay | m13v/fazm/Desktop/Sources/FloatingControlBar/FloatingControlBarView.swift |
+| Browser lock/multi-agent Playwright | m13v/browser-lock/playwright-lock.sh |
+| User memory/knowledge extraction | m13v/user-memories/user_memories/db.py |
+| Memory embeddings/semantic search | m13v/user-memories/user_memories/embeddings.py |
+| Browser history ingestion | m13v/user-memories/user_memories/ingestors/history.py |
+| Social posting pipeline | m13v/social-autoposter/skill/SKILL.md |
+| Reply scanning | m13v/social-autoposter/scripts/scan_replies.py |
+| Video editing/ffmpeg | m13v/video-edit/SKILL.md |
+| Video upload to social | m13v/social-media-video-upload |
+| Tmux agent orchestration | m13v/tmux-background-agents/SKILL.md |
+| Vector embeddings/semantic search | m13v/user-memories/user_memories/embeddings.py |
+| Offline voice/speech recognition | m13v/fazm/Desktop/Sources/TranscriptionService.swift |
+| Local knowledge extraction | m13v/ai-browser-profile |
+
+### 9. Log both comments
+
+```sql
+INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
+  thread_title, thread_content, our_url, our_content, our_account,
+  source_summary, status, posted_at)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
+```
+
+Log the main comment AND the self-reply as separate rows.
+
+### 10. Engagement
+
+Replies to our GitHub comments are scanned by `scan_github_replies.py` and responded to via `github-engage.sh`. Both run automatically via launchd.
+
+### Exclusions
+
+Skip issues from excluded repos/authors in `config.json -> exclusions.github_repos` and `exclusions.authors`.
+
+---
+
 ## Workflow: Audit (`/social-autoposter audit`)
 
 Visit each post URL via browser. Check status (active/deleted/removed/inactive). Update engagement metrics. Report summary.
@@ -297,6 +413,31 @@ GOOD body: Paragraphs, incomplete thoughts, personal details, casual tone, ends 
 
 ## Database Schema
 
-`posts`: id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary
+`posts`: id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary, batch_id
 
 `replies`: id, post_id, platform, their_author, their_content, our_reply_content, status (pending|replied|skipped|error), depth
+
+---
+
+## LinkedIn Batch Commenting
+
+LinkedIn comments use search result pages, not unique post URLs. URL-based dedup doesn't work. Use author-level dedup instead:
+
+```python
+from find_threads import get_engaged_linkedin_authors
+engaged = get_engaged_linkedin_authors()  # set of lowercased names
+```
+
+Or via SQL:
+```sql
+SELECT DISTINCT LOWER(thread_author) FROM posts WHERE platform = 'linkedin';
+```
+
+When logging LinkedIn batch comments, always set `batch_id`:
+```sql
+INSERT INTO posts (platform, thread_url, thread_title, thread_author,
+  our_content, our_account, source_summary, batch_id, status, posted_at)
+VALUES ('linkedin', %s, %s, %s, %s, 'Matthew Diakonov', %s, %s, 'active', NOW());
+```
+
+Search queries come from `config.json -> linkedin_topics` (30 topics). Use `find_threads.py --include-linkedin` to get search URLs and the full engaged authors list.
