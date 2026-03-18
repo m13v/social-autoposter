@@ -8,7 +8,7 @@
 set -uo pipefail
 
 REPO_DIR="$HOME/social-autoposter"
-SKILL_FILE="$REPO_DIR/skill/SKILL.md"
+SKILL_FILE="$REPO_DIR/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"
 QUIET="${1:-}"
 
