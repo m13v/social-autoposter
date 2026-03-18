@@ -9,3 +9,6 @@ __pycache__/
 
 # Social autoposter work queues (transient, generated data)
 scripts/phase_*.json
+
+# Date-named error/log output files
+2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]
