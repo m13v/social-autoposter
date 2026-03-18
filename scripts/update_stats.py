@@ -213,7 +213,7 @@ def update_reddit(db, user_agent, config=None, quiet=False):
                             engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
                             db.execute(
                                 "UPDATE posts SET upvotes=%s, thread_engagement=%s, "
-                                "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
+                                "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
                                 [score, engagement, post_id],
                             )
                             updated += 1
@@ -395,7 +395,7 @@ def update_moltbook(db, api_key, quiet=False):
 
             db.execute(
                 "UPDATE posts SET upvotes=%s, comments_count=%s, views=%s, thread_engagement=%s, "
-                "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
+                "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
                 [upvotes, comment_count, views, engagement, post_id],
             )
             updated += 1
