@@ -185,7 +185,7 @@ def update_reddit(db, user_agent, config=None, quiet=False):
                 engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
                 db.execute(
                     "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
-                    "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
+                    "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
                     [thread_score, thread_comments, engagement, post_id],
                 )
                 updated += 1
