@@ -197,7 +197,11 @@ def create_comment(post_id, content, api_key):
 
     d = r.json()
     if not d.get("success"):
-        print(f"Comment failed: {d.get('message', '')}", file=sys.stderr)
+        msg = d.get("message", "")
+        if "suspend" in msg.lower():
+            print(f"SUSPENDED: {msg}", file=sys.stderr)
+            sys.exit(3)
+        print(f"Comment failed: {msg}", file=sys.stderr)
         sys.exit(1)
 
     comment = d.get("comment", d)
@@ -226,6 +230,31 @@ def create_comment(post_id, content, api_key):
 
     return comment_id, True
 
+def self_upvote(item_type, item_id, api_key):
+    """Self-upvote a post or comment after verification."""
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if item_type == "post":
+        url = f"{BASE}/posts/{item_id}/upvote"
+    else:
+        url = f"{BASE}/comments/{item_id}/upvote"
+    try:
+        r = requests.post(url, headers=headers, timeout=15)
+        d = r.json()
+        if d.get("success") or d.get("upvoted"):
+            print(f"Self-upvoted {item_type} {item_id[:12]}")
+            return True
+        retry = d.get("retry_after_seconds")
+        if retry:
+            time.sleep(retry + 1)
+            r = requests.post(url, headers=headers, timeout=15)
+            if r.json().get("success") or r.json().get("upvoted"):
+                print(f"Self-upvoted {item_type} {item_id[:12]} (retry)")
+                return True
+    except Exception as e:
+        print(f"Upvote failed: {e}", file=sys.stderr)
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Moltbook post/comment with auto-verification")
     sub = parser.add_subparsers(dest="action")
@@ -234,10 +263,12 @@ def main():
     post_p.add_argument("--title", required=True)
     post_p.add_argument("--content", required=True)
     post_p.add_argument("--submolt", default="general")
+    post_p.add_argument("--no-upvote", action="store_true", help="Skip self-upvote")
 
     comment_p = sub.add_parser("comment")
     comment_p.add_argument("--post-id", required=True)
     comment_p.add_argument("--content", required=True)
+    comment_p.add_argument("--no-upvote", action="store_true", help="Skip self-upvote")
 
     args = parser.parse_args()
     api_key = get_api_key()
@@ -251,9 +282,13 @@ def main():
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             sys.exit(1)
+        if not args.no_upvote:
+            self_upvote("post", post_id, api_key)
         print(json.dumps({"post_id": post_id, "verified": True}))
     elif args.action == "comment":
         comment_id, ok = create_comment(args.post_id, args.content, api_key)
+        if ok and not args.no_upvote:
+            self_upvote("comment", str(comment_id), api_key)
         print(json.dumps({"comment_id": str(comment_id), "verified": ok}))
     else:
         parser.print_help()
