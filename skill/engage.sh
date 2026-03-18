@@ -51,7 +51,6 @@ EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
           AND (upvotes > 2 OR platform = 'linkedin')
           AND platform IN ('reddit', 'moltbook', 'linkedin')
         ORDER BY upvotes DESC NULLS LAST
-        LIMIT 30
     ) q;")
 
 if [ "$EDITABLE" != "null" ] && [ -n "$EDITABLE" ]; then
@@ -85,7 +84,7 @@ Process ALL of them. For each post:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='LINK_TEXT' WHERE id=POST_ID"
 PROMPT_EOF
 
-    gtimeout 2700 claude -p "$(cat "$PHASE_D_PROMPT")" --max-turns 200 2>&1 | tee -a "$LOG_FILE"
+    gtimeout 14400 claude -p "$(cat "$PHASE_D_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE"
     rm -f "$PHASE_D_PROMPT"
 else
     log "Phase D: No posts eligible for link edit"
