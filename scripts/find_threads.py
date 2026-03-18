@@ -103,29 +103,48 @@ def fetch_reddit_threads(subreddits, sort="new", limit=10, user_agent="social-au
     return threads
 
 
-def fetch_moltbook_threads(api_key, limit=10):
-    """Fetch threads from Moltbook REST API."""
+def fetch_moltbook_threads(api_key, limit=50):
+    """Fetch threads from Moltbook REST API.
+
+    Fetches multiple pages and filters out spam (mint/token posts).
+    """
     if not api_key:
         return []
 
-    data = fetch_json(
-        f"https://www.moltbook.com/api/v1/posts?limit={limit}",
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
-    if not data or "posts" not in data:
-        return []
-
     threads = []
-    for post in data["posts"]:
-        threads.append({
-            "platform": "moltbook",
-            "url": f"https://www.moltbook.com/post/{post.get('uuid', post.get('id', ''))}",
-            "title": post.get("title", ""),
-            "author": post.get("author", {}).get("name", ""),
-            "score": post.get("upvotes", 0),
-            "num_comments": post.get("comment_count", 0),
-            "content": post.get("content", "")[:500],
-        })
+    spam_patterns = ['mbc-20', 'mbc20', '"op":"mint"', '"tick"', 'pump.fun']
+    spam_title_patterns = ['mint', 'mbc20', 'token launch', 'inscription', 'redx',
+                           'wang ', 'bot claim', 'hackai']
+
+    for offset in [0, 50]:
+        data = fetch_json(
+            f"https://www.moltbook.com/api/v1/posts?sort=new&limit={limit}&offset={offset}",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        if not data or "posts" not in data:
+            break
+
+        for post in data["posts"]:
+            content = post.get("content", "")
+            title = post.get("title", "")
+
+            # Filter spam
+            if any(p in content.lower() for p in spam_patterns):
+                continue
+            if any(p in title.lower() for p in spam_title_patterns):
+                continue
+            if len(content) < 40:
+                continue
+
+            threads.append({
+                "platform": "moltbook",
+                "url": f"https://www.moltbook.com/post/{post.get('uuid', post.get('id', ''))}",
+                "title": title,
+                "author": post.get("author", {}).get("name", ""),
+                "score": post.get("upvotes", 0),
+                "num_comments": post.get("comment_count", 0),
+                "content": content[:500],
+            })
 
     return threads
 
