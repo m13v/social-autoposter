@@ -104,7 +104,9 @@ Follow Content Rules below. 2-3 sentences, first person, specific details from `
 - Post as the username in `config.json → accounts.reddit.username`
 
 **X/Twitter** (browser automation):
-- Navigate to tweet → reply box → type → Reply → verify → capture URL
+- Navigate to tweet → wait 4s → snapshot → find textbox ref → click → type (slowly=true) → snapshot → find Reply button ref → click → wait 3s
+- **Capture status URL immediately after posting:** snapshot the page, grep for `[handle]/status/` in the snapshot YAML to find our reply's status ID. Record it before moving to the next thread.
+- **Log to DB immediately:** INSERT the post row right after capturing the status URL. Do NOT batch inserts at the end.
 - Post as the handle in `config.json → accounts.twitter.handle`
 
 **LinkedIn** (browser automation):
@@ -123,6 +125,8 @@ Verify: fetch post by UUID, check `verification_status` is `"verified"`.
 
 ### 7. Log + sync
 
+**Log each post immediately after posting and capturing its URL.** Do NOT accumulate posts and batch insert at the end - insert one row right after each successful post. This prevents data loss if the session is interrupted.
+
 ```sql
 INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
   thread_title, thread_content, our_url, our_content, our_account,
@@ -131,6 +135,11 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
 ```
 
 Use the account value from `config.json` for `our_account`.
+
+**Dedup check before posting:** Instead of maintaining a list of posted URLs in context, query the DB:
+```sql
+SELECT thread_url FROM posts WHERE platform='twitter' AND thread_url LIKE '%' || :thread_id || '%';
+```
 
 If `sync_script` is set in config.json, run it after logging.
 
