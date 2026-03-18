@@ -224,6 +224,66 @@ def generate_linkedin_search_urls(topics, exclusions=None):
     return threads
 
 
+def fetch_github_issues(search_topics, exclusions=None, limit=10):
+    """Search GitHub issues using gh CLI and return candidate threads.
+
+    Rotates through search_topics, picking a random subset each run.
+    """
+    import random
+    import subprocess
+
+    excluded_repos = set()
+    excluded_authors = set()
+    if exclusions:
+        excluded_repos = {r.lower() for r in exclusions.get("github_repos", [])}
+        excluded_authors = {a.lower() for a in exclusions.get("authors", [])}
+
+    # Pick 5 random topics to rotate
+    topics = random.sample(search_topics, min(5, len(search_topics)))
+    threads = []
+
+    for topic in topics:
+        try:
+            result = subprocess.run(
+                ["gh", "search", "issues", topic, "--limit", "10",
+                 "--state", "open", "--sort", "updated",
+                 "--json", "url,title,author,repository"],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode != 0:
+                continue
+            issues = json.loads(result.stdout) if result.stdout.strip() else []
+        except Exception as e:
+            print(f"  ERROR searching GitHub for '{topic}': {e}", file=sys.stderr)
+            continue
+
+        for issue in issues:
+            repo_name = issue.get("repository", {}).get("nameWithOwner", "")
+            author = issue.get("author", {}).get("login", "")
+
+            # Apply exclusions
+            if any(excl in repo_name.lower() for excl in excluded_repos):
+                continue
+            if author.lower() in excluded_authors:
+                continue
+
+            threads.append({
+                "platform": "github_issues",
+                "url": issue.get("url", ""),
+                "title": issue.get("title", ""),
+                "author": author,
+                "score": 0,
+                "num_comments": 0,
+                "search_topic": topic,
+                "repository": repo_name,
+            })
+
+        if len(threads) >= limit:
+            break
+
+    return threads[:limit]
+
+
 def load_exclusions(config):
     """Load exclusion lists from config."""
     excl = config.get("exclusions", {})
@@ -293,6 +353,7 @@ def main():
     parser.add_argument("--include-moltbook", action="store_true", help="Also search Moltbook")
     parser.add_argument("--include-twitter", action="store_true", help="Generate X/Twitter search URLs")
     parser.add_argument("--include-linkedin", action="store_true", help="Generate LinkedIn search URLs")
+    parser.add_argument("--include-github", action="store_true", help="Search GitHub issues via gh CLI")
     parser.add_argument("--force", action="store_true", help="Skip rate limit check")
     args = parser.parse_args()
 
@@ -335,6 +396,13 @@ def main():
             linkedin_topics = [t for t in linkedin_topics if args.topic.lower() in t.lower()]
         raw_excl = config.get("exclusions", {})
         threads.extend(generate_linkedin_search_urls(linkedin_topics, exclusions=raw_excl))
+
+    if args.include_github:
+        github_topics = config.get("accounts", {}).get("github", {}).get("search_topics", [])
+        if args.topic:
+            github_topics = [t for t in github_topics if args.topic.lower() in t.lower()]
+        raw_excl = config.get("exclusions", {})
+        threads.extend(fetch_github_issues(github_topics, exclusions=raw_excl))
 
     # Filter
     candidates = filter_threads(threads, already_posted, topic=args.topic, exclusions=exclusions)
