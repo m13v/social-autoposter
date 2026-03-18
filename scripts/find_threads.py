@@ -53,6 +53,21 @@ def get_already_posted():
     return {row[0] for row in rows}
 
 
+def get_engaged_linkedin_authors():
+    """Return set of LinkedIn authors we've already commented on.
+
+    LinkedIn batch commenting uses search result pages (not unique post URLs),
+    so URL-based dedup doesn't work. This provides author-level dedup instead.
+    """
+    conn = dbmod.get_conn()
+    rows = conn.execute(
+        "SELECT LOWER(thread_author) FROM posts "
+        "WHERE platform = 'linkedin' AND thread_author IS NOT NULL AND thread_author != ''"
+    ).fetchall()
+    conn.close()
+    return {row[0] for row in rows}
+
+
 def get_recent_posts(limit=5):
     """Return our last N post contents for repetition checking."""
     conn = dbmod.get_conn()
@@ -332,6 +347,11 @@ def main():
         "recent_post_snippets": [p[:100] if p else "" for p in recent_posts],
         "threads": candidates,
     }
+
+    # Include engaged LinkedIn authors for dedup (author-level, not URL-level)
+    if args.include_linkedin:
+        output["engaged_linkedin_authors"] = sorted(get_engaged_linkedin_authors())
+        output["engaged_linkedin_count"] = len(output["engaged_linkedin_authors"])
 
     print(json.dumps(output, indent=2))
 
