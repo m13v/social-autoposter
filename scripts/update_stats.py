@@ -224,48 +224,119 @@ def update_moltbook(db, api_key, quiet=False):
         return {"skipped": True, "reason": "no_api_key"}
 
     posts = db.execute(
-        "SELECT id, our_url FROM posts WHERE platform='moltbook' AND status='active' AND our_url IS NOT NULL ORDER BY id"
+        "SELECT id, our_url, thread_url FROM posts WHERE platform='moltbook' AND status='active' AND our_url IS NOT NULL ORDER BY id"
     ).fetchall()
 
     total = updated = deleted = errors = 0
     results = []
+    headers = {"Authorization": f"Bearer {api_key}"}
 
     for post in posts:
         total += 1
-        post_id, our_url = post[0], post[1]
-        uuid_match = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", our_url)
-        if not uuid_match:
+        post_id, our_url, thread_url = post[0], post[1], post[2]
+
+        # Extract post UUID and optional comment UUID from our_url
+        # Format: https://www.moltbook.com/post/{post_uuid}#{comment_uuid}
+        uuids = re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", our_url)
+        if not uuids:
             errors += 1
             continue
 
-        data = fetch_json(
-            f"https://www.moltbook.com/api/v1/posts/{uuid_match.group()}",
-            headers={"Authorization": f"Bearer {api_key}"},
-        )
-        if not data or not data.get("success"):
-            errors += 1
-            continue
+        post_uuid = uuids[0]
+        comment_uuid = None
+        if "#" in our_url and len(uuids) >= 2:
+            comment_uuid = uuids[1]
+        elif "#" in our_url:
+            # Comment UUID might be short (not full UUID) - extract after #
+            comment_uuid = our_url.split("#")[-1] if our_url.split("#")[-1] != post_uuid else None
 
-        post_data = data.get("post", {})
-        if post_data.get("is_deleted"):
-            db.execute("UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=%s", [post_id])
-            deleted += 1
-            continue
+        is_comment = comment_uuid is not None
+        is_our_post = our_url == thread_url  # Original post if our_url matches thread_url
 
-        upvotes = post_data.get("upvotes", 0)
-        comment_count = post_data.get("comment_count", 0)
-        score = post_data.get("score", 0)
-        title = post_data.get("title", "")[:60]
-        engagement = json.dumps({"score": score, "upvotes": upvotes, "comment_count": comment_count})
+        if is_comment:
+            # Fetch comment-specific stats via comments endpoint
+            data = fetch_json(
+                f"https://www.moltbook.com/api/v1/posts/{post_uuid}/comments?sort=new&limit=100",
+                headers=headers,
+            )
+            if not data or not data.get("success"):
+                errors += 1
+                continue
 
-        db.execute(
-            "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
-            "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
-            [upvotes, comment_count, engagement, post_id],
-        )
-        updated += 1
-        results.append({"id": post_id, "upvotes": upvotes, "score": score,
-                        "comments": comment_count, "title": title})
+            # Find our comment by UUID
+            our_comment = None
+            for c in data.get("comments", []):
+                if c.get("id", "").startswith(comment_uuid[:8]):
+                    our_comment = c
+                    break
+
+            if not our_comment:
+                # Comment might not be in top 100 - just mark as checked
+                db.execute(
+                    "UPDATE posts SET status_checked_at=NOW() WHERE id=%s",
+                    [post_id],
+                )
+                errors += 1
+                continue
+
+            if our_comment.get("is_deleted"):
+                db.execute("UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=%s", [post_id])
+                deleted += 1
+                continue
+
+            # Comment-specific engagement
+            comment_upvotes = our_comment.get("upvotes", 0)
+            comment_score = our_comment.get("score", 0)
+            comment_replies = our_comment.get("reply_count", len(our_comment.get("replies", [])))
+            verification = our_comment.get("verification_status", "unknown")
+            thread_comment_count = data.get("count", 0)
+
+            engagement = json.dumps({
+                "comment_upvotes": comment_upvotes,
+                "comment_score": comment_score,
+                "comment_replies": comment_replies,
+                "verification": verification,
+                "thread_comments": thread_comment_count,
+            })
+
+            db.execute(
+                "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
+                "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
+                [comment_upvotes, comment_replies, engagement, post_id],
+            )
+            updated += 1
+            results.append({"id": post_id, "upvotes": comment_upvotes,
+                            "replies": comment_replies, "verification": verification})
+        else:
+            # Original post - fetch post-level stats
+            data = fetch_json(
+                f"https://www.moltbook.com/api/v1/posts/{post_uuid}",
+                headers=headers,
+            )
+            if not data or not data.get("success"):
+                errors += 1
+                continue
+
+            post_data = data.get("post", {})
+            if post_data.get("is_deleted"):
+                db.execute("UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=%s", [post_id])
+                deleted += 1
+                continue
+
+            upvotes = post_data.get("upvotes", 0)
+            comment_count = post_data.get("comment_count", post_data.get("comments_count", 0))
+            score = post_data.get("score", 0)
+            views = post_data.get("views", 0)
+            engagement = json.dumps({"score": score, "upvotes": upvotes, "comment_count": comment_count, "views": views})
+
+            db.execute(
+                "UPDATE posts SET upvotes=%s, comments_count=%s, views=%s, thread_engagement=%s, "
+                "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
+                [upvotes, comment_count, views, engagement, post_id],
+            )
+            updated += 1
+            results.append({"id": post_id, "upvotes": upvotes, "score": score,
+                            "comments": comment_count})
 
     db.commit()
     return {"total": total, "updated": updated, "deleted": deleted, "errors": errors, "results": results}
