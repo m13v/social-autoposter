@@ -165,10 +165,21 @@ def update_reddit(db, user_agent, config=None, quiet=False):
             if is_our_post:
                 # Original post — use thread-level stats (they ARE our stats)
                 if thread_data.get("removed_by_category"):
-                    db.execute("UPDATE posts SET status='removed', status_checked_at=NOW() WHERE id=%s", [post_id])
-                    removed += 1
-                    if not quiet:
-                        print(f"REMOVED (thread) [{post_id}]")
+                    row = db.execute(
+                        "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
+                    ).fetchone()
+                    detect_count = (row[0] if row else 0) + 1
+                    if detect_count >= 2:
+                        db.execute("UPDATE posts SET status='removed', deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                                   [detect_count, post_id])
+                        removed += 1
+                        if not quiet:
+                            print(f"REMOVED (thread) [{post_id}] (confirmed after {detect_count} detections)")
+                    else:
+                        db.execute("UPDATE posts SET deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                                   [detect_count, post_id])
+                        if not quiet:
+                            print(f"REMOVAL PENDING (thread) [{post_id}] (detection {detect_count}/2)")
                     continue
 
                 engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
@@ -211,10 +222,21 @@ def update_reddit(db, user_agent, config=None, quiet=False):
                         break
 
                 if our_removed:
-                    db.execute("UPDATE posts SET status='removed', status_checked_at=NOW() WHERE id=%s", [post_id])
-                    removed += 1
-                    if not quiet:
-                        print(f"REMOVED (no permalink) [{post_id}]")
+                    row = db.execute(
+                        "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
+                    ).fetchone()
+                    detect_count = (row[0] if row else 0) + 1
+                    if detect_count >= 2:
+                        db.execute("UPDATE posts SET status='removed', deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                                   [detect_count, post_id])
+                        removed += 1
+                        if not quiet:
+                            print(f"REMOVED (no permalink) [{post_id}] (confirmed after {detect_count} detections)")
+                    else:
+                        db.execute("UPDATE posts SET deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                                   [detect_count, post_id])
+                        if not quiet:
+                            print(f"REMOVAL PENDING (no permalink) [{post_id}] (detection {detect_count}/2)")
                 elif not our_found:
                     # Comment not in top-level replies — just update checked timestamp
                     engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
@@ -304,8 +326,17 @@ def update_moltbook(db, api_key, quiet=False):
                 continue
 
             if our_comment.get("is_deleted"):
-                db.execute("UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=%s", [post_id])
-                deleted += 1
+                row = db.execute(
+                    "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
+                ).fetchone()
+                detect_count = (row[0] if row else 0) + 1
+                if detect_count >= 2:
+                    db.execute("UPDATE posts SET status='deleted', deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                               [detect_count, post_id])
+                    deleted += 1
+                else:
+                    db.execute("UPDATE posts SET deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                               [detect_count, post_id])
                 continue
 
             # Comment-specific engagement
@@ -325,7 +356,7 @@ def update_moltbook(db, api_key, quiet=False):
 
             db.execute(
                 "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
-                "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
+                "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
                 [comment_upvotes, comment_replies, engagement, post_id],
             )
             updated += 1
@@ -343,8 +374,17 @@ def update_moltbook(db, api_key, quiet=False):
 
             post_data = data.get("post", {})
             if post_data.get("is_deleted"):
-                db.execute("UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=%s", [post_id])
-                deleted += 1
+                row = db.execute(
+                    "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
+                ).fetchone()
+                detect_count = (row[0] if row else 0) + 1
+                if detect_count >= 2:
+                    db.execute("UPDATE posts SET status='deleted', deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                               [detect_count, post_id])
+                    deleted += 1
+                else:
+                    db.execute("UPDATE posts SET deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                               [detect_count, post_id])
                 continue
 
             upvotes = post_data.get("upvotes", 0)
