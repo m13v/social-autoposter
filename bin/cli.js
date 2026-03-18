@@ -170,17 +170,15 @@ function init() {
     console.log('  psycopg2-binary already installed');
   }
 
-  // Ensure skill/SKILL.md is a symlink to the root SKILL.md (single source of truth)
+  // Remove stale skill/SKILL.md if it exists (SKILL.md lives at repo root only)
   const skillMd = path.join(DEST, 'skill', 'SKILL.md');
   try { fs.rmSync(skillMd, { force: true }); } catch {}
-  fs.symlinkSync(path.join(DEST, 'SKILL.md'), skillMd);
-  console.log('  skill/SKILL.md -> SKILL.md (single source of truth)');
 
-  // Skill symlinks
+  // Skill symlinks — point to repo root so Claude loads SKILL.md directly
   const skillsDir = path.join(os.homedir(), '.claude', 'skills');
   fs.mkdirSync(skillsDir, { recursive: true });
-  linkOrRelink(path.join(DEST, 'skill'), path.join(skillsDir, 'social-autoposter'));
-  console.log('  ~/.claude/skills/social-autoposter ->', path.join(DEST, 'skill'));
+  linkOrRelink(DEST, path.join(skillsDir, 'social-autoposter'));
+  console.log('  ~/.claude/skills/social-autoposter ->', DEST);
   linkOrRelink(path.join(DEST, 'setup'), path.join(skillsDir, 'social-autoposter-setup'));
   console.log('  ~/.claude/skills/social-autoposter-setup ->', path.join(DEST, 'setup'));
 
@@ -220,16 +218,14 @@ function update() {
   // Regenerate launchd plists with correct paths
   generatePlists();
 
-  // Ensure skill/SKILL.md is a symlink to the root SKILL.md (single source of truth)
+  // Remove stale skill/SKILL.md if it exists (SKILL.md lives at repo root only)
   const skillMd = path.join(DEST, 'skill', 'SKILL.md');
   try { fs.rmSync(skillMd, { force: true }); } catch {}
-  fs.symlinkSync(path.join(DEST, 'SKILL.md'), skillMd);
-  console.log('  skill/SKILL.md -> SKILL.md (single source of truth)');
 
-  // Re-symlink skill and setup skill in case they broke
+  // Re-symlink skills — point to repo root so Claude loads SKILL.md directly
   const skillsDir = path.join(os.homedir(), '.claude', 'skills');
   try {
-    linkOrRelink(path.join(DEST, 'skill'), path.join(skillsDir, 'social-autoposter'));
+    linkOrRelink(DEST, path.join(skillsDir, 'social-autoposter'));
     console.log('  re-linked ~/.claude/skills/social-autoposter');
   } catch {}
   try {
