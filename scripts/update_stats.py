@@ -111,23 +111,47 @@ def update_reddit(db, user_agent, config=None, quiet=False):
             score = comment_data.get("score", 0)
 
             if body in ("[deleted]",) or author == "[deleted]":
-                db.execute("UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=%s", [post_id])
-                deleted += 1
-                if not quiet:
-                    print(f"DELETED [{post_id}]")
+                # Require 2 consecutive deletion detections to avoid false positives
+                # from Reddit API rate limiting / transient errors
+                row = db.execute(
+                    "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
+                ).fetchone()
+                detect_count = (row[0] if row else 0) + 1
+                if detect_count >= 2:
+                    db.execute("UPDATE posts SET status='deleted', deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                               [detect_count, post_id])
+                    deleted += 1
+                    if not quiet:
+                        print(f"DELETED [{post_id}] (confirmed after {detect_count} detections)")
+                else:
+                    db.execute("UPDATE posts SET deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                               [detect_count, post_id])
+                    if not quiet:
+                        print(f"DELETION PENDING [{post_id}] (detection {detect_count}/2)")
                 continue
 
             if body == "[removed]":
-                db.execute("UPDATE posts SET status='removed', status_checked_at=NOW() WHERE id=%s", [post_id])
-                removed += 1
-                if not quiet:
-                    print(f"REMOVED [{post_id}]")
+                row = db.execute(
+                    "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
+                ).fetchone()
+                detect_count = (row[0] if row else 0) + 1
+                if detect_count >= 2:
+                    db.execute("UPDATE posts SET status='removed', deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                               [detect_count, post_id])
+                    removed += 1
+                    if not quiet:
+                        print(f"REMOVED [{post_id}] (confirmed after {detect_count} detections)")
+                else:
+                    db.execute("UPDATE posts SET deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                               [detect_count, post_id])
+                    if not quiet:
+                        print(f"REMOVAL PENDING [{post_id}] (detection {detect_count}/2)")
                 continue
 
             engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
             db.execute(
                 "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
-                "engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s",
+                "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
                 [score, thread_comments, engagement, post_id],
             )
             updated += 1
