@@ -65,6 +65,9 @@ Run the **Workflow: GitHub Issues** section. Follow every step:
    - Tmux agent orchestration -> m13v/tmux-background-agents/SKILL.md
    - Skill publishing -> m13v/publish-skill
    - Skill registry -> m13v/skill-registry
+   - Vector embeddings/semantic search -> m13v/user-memories/user_memories/embeddings.py
+   - Local knowledge extraction/browser data -> m13v/ai-browser-profile
+   - Offline voice/speech recognition -> m13v/fazm/Desktop/Sources/TranscriptionService.swift
 10. Log self-reply to database too
 
 Post to 2-3 issues per run. Spread across different repos and topics.
