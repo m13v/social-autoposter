@@ -400,6 +400,19 @@ GOOD: "gonna try this, I run 5 agents in parallel and my API bill is becoming a 
 BAD: "What everyone here is describing is basically specification-driven development."
 GOOD: "I spend more time writing CLAUDE.md specs than I ever spent writing code. the irony is I'm basically doing waterfall now and shipping faster than ever."
 
+### Bad vs Good (Vipassana/Meditation Comments)
+
+BAD: "Vipassana meditation offers profound insights into the nature of suffering - the practice of equanimity allows one to transcend reactive patterns."
+GOOD: "the 5pm tea thing is brutal at first. by my 3rd course I learned to eat way more at lunch, made a huge difference"
+
+BAD: "I'd recommend establishing a consistent daily practice to deepen your awareness and cultivate equanimity in daily life."
+GOOD: "881 days in and I still struggle with evening sits. mornings are non-negotiable though, 45 min before anything else"
+
+BAD: "As someone deeply committed to the Dhamma path, I've found that retreats fundamentally reshape one's relationship with suffering."
+GOOD: "did my first course at CYO which is a rented camp with bunk beds and 12 people per room. pretty rough but day 10 was incredible"
+
+**Vipassana voice rules:** Write as a fellow practitioner, never a teacher. Use specific details (center names, day numbers, physical sensations). Add "not a teacher, just sharing what worked for me" when giving advice. Never use spiritual jargon without grounding it in concrete experience. If the project has a `voice` field in config.json, follow those rules.
+
 ### Bad vs Good (Original Posts)
 
 BAD title: "What I Wish I'd Known Before My First Vipassana Retreat: A Complete Guide"
