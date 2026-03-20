@@ -15,7 +15,7 @@ Automates finding, posting, and tracking social media comments and original post
 | `/social-autoposter` | Comment run — find threads + post comment + log (cron-safe) |
 | `/social-autoposter post` | Create an original post/thread (manual only, never cron) |
 | `/social-autoposter stats` | Update engagement stats via API |
-| `/social-autoposter engage` | Scan and reply to responses on our posts + DM engaged users |
+| `/social-autoposter engage` | Scan and reply to responses on our posts |
 | `/social-autoposter audit` | Full browser audit of all posts |
 
 **View your posts live:** `https://s4l.ai/stats/[your_handle]`
@@ -245,55 +245,6 @@ Visit each post URL via browser. Check status (active/deleted/removed/inactive).
 
 ---
 
-## Workflow: DM Engage (runs as Phase E of `/social-autoposter engage`)
-
-Sends Reddit DMs via Chat to users who engaged on our posts, continuing the comment conversation.
-
-### How it works
-
-1. **Candidate scan** (no browser):
-```bash
-python3 ~/social-autoposter/scripts/scan_dm_candidates.py --max 3
-```
-Finds users from `replies` table where:
-- We already replied publicly (status='replied')
-- Their comment is substantive (>10 words)
-- We haven't DM'd them for this reply
-- We haven't DM'd them at all in the last 30 days
-- Post is from the last 7 days
-
-2. **Draft DM** based on comment context (thread topic + their comment + our reply). The DM must:
-- Feel like a natural continuation of the public conversation
-- Reference the specific topic, not generic outreach
-- Be 1-2 sentences, casual, like a text message
-- No links in first DM - earn the conversation first
-- No em dashes
-
-3. **Send via Reddit Chat** using the reddit-agent browser:
-- Navigate to `https://www.reddit.com/message/compose/?to=USERNAME`
-- Fill subject (2-4 casual words) and body
-- Submit and verify
-
-4. **Log to `dms` table**:
-```sql
-UPDATE dms SET status='sent', our_dm_content='TEXT', sent_at=NOW() WHERE id=DM_ID;
-```
-
-### Rate limits
-- Max 3 DMs per engage run
-- Max 1 DM per user per 30 days
-- Only DM users we've already engaged with publicly
-
-### DM tone examples
-
-GOOD: "yo your point about token costs scaling with agent count hit home, we're dealing with the exact same thing. what's your setup look like?"
-GOOD: "that workaround you mentioned for the accessibility API crash is clever, did it hold up in production?"
-
-BAD: "Hey! I noticed your comment on Reddit. I'm building something you might find interesting..."
-BAD: "Great point! I'd love to connect and share what we're working on."
-
----
-
 ## Content Rules
 
 ### Tone & Voice
@@ -349,5 +300,3 @@ GOOD body: Paragraphs, incomplete thoughts, personal details, casual tone, ends 
 `posts`: id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary
 
 `replies`: id, post_id, platform, their_author, their_content, our_reply_content, status (pending|replied|skipped|error), depth
-
-`dms`: id, platform, reply_id, post_id, their_author, their_content, our_dm_content, comment_context, status (pending|sent|skipped|error), sent_at
