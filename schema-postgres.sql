@@ -99,6 +99,25 @@ CREATE TABLE IF NOT EXISTS replies (
 ALTER TABLE replies ADD COLUMN IF NOT EXISTS processing_at TIMESTAMP;
 ALTER TABLE replies ADD CONSTRAINT IF NOT EXISTS replies_platform_comment_id_unique UNIQUE (platform, their_comment_id);
 
+CREATE TABLE IF NOT EXISTS dms (
+    id SERIAL PRIMARY KEY,
+    platform TEXT NOT NULL DEFAULT 'reddit',
+    reply_id INTEGER REFERENCES replies(id),
+    post_id INTEGER REFERENCES posts(id),
+    their_author TEXT NOT NULL,
+    their_content TEXT,
+    our_dm_content TEXT,
+    comment_context TEXT,
+    status TEXT DEFAULT 'pending',
+    skip_reason TEXT,
+    discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sent_at TIMESTAMP,
+    CONSTRAINT dms_platform_author_reply_unique UNIQUE (platform, their_author, reply_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dms_status ON dms(status);
+CREATE INDEX IF NOT EXISTS idx_dms_their_author ON dms(their_author);
+
 CREATE TABLE IF NOT EXISTS thread_comments (
     id SERIAL PRIMARY KEY,
     thread_id INTEGER,
