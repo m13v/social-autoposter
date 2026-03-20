@@ -3,6 +3,7 @@
 #   Step 1: API stats (upvotes, comments, deleted/removed) via Python
 #   Step 2: Reddit view counts via Claude + Playwright (browser required)
 #   Step 3: X/Twitter stats via Claude + Playwright (browser required)
+#   Step 4: LinkedIn stats via Claude + Playwright (browser required)
 # Called by launchd every 6 hours.
 
 set -uo pipefail
@@ -186,6 +187,129 @@ CRITICAL: Close browser tabs after you're done (mcp__twitter-agent__browser_tabs
     fi
 else
     log "Step 3: SKIPPED — no Twitter posts need stats update ($TWITTER_POSTS found)"
+fi
+
+# ═══════════════════════════════════════════════════════
+# STEP 4: LinkedIn stats (browser required)
+# ═══════════════════════════════════════════════════════
+log "Step 4: LinkedIn stats (Claude + Playwright)"
+
+LINKEDIN_POSTS=$(psql "$DATABASE_URL" -t -A -c "
+    SELECT COUNT(*) FROM posts
+    WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
+      AND our_url LIKE '%linkedin.com/feed/update/%'
+      AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days');" 2>/dev/null || echo "0")
+
+if [ "$LINKEDIN_POSTS" -gt 0 ]; then
+    STEP4_PROMPT=$(mktemp)
+    cat > "$STEP4_PROMPT" <<'STEP4_EOF'
+Scrape LinkedIn engagement stats for posts. Do these steps in order, no deviations:
+
+CRITICAL: Use the linkedin-agent browser (mcp__linkedin-agent__* tools) for ALL steps below. NEVER use generic mcp__playwright-extension__* tools.
+
+Step 1: Query the database to get LinkedIn posts needing stats updates:
+```bash
+source ~/social-autoposter/.env
+psql "$DATABASE_URL" -t -A -F '|' -c "
+    SELECT id, our_url FROM posts
+    WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
+      AND our_url LIKE '%linkedin.com/feed/update/%'
+      AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days')
+    ORDER BY id;"
+```
+
+Step 2: For each post URL, navigate with mcp__linkedin-agent__browser_navigate, wait for page load, then run mcp__linkedin-agent__browser_run_code with this JavaScript to extract stats:
+
+SCRAPE_JS:
+async (page) => {
+  await page.waitForTimeout(3000);
+  const result = { reactions: 0, comments: 0, views: 0, reposts: 0 };
+
+  // Try to get the social counts bar
+  const socialBar = await page.evaluate(() => {
+    const res = { reactions: 0, comments: 0, views: 0, reposts: 0 };
+
+    // Reactions (likes) - look for the social counts section
+    const reactionBtn = document.querySelector('button.social-details-social-counts__reactions-count, span.social-details-social-counts__reactions-count, button[aria-label*="reaction"], span[aria-label*="reaction"]');
+    if (reactionBtn) {
+      const text = reactionBtn.textContent.trim().replace(/,/g, '');
+      const num = parseInt(text, 10);
+      if (!isNaN(num)) res.reactions = num;
+      // Also check aria-label for more accurate count
+      const label = reactionBtn.getAttribute('aria-label') || '';
+      const m = label.match(/([\d,]+)\s*reaction/i);
+      if (m) res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
+    }
+
+    // Comments count
+    const commentBtn = document.querySelector('button.social-details-social-counts__comments, button[aria-label*="comment"], li.social-details-social-counts__comments');
+    if (commentBtn) {
+      const text = commentBtn.textContent.trim();
+      const m = text.match(/([\d,]+)/);
+      if (m) res.comments = parseInt(m[1].replace(/,/g, ''), 10);
+    }
+
+    // Views / impressions
+    const viewsEl = document.querySelector('span.social-details-social-counts__impressions, span[aria-label*="impression"], span.analytics-entry-point');
+    if (viewsEl) {
+      const text = viewsEl.textContent.trim().replace(/,/g, '');
+      const m = text.match(/([\d,]+)/);
+      if (m) res.views = parseInt(m[1].replace(/,/g, ''), 10);
+    }
+
+    // Also try generic approach: find all elements with counts in the social bar
+    document.querySelectorAll('.social-details-social-counts span, .social-details-social-counts button').forEach(el => {
+      const text = el.textContent.trim().toLowerCase();
+      const label = (el.getAttribute('aria-label') || '').toLowerCase();
+      const numMatch = text.match(/([\d,]+)/);
+      if (!numMatch) return;
+      const num = parseInt(numMatch[1].replace(/,/g, ''), 10);
+      if (isNaN(num)) return;
+
+      if (label.includes('reaction') || label.includes('like')) res.reactions = Math.max(res.reactions, num);
+      else if (label.includes('comment')) res.comments = Math.max(res.comments, num);
+      else if (label.includes('repost') || label.includes('share')) res.reposts = Math.max(res.reposts, num);
+      else if (label.includes('impression') || label.includes('view')) res.views = Math.max(res.views, num);
+    });
+
+    // Fallback: look at all text nodes for "N impressions" pattern
+    const allText = document.body.innerText;
+    const viewMatch = allText.match(/([\d,]+)\s*impressions?/i);
+    if (viewMatch && res.views === 0) {
+      res.views = parseInt(viewMatch[1].replace(/,/g, ''), 10);
+    }
+
+    return res;
+  });
+
+  return JSON.stringify(socialBar);
+}
+
+Step 3: Collect all results into a JSON array and save to /tmp/linkedin_stats.json. Each entry should be:
+  {"url": "<the linkedin post url>", "reactions": N, "comments": N, "views": N, "reposts": N}
+
+Process in batches of 10 with 5-second delays between page loads to avoid LinkedIn rate limiting.
+
+Step 4: Run: python3 REPO_DIR_PLACEHOLDER/scripts/scrape_linkedin_stats.py --from-json /tmp/linkedin_stats.json
+
+Step 5: Close the browser tab (mcp__linkedin-agent__browser_tabs action 'close', NOT browser_close).
+
+Done. Report totals. Do NOT read any other files. Do NOT deviate from these steps.
+STEP4_EOF
+    sed -i '' "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP4_PROMPT"
+
+    gtimeout 1800 claude -p "$(cat "$STEP4_PROMPT")" --max-turns 80 >> "$LOGFILE" 2>&1
+    STEP4_EXIT=$?
+    rm -f "$STEP4_PROMPT"
+    if [ "$STEP4_EXIT" -eq 124 ]; then
+        log "Step 4: TIMEOUT (30 min limit reached)"
+    elif [ "$STEP4_EXIT" -ne 0 ]; then
+        log "Step 4: FAILED (exit $STEP4_EXIT)"
+    else
+        log "Step 4: Done"
+    fi
+else
+    log "Step 4: SKIPPED — no LinkedIn posts need stats update ($LINKEDIN_POSTS found)"
 fi
 
 log "=== Stats Pipeline complete: $(date) ==="
