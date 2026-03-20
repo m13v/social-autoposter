@@ -144,30 +144,15 @@ while true; do
             LIMIT $BATCH_SIZE
         ) q;")
 
-    cat > "$PHASE_B_PROMPT" <<PROMPT_EOF
-You are the Social Autoposter engagement bot.
-
-Read $SKILL_FILE for the full workflow, content rules, and platform details.
-
-EXCLUSIONS — do NOT engage with these accounts (skip and mark as 'skipped' with reason 'excluded_author'):
-- Excluded authors: $EXCLUDED_AUTHORS
-- Excluded Twitter accounts: $EXCLUDED_TWITTER
-- Excluded LinkedIn profiles: $EXCLUDED_LINKEDIN
-
-CRITICAL — Browser agent rule: Each platform MUST use its dedicated browser agent. NEVER use generic mcp__playwright-extension__* or mcp__isolated-browser__* tools.
-- Reddit: mcp__reddit-agent__* tools (e.g. mcp__reddit-agent__browser_navigate)
-- Twitter: mcp__twitter-agent__* tools (e.g. mcp__twitter-agent__browser_navigate)
-- LinkedIn: mcp__linkedin-agent__* tools (e.g. mcp__linkedin-agent__browser_navigate)
-Each agent has its own browser lock. Using the wrong agent bypasses the lock and causes session conflicts.
-
-$(if [ "$BATCH_NUM" -eq 1 ]; then
-cat <<'TWITTER_EOF'
-## X/Twitter replies — use the twitter-agent browser (mcp__twitter-agent__* tools)
+    # Build discovery section for batch 1 only (avoids nested heredoc parsing issues)
+    DISCOVERY_SECTION=""
+    if [ "$BATCH_NUM" -eq 1 ]; then
+        DISCOVERY_SECTION='## X/Twitter replies — use the twitter-agent browser (mcp__twitter-agent__* tools)
 1. Navigate to https://x.com/notifications/mentions via the twitter-agent browser
 2. Extract mentions replying to @m13v_
-3. Before logging or replying to any mention: query the DB to check if it's already tracked:
-   python3 $REPO_DIR/scripts/reply_db.py status
-   Also run: psql "$DATABASE_URL" -t -A -c "SELECT their_comment_id FROM replies WHERE platform='x';"
+3. Before logging or replying to any mention: query the DB to check if it is already tracked:
+   python3 '"$REPO_DIR"'/scripts/reply_db.py status
+   Also run: psql "$DATABASE_URL" -t -A -c "SELECT their_comment_id FROM replies WHERE platform='"'"'x'"'"';"
    Skip any mention whose numeric tweet ID appears in that list.
 4. Skip light acknowledgments and your own replies
 5. Respond to all substantive new replies
@@ -175,12 +160,10 @@ cat <<'TWITTER_EOF'
 
 CRITICAL — Twitter comment ID format: always store ONLY the numeric tweet ID as their_comment_id.
 Extract it from the tweet URL: x.com/username/status/NUMERIC_ID → store just NUMERIC_ID.
-NEVER prefix with username or any other text (e.g. store '2030180353625948573', NOT 'TisDad_2030180353625948573').
-TWITTER_EOF
+NEVER prefix with username or any other text (e.g. store '"'"'2030180353625948573'"'"', NOT '"'"'TisDad_2030180353625948573'"'"').
 
-cat <<'LINKEDIN_EOF'
 ## LinkedIn replies/mentions discovery
-Scan LinkedIn notifications for new comments, mentions, and replies on our posts. Insert them as 'pending' in the replies table so the generic reply loop below handles them.
+Scan LinkedIn notifications for new comments, mentions, and replies on our posts. Insert them as '"'"'pending'"'"' in the replies table so the generic reply loop below handles them.
 
 1. Navigate to https://www.linkedin.com/notifications/ using the linkedin-agent browser
 2. Scroll down several times to load ~50 notifications
@@ -198,25 +181,25 @@ Scan LinkedIn notifications for new comments, mentions, and replies on our posts
 4. For each actionable notification, navigate to the post/comment to get full context:
    a. Click the notification link to open the post
    b. Find the specific comment using JavaScript:
-      document.querySelectorAll('article.comments-comment-entity').forEach(el => {
-        const dataId = el.getAttribute('data-id');
-        const author = el.querySelector('.comments-post-meta__name-text')?.innerText;
-        const content = el.querySelector('.comments-comment-item__main-content')?.innerText;
+      document.querySelectorAll('"'"'article.comments-comment-entity'"'"').forEach(el => {
+        const dataId = el.getAttribute('"'"'data-id'"'"');
+        const author = el.querySelector('"'"'.comments-post-meta__name-text'"'"')?.innerText;
+        const content = el.querySelector('"'"'.comments-comment-item__main-content'"'"')?.innerText;
         console.log(JSON.stringify({dataId, author, content}));
       });
    c. Extract the comment URN from data-id attribute: urn:li:comment:(activity:XXXXX,YYYYY)
 
 5. Before inserting: check if already tracked:
-   psql "$DATABASE_URL" -t -A -c "SELECT their_comment_id FROM replies WHERE platform='linkedin';"
+   psql "$DATABASE_URL" -t -A -c "SELECT their_comment_id FROM replies WHERE platform='"'"'linkedin'"'"';"
    Skip any comment whose URN is already in the list.
 
 6. To find the post_id: match the activity URL against our LinkedIn posts:
-   psql "$DATABASE_URL" -t -A -c "SELECT id, our_url FROM posts WHERE platform='linkedin' AND status='active';"
+   psql "$DATABASE_URL" -t -A -c "SELECT id, our_url FROM posts WHERE platform='"'"'linkedin'"'"' AND status='"'"'active'"'"';"
    If no matching post exists, create one with:
-   psql "$DATABASE_URL" -c "INSERT INTO posts (platform, thread_url, thread_author, thread_title, our_url, our_content, our_account, status, posted_at) VALUES ('linkedin', 'THREAD_URL', 'THREAD_AUTHOR', 'THREAD_TITLE', 'OUR_POST_URL', 'OUR_POST_CONTENT', 'm13v', 'active', NOW()) RETURNING id;"
+   psql "$DATABASE_URL" -c "INSERT INTO posts (platform, thread_url, thread_author, thread_title, our_url, our_content, our_account, status, posted_at) VALUES ('"'"'linkedin'"'"', '"'"'THREAD_URL'"'"', '"'"'THREAD_AUTHOR'"'"', '"'"'THREAD_TITLE'"'"', '"'"'OUR_POST_URL'"'"', '"'"'OUR_POST_CONTENT'"'"', '"'"'m13v'"'"', '"'"'active'"'"', NOW()) RETURNING id;"
 
 7. Insert each new reply:
-   psql "$DATABASE_URL" -c "INSERT INTO replies (post_id, platform, their_comment_id, their_author, their_content, their_comment_url, depth, status) VALUES (POST_ID, 'linkedin', 'URN_FROM_DATA_ID', 'AUTHOR_NAME', 'COMMENT_TEXT', 'COMMENT_PERMALINK_URL', 1, 'pending');"
+   psql "$DATABASE_URL" -c "INSERT INTO replies (post_id, platform, their_comment_id, their_author, their_content, their_comment_url, depth, status) VALUES (POST_ID, '"'"'linkedin'"'"', '"'"'URN_FROM_DATA_ID'"'"', '"'"'AUTHOR_NAME'"'"', '"'"'COMMENT_TEXT'"'"', '"'"'COMMENT_PERMALINK_URL'"'"', 1, '"'"'pending'"'"');"
 
 CRITICAL - LinkedIn comment ID format: always store the FULL URN from the data-id attribute as their_comment_id.
 Format: urn:li:comment:(activity:ACTIVITY_ID,COMMENT_ID)
@@ -225,11 +208,10 @@ Example: urn:li:comment:(activity:7438226125077549056,7438815640536170496)
 CRITICAL - LinkedIn comment permalink URL format:
 https://www.linkedin.com/feed/update/urn:li:activity:ACTIVITY_ID?commentUrn=urn%3Ali%3Acomment%3A%28activity%3AACTIVITY_ID%2CCOMMENT_ID%29
 
-CRITICAL - Excluded LinkedIn profiles: $EXCLUDED_LINKEDIN — skip comments from these profiles and mark as 'skipped' with reason 'excluded_author'.
+CRITICAL - Excluded LinkedIn profiles: '"$EXCLUDED_LINKEDIN"' — skip comments from these profiles and mark as '"'"'skipped'"'"' with reason '"'"'excluded_author'"'"'.
 
-CRITICAL - Skip comments by "Matthew Diakonov" or "m13v" (our own account).
-LINKEDIN_EOF
-fi)
+CRITICAL - Skip comments by "Matthew Diakonov" or "m13v" (our own account).'
+    fi
 
 ## Respond to pending replies (batch $BATCH_NUM: $BATCH_ACTUAL of $PENDING_COUNT total)
 
