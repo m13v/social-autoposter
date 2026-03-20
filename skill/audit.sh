@@ -2,8 +2,9 @@
 # audit.sh — Full post audit pipeline:
 #   Step 1: API audit (Reddit + Moltbook) via Python
 #   Step 2: X/Twitter audit via Claude + Playwright (browser required)
-#   Step 3: Mark deleted/removed posts
-#   Step 4: Report summary
+#   Step 3: LinkedIn audit via Claude + Playwright (browser required)
+#   Step 4: Mark deleted/removed posts
+#   Step 5: Report summary
 # Called by launchd every 24 hours.
 
 set -uo pipefail
@@ -98,9 +99,101 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════
-# STEP 4: Report summary
+# STEP 3: LinkedIn audit (browser required)
 # ═══════════════════════════════════════════════════════
-log "Step 4: Summary"
+LINKEDIN_COUNT=$(psql "$DATABASE_URL" -t -A -c "
+    SELECT COUNT(*) FROM posts
+    WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
+      AND our_url LIKE '%linkedin.com/feed/update/%';" 2>/dev/null || echo "0")
+
+if [ "$LINKEDIN_COUNT" -gt 0 ]; then
+    log "Step 3: LinkedIn audit — $LINKEDIN_COUNT active LinkedIn posts to check (Claude + Playwright)"
+
+    gtimeout 1800 claude -p "You are the Social Autoposter audit bot.
+
+Execute a LinkedIn post audit. There are $LINKEDIN_COUNT active LinkedIn posts to check.
+
+CRITICAL: Use the linkedin-agent browser (mcp__linkedin-agent__* tools) for ALL LinkedIn operations. NEVER use generic mcp__playwright-extension__* tools.
+
+Follow these steps exactly:
+
+1. Query the DB for all active LinkedIn posts:
+   source ~/social-autoposter/.env
+   psql \"\$DATABASE_URL\" -t -A -F '|' -c \"
+     SELECT id, our_url FROM posts
+     WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
+       AND our_url LIKE '%linkedin.com/feed/update/%'
+     ORDER BY id;\"
+
+2. For each post, use mcp__linkedin-agent__browser_navigate to visit the URL.
+   Process in batches of 10 with 5-second delays between page loads.
+
+3. For each post, run mcp__linkedin-agent__browser_run_code with this JavaScript:
+async (page) => {
+  await page.waitForTimeout(3000);
+  const result = await page.evaluate(() => {
+    const res = { reactions: 0, comments: 0, views: 0, reposts: 0, status: 'active' };
+
+    // Check if post is unavailable
+    const bodyText = document.body.innerText.toLowerCase();
+    if (bodyText.includes('this content isn') || bodyText.includes('page not found') ||
+        bodyText.includes('this post was removed') || bodyText.includes('no longer available')) {
+      res.status = 'deleted';
+      return res;
+    }
+
+    // Reactions
+    const reactionBtn = document.querySelector('button.social-details-social-counts__reactions-count, span.social-details-social-counts__reactions-count, button[aria-label*=\"reaction\"], span[aria-label*=\"reaction\"]');
+    if (reactionBtn) {
+      const label = reactionBtn.getAttribute('aria-label') || '';
+      const m = label.match(/([\d,]+)\\s*reaction/i);
+      if (m) res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
+      else { const t = reactionBtn.textContent.trim().replace(/,/g, ''); const n = parseInt(t, 10); if (!isNaN(n)) res.reactions = n; }
+    }
+
+    // Comments
+    const commentBtn = document.querySelector('button.social-details-social-counts__comments, button[aria-label*=\"comment\"]');
+    if (commentBtn) { const m = commentBtn.textContent.trim().match(/([\d,]+)/); if (m) res.comments = parseInt(m[1].replace(/,/g, ''), 10); }
+
+    // Views / impressions
+    const viewsEl = document.querySelector('span.social-details-social-counts__impressions, span[aria-label*=\"impression\"], span.analytics-entry-point');
+    if (viewsEl) { const m = viewsEl.textContent.trim().match(/([\d,]+)/); if (m) res.views = parseInt(m[1].replace(/,/g, ''), 10); }
+
+    // Fallback impressions
+    const viewMatch = document.body.innerText.match(/([\d,]+)\\s*impressions?/i);
+    if (viewMatch && res.views === 0) res.views = parseInt(viewMatch[1].replace(/,/g, ''), 10);
+
+    return res;
+  });
+  return JSON.stringify(result);
+}
+
+4. For each post:
+   - If status is 'deleted': UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=<id>
+   - Otherwise: UPDATE posts SET upvotes=<reactions>, comments_count=<comments>, views=<views>,
+       thread_engagement='<json>', engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=<id>
+
+5. Close browser tabs after done (mcp__linkedin-agent__browser_tabs action 'close', NOT browser_close).
+
+6. Print a summary: posts checked, updated, deleted, errors.
+
+CRITICAL: Use 5-second delays between page loads to avoid LinkedIn rate limiting." --max-turns 80 >> "$LOG_FILE" 2>&1
+    STEP3_EXIT=$?
+    if [ "$STEP3_EXIT" -eq 124 ]; then
+        log "Step 3: TIMEOUT (30 min limit reached)"
+    elif [ "$STEP3_EXIT" -ne 0 ]; then
+        log "Step 3: FAILED (exit $STEP3_EXIT)"
+    else
+        log "Step 3: Done"
+    fi
+else
+    log "Step 3: SKIPPED — no active LinkedIn posts to audit"
+fi
+
+# ═══════════════════════════════════════════════════════
+# STEP 5: Report summary
+# ═══════════════════════════════════════════════════════
+log "Step 5: Summary"
 
 ACTIVE=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE status='active';" 2>/dev/null || echo "?")
 DELETED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE status='deleted';" 2>/dev/null || echo "?")
