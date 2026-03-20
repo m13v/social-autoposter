@@ -283,18 +283,42 @@ def update_moltbook(db, api_key, quiet=False):
 
         # Extract post UUID and optional comment UUID from our_url
         # Format: https://www.moltbook.com/post/{post_uuid}#{comment_uuid}
-        uuids = re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", our_url)
+        # Also handles bare fragments like "#abc123" by falling back to thread_url
+        effective_url = our_url
+        if not our_url.startswith("http"):
+            # Bare fragment (e.g. "#f504d6fb") - reconstruct from thread_url
+            if thread_url and thread_url.startswith("http"):
+                thread_uuids = re.findall(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", thread_url)
+                if not thread_uuids:
+                    # thread_url might have short UUID too - extract what we can
+                    m = re.search(r"/post/([0-9a-f-]+)", thread_url)
+                    if m:
+                        effective_url = thread_url + our_url  # append fragment
+                    else:
+                        errors += 1
+                        continue
+                else:
+                    effective_url = f"https://www.moltbook.com/post/{thread_uuids[0]}{our_url}"
+            else:
+                errors += 1
+                continue
+
+        uuids = re.findall(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", effective_url)
         if not uuids:
             errors += 1
             continue
 
         post_uuid = uuids[0]
         comment_uuid = None
-        if "#" in our_url and len(uuids) >= 2:
+        if "#" in effective_url and len(uuids) >= 2:
             comment_uuid = uuids[1]
-        elif "#" in our_url:
+        elif "#" in effective_url:
             # Comment UUID might be short (not full UUID) - extract after #
-            comment_uuid = our_url.split("#")[-1] if our_url.split("#")[-1] != post_uuid else None
+            fragment = effective_url.split("#")[-1]
+            # Strip "comment-" prefix if present
+            fragment = re.sub(r'^comment-', '', fragment)
+            if fragment and fragment != post_uuid:
+                comment_uuid = fragment
 
         is_comment = comment_uuid is not None
         is_our_post = our_url == thread_url  # Original post if our_url matches thread_url
@@ -309,10 +333,14 @@ def update_moltbook(db, api_key, quiet=False):
                 errors += 1
                 continue
 
-            # Find our comment by UUID
+            # Find our comment by UUID - try multiple matching strategies
             our_comment = None
+            # Strip "comment-" prefix for matching
+            clean_uuid = re.sub(r'^comment-', '', comment_uuid)
             for c in data.get("comments", []):
-                if c.get("id", "").startswith(comment_uuid[:8]):
+                cid = c.get("id", "")
+                # Match by: full UUID, starts-with (8 chars), or contains
+                if cid == clean_uuid or cid.startswith(clean_uuid[:8]) or clean_uuid in cid:
                     our_comment = c
                     break
 
