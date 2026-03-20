@@ -342,25 +342,24 @@ fi
 # PHASE E: Reddit DM engagement (continue conversations via Chat)
 # Finds users who engaged on our posts and DMs them to continue the discussion
 # ═══════════════════════════════════════════════════════
-log "Phase E: Scanning for DM candidates..."
-(PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_dm_candidates.py" --max 3 2>&1 || true) | tee -a "$LOG_FILE"
+log "Phase E: Scanning for DM candidates (all platforms)..."
+(PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_dm_candidates.py" 2>&1 || true) | tee -a "$LOG_FILE"
 
-DM_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='pending' AND platform='reddit';")
+DM_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='pending';" 2>/dev/null || echo "0")
 
 if [ "$DM_PENDING" -gt 0 ]; then
-    log "Phase E: $DM_PENDING Reddit DMs to send"
+    log "Phase E: $DM_PENDING DMs to send across all platforms"
 
     DM_DATA=$(psql "$DATABASE_URL" -t -A -c "
         SELECT json_agg(q) FROM (
-            SELECT d.id, d.their_author, d.their_content, d.comment_context,
+            SELECT d.id, d.platform, d.their_author, d.their_content, d.comment_context,
                    r.their_comment_url, r.our_reply_content,
                    p.thread_title, p.our_content as our_post_content
             FROM dms d
             JOIN replies r ON d.reply_id = r.id
             JOIN posts p ON d.post_id = p.id
-            WHERE d.status='pending' AND d.platform='reddit'
+            WHERE d.status='pending'
             ORDER BY d.discovered_at ASC
-            LIMIT 3
         ) q;")
 
     DM_PROMPT=$(mktemp)
@@ -369,9 +368,9 @@ You are the Social Autoposter DM engagement bot.
 
 Read $SKILL_FILE for content rules (tone, anti-AI detection, no em dashes).
 
-## Task: Send Reddit DMs to continue comment conversations
+## Task: Send DMs to continue comment conversations across platforms
 
-These users engaged with our posts/comments. We already replied publicly. Now send a short, casual DM via Reddit Chat to continue the conversation.
+These users engaged with our posts/comments. We already replied publicly. Now send a short, casual DM to continue the conversation.
 
 CRITICAL RULES:
 1. DMs must feel like a natural continuation of the comment discussion - NOT a cold outreach or sales pitch
@@ -379,7 +378,6 @@ CRITICAL RULES:
 3. Keep it short: 1-2 sentences max, like a text message
 4. No links in the first DM - earn the conversation first
 5. No em dashes. Write casually, like texting a coworker.
-6. Max 3 DMs per run (rate limit to avoid Reddit flagging)
 
 DM EXAMPLES (good):
 - "yo your point about token costs scaling with agent count hit home, we're dealing with the exact same thing. what's your setup look like?"
@@ -394,28 +392,41 @@ DM EXAMPLES (bad):
 ## Users to DM:
 $DM_DATA
 
-## How to send each DM:
+## How to send DMs per platform:
 
-For each DM candidate:
-1. Draft the DM text based on comment_context (their comment + our reply + thread topic)
-2. Navigate to https://www.reddit.com/message/compose/?to=THEIR_AUTHOR using the reddit-agent browser (mcp__reddit-agent__* tools)
-3. Reddit now uses Chat, so the compose page routes to Chat. Fill in:
-   - Subject/title: keep it short and casual (2-4 words related to the topic)
-   - Body: your 1-2 sentence message
-4. Submit and verify the message was sent (check if form clears or chat appears)
-5. Update the DB:
-   psql "\$DATABASE_URL" -c "UPDATE dms SET status='sent', our_dm_content='DM_TEXT', sent_at=NOW() WHERE id=DM_ID;"
+### Reddit DMs (use mcp__reddit-agent__* tools)
+1. Navigate to https://www.reddit.com/message/compose/?to=THEIR_AUTHOR
+2. Reddit uses Chat now. Fill in subject (2-4 casual words) and body.
+3. Submit and verify (form clears or chat appears).
 
-If sending fails (rate limit, blocked, error):
-   psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='REASON' WHERE id=DM_ID;"
+### LinkedIn DMs (use mcp__linkedin-agent__* tools)
+1. Navigate to https://www.linkedin.com/messaging/
+2. Start new message to THEIR_AUTHOR
+3. Type and send the message.
 
-If the user has DMs/Chat disabled:
-   psql "\$DATABASE_URL" -c "UPDATE dms SET status='skipped', skip_reason='chat_disabled' WHERE id=DM_ID;"
+### Twitter/X DMs (use mcp__twitter-agent__* tools)
+1. Navigate to https://x.com/messages
+2. Start new message to THEIR_AUTHOR
+3. Type and send the message.
 
-CRITICAL: ALL Reddit browser calls MUST use mcp__reddit-agent__* tools.
+## After each DM:
+
+Success:
+  psql "\$DATABASE_URL" -c "UPDATE dms SET status='sent', our_dm_content='DM_TEXT', sent_at=NOW() WHERE id=DM_ID;"
+
+Failed (rate limit, blocked, error):
+  psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='REASON' WHERE id=DM_ID;"
+
+DMs/Chat disabled:
+  psql "\$DATABASE_URL" -c "UPDATE dms SET status='skipped', skip_reason='chat_disabled' WHERE id=DM_ID;"
+
+CRITICAL: Each platform MUST use its dedicated browser agent. NEVER use generic mcp__playwright-extension__* tools.
+- Reddit: mcp__reddit-agent__*
+- Twitter: mcp__twitter-agent__*
+- LinkedIn: mcp__linkedin-agent__*
 PROMPT_EOF
 
-    gtimeout 900 claude -p "$(cat "$DM_PROMPT")" --max-turns 100 2>&1 | tee -a "$LOG_FILE"
+    gtimeout 3600 claude -p "$(cat "$DM_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE"
     rm -f "$DM_PROMPT"
 else
     log "Phase E: No pending DMs"
