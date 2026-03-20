@@ -339,6 +339,89 @@ if kill -0 "$SCAN_PID" 2>/dev/null; then
 fi
 
 # ═══════════════════════════════════════════════════════
+# PHASE E: Reddit DM engagement (continue conversations via Chat)
+# Finds users who engaged on our posts and DMs them to continue the discussion
+# ═══════════════════════════════════════════════════════
+log "Phase E: Scanning for DM candidates..."
+(PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_dm_candidates.py" --max 3 2>&1 || true) | tee -a "$LOG_FILE"
+
+DM_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='pending' AND platform='reddit';")
+
+if [ "$DM_PENDING" -gt 0 ]; then
+    log "Phase E: $DM_PENDING Reddit DMs to send"
+
+    DM_DATA=$(psql "$DATABASE_URL" -t -A -c "
+        SELECT json_agg(q) FROM (
+            SELECT d.id, d.their_author, d.their_content, d.comment_context,
+                   r.their_comment_url, r.our_reply_content,
+                   p.thread_title, p.our_content as our_post_content
+            FROM dms d
+            JOIN replies r ON d.reply_id = r.id
+            JOIN posts p ON d.post_id = p.id
+            WHERE d.status='pending' AND d.platform='reddit'
+            ORDER BY d.discovered_at ASC
+            LIMIT 3
+        ) q;")
+
+    DM_PROMPT=$(mktemp)
+    cat > "$DM_PROMPT" <<PROMPT_EOF
+You are the Social Autoposter DM engagement bot.
+
+Read $SKILL_FILE for content rules (tone, anti-AI detection, no em dashes).
+
+## Task: Send Reddit DMs to continue comment conversations
+
+These users engaged with our posts/comments. We already replied publicly. Now send a short, casual DM via Reddit Chat to continue the conversation.
+
+CRITICAL RULES:
+1. DMs must feel like a natural continuation of the comment discussion - NOT a cold outreach or sales pitch
+2. Reference the specific conversation topic, not generic "hey I saw your comment"
+3. Keep it short: 1-2 sentences max, like a text message
+4. No links in the first DM - earn the conversation first
+5. No em dashes. Write casually, like texting a coworker.
+6. Max 3 DMs per run (rate limit to avoid Reddit flagging)
+
+DM EXAMPLES (good):
+- "yo your point about token costs scaling with agent count hit home, we're dealing with the exact same thing. what's your setup look like?"
+- "that workaround you mentioned for the accessibility API crash is clever, did it hold up in production?"
+- "curious how you ended up going with that approach for the MCP server, we tried something similar"
+
+DM EXAMPLES (bad):
+- "Hey! I noticed your comment on Reddit. I'm building something you might find interesting..." (cold pitch)
+- "Great point! I'd love to connect and share what we're working on." (generic)
+- "Hi there - I saw your insightful comment about AI agents..." (too formal)
+
+## Users to DM:
+$DM_DATA
+
+## How to send each DM:
+
+For each DM candidate:
+1. Draft the DM text based on comment_context (their comment + our reply + thread topic)
+2. Navigate to https://www.reddit.com/message/compose/?to=THEIR_AUTHOR using the reddit-agent browser (mcp__reddit-agent__* tools)
+3. Reddit now uses Chat, so the compose page routes to Chat. Fill in:
+   - Subject/title: keep it short and casual (2-4 words related to the topic)
+   - Body: your 1-2 sentence message
+4. Submit and verify the message was sent (check if form clears or chat appears)
+5. Update the DB:
+   psql "\$DATABASE_URL" -c "UPDATE dms SET status='sent', our_dm_content='DM_TEXT', sent_at=NOW() WHERE id=DM_ID;"
+
+If sending fails (rate limit, blocked, error):
+   psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='REASON' WHERE id=DM_ID;"
+
+If the user has DMs/Chat disabled:
+   psql "\$DATABASE_URL" -c "UPDATE dms SET status='skipped', skip_reason='chat_disabled' WHERE id=DM_ID;"
+
+CRITICAL: ALL Reddit browser calls MUST use mcp__reddit-agent__* tools.
+PROMPT_EOF
+
+    gtimeout 900 claude -p "$(cat "$DM_PROMPT")" --max-turns 100 2>&1 | tee -a "$LOG_FILE"
+    rm -f "$DM_PROMPT"
+else
+    log "Phase E: No pending DMs"
+fi
+
+# ═══════════════════════════════════════════════════════
 # PHASE C: Cleanup
 # ═══════════════════════════════════════════════════════
 log "Phase C: Cleanup"
@@ -348,7 +431,13 @@ TOTAL_REPLIED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHER
 TOTAL_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='skipped';")
 TOTAL_ERRORS=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='error';")
 
+DM_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='pending';" 2>/dev/null || echo "0")
+DM_SENT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='sent';" 2>/dev/null || echo "0")
+DM_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='skipped';" 2>/dev/null || echo "0")
+DM_ERRORS=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='error';" 2>/dev/null || echo "0")
+
 log "Replies summary: pending=$TOTAL_PENDING replied=$TOTAL_REPLIED skipped=$TOTAL_SKIPPED errors=$TOTAL_ERRORS"
+log "DMs summary: pending=$DM_PENDING sent=$DM_SENT skipped=$DM_SKIPPED errors=$DM_ERRORS"
 
 # Delete old logs
 find "$LOG_DIR" -name "engage-*.log" -mtime +7 -delete 2>/dev/null || true
