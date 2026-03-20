@@ -284,12 +284,14 @@ def main():
             sys.exit(1)
         if not args.no_upvote:
             self_upvote("post", post_id, api_key)
-        print(json.dumps({"post_id": post_id, "verified": True}))
+        url = f"https://www.moltbook.com/post/{post_id}"
+        print(json.dumps({"post_id": post_id, "verified": True, "url": url}))
     elif args.action == "comment":
         comment_id, ok = create_comment(args.post_id, args.content, api_key)
         if ok and not args.no_upvote:
             self_upvote("comment", str(comment_id), api_key)
-        print(json.dumps({"comment_id": str(comment_id), "verified": ok}))
+        url = f"https://www.moltbook.com/post/{args.post_id}#{comment_id}"
+        print(json.dumps({"comment_id": str(comment_id), "verified": ok, "url": url}))
     else:
         parser.print_help()
         sys.exit(1)
