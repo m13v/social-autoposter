@@ -54,9 +54,9 @@ Run the **Workflow: GitHub Issues** section. Follow every step:
    - Tool execution/function calling -> m13v/fazm/Desktop/Sources/Providers/ChatToolExecutor.swift
    - Floating UI/overlay -> m13v/fazm/Desktop/Sources/FloatingControlBar/FloatingControlBarView.swift
    - Browser lock/multi-agent Playwright -> m13v/browser-lock/playwright-lock.sh
-   - User memory/knowledge extraction -> m13v/user-memories/user_memories/db.py
-   - Memory embeddings/semantic search -> m13v/user-memories/user_memories/embeddings.py
-   - Browser history ingestion -> m13v/user-memories/user_memories/ingestors/history.py
+   - User memory/knowledge extraction -> m13v/ai-browser-profile/ai_browser_profile/db.py
+   - Memory embeddings/semantic search -> m13v/ai-browser-profile/ai_browser_profile/embeddings.py
+   - Browser history ingestion -> m13v/ai-browser-profile/ai_browser_profile/ingestors/history.py
    - Social posting pipeline -> m13v/social-autoposter/skill/SKILL.md
    - Launchd scheduling -> m13v/social-autoposter/launchd/ (directory)
    - Reply scanning -> m13v/social-autoposter/scripts/scan_replies.py
@@ -65,7 +65,7 @@ Run the **Workflow: GitHub Issues** section. Follow every step:
    - Tmux agent orchestration -> m13v/tmux-background-agents/SKILL.md
    - Skill publishing -> m13v/publish-skill
    - Skill registry -> m13v/skill-registry
-   - Vector embeddings/semantic search -> m13v/user-memories/user_memories/embeddings.py
+   - Vector embeddings/semantic search -> m13v/ai-browser-profile/ai_browser_profile/embeddings.py
    - Local knowledge extraction/browser data -> m13v/ai-browser-profile
    - Offline voice/speech recognition -> m13v/fazm/Desktop/Sources/TranscriptionService.swift
 10. Log self-reply to database too
