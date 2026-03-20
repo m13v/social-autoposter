@@ -305,6 +305,15 @@ def update_moltbook(db, api_key, quiet=False):
 
         uuids = re.findall(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", effective_url)
         if not uuids:
+            # Try short UUID format: /post/{short_id}
+            m = re.search(r"/post/([0-9a-f]{7,})", effective_url)
+            if m:
+                # Short UUID - API won't accept it, skip gracefully
+                db.execute(
+                    "UPDATE posts SET status_checked_at=NOW() WHERE id=%s",
+                    [post_id],
+                )
+                continue
             errors += 1
             continue
 
