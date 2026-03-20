@@ -48,6 +48,11 @@ def is_too_old(created_utc):
         return False
 
 
+class HttpNotFoundError(Exception):
+    """Raised when a fetch returns HTTP 404."""
+    pass
+
+
 def fetch_json(url, headers=None, user_agent="social-autoposter/1.0", retries=3):
     hdrs = {"User-Agent": user_agent}
     if headers:
@@ -58,6 +63,9 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0", retries=3)
             with urllib.request.urlopen(req, timeout=15) as resp:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
+            if e.code == 404:
+                print(f"  404 not found: {url}")
+                raise HttpNotFoundError(url)
             if e.code == 429 and attempt < retries - 1:
                 wait = 30 * (attempt + 1)
                 print(f"  429 rate-limited, waiting {wait}s... ({url})")
@@ -65,6 +73,8 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0", retries=3)
                 continue
             print(f"  ERROR fetching {url}: {e}")
             return None
+        except HttpNotFoundError:
+            raise
         except Exception as e:
             print(f"  ERROR fetching {url}: {e}")
             return None
