@@ -4,7 +4,7 @@
 # Phase B: Claude drafts and posts replies via Playwright/API (batched, 50 at a time)
 # Phase C: Cleanup
 # Phase D: Edit high-performing posts (>2 upvotes, 6h+ old) with a project link
-# Called by launchd every 2 hours.
+# Called by launchd every 2 hours (7200s interval).
 
 set -euo pipefail
 
@@ -15,7 +15,7 @@ set -euo pipefail
 REPO_DIR="$HOME/social-autoposter"
 SKILL_FILE="$REPO_DIR/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"
-BATCH_SIZE=50
+BATCH_SIZE=200
 
 if [ -z "${DATABASE_URL:-}" ]; then
     echo "ERROR: DATABASE_URL not set in ~/social-autoposter/.env"
@@ -320,7 +320,7 @@ For **linkedin** — use the linkedin-agent browser (mcp__linkedin-agent__* tool
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
 
-    gtimeout 1800 claude -p "$(cat "$PHASE_B_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE"
+    gtimeout 5400 claude -p "$(cat "$PHASE_B_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE"
     rm -f "$PHASE_B_PROMPT"
 
     # Check if we actually made progress (avoid infinite loop)
