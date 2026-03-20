@@ -245,6 +245,53 @@ Visit each post URL via browser. Check status (active/deleted/removed/inactive).
 
 ---
 
+## Workflow: DM Engage (runs as Phase E of `/social-autoposter engage`)
+
+Sends DMs across Reddit, LinkedIn, and Twitter/X to users who engaged on our posts, continuing the comment conversation.
+
+### How it works
+
+1. **Candidate scan** (no browser):
+```bash
+python3 ~/social-autoposter/scripts/scan_dm_candidates.py [--platform reddit|linkedin|x|all] [--dry-run]
+```
+Finds users from `replies` table where:
+- We already replied publicly (status='replied')
+- Their comment is substantive (>10 words)
+- We haven't DM'd them for this reply
+- We haven't DM'd them at all in the last 30 days
+- Post is from the last 7 days
+- Scans all platforms by default, no cap on candidates
+
+2. **Draft DM** based on comment context (thread topic + their comment + our reply). The DM must:
+- Feel like a natural continuation of the public conversation
+- Reference the specific topic, not generic outreach
+- Be 1-2 sentences, casual, like a text message
+- No links in first DM - earn the conversation first
+- No em dashes
+
+3. **Send via platform-specific browser agent**:
+- Reddit: `mcp__reddit-agent__*` - navigate to compose, fill Chat
+- LinkedIn: `mcp__linkedin-agent__*` - navigate to messaging
+- Twitter/X: `mcp__twitter-agent__*` - navigate to DMs
+
+4. **Log to `dms` table** - every candidate is tracked with status (pending/sent/skipped/error), skip reason, DM content, and timestamps.
+
+### Rate limits
+- Max 1 DM per user per 30 days (per platform)
+- Only DM users we've already engaged with publicly
+- Candidates that are skipped are tracked with reason (excluded_author, too_short, already_dmd_recently, chat_disabled)
+
+### DM tone examples
+
+GOOD: "yo your point about token costs scaling with agent count hit home, we're dealing with the exact same thing. what's your setup look like?"
+GOOD: "that workaround you mentioned for the accessibility API crash is clever, did it hold up in production?"
+
+BAD: "Hey! I noticed your comment on Reddit. I'm building something you might find interesting..."
+BAD: "Great point! I'd love to connect and share what we're working on."
+
+---
+
 ## Content Rules
 
 ### Tone & Voice
@@ -300,3 +347,5 @@ GOOD body: Paragraphs, incomplete thoughts, personal details, casual tone, ends 
 `posts`: id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary
 
 `replies`: id, post_id, platform, their_author, their_content, our_reply_content, status (pending|replied|skipped|error), depth
+
+`dms`: id, platform, reply_id, post_id, their_author, their_content, our_dm_content, comment_context, status (pending|sent|skipped|error), skip_reason, sent_at
