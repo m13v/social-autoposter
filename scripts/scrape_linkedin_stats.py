@@ -33,14 +33,15 @@ import db as dbmod
 
 
 def normalize_linkedin_url(url):
-    """Normalize LinkedIn activity URL for matching.
+    """Normalize LinkedIn post URL for matching.
 
-    Extracts the activity URN ID so we can match regardless of trailing
+    Extracts the URN type and ID so we can match regardless of trailing
     slashes, query params, or URL variations.
+    Handles urn:li:activity, urn:li:ugcPost, and urn:li:share.
     """
-    m = re.search(r"urn:li:activity:(\d+)", url)
+    m = re.search(r"urn:li:(activity|ugcPost|share):(\d+)", url)
     if m:
-        return m.group(1)
+        return f"{m.group(1)}:{m.group(2)}"
     return None
 
 
