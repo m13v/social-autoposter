@@ -111,21 +111,15 @@ Follow Content Rules below. 2-3 sentences, first person, specific details from `
 - Navigate to post → comment box → type → Post → close tab
 - Post as the name in `config.json → accounts.linkedin.name`
 
-**Moltbook** (API - prefer the helper script):
+**Moltbook** (API — no browser needed):
 ```bash
-# Original post:
-python3 ~/social-autoposter/scripts/moltbook_post.py post --title "..." --content "..." --submolt general
-# Comment on a thread:
-python3 ~/social-autoposter/scripts/moltbook_post.py comment --post-id POST_UUID --content "..."
+source ~/social-autoposter/.env
+curl -s -X POST -H "Authorization: Bearer $MOLTBOOK_API_KEY" -H "Content-Type: application/json" \
+  -d '{"title": "...", "content": "...", "type": "text", "submolt_name": "general"}' \
+  "https://www.moltbook.com/api/v1/posts"
 ```
-The script handles verification, self-upvote, and outputs JSON with a `url` field.
 On Moltbook: write as agent ("my human" not "I"). Max 1 post per 30 min.
-
-**CRITICAL - Moltbook URL format for `our_url`:**
-- Original post: `https://www.moltbook.com/post/{post_uuid}`
-- Comment: `https://www.moltbook.com/post/{thread_post_uuid}#{comment_uuid}`
-- The `url` field in the script's JSON output is the correct value for `our_url`.
-- NEVER store a bare fragment like `#abc123` - always include the full URL.
+Verify: fetch post by UUID, check `verification_status` is `"verified"`.
 
 ### 7. Log + sync
 
@@ -207,28 +201,9 @@ After posting, you MUST:
 
 ## Workflow: Stats (`/social-autoposter stats`)
 
-Full pipeline runs via `~/social-autoposter/skill/stats.sh`:
-
-| Step | Platform | Method | What it updates |
-|------|----------|--------|-----------------|
-| 1 | Reddit + Moltbook | Python API (`update_stats.py`) | upvotes, comments, deleted/removed status |
-| 2 | Reddit | Browser scrape (reddit-agent) | view counts (not available via API) |
-| 3 | X/Twitter | Browser scrape (twitter-agent) | views, likes, replies |
-| 4 | LinkedIn | Browser scrape (linkedin-agent) | reactions, comments, views/impressions |
-
 ```bash
-# Full pipeline (all 4 steps):
-~/social-autoposter/skill/stats.sh
-
-# API-only (Step 1 only — Reddit + Moltbook):
 python3 ~/social-autoposter/scripts/update_stats.py
 ```
-
-**LinkedIn stats** use browser scraping because LinkedIn has no public API for post analytics. The pipeline:
-1. Queries DB for LinkedIn posts with `engagement_updated_at` older than 7 days (or NULL)
-2. Visits each post URL via linkedin-agent browser
-3. Extracts reactions, comments, views/impressions from the page DOM
-4. Saves to `/tmp/linkedin_stats.json`, then runs `scripts/scrape_linkedin_stats.py` to update DB
 
 After running, view updated stats at `https://s4l.ai/stats/[handle]`. The DB syncs to Neon Postgres via `syncfield.sh` (called automatically by `stats.sh`). Changes appear on the website within ~5 minutes.
 
@@ -265,15 +240,6 @@ Navigate to `https://x.com/notifications/mentions`. Find replies to the handle i
 ---
 
 ## Workflow: Audit (`/social-autoposter audit`)
-
-Full pipeline runs via `~/social-autoposter/skill/audit.sh`:
-
-| Step | Platform | Method |
-|------|----------|--------|
-| 1 | Reddit + Moltbook | Python API (`update_stats.py`) |
-| 2 | X/Twitter | Browser audit (twitter-agent) |
-| 3 | LinkedIn | Browser audit (linkedin-agent) |
-| 4-5 | All | Mark deleted/removed, report summary |
 
 Visit each post URL via browser. Check status (active/deleted/removed/inactive). Update engagement metrics. Report summary.
 
