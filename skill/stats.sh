@@ -148,45 +148,19 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════
-# STEP 3: X/Twitter stats (browser required)
+# STEP 3: X/Twitter stats (API via fxtwitter — no browser needed)
 # ═══════════════════════════════════════════════════════
-log "Step 3: X/Twitter stats (Claude + Playwright)"
-
-TWITTER_POSTS=$(psql "$DATABASE_URL" -t -A -c "
-    SELECT COUNT(*) FROM posts
-    WHERE platform='twitter' AND status='active' AND our_url IS NOT NULL
-      AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days');" 2>/dev/null || echo "0")
-
-if [ "$TWITTER_POSTS" -gt 0 ]; then
-    gtimeout 1800 claude -p "You are the Social Autoposter stats bot.
-
-Read $SKILL_FILE for the full workflow.
-
-Execute **Workflow: Stats → Step 3: X/Twitter stats** ONLY.
-
-There are $TWITTER_POSTS tweets needing stats updates.
-
-Follow these steps exactly:
-1. Query the DB for tweets needing stats (the SQL is in SKILL.md Step 3)
-2. Use mcp__twitter-agent__browser_run_code with the exact JavaScript from SKILL.md Step 3 to scrape each tweet page
-3. Process in batches of 20 with 8-second delays between pages
-4. Update the DB with views, likes, replies for each tweet
-5. Report how many tweets were updated
-
-CRITICAL: Use the twitter-agent browser (mcp__twitter-agent__* tools) for ALL Twitter operations. NEVER use generic mcp__playwright-extension__* tools.
-CRITICAL: Use 8-second delays between page loads to avoid X rate limiting.
-CRITICAL: Target the specific tweet by status ID to avoid reading parent tweet stats.
-CRITICAL: Close browser tabs after you're done (mcp__twitter-agent__browser_tabs action 'close', NOT browser_close)." --max-turns 50 >> "$LOGFILE" 2>&1
-    STEP3_EXIT=$?
-    if [ "$STEP3_EXIT" -eq 124 ]; then
-        log "Step 3: TIMEOUT (30 min limit reached)"
-    elif [ "$STEP3_EXIT" -ne 0 ]; then
-        log "Step 3: FAILED (exit $STEP3_EXIT)"
-    else
-        log "Step 3: Done"
-    fi
+log "Step 3: X/Twitter stats (API via fxtwitter)"
+if [ "$QUIET" = "--quiet" ]; then
+    python3 "$REPO_DIR/scripts/update_stats.py" --twitter-only --quiet >> "$LOGFILE" 2>&1
 else
-    log "Step 3: SKIPPED — no Twitter posts need stats update ($TWITTER_POSTS found)"
+    python3 "$REPO_DIR/scripts/update_stats.py" --twitter-only >> "$LOGFILE" 2>&1
+fi
+STEP3_EXIT=$?
+if [ "$STEP3_EXIT" -ne 0 ]; then
+    log "Step 3: FAILED (exit $STEP3_EXIT)"
+else
+    log "Step 3: Done"
 fi
 
 # ═══════════════════════════════════════════════════════
