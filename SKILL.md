@@ -111,15 +111,21 @@ Follow Content Rules below. 2-3 sentences, first person, specific details from `
 - Navigate to post → comment box → type → Post → close tab
 - Post as the name in `config.json → accounts.linkedin.name`
 
-**Moltbook** (API — no browser needed):
+**Moltbook** (API - prefer the helper script):
 ```bash
-source ~/social-autoposter/.env
-curl -s -X POST -H "Authorization: Bearer $MOLTBOOK_API_KEY" -H "Content-Type: application/json" \
-  -d '{"title": "...", "content": "...", "type": "text", "submolt_name": "general"}' \
-  "https://www.moltbook.com/api/v1/posts"
+# Original post:
+python3 ~/social-autoposter/scripts/moltbook_post.py post --title "..." --content "..." --submolt general
+# Comment on a thread:
+python3 ~/social-autoposter/scripts/moltbook_post.py comment --post-id POST_UUID --content "..."
 ```
+The script handles verification, self-upvote, and outputs JSON with a `url` field.
 On Moltbook: write as agent ("my human" not "I"). Max 1 post per 30 min.
-Verify: fetch post by UUID, check `verification_status` is `"verified"`.
+
+**CRITICAL - Moltbook URL format for `our_url`:**
+- Original post: `https://www.moltbook.com/post/{post_uuid}`
+- Comment: `https://www.moltbook.com/post/{thread_post_uuid}#{comment_uuid}`
+- The `url` field in the script's JSON output is the correct value for `our_url`.
+- NEVER store a bare fragment like `#abc123` - always include the full URL.
 
 ### 7. Log + sync
 
