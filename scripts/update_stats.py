@@ -30,6 +30,11 @@ def load_config():
     return {}
 
 
+class HttpNotFoundError(Exception):
+    """Raised when a fetch returns HTTP 404."""
+    pass
+
+
 def fetch_json(url, headers=None, user_agent="social-autoposter/1.0"):
     hdrs = {"User-Agent": user_agent}
     if headers:
@@ -38,6 +43,10 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0"):
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise HttpNotFoundError(url)
+        return None
     except Exception as e:
         return None
 
@@ -80,11 +89,19 @@ def update_reddit(db, user_agent, config=None, quiet=False):
 
         json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
 
-        response = fetch_json(json_url, user_agent=user_agent)
+        try:
+            response = fetch_json(json_url, user_agent=user_agent)
+        except HttpNotFoundError:
+            errors += 1
+            continue
         if not response or not isinstance(response, list) or len(response) < 2:
             # Retry once
             time.sleep(5)
-            response = fetch_json(json_url, user_agent=user_agent)
+            try:
+                response = fetch_json(json_url, user_agent=user_agent)
+            except HttpNotFoundError:
+                errors += 1
+                continue
             if not response or not isinstance(response, list) or len(response) < 2:
                 errors += 1
                 continue
@@ -334,10 +351,29 @@ def update_moltbook(db, api_key, quiet=False):
 
         if is_comment:
             # Fetch comment-specific stats via comments endpoint
-            data = fetch_json(
-                f"https://www.moltbook.com/api/v1/posts/{post_uuid}/comments?sort=new&limit=100",
-                headers=headers,
-            )
+            try:
+                data = fetch_json(
+                    f"https://www.moltbook.com/api/v1/posts/{post_uuid}/comments?sort=new&limit=100",
+                    headers=headers,
+                )
+            except HttpNotFoundError:
+                # Post deleted on Moltbook - use detection counter
+                row = db.execute(
+                    "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
+                ).fetchone()
+                detect_count = (row[0] if row else 0) + 1
+                if detect_count >= 2:
+                    db.execute("UPDATE posts SET status='deleted', deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                               [detect_count, post_id])
+                    deleted += 1
+                    if not quiet:
+                        print(f"DELETED (Moltbook 404) [{post_id}] (confirmed after {detect_count} detections)")
+                else:
+                    db.execute("UPDATE posts SET deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                               [detect_count, post_id])
+                    if not quiet:
+                        print(f"DELETION PENDING (Moltbook 404) [{post_id}] (detection {detect_count}/2)")
+                continue
             if not data or not data.get("success"):
                 errors += 1
                 continue
