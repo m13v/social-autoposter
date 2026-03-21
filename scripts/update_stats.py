@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -437,10 +438,29 @@ def update_moltbook(db, api_key, quiet=False):
                             "replies": comment_replies, "verification": verification})
         else:
             # Original post - fetch post-level stats
-            data = fetch_json(
-                f"https://www.moltbook.com/api/v1/posts/{post_uuid}",
-                headers=headers,
-            )
+            try:
+                data = fetch_json(
+                    f"https://www.moltbook.com/api/v1/posts/{post_uuid}",
+                    headers=headers,
+                )
+            except HttpNotFoundError:
+                # Post deleted on Moltbook - use detection counter
+                row = db.execute(
+                    "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
+                ).fetchone()
+                detect_count = (row[0] if row else 0) + 1
+                if detect_count >= 2:
+                    db.execute("UPDATE posts SET status='deleted', deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                               [detect_count, post_id])
+                    deleted += 1
+                    if not quiet:
+                        print(f"DELETED (Moltbook 404) [{post_id}] (confirmed after {detect_count} detections)")
+                else:
+                    db.execute("UPDATE posts SET deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                               [detect_count, post_id])
+                    if not quiet:
+                        print(f"DELETION PENDING (Moltbook 404) [{post_id}] (detection {detect_count}/2)")
+                continue
             if not data or not data.get("success"):
                 errors += 1
                 continue
