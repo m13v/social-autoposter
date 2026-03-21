@@ -234,7 +234,11 @@ class ReplyScanner:
                 # Do NOT recurse into reply trees — those are conversations between other users.
                 # The BFS scan below handles replies to our own replies at any depth.
                 json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
-                data = fetch_json(json_url, user_agent=self.user_agent)
+                try:
+                    data = fetch_json(json_url, user_agent=self.user_agent)
+                except HttpNotFoundError:
+                    self.errors += 1
+                    continue
                 if not data or not isinstance(data, list) or len(data) < 2:
                     self.errors += 1
                     continue
@@ -246,7 +250,11 @@ class ReplyScanner:
             else:
                 # Comment on someone else's thread: fetch our comment URL and scan replies to it
                 json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
-                data = fetch_json(json_url, user_agent=self.user_agent)
+                try:
+                    data = fetch_json(json_url, user_agent=self.user_agent)
+                except HttpNotFoundError:
+                    self.errors += 1
+                    continue
                 if not data or not isinstance(data, list) or len(data) < 2:
                     self.errors += 1
                     continue
@@ -291,7 +299,10 @@ class ReplyScanner:
             if not our_reply_url.startswith("http"):
                 continue
             json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_reply_url).rstrip("/") + ".json"
-            data = fetch_json(json_url, user_agent=self.user_agent)
+            try:
+                data = fetch_json(json_url, user_agent=self.user_agent)
+            except HttpNotFoundError:
+                continue
             if not data or not isinstance(data, list) or len(data) < 2:
                 continue
 
@@ -396,6 +407,49 @@ class ReplyScanner:
 
             time.sleep(1)  # Light rate limiting for gh CLI
 
+    def _extract_moltbook_post_uuid(self, our_url, thread_url):
+        """Extract the Moltbook post UUID from our_url, falling back to thread_url for short IDs."""
+        effective_url = our_url
+        if not our_url.startswith("http"):
+            # Bare fragment (e.g. "#f504d6fb") - reconstruct from thread_url
+            if thread_url and thread_url.startswith("http"):
+                effective_url = thread_url + our_url
+            else:
+                return None
+
+        uuid_match = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", effective_url)
+        if uuid_match:
+            return uuid_match.group()
+
+        # Try thread_url for full UUID (our_url may have short ID)
+        if thread_url:
+            uuid_match = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", thread_url)
+            if uuid_match:
+                return uuid_match.group()
+
+        return None
+
+    def _mark_moltbook_deleted(self, post_id):
+        """Use detection counter to mark a Moltbook post as deleted after 2 consecutive 404s."""
+        row = self.db.execute(
+            "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
+        ).fetchone()
+        detect_count = (row[0] if row else 0) + 1
+        if detect_count >= 2:
+            self.db.execute(
+                "UPDATE posts SET status='deleted', deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                [detect_count, post_id],
+            )
+            self.db.commit()
+            print(f"  DELETED [{post_id}] (Moltbook 404, confirmed after {detect_count} detections)")
+        else:
+            self.db.execute(
+                "UPDATE posts SET deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                [detect_count, post_id],
+            )
+            self.db.commit()
+            print(f"  DELETION PENDING [{post_id}] (Moltbook 404, detection {detect_count}/2)")
+
     def scan_moltbook(self, api_key):
         if not api_key:
             print("MOLTBOOK_API_KEY not set, skipping Moltbook scan")
@@ -403,40 +457,56 @@ class ReplyScanner:
 
         print("\nScanning Moltbook posts for replies...")
         posts = self.db.execute(
-            "SELECT id, our_url FROM posts "
+            "SELECT id, our_url, thread_url FROM posts "
             "WHERE platform='moltbook' AND status='active' AND our_url IS NOT NULL",
         ).fetchall()
 
+        skipped_no_uuid = 0
         for post in posts:
             post_id = post["id"]
-            uuid_match = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", post["our_url"])
-            if not uuid_match:
+            post_uuid = self._extract_moltbook_post_uuid(post["our_url"], post.get("thread_url", ""))
+            if not post_uuid:
+                skipped_no_uuid += 1
                 continue
 
-            data = fetch_json(
-                f"https://www.moltbook.com/api/v1/posts/{uuid_match.group()}",
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
+            try:
+                data = fetch_json(
+                    f"https://www.moltbook.com/api/v1/posts/{post_uuid}",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            except HttpNotFoundError:
+                self._mark_moltbook_deleted(post_id)
+                continue
+
             if not data or not data.get("success"):
                 self.errors += 1
                 continue
+
+            # Reset deletion counter on successful fetch
+            self.db.execute(
+                "UPDATE posts SET deletion_detect_count=0 WHERE id=%s AND COALESCE(deletion_detect_count, 0) > 0",
+                [post_id],
+            )
 
             comments = data.get("post", {}).get("comments", [])
             for comment in comments:
                 author = comment.get("author", {}).get("name", "")
                 content = comment.get("content", "")
                 comment_id = comment.get("uuid", comment.get("id", ""))
-                comment_url = f"https://www.moltbook.com/post/{uuid_match.group()}#comment-{comment_id}"
+                comment_url = f"https://www.moltbook.com/post/{post_uuid}#comment-{comment_id}"
 
                 if word_count(content) < MIN_WORDS:
                     self.insert_reply(post_id, "moltbook", comment_id, author, content, comment_url,
                                       status="skipped", skip_reason=f"too_short ({word_count(content)} words)",
-                                      moltbook_post_uuid=uuid_match.group())
+                                      moltbook_post_uuid=post_uuid)
                     continue
 
                 self.insert_reply(post_id, "moltbook", comment_id, author, content, comment_url,
-                                  moltbook_post_uuid=uuid_match.group())
+                                  moltbook_post_uuid=post_uuid)
                 print(f"  NEW: [{post_id}] {author}: {content[:80]}...")
+
+        if skipped_no_uuid:
+            print(f"  Skipped {skipped_no_uuid} Moltbook posts (no full UUID available)")
 
     def finish(self):
         self.db.commit()
