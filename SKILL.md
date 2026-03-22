@@ -121,17 +121,6 @@ curl -s -X POST -H "Authorization: Bearer $MOLTBOOK_API_KEY" -H "Content-Type: a
 On Moltbook: write as agent ("my human" not "I"). Max 1 post per 30 min.
 Verify: fetch post by UUID, check `verification_status` is `"verified"`.
 
-Prefer the helper script (handles verification + self-upvote + outputs correct URL):
-```bash
-python3 ~/social-autoposter/scripts/moltbook_post.py post --title "..." --content "..." --submolt general
-python3 ~/social-autoposter/scripts/moltbook_post.py comment --post-id POST_UUID --content "..."
-```
-
-**Moltbook `our_url` rules:**
-- Post: `https://www.moltbook.com/post/{post_uuid}`
-- Comment: `https://www.moltbook.com/post/{thread_uuid}#{comment_uuid}`
-- Use the `url` field from the script's JSON output. Never store bare fragments like `#abc123`.
-
 ### 7. Log + sync
 
 ```sql
@@ -306,55 +295,8 @@ GOOD body: Paragraphs, incomplete thoughts, personal details, casual tone, ends 
 
 ---
 
-## Workflow: DM Engage (`/social-autoposter engage` Phase E)
-
-DM conversations are tracked end-to-end across `dms` (conversation header) and `dm_messages` (every message).
-
-### Helper scripts
-
-```bash
-# Scan for new DM candidates from replies
-python3 ~/social-autoposter/scripts/scan_dm_candidates.py --include-moltbook
-
-# Conversation tracker CLI
-python3 ~/social-autoposter/scripts/dm_conversation.py summary     # pipeline overview
-python3 ~/social-autoposter/scripts/dm_conversation.py pending     # conversations needing reply
-python3 ~/social-autoposter/scripts/dm_conversation.py history --dm-id 5
-python3 ~/social-autoposter/scripts/dm_conversation.py find --author tolley
-```
-
-### Before sending any DM reply
-
-1. Query conversation history: `dm_conversation.py history --dm-id N`
-2. Check tier and decide response strategy (Tier 1/2/3)
-3. Draft reply following Content Rules
-4. Send via browser (Reddit Chat / LinkedIn / X)
-5. Log outbound: `dm_conversation.py log-outbound --dm-id N --content "..."`
-6. Update tier if conversation progressed: `dm_conversation.py set-tier --dm-id N --tier 2`
-
-### After receiving DM responses
-
-1. Check Reddit Chat / LinkedIn / X for new inbound messages
-2. Log each: `dm_conversation.py log-inbound --dm-id N --author username --content "..."`
-3. Set chat URL if missing: `dm_conversation.py set-url --dm-id N --url "https://..."`
-4. Conversation auto-marks as `needs_reply`
-
-### Conversation statuses
-
-- `active` - conversation ongoing, no pending action
-- `needs_reply` - they replied, we haven't responded yet
-- `stale` - no activity for 7+ days
-- `converted` - they used/tried our product
-- `closed` - conversation ended naturally
-
----
-
 ## Database Schema
 
 `posts`: id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary
 
 `replies`: id, post_id, platform, their_author, their_content, our_reply_content, status (pending|replied|skipped|error), depth
-
-`dms`: id, platform, reply_id, post_id, their_author, their_content, our_dm_content, comment_context, status (pending|sent|skipped), skip_reason, chat_url, conversation_status (active|needs_reply|stale|converted|closed), tier (1|2|3), last_message_at, message_count
-
-`dm_messages`: id, dm_id, direction (outbound|inbound), author, content, message_at, logged_at
