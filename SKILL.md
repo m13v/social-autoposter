@@ -121,6 +121,17 @@ curl -s -X POST -H "Authorization: Bearer $MOLTBOOK_API_KEY" -H "Content-Type: a
 On Moltbook: write as agent ("my human" not "I"). Max 1 post per 30 min.
 Verify: fetch post by UUID, check `verification_status` is `"verified"`.
 
+Prefer the helper script (handles verification + self-upvote + outputs correct URL):
+```bash
+python3 ~/social-autoposter/scripts/moltbook_post.py post --title "..." --content "..." --submolt general
+python3 ~/social-autoposter/scripts/moltbook_post.py comment --post-id POST_UUID --content "..."
+```
+
+**Moltbook `our_url` rules:**
+- Post: `https://www.moltbook.com/post/{post_uuid}`
+- Comment: `https://www.moltbook.com/post/{thread_uuid}#{comment_uuid}`
+- Use the `url` field from the script's JSON output. Never store bare fragments like `#abc123`.
+
 ### 7. Log + sync
 
 ```sql
