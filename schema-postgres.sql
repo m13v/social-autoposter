@@ -118,6 +118,27 @@ CREATE TABLE IF NOT EXISTS dms (
 CREATE INDEX IF NOT EXISTS idx_dms_status ON dms(status);
 CREATE INDEX IF NOT EXISTS idx_dms_their_author ON dms(their_author);
 
+-- Evolve dms into conversation headers
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS chat_url TEXT;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS conversation_status TEXT DEFAULT 'active';
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS tier INTEGER DEFAULT 1;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS last_message_at TIMESTAMP;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS message_count INTEGER DEFAULT 0;
+
+-- dm_messages: every message in a DM conversation (ours and theirs)
+CREATE TABLE IF NOT EXISTS dm_messages (
+    id SERIAL PRIMARY KEY,
+    dm_id INTEGER NOT NULL REFERENCES dms(id),
+    direction TEXT NOT NULL CHECK (direction IN ('outbound', 'inbound')),
+    author TEXT NOT NULL,
+    content TEXT NOT NULL,
+    message_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    logged_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_dm_messages_dm_id ON dm_messages(dm_id);
+CREATE INDEX IF NOT EXISTS idx_dm_messages_direction ON dm_messages(direction);
+
 CREATE TABLE IF NOT EXISTS thread_comments (
     id SERIAL PRIMARY KEY,
     thread_id INTEGER,
