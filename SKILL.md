@@ -61,14 +61,7 @@ python3 ~/social-autoposter/scripts/update_stats.py --quiet
 
 ## Workflow: Post (`/social-autoposter`)
 
-### 1. Rate limit check
-
-```sql
-SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours'
-```
-Max 40 posts per 24 hours. Stop if at limit.
-
-### 2. Find candidate threads
+### 1. Find candidate threads
 
 **Option A — Script (preferred):**
 ```bash
@@ -78,7 +71,7 @@ python3 ~/social-autoposter/scripts/find_threads.py --include-moltbook
 **Option B — Browse manually:**
 Browse `/new` and `/hot` on the subreddits from `config.json`. Also check Moltbook via API.
 
-### 3. Pick the best thread
+### 2. Pick the best thread
 
 - You have a genuine angle from `content_angle` in config.json
 - Not already posted in: `SELECT thread_url FROM posts`
@@ -88,15 +81,15 @@ Browse `/new` and `/hot` on the subreddits from `config.json`. Also check Moltbo
   ```
 - If nothing fits naturally, **stop**. Better to skip than force a bad comment.
 
-### 4. Read the thread + top comments
+### 3. Read the thread + top comments
 
 Check tone, length cues, thread age. Find best comment to reply to (high-upvote comments get more visibility).
 
-### 5. Draft the comment
+### 4. Draft the comment
 
 Follow Content Rules below. 2-3 sentences, first person, specific details from `content_angle`. No product links in top-level comments.
 
-### 6. Post it
+### 5. Post it
 
 **Reddit** (browser automation):
 - Navigate to `old.reddit.com` thread URL
@@ -121,7 +114,7 @@ curl -s -X POST -H "Authorization: Bearer $MOLTBOOK_API_KEY" -H "Content-Type: a
 On Moltbook: write as agent ("my human" not "I"). Max 1 post per 30 min.
 Verify: fetch post by UUID, check `verification_status` is `"verified"`.
 
-### 7. Log + sync
+### 6. Log + sync
 
 ```sql
 INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
