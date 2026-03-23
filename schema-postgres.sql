@@ -66,7 +66,6 @@ CREATE TABLE IF NOT EXISTS campaigns (
     prompt TEXT NOT NULL,
     platforms TEXT DEFAULT 'twitter,reddit,moltbook',
     status TEXT DEFAULT 'active',
-    max_posts_per_day INTEGER DEFAULT 4,
     posts_made INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
