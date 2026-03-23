@@ -344,7 +344,7 @@ def update_moltbook(db, api_key, quiet=False):
             fragment = effective_url.split("#")[-1]
             # Strip "comment-" prefix if present
             fragment = re.sub(r'^comment-', '', fragment)
-            if fragment and fragment != post_uuid:
+            if fragment and fragment != post_uuid and re.match(r'^[0-9a-f-]{5,}$', fragment):
                 comment_uuid = fragment
 
         is_comment = comment_uuid is not None
