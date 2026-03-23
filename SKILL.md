@@ -251,7 +251,7 @@ Visit each post URL via browser. Check status (active/deleted/removed/inactive).
 8. **No em dashes (—).** Use commas, periods, or regular dashes (-) instead. Em dashes are the #1 "ChatGPT tell."
 9. **No markdown formatting in Reddit.** No headers (##), no bold (**text**), no numbered lists. Write in plain paragraphs.
 10. **Never cross-post.** One post per topic per community.
-11. **Space posts out.** Max 1 original post per day, max 3 per week. Don't spam.
+11. **Space posts out.** Don't spam the same community back-to-back.
 12. **Include imperfections.** Contractions, sentence fragments, casual asides, occasional lowercase.
 13. **Vary your openings.** Don't always start with credentials. Sometimes just jump into the topic.
 14. **Reply to comments on your posts.** Zero engagement on your own post = bot signal. Reply within 24h.
