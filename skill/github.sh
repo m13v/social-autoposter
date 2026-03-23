@@ -31,6 +31,18 @@ EXCLUSIONS — do NOT interact with these:
 - Excluded authors: $EXCLUDED_AUTHORS
 Skip any issues from excluded repos/orgs. Do not reply to excluded authors. Do not post on issues owned by excluded orgs.
 
+TARGETING (data-driven, from engagement analysis):
+- Best topics: Agents (8.6%), Accessibility (8.3%), Voice/ASR (8.0%), Tool Use (7.9%). Prioritize these.
+- Avoid: Browser automation (0% engagement), reduce MCP volume (oversaturated, only 6.3%).
+- Target small-to-mid repos (<1000 stars) where maintainer is active. Solo maintainers reply; big repos bury comments.
+- Prefer issues updated in last 7 days.
+
+COMMENT STYLE (what gets replies):
+- Lead with the pain you hit, then your fix. \"the token overhead is brutal\" > \"here is how to optimize\".
+- Keep it conversational, no code blocks in the initial comment. Save code/links for the self-reply.
+- Aim for 400-600 chars. Short enough to read, long enough to show real experience.
+- Share specific implementation details (file names, metrics, tradeoffs), not generic advice.
+
 Run the **Workflow: GitHub Issues** section. Follow every step:
 1. Search for relevant issues using topics from config.json -> accounts.github.search_topics
    Rotate through different search topics each run - don't always search the same keywords.
@@ -38,7 +50,7 @@ Run the **Workflow: GitHub Issues** section. Follow every step:
 3. Check dedup: SELECT thread_url FROM posts WHERE platform='github_issues'
 4. Pick the best 2-3 issues where our experience genuinely adds value
 5. Read each issue fully (body + existing comments)
-6. Draft helpful comments (follow Content Rules - NEVER use em dashes)
+6. Draft helpful comments (follow Content Rules and COMMENT STYLE above - NEVER use em dashes)
 7. Post via: gh issue comment NUMBER -R OWNER/REPO --body \"...\"
 8. Log to database
 9. Self-reply with a link to a SPECIFIC FILE in our repos (not just the repo homepage).
