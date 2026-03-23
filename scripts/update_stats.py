@@ -391,12 +391,35 @@ def update_moltbook(db, api_key, quiet=False):
                     break
 
             if not our_comment:
-                # Comment might not be in top 100 - just mark as checked
-                db.execute(
-                    "UPDATE posts SET status_checked_at=NOW() WHERE id=%s",
-                    [post_id],
-                )
-                errors += 1
+                has_more = data.get("has_more", False)
+                total_comments = data.get("count", 0)
+                if has_more or total_comments > 100:
+                    # Comment is buried beyond first page — not an error, just unreachable
+                    db.execute(
+                        "UPDATE posts SET status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
+                        [post_id],
+                    )
+                else:
+                    # Post has few comments but ours is missing — likely deleted
+                    row = db.execute(
+                        "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
+                    ).fetchone()
+                    detect_count = (row[0] if row else 0) + 1
+                    if detect_count >= 2:
+                        db.execute(
+                            "UPDATE posts SET status='deleted', deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                            [detect_count, post_id],
+                        )
+                        deleted += 1
+                        if not quiet:
+                            print(f"DELETED (Moltbook comment missing) [{post_id}] (confirmed after {detect_count} detections)")
+                    else:
+                        db.execute(
+                            "UPDATE posts SET deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                            [detect_count, post_id],
+                        )
+                        if not quiet:
+                            print(f"DELETION PENDING (Moltbook comment missing) [{post_id}] (detection {detect_count}/2)")
                 continue
 
             if our_comment.get("is_deleted"):
