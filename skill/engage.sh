@@ -115,7 +115,7 @@ EXCLUDED_LINKEDIN=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.
 BATCH_NUM=0
 
 while true; do
-    PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending';")
+    PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND platform NOT IN ('linkedin', 'x');")
 
     if [ "$PENDING_COUNT" -eq 0 ]; then
         log "Phase B: No pending replies remaining. Done!"
@@ -137,7 +137,7 @@ while true; do
                    CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post
             FROM replies r
             JOIN posts p ON r.post_id = p.id
-            WHERE r.status='pending'
+            WHERE r.status='pending' AND r.platform NOT IN ('linkedin', 'x')
             ORDER BY
                 CASE WHEN p.thread_url = p.our_url THEN 0 ELSE 1 END,
                 r.discovered_at ASC
@@ -164,77 +164,10 @@ CRITICAL: If a browser agent tool call is blocked or times out, DO NOT fall back
 
 PROMPT_HEADER
 
-    # Batch 1 only: append Twitter and LinkedIn discovery sections
-    if [ "$BATCH_NUM" -eq 1 ]; then
-        cat >> "$PHASE_B_PROMPT" <<'TWITTER_EOF'
-## X/Twitter replies — use the twitter-agent browser (mcp__twitter-agent__* tools)
-1. Navigate to https://x.com/notifications/mentions via the twitter-agent browser
-2. Extract mentions replying to @m13v_
-3. Before logging or replying to any mention: query the DB to check if it's already tracked:
-   python3 $REPO_DIR/scripts/reply_db.py status
-   Also run: psql "$DATABASE_URL" -t -A -c "SELECT their_comment_id FROM replies WHERE platform='x';"
-   Skip any mention whose numeric tweet ID appears in that list.
-4. Skip light acknowledgments and your own replies
-5. Respond to all substantive new replies
-6. Log everything to the replies table
-
-CRITICAL — Twitter comment ID format: always store ONLY the numeric tweet ID as their_comment_id.
-Extract it from the tweet URL: x.com/username/status/NUMERIC_ID → store just NUMERIC_ID.
-NEVER prefix with username or any other text (e.g. store '2030180353625948573', NOT 'TisDad_2030180353625948573').
-TWITTER_EOF
-
-        cat >> "$PHASE_B_PROMPT" <<LINKEDIN_EOF
-## LinkedIn replies/mentions discovery
-Scan LinkedIn notifications for new comments, mentions, and replies on our posts. Insert them as 'pending' in the replies table so the generic reply loop below handles them.
-
-1. Navigate to https://www.linkedin.com/notifications/ using the linkedin-agent browser
-2. Scroll down several times to load ~50 notifications
-3. Extract actionable notifications - ONLY these types:
-   - Comments on our posts (e.g. "X commented on your post")
-   - Mentions in comments (e.g. "X mentioned you in a comment")
-   - Replies to our comments (e.g. "X replied to your comment")
-   SKIP these types (they are not engageable):
-   - Profile views, search appearances, impressions/analytics
-   - Job changes, birthdays, work anniversaries
-   - "X was live", "X posted", suggested posts
-   - New followers (handle separately)
-   - Scheduled post confirmations
-
-4. For each actionable notification, navigate to the post/comment to get full context:
-   a. Click the notification link to open the post
-   b. Find the specific comment using JavaScript:
-      document.querySelectorAll('article.comments-comment-entity').forEach(el => {
-        const dataId = el.getAttribute('data-id');
-        const author = el.querySelector('.comments-post-meta__name-text')?.innerText;
-        const content = el.querySelector('.comments-comment-item__main-content')?.innerText;
-        console.log(JSON.stringify({dataId, author, content}));
-      });
-   c. Extract the comment URN from data-id attribute: urn:li:comment:(activity:XXXXX,YYYYY)
-
-5. Before inserting: check if already tracked:
-   psql "\$DATABASE_URL" -t -A -c "SELECT their_comment_id FROM replies WHERE platform='linkedin';"
-   Skip any comment whose URN is already in the list.
-
-6. To find the post_id: match the activity URL against our LinkedIn posts:
-   psql "\$DATABASE_URL" -t -A -c "SELECT id, our_url FROM posts WHERE platform='linkedin' AND status='active';"
-   If no matching post exists, create one with:
-   psql "\$DATABASE_URL" -c "INSERT INTO posts (platform, thread_url, thread_author, thread_title, our_url, our_content, our_account, status, posted_at) VALUES ('linkedin', 'THREAD_URL', 'THREAD_AUTHOR', 'THREAD_TITLE', 'OUR_POST_URL', 'OUR_POST_CONTENT', 'm13v', 'active', NOW()) RETURNING id;"
-
-7. Insert each new reply:
-   psql "\$DATABASE_URL" -c "INSERT INTO replies (post_id, platform, their_comment_id, their_author, their_content, their_comment_url, depth, status) VALUES (POST_ID, 'linkedin', 'URN_FROM_DATA_ID', 'AUTHOR_NAME', 'COMMENT_TEXT', 'COMMENT_PERMALINK_URL', 1, 'pending');"
-
-CRITICAL - LinkedIn comment ID format: always store the FULL URN from the data-id attribute as their_comment_id.
-Format: urn:li:comment:(activity:ACTIVITY_ID,COMMENT_ID)
-Example: urn:li:comment:(activity:7438226125077549056,7438815640536170496)
-
-CRITICAL - LinkedIn comment permalink URL format:
-https://www.linkedin.com/feed/update/urn:li:activity:ACTIVITY_ID?commentUrn=urn%3Ali%3Acomment%3A%28activity%3AACTIVITY_ID%2CCOMMENT_ID%29
-
-CRITICAL - Excluded LinkedIn profiles: $EXCLUDED_LINKEDIN — skip comments from these profiles and mark as 'skipped' with reason 'excluded_author'.
-
-CRITICAL - Skip comments by "Matthew Diakonov" or "m13v" (our own account).
-LINKEDIN_EOF
-    fi
+    # NOTE: LinkedIn and Twitter discovery+engagement are handled by separate dedicated scripts:
+    # - engage-linkedin.sh (launchd: com.m13v.social-engage-linkedin, every 3h)
+    # - engage-twitter.sh  (launchd: com.m13v.social-engage-twitter, every 3h)
+    # This Phase B only handles Reddit replies.
 
     # Append the main reply processing section
     cat >> "$PHASE_B_PROMPT" <<PROMPT_BODY
@@ -270,6 +203,7 @@ MANDATORY reply flow for every item:
 If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run — safe to retry.
 
 GitHub issues engagement is handled by a separate pipeline (github-engage.sh). Skip any github_issues replies in this batch.
+LinkedIn and Twitter engagement are handled by separate pipelines (engage-linkedin.sh, engage-twitter.sh). This batch contains ONLY Reddit and Moltbook replies.
 
 For **reddit** — use the reddit-agent browser (mcp__reddit-agent__* tools) with this FAST posting method (browser_run_code):
 1. First, pre-compose ALL reply texts before opening the browser. Decide skip/reply and draft text for every item.
@@ -317,13 +251,6 @@ Do NOT extract permalinks from snapshots — use the JS return value or skip it.
 Do NOT store 'posted' or their_comment_url as our_reply_url — store null/no URL if the permalink is unavailable.
 CRITICAL: ALL Reddit browser calls MUST use mcp__reddit-agent__* tools (e.g. mcp__reddit-agent__browser_run_code, mcp__reddit-agent__browser_navigate). NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools for Reddit.
 
-For **linkedin** — use the linkedin-agent browser (mcp__linkedin-agent__* tools):
-1. Navigate to their_comment_url (the post with commentUrn query param).
-2. Find the specific comment in the page. Take a snapshot to locate it.
-3. Click "Reply" on that comment, type the reply text, and submit.
-4. After posting, construct the permalink URL for our reply and store it.
-5. If you can't find the comment or it's been deleted, mark as 'skipped' with reason 'comment_not_found'.
-
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_BODY
 
@@ -331,7 +258,7 @@ PROMPT_BODY
     rm -f "$PHASE_B_PROMPT"
 
     # Check if we actually made progress (avoid infinite loop)
-    NEW_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending';")
+    NEW_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND platform NOT IN ('linkedin', 'x');")
     if [ "$NEW_PENDING" -ge "$PENDING_COUNT" ]; then
         log "WARNING: No progress made in batch $BATCH_NUM ($PENDING_COUNT -> $NEW_PENDING). Stopping to avoid infinite loop."
         break
