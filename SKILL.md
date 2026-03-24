@@ -61,7 +61,14 @@ python3 ~/social-autoposter/scripts/update_stats.py --quiet
 
 ## Workflow: Post (`/social-autoposter`)
 
-### 1. Find candidate threads
+### 1. Rate limit check
+
+```sql
+SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours'
+```
+Max 40 posts per 24 hours. Stop if at limit.
+
+### 2. Find candidate threads
 
 **Option A — Script (preferred):**
 ```bash
@@ -111,7 +118,7 @@ curl -s -X POST -H "Authorization: Bearer $MOLTBOOK_API_KEY" -H "Content-Type: a
   -d '{"title": "...", "content": "...", "type": "text", "submolt_name": "general"}' \
   "https://www.moltbook.com/api/v1/posts"
 ```
-On Moltbook: write as agent ("my human" not "I").
+On Moltbook: write as agent ("my human" not "I"). Max 1 post per 30 min.
 Verify: fetch post by UUID, check `verification_status` is `"verified"`.
 
 ### 7. Log + sync
@@ -133,7 +140,11 @@ If `sync_script` is set in config.json, run it after logging.
 
 **Manual only — never run from cron.** Original posts are high-stakes and need human review.
 
-### 1. Cross-posting check
+### 1. Rate limit check
+
+Max 1 original post per 24 hours. Max 3 per week.
+
+### 2. Cross-posting check
 
 ```sql
 SELECT platform, thread_title, posted_at FROM posts
@@ -214,7 +225,7 @@ FROM replies r JOIN posts p ON r.post_id = p.id
 WHERE r.status='pending' ORDER BY r.discovered_at ASC LIMIT 10
 ```
 
-Draft replies: 2-4 sentences, casual, expand the topic. Apply Tiered Reply Strategy.
+Draft replies: 2-4 sentences, casual, expand the topic. Apply Tiered Reply Strategy. Max 5 replies per run.
 
 Post via browser (Reddit/X) or API (Moltbook). Update:
 ```sql
@@ -224,7 +235,7 @@ UPDATE replies SET status='replied', our_reply_content=%s, our_reply_url=%s,
 
 ### Phase C: X/Twitter replies (browser required)
 
-Navigate to `https://x.com/notifications/mentions`. Find replies to the handle in config.json. Respond to substantive ones. Log to `replies` table.
+Navigate to `https://x.com/notifications/mentions`. Find replies to the handle in config.json. Respond to substantive ones (max 5). Log to `replies` table.
 
 ---
 
@@ -251,7 +262,7 @@ Visit each post URL via browser. Check status (active/deleted/removed/inactive).
 8. **No em dashes (—).** Use commas, periods, or regular dashes (-) instead. Em dashes are the #1 "ChatGPT tell."
 9. **No markdown formatting in Reddit.** No headers (##), no bold (**text**), no numbered lists. Write in plain paragraphs.
 10. **Never cross-post.** One post per topic per community.
-11. **Space posts out.** Don't spam.
+11. **Space posts out.** Max 1 original post per day, max 3 per week. Don't spam.
 12. **Include imperfections.** Contractions, sentence fragments, casual asides, occasional lowercase.
 13. **Vary your openings.** Don't always start with credentials. Sometimes just jump into the topic.
 14. **Reply to comments on your posts.** Zero engagement on your own post = bot signal. Reply within 24h.
