@@ -15,14 +15,6 @@ LOG_FILE="$LOG_DIR/run-moltbook-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== MoltBook Post Run: $(date) ===" | tee "$LOG_FILE"
 
-# Rate limit check: max 30 MoltBook posts per 24 hours
-COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE platform='moltbook' AND posted_at >= NOW() - INTERVAL '24 hours'" 2>/dev/null || echo "0")
-if [ "$COUNT" -ge 30 ]; then
-  echo "Rate limit reached: $COUNT MoltBook posts in last 24h (max 30). Skipping." | tee -a "$LOG_FILE"
-  exit 0
-fi
-echo "Rate limit OK: $COUNT MoltBook posts in last 24h (max 30)" | tee -a "$LOG_FILE"
-
 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
@@ -31,7 +23,7 @@ Read $REPO_DIR/config.json for the moltbook account and content_angle.
 Run the **Workflow: Post** section for **MoltBook ONLY**. Post up to 5 comments per run.
 
 Steps:
-1. Rate limit check: SELECT COUNT(*) FROM posts WHERE platform='moltbook' AND posted_at >= NOW() - INTERVAL '24 hours'. Stop if > 30.
+1. Check existing posts: SELECT COUNT(*) FROM posts WHERE platform='moltbook' AND posted_at >= NOW() - INTERVAL '24 hours' (for logging only, no cap).
 2. Find threads via MoltBook API:
    source $REPO_DIR/.env
    curl -s -H \"Authorization: Bearer \$MOLTBOOK_API_KEY\" \"https://www.moltbook.com/api/v1/posts?sort=hot&limit=50\"
