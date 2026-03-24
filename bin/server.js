@@ -20,6 +20,7 @@ const JOBS = [
   { label: 'com.m13v.social-engage', name: 'Engage', script: 'engage.sh', logPrefix: 'engage-', plist: 'com.m13v.social-engage.plist' },
   { label: 'com.m13v.social-github', name: 'GitHub', script: 'github.sh', logPrefix: 'github-', plist: 'com.m13v.social-github.plist' },
   { label: 'com.m13v.social-audit', name: 'Audit', script: 'audit.sh', logPrefix: 'audit-', plist: 'com.m13v.social-audit.plist' },
+  { label: 'com.m13v.social-octolens', name: 'Octolens', script: 'octolens.sh', logPrefix: 'octolens-', plist: 'com.m13v.social-octolens.plist' },
 ];
 
 // --- Helpers ---
