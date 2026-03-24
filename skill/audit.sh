@@ -76,7 +76,8 @@ if [ "$LINKEDIN_COUNT" -gt 0 ]; then
 
 Execute a LinkedIn post audit. There are $LINKEDIN_COUNT active LinkedIn posts to check.
 
-CRITICAL: Use the linkedin-agent browser (mcp__linkedin-agent__* tools) for ALL LinkedIn operations. NEVER use generic mcp__playwright-extension__* tools.
+CRITICAL: Use the linkedin-agent browser (mcp__linkedin-agent__* tools) for ALL LinkedIn operations. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
+If a tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
 
 Follow these steps exactly:
 
