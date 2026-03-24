@@ -13,7 +13,7 @@ set -euo pipefail
 REPO_DIR="$HOME/social-autoposter"
 SKILL_FILE="$REPO_DIR/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"
-BATCH_SIZE=50
+BATCH_SIZE=500
 
 if [ -z "${DATABASE_URL:-}" ]; then
     echo "ERROR: DATABASE_URL not set in ~/social-autoposter/.env"
