@@ -53,7 +53,7 @@ PENDING_DATA=$(psql "$DATABASE_URL" -t -A -c "
         JOIN posts p ON r.post_id = p.id
         WHERE r.platform='github_issues' AND r.status='pending'
         ORDER BY r.discovered_at ASC
-        LIMIT 50
+        LIMIT 500
     ) q;")
 
 # Load exclusions
