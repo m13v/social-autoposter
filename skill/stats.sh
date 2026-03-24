@@ -107,7 +107,8 @@ async (page) => {
   return JSON.stringify({ total: resultsArray.length, scrolls: scrollCount, results: resultsArray });
 }
 
-CRITICAL: Use the reddit-agent browser (mcp__reddit-agent__* tools) for ALL steps below. NEVER use generic mcp__playwright-extension__* tools.
+CRITICAL: Use the reddit-agent browser (mcp__reddit-agent__* tools) for ALL steps below. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
+If a tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
 
 Step 1: mcp__reddit-agent__browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/comments/?sort=top
 Then mcp__reddit-agent__browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_1.json
@@ -179,7 +180,8 @@ if [ "$LINKEDIN_POSTS" -gt 0 ]; then
     cat > "$STEP4_PROMPT" <<'STEP4_EOF'
 Scrape LinkedIn engagement stats for posts. Do these steps in order, no deviations:
 
-CRITICAL: Use the linkedin-agent browser (mcp__linkedin-agent__* tools) for ALL steps below. NEVER use generic mcp__playwright-extension__* tools.
+CRITICAL: Use the linkedin-agent browser (mcp__linkedin-agent__* tools) for ALL steps below. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
+If a tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
 
 Step 1: Query the database to get LinkedIn posts needing stats updates:
 ```bash
