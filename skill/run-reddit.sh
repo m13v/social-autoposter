@@ -15,6 +15,14 @@ LOG_FILE="$LOG_DIR/run-reddit-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Reddit Post Run: $(date) ===" | tee "$LOG_FILE"
 
+# Rate limit check: max 10 Reddit posts per 24 hours
+COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE platform='reddit' AND posted_at >= NOW() - INTERVAL '24 hours'" 2>/dev/null || echo "0")
+if [ "$COUNT" -ge 10 ]; then
+  echo "Rate limit reached: $COUNT Reddit posts in last 24h (max 10). Skipping." | tee -a "$LOG_FILE"
+  exit 0
+fi
+echo "Rate limit OK: $COUNT Reddit posts in last 24h (max 10)" | tee -a "$LOG_FILE"
+
 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
