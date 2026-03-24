@@ -32,17 +32,25 @@ echo "$CANDIDATES" | claude -p "You are running the social-autoposter Octolens e
 Here are the Octolens mention candidates (JSON):
 $(echo "$CANDIDATES")
 
+IMPORTANT: This is the Octolens engagement pipeline. It has its OWN rate limit separate from the main social-autoposter:
+- Max 3 Octolens-sourced posts per run
+- Check: SELECT COUNT(*) FROM posts WHERE source_summary LIKE '%octolens%' AND posted_at >= NOW() - INTERVAL '24 hours'
+- If >= 6 octolens posts in 24h, stop. Otherwise proceed.
+- Do NOT use the main 40/day rate limit check - that includes bulk github_issues imports.
+
 Pick the BEST 1-2 candidates to engage with. Prioritize:
 1. buy_intent or product_question tags (someone looking for a solution)
-2. Negative competitor mentions (opportunity to suggest alternative)
+2. Negative competitor mentions on Reddit (opportunity to suggest alternative)
 3. High-follower authors on Twitter/X
 4. Reddit threads with active discussion
+5. Skip tweets that are just replies to other tweets (low visibility)
+6. Skip [removed] or empty content posts
 
 For each picked candidate, follow the standard social-autoposter posting flow:
-- Read the thread via browser
+- Read the full thread/post via browser to understand context
 - Draft a natural comment following content_angle from config.json
-- Post via browser automation
-- Log to the posts table with source_summary mentioning 'octolens'
+- Post via browser automation (reddit-agent for Reddit, twitter-agent for Twitter, etc.)
+- Log to the posts table with source_summary = 'octolens: [keyword]'
 
 Skip if nothing fits naturally. Config is at ~/social-autoposter/config.json" 2>&1 | tee -a "$LOG_FILE"
 
