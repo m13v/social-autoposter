@@ -32,7 +32,8 @@ ONE post per run max. If nothing fits, say '## No good thread found' and stop.
 
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
 CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close).
-CRITICAL: Use the correct browser agent for each platform — Reddit: mcp__reddit-agent__* tools, Twitter: mcp__twitter-agent__* tools, LinkedIn: mcp__linkedin-agent__* tools. NEVER use generic mcp__playwright-extension__* or mcp__isolated-browser__* for platform actions. Each agent has its own browser lock to prevent concurrent session conflicts." --max-turns 50 2>&1 | tee -a "$LOG_FILE"
+CRITICAL: Use the correct browser agent for each platform — Reddit: mcp__reddit-agent__* tools, Twitter: mcp__twitter-agent__* tools, LinkedIn: mcp__linkedin-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* for platform actions. Each agent has its own browser lock to prevent concurrent session conflicts.
+CRITICAL: If a browser agent tool call is blocked or times out, DO NOT fall back to any other browser tool. Wait 30 seconds and retry the same agent. Repeat up to 3 times. If still blocked, skip that platform and move on." --max-turns 50 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 
