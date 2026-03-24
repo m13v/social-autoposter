@@ -392,6 +392,55 @@ function handleApi(req, res) {
     });
   }
 
+  // POST /api/webhooks/octolens
+  if (p === '/api/webhooks/octolens' && req.method === 'POST') {
+    return readBody(req).then(body => {
+      const payload = JSON.parse(body);
+      const mentions = Array.isArray(payload) ? payload : (payload.mentions || payload.data || [payload]);
+      const dbUrl = getDbUrl();
+      if (!dbUrl) return json(res, { error: 'No DATABASE_URL' }, 500);
+
+      let inserted = 0;
+      for (const m of mentions) {
+        if (!m.url) continue;
+        // Map Octolens source to our platform names
+        const platform = (m.source || 'unknown').replace('twitter', 'twitter').replace('reddit_comment', 'reddit');
+        const tags = Array.isArray(m.tags) ? m.tags.join(',') : (m.tags || '');
+        const keywords = Array.isArray(m.keywords)
+          ? m.keywords.map(k => k.keyword || k).join(',')
+          : '';
+        // Insert into octolens_mentions table
+        const q = `INSERT INTO octolens_mentions (octolens_id, platform, url, title, body, author, author_url, author_followers, sentiment, tags, keywords, source_timestamp, relevance) VALUES (${parseInt(m.id) || 0}, '${(platform).replace(/'/g, "''")}', '${(m.url || '').replace(/'/g, "''")}', '${(m.title || '').replace(/'/g, "''")}', '${(m.body || '').slice(0, 2000).replace(/'/g, "''")}', '${(m.author || '').replace(/'/g, "''")}', '${(m.authorUrl || '').replace(/'/g, "''")}', ${parseInt(m.authorFollowers) || 0}, '${(m.sentiment || '').replace(/'/g, "''")}', '${tags.replace(/'/g, "''")}', '${keywords.replace(/'/g, "''")}', '${(m.timestamp || new Date().toISOString()).replace(/'/g, "''")}', '${(m.relevance || '').replace(/'/g, "''")}') ON CONFLICT (octolens_id) DO NOTHING`;
+        try {
+          psql(q);
+          inserted++;
+        } catch (e) {
+          console.error('Failed to insert mention:', m.id, e.message);
+        }
+      }
+
+      // Log webhook receipt
+      const logFile = path.join(LOG_DIR, `octolens-webhook-${new Date().toISOString().slice(0, 10)}.log`);
+      const logLine = `[${new Date().toISOString()}] Received ${mentions.length} mentions, inserted ${inserted}\n`;
+      try { fs.appendFileSync(logFile, logLine); } catch {}
+
+      return json(res, { received: mentions.length, inserted });
+    }).catch(e => {
+      console.error('Octolens webhook error:', e.message);
+      return json(res, { error: e.message }, 400);
+    });
+  }
+
+  // GET /api/webhooks/octolens/pending
+  if (p === '/api/webhooks/octolens/pending' && req.method === 'GET') {
+    const count = psql("SELECT COUNT(*) FROM octolens_mentions WHERE status = 'pending'");
+    const recent = psql("SELECT json_agg(row_to_json(r)) FROM (SELECT id, platform, url, author, sentiment, tags, keywords, source_timestamp FROM octolens_mentions WHERE status = 'pending' ORDER BY source_timestamp DESC LIMIT 20) r");
+    return json(res, {
+      count: count ? parseInt(count, 10) : 0,
+      mentions: recent ? JSON.parse(recent) : [],
+    });
+  }
+
   return json(res, { error: 'Not found' }, 404);
 }
 
