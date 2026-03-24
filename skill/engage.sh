@@ -155,11 +155,12 @@ EXCLUSIONS — do NOT engage with these accounts (skip and mark as 'skipped' wit
 - Excluded Twitter accounts: $EXCLUDED_TWITTER
 - Excluded LinkedIn profiles: $EXCLUDED_LINKEDIN
 
-CRITICAL — Browser agent rule: Each platform MUST use its dedicated browser agent. NEVER use generic mcp__playwright-extension__* or mcp__isolated-browser__* tools.
+CRITICAL — Browser agent rule: Each platform MUST use its dedicated browser agent. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
 - Reddit: mcp__reddit-agent__* tools (e.g. mcp__reddit-agent__browser_navigate)
 - Twitter: mcp__twitter-agent__* tools (e.g. mcp__twitter-agent__browser_navigate)
 - LinkedIn: mcp__linkedin-agent__* tools (e.g. mcp__linkedin-agent__browser_navigate)
 Each agent has its own browser lock. Using the wrong agent bypasses the lock and causes session conflicts.
+CRITICAL: If a browser agent tool call is blocked or times out, DO NOT fall back to any other browser tool (especially not macos-use). Wait 30 seconds and retry the same agent. Repeat up to 3 times. If still blocked, skip that item and move on.
 
 PROMPT_HEADER
 
@@ -314,7 +315,7 @@ If the JS returns null (no permalink found): call reply_db.py replied ID "text" 
 Do NOT use browser_snapshot, browser_click, or browser_type for Reddit replies. browser_run_code is 5x faster.
 Do NOT extract permalinks from snapshots — use the JS return value or skip it.
 Do NOT store 'posted' or their_comment_url as our_reply_url — store null/no URL if the permalink is unavailable.
-CRITICAL: ALL Reddit browser calls MUST use mcp__reddit-agent__* tools (e.g. mcp__reddit-agent__browser_run_code, mcp__reddit-agent__browser_navigate). NEVER use generic mcp__playwright-extension__* tools for Reddit.
+CRITICAL: ALL Reddit browser calls MUST use mcp__reddit-agent__* tools (e.g. mcp__reddit-agent__browser_run_code, mcp__reddit-agent__browser_navigate). NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools for Reddit.
 
 For **linkedin** — use the linkedin-agent browser (mcp__linkedin-agent__* tools):
 1. Navigate to their_comment_url (the post with commentUrn query param).
@@ -426,10 +427,11 @@ Failed (rate limit, blocked, error):
 DMs/Chat disabled:
   psql "\$DATABASE_URL" -c "UPDATE dms SET status='skipped', skip_reason='chat_disabled' WHERE id=DM_ID;"
 
-CRITICAL: Each platform MUST use its dedicated browser agent. NEVER use generic mcp__playwright-extension__* tools.
+CRITICAL: Each platform MUST use its dedicated browser agent. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
 - Reddit: mcp__reddit-agent__*
 - Twitter: mcp__twitter-agent__*
 - LinkedIn: mcp__linkedin-agent__*
+If a browser agent tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
 PROMPT_EOF
 
     gtimeout 3600 claude -p "$(cat "$DM_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase E claude exited with code $?"
