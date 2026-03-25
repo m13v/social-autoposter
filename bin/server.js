@@ -720,24 +720,6 @@ function renderCell(job) {
 
   return '<td data-job="' + job.label + '"><div class="matrix-cell">' +
     '<span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span>' +
-    '<div class="cell-info" data-field="lastrun">' + relTime(job.lastRun) + '</div>' +
-    '<div class="cell-actions">' + runStopBtn + toggleBtn + '</div>' +
-  '</div></td>';
-}
-
-function renderSpanCell(job, colspan) {
-  if (!job) return '<td colspan="' + colspan + '"><span class="matrix-cell-empty">-</span></td>';
-  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
-  const runStopBtn = job.running
-    ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
-    : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
-  const toggleBtn = job.loaded
-    ? '<button class="btn danger" onclick="toggleJob(\\'' + job.label + '\\')">Off</button>'
-    : '<button class="btn primary" onclick="toggleJob(\\'' + job.label + '\\')">On</button>';
-
-  return '<td colspan="' + colspan + '" data-job="' + job.label + '"><div class="matrix-cell">' +
-    '<span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span>' +
-    '<div class="cell-info" data-field="lastrun">' + relTime(job.lastRun) + '</div>' +
     '<div class="cell-actions">' + runStopBtn + toggleBtn + '</div>' +
   '</div></td>';
 }
@@ -782,8 +764,20 @@ function updateCell(td, job) {
   const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
   const badge = td.querySelector('[data-field="status"]');
   if (badge) { badge.textContent = statusLabel; badge.className = 'badge ' + job.status; }
-  const lastrun = td.querySelector('[data-field="lastrun"]');
-  if (lastrun) { lastrun.textContent = relTime(job.lastRun); }
+}
+
+function updateFreqCells(jobs) {
+  for (const jobType of JOB_TYPES) {
+    const td = document.querySelector('[data-freq="' + jobType + '"]');
+    if (!td) continue;
+    const rowJobs = jobs.filter(j => j.type === jobType);
+    let latestRun = null;
+    for (const j of rowJobs) {
+      if (j.lastRun && (!latestRun || new Date(j.lastRun) > new Date(latestRun))) latestRun = j.lastRun;
+    }
+    const el = td.querySelector('[data-field="freq-lastrun"]');
+    if (el) el.textContent = relTime(latestRun);
+  }
 }
 
 async function loadStatus() {
@@ -808,6 +802,7 @@ async function loadStatus() {
         const td = container.querySelector('[data-job="' + job.label + '"]');
         if (td) updateCell(td, job);
       });
+      updateFreqCells(data.jobs);
     }
 
     // Pending replies - separate full-width section
