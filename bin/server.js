@@ -154,6 +154,8 @@ function handleApi(req, res) {
       return {
         label: job.label,
         name: job.name,
+        type: job.type,
+        platform: job.platform,
         script: job.script,
         loaded,
         running,
@@ -574,10 +576,18 @@ const HTML = `<!DOCTYPE html>
   <div class="log-controls">
     <select id="log-job-filter">
       <option value="">All jobs</option>
-      <option value="post">Post</option>
-      <option value="stats">Stats</option>
-      <option value="engage">Engage</option>
+      <option value="reddit">Reddit</option>
+      <option value="twitter">Twitter</option>
+      <option value="linkedin">LinkedIn</option>
+      <option value="moltbook">MoltBook</option>
       <option value="github">GitHub</option>
+      <option value="engage reddit+mb">Engage</option>
+      <option value="engage twitter">Engage Twitter</option>
+      <option value="engage linkedin">Engage LinkedIn</option>
+      <option value="github engage">GitHub Engage</option>
+      <option value="stats">Stats</option>
+      <option value="audit">Audit</option>
+      <option value="octolens">Octolens</option>
     </select>
     <select id="log-file-select"><option>Loading...</option></select>
     <button class="btn" id="log-refresh-btn">Refresh</button>
@@ -653,52 +663,79 @@ function fmtInterval(secs) {
 }
 
 let _initialized = false;
+const PLATFORMS = ['Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
+const JOB_TYPES = ['Post', 'Engage', 'Stats', 'Audit', 'Octolens'];
 
-function renderJobRow(job) {
+function renderCell(job) {
+  if (!job) return '<td><span class="matrix-cell-empty">-</span></td>';
+  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
   const intervalOptions = INTERVALS.map(i =>
     '<option value="' + i.value + '"' + (i.value === job.interval ? ' selected' : '') + '>' + i.label + '</option>'
   ).join('');
-  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
   const runStopBtn = job.running
-    ? '<button class="btn danger" data-field="runstop" onclick="stopJob(\\''+job.label+'\\')">Stop</button>'
-    : '<button class="btn" data-field="runstop" onclick="runJob(\\''+job.label+'\\')">Run Now</button>';
-  const scheduleBtn = job.loaded
-    ? '<button class="btn danger" data-field="toggle" onclick="toggleJob(\\''+job.label+'\\')">Unschedule</button>'
-    : '<button class="btn primary" data-field="toggle" onclick="toggleJob(\\''+job.label+'\\')">Schedule</button>';
+    ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
+    : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
+  const toggleBtn = job.loaded
+    ? '<button class="btn danger" onclick="toggleJob(\\'' + job.label + '\\')">Off</button>'
+    : '<button class="btn primary" onclick="toggleJob(\\'' + job.label + '\\')">On</button>';
 
-  return '<tr data-job="' + job.label + '">' +
-    '<td><span class="job-name">' + job.name + '</span></td>' +
-    '<td><span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span></td>' +
-    '<td>' + runStopBtn + '</td>' +
-    '<td><select onchange="setInterval_(\\''+job.label+'\\', this.value)">' + intervalOptions + '</select></td>' +
-    '<td data-field="lastrun">' + relTime(job.lastRun) + '</td>' +
-    '<td>' + scheduleBtn + '</td>' +
-  '</tr>';
+  return '<td data-job="' + job.label + '"><div class="matrix-cell">' +
+    '<span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span>' +
+    '<div class="cell-info" data-field="lastrun">' + relTime(job.lastRun) + '</div>' +
+    '<select style="font-size:11px;padding:2px 4px;" onchange="setInterval_(\\'' + job.label + '\\', this.value)">' + intervalOptions + '</select>' +
+    '<div class="cell-actions">' + runStopBtn + toggleBtn + '</div>' +
+  '</div></td>';
 }
 
-function updateJobRow(row, job) {
+function renderSpanCell(job, colspan) {
+  if (!job) return '<td colspan="' + colspan + '"><span class="matrix-cell-empty">-</span></td>';
   const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
-  const badge = row.querySelector('[data-field="status"]');
-  badge.textContent = statusLabel;
-  badge.className = 'badge ' + job.status;
+  const intervalOptions = INTERVALS.map(i =>
+    '<option value="' + i.value + '"' + (i.value === job.interval ? ' selected' : '') + '>' + i.label + '</option>'
+  ).join('');
+  const runStopBtn = job.running
+    ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
+    : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
+  const toggleBtn = job.loaded
+    ? '<button class="btn danger" onclick="toggleJob(\\'' + job.label + '\\')">Off</button>'
+    : '<button class="btn primary" onclick="toggleJob(\\'' + job.label + '\\')">On</button>';
 
-  const lastrun = row.querySelector('[data-field="lastrun"]');
-  lastrun.textContent = relTime(job.lastRun);
+  return '<td colspan="' + colspan + '" data-job="' + job.label + '"><div class="matrix-cell">' +
+    '<span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span>' +
+    '<div class="cell-info" data-field="lastrun">' + relTime(job.lastRun) + '</div>' +
+    '<select style="font-size:11px;padding:2px 4px;" onchange="setInterval_(\\'' + job.label + '\\', this.value)">' + intervalOptions + '</select>' +
+    '<div class="cell-actions">' + runStopBtn + toggleBtn + '</div>' +
+  '</div></td>';
+}
 
-  const runStopBtn = row.querySelector('[data-field="runstop"]');
-  if (job.running) {
-    runStopBtn.textContent = 'Stop';
-    runStopBtn.className = 'btn danger';
-    runStopBtn.setAttribute('onclick', "stopJob('" + job.label + "')");
-  } else {
-    runStopBtn.textContent = 'Run Now';
-    runStopBtn.className = 'btn';
-    runStopBtn.setAttribute('onclick', "runJob('" + job.label + "')");
+function buildMatrix(jobs) {
+  // Index jobs by type+platform
+  const map = {};
+  jobs.forEach(j => { map[j.type + ':' + j.platform] = j; });
+
+  let html = '';
+  for (const jobType of JOB_TYPES) {
+    html += '<tr><td class="row-label">' + jobType + '</td>';
+    // Check if this row has a single "all" job
+    const allJob = map[jobType + ':all'];
+    if (allJob) {
+      html += renderSpanCell(allJob, PLATFORMS.length);
+    } else {
+      for (const plat of PLATFORMS) {
+        html += renderCell(map[jobType + ':' + plat] || null);
+      }
+    }
+    html += '</tr>';
   }
+  return html;
+}
 
-  const toggleBtn = row.querySelector('[data-field="toggle"]');
-  toggleBtn.textContent = job.loaded ? 'Unschedule' : 'Schedule';
-  toggleBtn.className = 'btn ' + (job.loaded ? 'danger' : 'primary');
+function updateCell(td, job) {
+  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
+  const badge = td.querySelector('[data-field="status"]');
+  if (badge) { badge.textContent = statusLabel; badge.className = 'badge ' + job.status; }
+  const lastrun = td.querySelector('[data-field="lastrun"]');
+  if (lastrun) { lastrun.textContent = relTime(job.lastRun); }
 }
 
 async function loadStatus() {
@@ -713,15 +750,15 @@ async function loadStatus() {
     document.getElementById('pending-badge').textContent =
       (data.pendingReplies != null ? data.pendingReplies : '--') + ' pending';
 
-    const container = document.getElementById('job-rows');
+    const container = document.getElementById('matrix-body');
 
     if (!_initialized) {
-      container.innerHTML = data.jobs.map(renderJobRow).join('');
+      container.innerHTML = buildMatrix(data.jobs);
       _initialized = true;
     } else {
       data.jobs.forEach(job => {
-        const row = container.querySelector('[data-job="' + job.label + '"]');
-        if (row) updateJobRow(row, job);
+        const td = container.querySelector('[data-job="' + job.label + '"]');
+        if (td) updateCell(td, job);
       });
     }
 
