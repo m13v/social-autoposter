@@ -10,7 +10,7 @@
 		<string>/Users/matthewdi/social-autoposter/skill/github.sh</string>
 	</array>
 	<key>StartInterval</key>
-	<integer>14400</integer>
+	<integer>7200</integer>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-github-stdout.log</string>
 	<key>StandardErrorPath</key>
