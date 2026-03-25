@@ -261,6 +261,43 @@ function handleApi(req, res) {
     }).catch(e => json(res, { error: e.message }, 400));
   }
 
+  // POST /api/phase/:type/interval - set interval for ALL jobs of a given type
+  const phaseMatch = p.match(/^\/api\/phase\/([^/]+)\/interval$/);
+  if (phaseMatch && req.method === 'POST') {
+    return readBody(req).then(body => {
+      const { interval } = JSON.parse(body);
+      const jobType = decodeURIComponent(phaseMatch[1]);
+      const phaseJobs = JOBS.filter(j => j.type === jobType);
+      if (!phaseJobs.length) return json(res, { error: 'Unknown phase' }, 404);
+      const results = [];
+      for (const job of phaseJobs) {
+        const plistPath = path.join(LAUNCHD_DIR, job.plist);
+        try {
+          let xml = fs.readFileSync(plistPath, 'utf8');
+          xml = xml.replace(
+            /(<key>StartInterval<\/key>\s*<integer>)\d+(<\/integer>)/,
+            `$1${interval}$2`
+          );
+          fs.writeFileSync(plistPath, xml);
+          // Reload if currently loaded
+          const agentLink = getLaunchAgentPath(job.plist);
+          if (isJobLoaded(job.label)) {
+            try {
+              execSync(`launchctl unload "${agentLink}"`, { stdio: 'pipe' });
+              try { fs.unlinkSync(agentLink); } catch {}
+              fs.symlinkSync(plistPath, agentLink);
+              execSync(`launchctl load "${agentLink}"`, { stdio: 'pipe' });
+            } catch {}
+          }
+          results.push({ label: job.label, interval });
+        } catch (e) {
+          results.push({ label: job.label, error: e.message });
+        }
+      }
+      return json(res, { phase: jobType, interval, updated: results });
+    }).catch(e => json(res, { error: e.message }, 400));
+  }
+
   // GET /api/logs
   if (p === '/api/logs' && req.method === 'GET') {
     const jobFilter = url.searchParams.get('job');
@@ -673,9 +710,6 @@ const JOB_TYPES = ['Post', 'Engage', 'Stats', 'Audit', 'Octolens'];
 function renderCell(job) {
   if (!job) return '<td><span class="matrix-cell-empty">-</span></td>';
   const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
-  const intervalOptions = INTERVALS.map(i =>
-    '<option value="' + i.value + '"' + (i.value === job.interval ? ' selected' : '') + '>' + i.label + '</option>'
-  ).join('');
   const runStopBtn = job.running
     ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
     : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
@@ -686,7 +720,6 @@ function renderCell(job) {
   return '<td data-job="' + job.label + '"><div class="matrix-cell">' +
     '<span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span>' +
     '<div class="cell-info" data-field="lastrun">' + relTime(job.lastRun) + '</div>' +
-    '<select style="font-size:11px;padding:2px 4px;" onchange="setInterval_(\\'' + job.label + '\\', this.value)">' + intervalOptions + '</select>' +
     '<div class="cell-actions">' + runStopBtn + toggleBtn + '</div>' +
   '</div></td>';
 }
@@ -694,9 +727,6 @@ function renderCell(job) {
 function renderSpanCell(job, colspan) {
   if (!job) return '<td colspan="' + colspan + '"><span class="matrix-cell-empty">-</span></td>';
   const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
-  const intervalOptions = INTERVALS.map(i =>
-    '<option value="' + i.value + '"' + (i.value === job.interval ? ' selected' : '') + '>' + i.label + '</option>'
-  ).join('');
   const runStopBtn = job.running
     ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
     : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
@@ -707,20 +737,32 @@ function renderSpanCell(job, colspan) {
   return '<td colspan="' + colspan + '" data-job="' + job.label + '"><div class="matrix-cell">' +
     '<span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span>' +
     '<div class="cell-info" data-field="lastrun">' + relTime(job.lastRun) + '</div>' +
-    '<select style="font-size:11px;padding:2px 4px;" onchange="setInterval_(\\'' + job.label + '\\', this.value)">' + intervalOptions + '</select>' +
     '<div class="cell-actions">' + runStopBtn + toggleBtn + '</div>' +
   '</div></td>';
 }
 
+function renderFreqCell(jobType, interval) {
+  const intervalOptions = INTERVALS.map(i =>
+    '<option value="' + i.value + '"' + (i.value === interval ? ' selected' : '') + '>' + i.label + '</option>'
+  ).join('');
+  return '<td class="freq-cell" data-freq="' + jobType + '">' +
+    '<select onchange="setPhaseInterval(\\'' + jobType + '\\', this.value)">' + intervalOptions + '</select>' +
+  '</td>';
+}
+
 function buildMatrix(jobs) {
-  // Index jobs by type+platform
   const map = {};
   jobs.forEach(j => { map[j.type + ':' + j.platform] = j; });
 
   let html = '';
   for (const jobType of JOB_TYPES) {
+    // Get interval from the first job in this row
+    const rowJobs = jobs.filter(j => j.type === jobType);
+    const interval = rowJobs.length ? rowJobs[0].interval : null;
+
     html += '<tr><td class="row-label">' + jobType + '</td>';
-    // Check if this row has a single "all" job
+    html += renderFreqCell(jobType, interval);
+
     const allJob = map[jobType + ':all'];
     if (allJob) {
       html += renderSpanCell(allJob, PLATFORMS.length);
@@ -824,6 +866,18 @@ async function setInterval_(label, value) {
       body: JSON.stringify({ interval: parseInt(value) }),
     });
     toast('Interval updated');
+    loadStatus();
+  } catch(e) { toast('Error: ' + e.message, true); }
+}
+
+async function setPhaseInterval(jobType, value) {
+  try {
+    await fetch('/api/phase/' + encodeURIComponent(jobType) + '/interval', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interval: parseInt(value) }),
+    });
+    toast(jobType + ' interval updated to ' + fmtInterval(parseInt(value)));
     loadStatus();
   } catch(e) { toast('Error: ' + e.message, true); }
 }
