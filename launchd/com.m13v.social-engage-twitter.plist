@@ -10,7 +10,7 @@
 		<string>/Users/matthewdi/social-autoposter/skill/engage-twitter.sh</string>
 	</array>
 	<key>StartInterval</key>
-	<integer>10800</integer>
+	<integer>7200</integer>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-engage-twitter-stdout.log</string>
 	<key>StandardErrorPath</key>
