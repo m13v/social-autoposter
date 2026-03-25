@@ -106,6 +106,7 @@ Follow Content Rules below. 2-3 sentences, first person, specific details from `
 **X/Twitter** (browser automation):
 - Navigate to tweet → reply box → type → Reply → verify → capture URL
 - Post as the handle in `config.json → accounts.twitter.handle`
+- If a DM passcode/encryption prompt appears, enter the code from `TWITTER_DM_PASSCODE` in `.env`
 
 **LinkedIn** (browser automation):
 - Navigate to post → comment box → type → Post → close tab
