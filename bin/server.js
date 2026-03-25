@@ -480,11 +480,21 @@ const HTML = `<!DOCTYPE html>
   .tab:hover { color: #e5e5e5; }
   .tab.active { color: #e5e5e5; border-bottom-color: #7c3aed; }
   .content { padding: 24px; }
-  .job-table { width: 100%; border-collapse: collapse; background: #171717; border: 1px solid #262626; border-radius: 12px; overflow: hidden; }
-  .job-table th { text-align: left; padding: 12px 16px; font-size: 12px; font-weight: 500; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #262626; background: #0f0f0f; }
-  .job-table td { padding: 12px 16px; font-size: 14px; border-bottom: 1px solid #1f1f1f; vertical-align: middle; }
-  .job-table tr:last-child td { border-bottom: none; }
-  .job-table tr:hover { background: #1c1c1c; }
+  .matrix-wrapper { overflow-x: auto; }
+  .matrix-table { width: 100%; border-collapse: collapse; background: #171717; border: 1px solid #262626; border-radius: 12px; overflow: hidden; }
+  .matrix-table th { text-align: center; padding: 12px 16px; font-size: 12px; font-weight: 500; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #262626; background: #0f0f0f; }
+  .matrix-table th.row-header { width: 100px; }
+  .matrix-table td { padding: 10px 8px; font-size: 13px; border-bottom: 1px solid #1f1f1f; vertical-align: middle; text-align: center; }
+  .matrix-table td.row-label { text-align: left; padding-left: 16px; font-weight: 600; font-size: 14px; color: #e5e5e5; background: #0f0f0f; width: 100px; }
+  .matrix-table tr:last-child td { border-bottom: none; }
+  .matrix-cell { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .matrix-cell .badge { font-size: 11px; padding: 2px 8px; cursor: pointer; }
+  .matrix-cell .badge:hover { filter: brightness(1.3); }
+  .matrix-cell .cell-info { font-size: 11px; color: #6b7280; }
+  .matrix-cell .cell-actions { display: flex; gap: 4px; margin-top: 2px; }
+  .matrix-cell .cell-actions .btn { padding: 3px 8px; font-size: 11px; }
+  .matrix-cell-empty { color: #333; font-size: 20px; }
+  .matrix-cell-span { text-align: center; }
   .job-name { font-weight: 600; }
   .badge { padding: 3px 10px; border-radius: 8px; font-size: 12px; font-weight: 500; display: inline-block; }
   .badge.running { background: #1e3a5f; color: #60a5fa; animation: pulse 2s infinite; }
