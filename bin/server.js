@@ -16,7 +16,7 @@ const PORT = parseInt(process.env.PORT || '3141', 10);
 
 // Matrix: rows = job types, columns = platforms
 // Each cell is a job (or null if that combo doesn't exist)
-const PLATFORMS = ['Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
+const PLATFORMS = ['all', 'Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
 const JOB_TYPES = ['Post', 'Engage', 'Stats', 'Audit', 'Octolens'];
 
 const JOBS = [
@@ -600,6 +600,7 @@ const HTML = `<!DOCTYPE html>
         <tr>
           <th class="row-header"></th>
           <th class="freq-header">Freq</th>
+          <th>Overall</th>
           <th>Reddit</th>
           <th>Twitter</th>
           <th>LinkedIn</th>
@@ -704,7 +705,7 @@ function fmtInterval(secs) {
 }
 
 let _initialized = false;
-const PLATFORMS = ['Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
+const PLATFORMS = ['all', 'Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
 const JOB_TYPES = ['Post', 'Engage', 'Stats', 'Audit', 'Octolens'];
 
 function renderCell(job) {
