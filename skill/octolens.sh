@@ -33,12 +33,12 @@ Here are the Octolens mention candidates (JSON):
 $(echo "$CANDIDATES")
 
 IMPORTANT: This is the Octolens engagement pipeline. It has its OWN rate limit separate from the main social-autoposter:
-- Max 3 Octolens-sourced posts per run
+- Max 10 Octolens-sourced posts per run
 - Check: SELECT COUNT(*) FROM posts WHERE source_summary LIKE '%octolens%' AND posted_at >= NOW() - INTERVAL '24 hours'
-- If >= 6 octolens posts in 24h, stop. Otherwise proceed.
+- If >= 100 octolens posts in 24h, stop. Otherwise proceed.
 - Do NOT use the main 40/day rate limit check - that includes bulk github_issues imports.
 
-Pick the BEST 1-2 candidates to engage with. Prioritize:
+Pick the BEST 5-10 candidates to engage with. Prioritize:
 1. buy_intent or product_question tags (someone looking for a solution)
 2. Negative competitor mentions on Reddit (opportunity to suggest alternative)
 3. High-follower authors on Twitter/X
