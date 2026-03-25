@@ -10,7 +10,7 @@
 		<string>/Users/matthewdi/social-autoposter/skill/github-engage.sh</string>
 	</array>
 	<key>StartInterval</key>
-	<integer>21600</integer>
+	<integer>7200</integer>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-github-engage-stdout.log</string>
 	<key>StandardErrorPath</key>
