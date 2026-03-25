@@ -1,6 +1,6 @@
 #!/bin/bash
 # Social Autoposter - Twitter/X posting only
-# Finds Twitter threads and posts ONE reply per run.
+# Finds Twitter threads and posts up to 3 replies per run.
 # Called by launchd every 2 hours.
 
 set -euo pipefail
@@ -29,7 +29,7 @@ Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
 4. Post it using the twitter-agent browser (mcp__twitter-agent__* tools)
 5. Log to database
 
-ONE post per run max. If nothing fits, say '## No good tweet found' and stop.
+Up to 3 posts per run. If nothing fits, say '## No good tweet found' and stop.
 
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
 CRITICAL: Use ONLY mcp__twitter-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
