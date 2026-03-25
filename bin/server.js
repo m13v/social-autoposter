@@ -15,10 +15,19 @@ const ENV_FILE = path.join(DEST, '.env');
 const PORT = parseInt(process.env.PORT || '3141', 10);
 
 const JOBS = [
-  { label: 'com.m13v.social-autoposter', name: 'Post', script: 'run.sh', logPrefix: '', plist: 'com.m13v.social-autoposter.plist' },
-  { label: 'com.m13v.social-stats', name: 'Stats', script: 'stats.sh', logPrefix: 'stats-', plist: 'com.m13v.social-stats.plist' },
-  { label: 'com.m13v.social-engage', name: 'Engage', script: 'engage.sh', logPrefix: 'engage-', plist: 'com.m13v.social-engage.plist' },
+  // Per-platform posting pipelines
+  { label: 'com.m13v.social-reddit', name: 'Reddit', script: 'run-reddit.sh', logPrefix: 'run-reddit-', plist: 'com.m13v.social-reddit.plist' },
+  { label: 'com.m13v.social-twitter', name: 'Twitter', script: 'run-twitter.sh', logPrefix: 'run-twitter-', plist: 'com.m13v.social-twitter.plist' },
+  { label: 'com.m13v.social-linkedin', name: 'LinkedIn', script: 'run-linkedin.sh', logPrefix: 'run-linkedin-', plist: 'com.m13v.social-linkedin.plist' },
+  { label: 'com.m13v.social-moltbook', name: 'MoltBook', script: 'run-moltbook.sh', logPrefix: 'run-moltbook-', plist: 'com.m13v.social-moltbook.plist' },
   { label: 'com.m13v.social-github', name: 'GitHub', script: 'github.sh', logPrefix: 'github-', plist: 'com.m13v.social-github.plist' },
+  // Engagement pipelines
+  { label: 'com.m13v.social-engage', name: 'Engage', script: 'engage.sh', logPrefix: 'engage-', plist: 'com.m13v.social-engage.plist' },
+  { label: 'com.m13v.social-engage-twitter', name: 'Engage Twitter', script: 'engage-twitter.sh', logPrefix: 'engage-twitter-', plist: 'com.m13v.social-engage-twitter.plist' },
+  { label: 'com.m13v.social-engage-linkedin', name: 'Engage LinkedIn', script: 'engage-linkedin.sh', logPrefix: 'engage-linkedin-', plist: 'com.m13v.social-engage-linkedin.plist' },
+  { label: 'com.m13v.social-github-engage', name: 'GitHub Engage', script: 'github-engage.sh', logPrefix: 'github-engage-', plist: 'com.m13v.social-github-engage.plist' },
+  // Utilities
+  { label: 'com.m13v.social-stats', name: 'Stats', script: 'stats.sh', logPrefix: 'stats-', plist: 'com.m13v.social-stats.plist' },
   { label: 'com.m13v.social-audit', name: 'Audit', script: 'audit.sh', logPrefix: 'audit-', plist: 'com.m13v.social-audit.plist' },
   { label: 'com.m13v.social-octolens', name: 'Octolens', script: 'octolens.sh', logPrefix: 'octolens-', plist: 'com.m13v.social-octolens.plist' },
 ];
