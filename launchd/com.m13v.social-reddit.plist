@@ -10,7 +10,7 @@
 		<string>/Users/matthewdi/social-autoposter/skill/run-reddit.sh</string>
 	</array>
 	<key>StartInterval</key>
-	<integer>3600</integer>
+	<integer>7200</integer>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-reddit-stdout.log</string>
 	<key>StandardErrorPath</key>
