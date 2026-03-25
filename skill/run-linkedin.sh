@@ -1,6 +1,6 @@
 #!/bin/bash
 # Social Autoposter - LinkedIn posting only
-# Finds LinkedIn posts and adds ONE comment per run.
+# Finds LinkedIn posts and adds up to 3 comments per run.
 # Called by launchd every 3 hours.
 
 set -euo pipefail
@@ -29,7 +29,7 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
 4. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools)
 5. Log to database
 
-ONE post per run max. If nothing fits, say '## No good post found' and stop.
+Up to 3 posts per run. If nothing fits, say '## No good post found' and stop.
 
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
 CRITICAL: Use ONLY mcp__linkedin-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
