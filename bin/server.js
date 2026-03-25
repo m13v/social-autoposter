@@ -485,7 +485,10 @@ const HTML = `<!DOCTYPE html>
   .matrix-wrapper { overflow-x: auto; }
   .matrix-table { width: 100%; border-collapse: collapse; background: #171717; border: 1px solid #262626; border-radius: 12px; overflow: hidden; }
   .matrix-table th { text-align: center; padding: 12px 16px; font-size: 12px; font-weight: 500; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #262626; background: #0f0f0f; }
-  .matrix-table th.row-header { width: 100px; }
+  .matrix-table th.row-header { width: 90px; }
+  .matrix-table th.freq-header { width: 90px; }
+  .freq-cell { text-align: center; vertical-align: middle; background: #0f0f0f; }
+  .freq-cell select { font-size: 12px; padding: 4px 6px; }
   .matrix-table td { padding: 10px 8px; font-size: 13px; border-bottom: 1px solid #1f1f1f; vertical-align: middle; text-align: center; }
   .matrix-table td.row-label { text-align: left; padding-left: 16px; font-weight: 600; font-size: 14px; color: #e5e5e5; background: #0f0f0f; width: 100px; }
   .matrix-table tr:last-child td { border-bottom: none; }
@@ -559,6 +562,7 @@ const HTML = `<!DOCTYPE html>
       <thead>
         <tr>
           <th class="row-header"></th>
+          <th class="freq-header">Freq</th>
           <th>Reddit</th>
           <th>Twitter</th>
           <th>LinkedIn</th>
