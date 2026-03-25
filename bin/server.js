@@ -742,11 +742,18 @@ function renderSpanCell(job, colspan) {
   '</div></td>';
 }
 
-function renderFreqCell(jobType, interval) {
+function renderFreqCell(jobType, interval, jobs) {
   const intervalOptions = INTERVALS.map(i =>
     '<option value="' + i.value + '"' + (i.value === interval ? ' selected' : '') + '>' + i.label + '</option>'
   ).join('');
+  // Find the most recent lastRun across all jobs in this phase
+  const rowJobs = jobs.filter(j => j.type === jobType);
+  let latestRun = null;
+  for (const j of rowJobs) {
+    if (j.lastRun && (!latestRun || new Date(j.lastRun) > new Date(latestRun))) latestRun = j.lastRun;
+  }
   return '<td class="freq-cell" data-freq="' + jobType + '">' +
+    '<div class="cell-info" data-field="freq-lastrun">' + relTime(latestRun) + '</div>' +
     '<select onchange="setPhaseInterval(\\'' + jobType + '\\', this.value)">' + intervalOptions + '</select>' +
   '</td>';
 }
@@ -761,7 +768,7 @@ function buildMatrix(jobs) {
     const interval = rowJobs.length ? rowJobs[0].interval : null;
 
     html += '<tr><td class="row-label">' + jobType + '</td>';
-    html += renderFreqCell(jobType, interval);
+    html += renderFreqCell(jobType, interval, jobs);
 
     for (const plat of PLATFORMS) {
       html += renderCell(map[jobType + ':' + plat] || null);
