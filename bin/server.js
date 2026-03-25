@@ -14,22 +14,29 @@ const CONFIG_FILE = path.join(DEST, 'config.json');
 const ENV_FILE = path.join(DEST, '.env');
 const PORT = parseInt(process.env.PORT || '3141', 10);
 
+// Matrix: rows = job types, columns = platforms
+// Each cell is a job (or null if that combo doesn't exist)
+const PLATFORMS = ['Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
+const JOB_TYPES = ['Post', 'Engage', 'Stats', 'Audit', 'Octolens'];
+
 const JOBS = [
-  // Per-platform posting pipelines
-  { label: 'com.m13v.social-reddit', name: 'Reddit', script: 'run-reddit.sh', logPrefix: 'run-reddit-', plist: 'com.m13v.social-reddit.plist' },
-  { label: 'com.m13v.social-twitter', name: 'Twitter', script: 'run-twitter.sh', logPrefix: 'run-twitter-', plist: 'com.m13v.social-twitter.plist' },
-  { label: 'com.m13v.social-linkedin', name: 'LinkedIn', script: 'run-linkedin.sh', logPrefix: 'run-linkedin-', plist: 'com.m13v.social-linkedin.plist' },
-  { label: 'com.m13v.social-moltbook', name: 'MoltBook', script: 'run-moltbook.sh', logPrefix: 'run-moltbook-', plist: 'com.m13v.social-moltbook.plist' },
-  { label: 'com.m13v.social-github', name: 'GitHub', script: 'github.sh', logPrefix: 'github-', plist: 'com.m13v.social-github.plist' },
-  // Engagement pipelines
-  { label: 'com.m13v.social-engage', name: 'Engage', script: 'engage.sh', logPrefix: 'engage-', plist: 'com.m13v.social-engage.plist' },
-  { label: 'com.m13v.social-engage-twitter', name: 'Engage Twitter', script: 'engage-twitter.sh', logPrefix: 'engage-twitter-', plist: 'com.m13v.social-engage-twitter.plist' },
-  { label: 'com.m13v.social-engage-linkedin', name: 'Engage LinkedIn', script: 'engage-linkedin.sh', logPrefix: 'engage-linkedin-', plist: 'com.m13v.social-engage-linkedin.plist' },
-  { label: 'com.m13v.social-github-engage', name: 'GitHub Engage', script: 'github-engage.sh', logPrefix: 'github-engage-', plist: 'com.m13v.social-github-engage.plist' },
-  // Utilities
-  { label: 'com.m13v.social-stats', name: 'Stats', script: 'stats.sh', logPrefix: 'stats-', plist: 'com.m13v.social-stats.plist' },
-  { label: 'com.m13v.social-audit', name: 'Audit', script: 'audit.sh', logPrefix: 'audit-', plist: 'com.m13v.social-audit.plist' },
-  { label: 'com.m13v.social-octolens', name: 'Octolens', script: 'octolens.sh', logPrefix: 'octolens-', plist: 'com.m13v.social-octolens.plist' },
+  // Post row
+  { label: 'com.m13v.social-reddit', name: 'Reddit', type: 'Post', platform: 'Reddit', script: 'run-reddit.sh', logPrefix: 'run-reddit-', plist: 'com.m13v.social-reddit.plist' },
+  { label: 'com.m13v.social-twitter', name: 'Twitter', type: 'Post', platform: 'Twitter', script: 'run-twitter.sh', logPrefix: 'run-twitter-', plist: 'com.m13v.social-twitter.plist' },
+  { label: 'com.m13v.social-linkedin', name: 'LinkedIn', type: 'Post', platform: 'LinkedIn', script: 'run-linkedin.sh', logPrefix: 'run-linkedin-', plist: 'com.m13v.social-linkedin.plist' },
+  { label: 'com.m13v.social-moltbook', name: 'MoltBook', type: 'Post', platform: 'MoltBook', script: 'run-moltbook.sh', logPrefix: 'run-moltbook-', plist: 'com.m13v.social-moltbook.plist' },
+  { label: 'com.m13v.social-github', name: 'GitHub', type: 'Post', platform: 'GitHub', script: 'github.sh', logPrefix: 'github-', plist: 'com.m13v.social-github.plist' },
+  // Engage row
+  { label: 'com.m13v.social-engage', name: 'Engage Reddit+MB', type: 'Engage', platform: 'Reddit', script: 'engage.sh', logPrefix: 'engage-', plist: 'com.m13v.social-engage.plist' },
+  { label: 'com.m13v.social-engage-twitter', name: 'Engage Twitter', type: 'Engage', platform: 'Twitter', script: 'engage-twitter.sh', logPrefix: 'engage-twitter-', plist: 'com.m13v.social-engage-twitter.plist' },
+  { label: 'com.m13v.social-engage-linkedin', name: 'Engage LinkedIn', type: 'Engage', platform: 'LinkedIn', script: 'engage-linkedin.sh', logPrefix: 'engage-linkedin-', plist: 'com.m13v.social-engage-linkedin.plist' },
+  { label: 'com.m13v.social-github-engage', name: 'GitHub Engage', type: 'Engage', platform: 'GitHub', script: 'github-engage.sh', logPrefix: 'github-engage-', plist: 'com.m13v.social-github-engage.plist' },
+  // Stats row (single job covers all platforms)
+  { label: 'com.m13v.social-stats', name: 'Stats', type: 'Stats', platform: 'all', script: 'stats.sh', logPrefix: 'stats-', plist: 'com.m13v.social-stats.plist' },
+  // Audit row
+  { label: 'com.m13v.social-audit', name: 'Audit', type: 'Audit', platform: 'all', script: 'audit.sh', logPrefix: 'audit-', plist: 'com.m13v.social-audit.plist' },
+  // Octolens row
+  { label: 'com.m13v.social-octolens', name: 'Octolens', type: 'Octolens', platform: 'all', script: 'octolens.sh', logPrefix: 'octolens-', plist: 'com.m13v.social-octolens.plist' },
 ];
 
 // --- Helpers ---
@@ -535,12 +542,21 @@ const HTML = `<!DOCTYPE html>
 </div>
 
 <div class="content" id="tab-status">
-  <table class="job-table">
-    <thead>
-      <tr><th>Job</th><th>Status</th><th></th><th>Interval</th><th>Last Run</th><th></th></tr>
-    </thead>
-    <tbody id="job-rows"></tbody>
-  </table>
+  <div class="matrix-wrapper">
+    <table class="matrix-table">
+      <thead>
+        <tr>
+          <th class="row-header"></th>
+          <th>Reddit</th>
+          <th>Twitter</th>
+          <th>LinkedIn</th>
+          <th>MoltBook</th>
+          <th>GitHub</th>
+        </tr>
+      </thead>
+      <tbody id="matrix-body"></tbody>
+    </table>
+  </div>
   <div id="pending-section" style="margin-top: 16px;"></div>
 </div>
 
