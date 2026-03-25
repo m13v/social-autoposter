@@ -757,20 +757,14 @@ function buildMatrix(jobs) {
 
   let html = '';
   for (const jobType of JOB_TYPES) {
-    // Get interval from the first job in this row
     const rowJobs = jobs.filter(j => j.type === jobType);
     const interval = rowJobs.length ? rowJobs[0].interval : null;
 
     html += '<tr><td class="row-label">' + jobType + '</td>';
     html += renderFreqCell(jobType, interval);
 
-    const allJob = map[jobType + ':all'];
-    if (allJob) {
-      html += renderSpanCell(allJob, PLATFORMS.length);
-    } else {
-      for (const plat of PLATFORMS) {
-        html += renderCell(map[jobType + ':' + plat] || null);
-      }
+    for (const plat of PLATFORMS) {
+      html += renderCell(map[jobType + ':' + plat] || null);
     }
     html += '</tr>';
   }
