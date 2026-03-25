@@ -10,7 +10,7 @@
 		<string>/Users/matthewdi/social-autoposter/skill/octolens.sh</string>
 	</array>
 	<key>StartInterval</key>
-	<integer>14400</integer>
+	<integer>1800</integer>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-octolens-stdout.log</string>
 	<key>StandardErrorPath</key>
