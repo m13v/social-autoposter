@@ -1,6 +1,6 @@
 #!/bin/bash
 # Social Autoposter - Reddit posting only
-# Finds Reddit threads and posts ONE comment per run.
+# Finds Reddit threads and posts up to 3 comments per run.
 # Called by launchd every 1 hour.
 
 set -euo pipefail
@@ -26,7 +26,7 @@ Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
 4. Post it using the reddit-agent browser (mcp__reddit-agent__* tools)
 5. Log to database
 
-ONE post per run max. If nothing fits, say '## No good thread found' and stop.
+Up to 3 posts per run. If nothing fits, say '## No good thread found' and stop.
 
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
 CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close).
