@@ -154,8 +154,14 @@ $PROJECTS
 ## PHASE C: Scan X/Twitter DMs for new messages
 
 1. Navigate to https://x.com/messages using the twitter-agent browser
-2. Look for conversations with unread indicators
-3. Same process as above - log inbound messages
+2. **ENCRYPTED DM PASSCODE**: Twitter may show an "Enter your passcode" or "encrypted_dm_passcode_required" dialog before you can access DMs. If you see this dialog:
+   a. Find the passcode input field in the snapshot
+   b. Type the passcode: $TWITTER_DM_PASSCODE
+   c. Click "Confirm" or press Enter
+   d. Wait for the DM inbox to load
+   The passcode is loaded from .env as TWITTER_DM_PASSCODE.
+3. Look for conversations with unread indicators
+4. Same process as above - log inbound messages
 
 ## PHASE D: Reply to all conversations with pending inbound messages
 
@@ -234,7 +240,7 @@ Then SKIP to the next conversation. Do NOT reply.
 2. Type and send
 
 **X/Twitter DMs** (mcp__twitter-agent__* tools):
-1. Navigate to the conversation
+1. Navigate to the conversation (if the encrypted DM passcode dialog appears, enter: $TWITTER_DM_PASSCODE and confirm)
 2. Type and send
 
 ### After each reply, log it:
