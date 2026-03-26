@@ -69,7 +69,8 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
             WHERE dm_id = d.id AND direction = 'outbound'
             ORDER BY message_at DESC LIMIT 1
         ) last_out ON true
-        WHERE d.conversation_status = 'active'
+        WHERE d.conversation_status IN ('active', 'needs_reply')
+          AND d.conversation_status != 'needs_human'
           AND d.status = 'sent'
           AND (last_out.message_at IS NULL OR last_in.message_at > last_out.message_at)
         ORDER BY
@@ -166,9 +167,35 @@ cd ~/social-autoposter && python3 scripts/dm_conversation.py pending
 Known conversations from the database that already need replies:
 $PENDING_CONVOS
 
+CRITICAL DEDUP RULES (read this first):
+- NEVER send a reply if the last message in the conversation is already outbound (we sent last). The log-outbound command will block this automatically, but check yourself too.
+- NEVER send more than 1 reply per conversation per run. One reply, then move on.
+- If you see the same inbound message you already replied to in a previous run, SKIP it.
+- If the conversation_history shows multiple consecutive outbound messages, something went wrong. Do NOT add another. Mark it stale or needs_human instead.
+
 For EACH conversation needing a reply:
 
-### Decide the reply strategy based on tier and context:
+### Step 0: Check if we should even reply
+Before composing a reply, check the conversation_history. If the last message is already outbound, SKIP this conversation entirely.
+
+### Step 1: Check if this needs HUMAN escalation
+Flag for human attention (do NOT auto-reply) if ANY of these are true:
+- They asked for a call, meeting, video chat, or scheduled time
+- They invited us to a podcast, interview, series, or event
+- They offered a partnership, collaboration deal, or business proposal
+- They shared a phone number, Telegram handle, or asked to move to another platform
+- They asked a question that requires specific personal knowledge (e.g. "when are you free?", "what's your calendar look like?")
+- They expressed frustration, anger, or dissatisfaction with our product/response
+- They asked about pricing, contracts, or business terms
+- The conversation has 6+ total messages and seems high-value
+
+To flag:
+\`\`\`bash
+cd ~/social-autoposter && python3 scripts/dm_conversation.py flag-human --dm-id DM_ID --reason "REASON"
+\`\`\`
+Then SKIP to the next conversation. Do NOT reply.
+
+### Step 2: Decide the reply strategy based on tier and context:
 
 **Tier 1 (rapport building):** No links. Ask questions, share experiences, be genuinely curious about their work. Keep it casual and short (1-3 sentences). The goal is to build rapport and find a natural opening.
 
@@ -180,7 +207,7 @@ For EACH conversation needing a reply:
 - If they ask "what are you building?" or "what do you work on?" or express interest -> escalate to T2 or T3
 - If they mention a problem one of our projects solves -> escalate to T2
 - If they explicitly ask for a link -> escalate to T3
-- Update tier: \`python3 scripts/dm_conversation.py set-tier --author "USERNAME" --tier N\`
+- Update tier: \`python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier N\`
 
 ### Reply guidelines:
 - Write like you're texting a coworker. Short. Casual. No em dashes.
@@ -189,6 +216,11 @@ For EACH conversation needing a reply:
 - If the conversation is going stale or they sent a one-word reply, it's okay to let it rest
 - Never send more than 2-3 sentences per reply
 - If they shared something cool, acknowledge it genuinely
+- NEVER repeat a question you already asked in a previous message
+
+### Backoff rules:
+- If we sent a message and they haven't replied, do NOT send another. Wait for their reply.
+- If 2+ consecutive outbound messages exist with no inbound between them, mark as stale.
 
 ### Send the reply:
 
@@ -207,21 +239,24 @@ For EACH conversation needing a reply:
 
 ### After each reply, log it:
 \`\`\`bash
-cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --author "USERNAME" --content "YOUR_REPLY_TEXT"
+cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "YOUR_REPLY_TEXT"
 \`\`\`
+The log-outbound command has a built-in dedup guard. If it says "DEDUP BLOCKED", that means you already replied and the message was NOT logged. Do not retry.
 
 ### Skip conditions (mark conversation as stale):
 - They haven't replied in 7+ days and the conversation was surface-level
 - They sent a clear ending ("thanks", "bye", "good luck")
 - The conversation reached a natural conclusion
+- 2+ consecutive outbound messages with no reply
 \`\`\`bash
-python3 scripts/dm_conversation.py set-status --author "USERNAME" --status stale
+python3 scripts/dm_conversation.py set-status --dm-id DM_ID --status stale
 \`\`\`
 
 After processing all conversations, print a summary:
 - How many new inbound messages found per platform
 - How many replies sent
 - How many conversations escalated (tier changes)
+- How many flagged for human attention (and why)
 - How many marked stale
 PROMPT_EOF
 
@@ -244,6 +279,22 @@ DM_SUMMARY=$(psql "$DATABASE_URL" -t -A -c "
     );" 2>/dev/null || echo "{}")
 
 log "DM pipeline summary: $DM_SUMMARY"
+
+# Report flagged conversations needing human attention
+FLAGGED=$(psql "$DATABASE_URL" -t -A -c "
+    SELECT json_agg(json_build_object(
+        'dm_id', d.id, 'platform', d.platform, 'author', d.their_author,
+        'reason', d.human_reason, 'chat_url', d.chat_url,
+        'last_msg', (SELECT LEFT(content, 150) FROM dm_messages WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1)
+    ))
+    FROM dms d WHERE d.conversation_status = 'needs_human'
+    ORDER BY d.flagged_at DESC;" 2>/dev/null || echo "null")
+
+if [ "$FLAGGED" != "null" ] && [ -n "$FLAGGED" ]; then
+    FLAGGED_COUNT=$(echo "$FLAGGED" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+    log "ACTION REQUIRED: $FLAGGED_COUNT conversations flagged for human attention"
+    log "Run: python3 ~/social-autoposter/scripts/dm_conversation.py show-flagged"
+fi
 
 # Delete old logs
 find "$LOG_DIR" -name "engage-dm-replies-*.log" -mtime +7 -delete 2>/dev/null || true
