@@ -183,6 +183,18 @@ PROMPT_HEADER
 - **Tier 2 (natural mention):** Conversation touches something we build. Mention casually.
 - **Tier 3 (direct ask):** They ask for link/tool/source. Give it immediately.
 
+### Reply archetypes — MUST rotate, never use the same type twice in a row:
+- **Short affirm** (1 sentence): "love this framing" / "this is underrated" — no product tie-in
+- **Pure question** (1-2 sentences): Ask something genuine. Don't mention our work at all.
+- **Respectful pushback**: Disagree or add nuance. "I've actually seen the opposite..."
+- **Story/anecdote**: Share a specific experience WITHOUT tying back to our product.
+- **Builder reply**: The current default — relate to our work. Use for MAX 30% of replies.
+
+### Anti-pattern rules:
+- NEVER start with "exactly", "yeah totally", "100%", "that's smart". Vary first words.
+- NEVER bridge every reply to "we built" / "on the macOS side" / "accessibility APIs". Most replies should NOT mention our product.
+- Some replies should be 1 sentence. Not everything needs 3-4 sentences.
+
 Here are the $BATCH_ACTUAL replies to process:
 $PENDING_DATA
 
@@ -340,8 +352,14 @@ $DM_DATA
 
 ### Twitter/X DMs (use mcp__twitter-agent__* tools)
 1. Navigate to https://x.com/messages
-2. Start new message to THEIR_AUTHOR
-3. Type and send the message.
+2. **ENCRYPTED DM PASSCODE**: Twitter may show an "Enter your passcode" or "encrypted_dm_passcode_required" dialog before you can access DMs. If you see this dialog:
+   a. Find the passcode input field in the snapshot
+   b. Type the passcode: $TWITTER_DM_PASSCODE
+   c. Click "Confirm" or press Enter
+   d. Wait for the DM inbox to load
+   The passcode is loaded from .env as TWITTER_DM_PASSCODE.
+3. Start new message to THEIR_AUTHOR
+4. Type and send the message.
 
 ## After each DM:
 
