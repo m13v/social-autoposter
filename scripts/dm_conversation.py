@@ -64,10 +64,21 @@ def get_our_account(config, platform):
 
 
 def log_outbound(conn, dm_id, content, author=None):
-    """Log a message we sent."""
+    """Log a message we sent. Includes dedup guard to prevent double-sending."""
     row = conn.execute("SELECT platform, their_author FROM dms WHERE id = %s", (dm_id,)).fetchone()
     if not row:
         print(f"ERROR: DM #{dm_id} not found")
+        return False
+
+    # Dedup guard: check if last message is already outbound (no inbound since our last reply)
+    last_msg = conn.execute("""
+        SELECT direction, content, message_at FROM dm_messages
+        WHERE dm_id = %s ORDER BY message_at DESC LIMIT 1
+    """, (dm_id,)).fetchone()
+
+    if last_msg and last_msg["direction"] == "outbound":
+        hours_ago = (datetime.now() - last_msg["message_at"]).total_seconds() / 3600
+        print(f"  DEDUP BLOCKED: Last message to {row['their_author']} (DM #{dm_id}) was already outbound ({hours_ago:.1f}h ago). Skipping.")
         return False
 
     config = load_config()
@@ -80,7 +91,8 @@ def log_outbound(conn, dm_id, content, author=None):
     """, (dm_id, author, content))
 
     conn.execute("""
-        UPDATE dms SET last_message_at = NOW(), message_count = message_count + 1
+        UPDATE dms SET last_message_at = NOW(), message_count = message_count + 1,
+                       conversation_status = 'active'
         WHERE id = %s
     """, (dm_id,))
     conn.commit()
@@ -264,6 +276,51 @@ def show_summary(conn):
             print(f"    DM #{r['id']} {r['their_author']} [{r['platform']}] - {r['message_count']} msgs, T{r['tier'] or 1}, {r['conversation_status']} (last: {ts})")
 
 
+def flag_human(conn, dm_id, reason):
+    """Flag a conversation as needing human attention."""
+    row = conn.execute("SELECT platform, their_author, conversation_status FROM dms WHERE id = %s", (dm_id,)).fetchone()
+    if not row:
+        print(f"ERROR: DM #{dm_id} not found")
+        return False
+
+    conn.execute("""
+        UPDATE dms SET conversation_status = 'needs_human', human_reason = %s, flagged_at = NOW()
+        WHERE id = %s
+    """, (reason, dm_id))
+    conn.commit()
+    print(f"  FLAGGED DM #{dm_id} ({row['their_author']} [{row['platform']}]) for human attention: {reason}")
+    return True
+
+
+def show_flagged(conn):
+    """Show all conversations flagged for human attention."""
+    rows = conn.execute("""
+        SELECT d.id, d.platform, d.their_author, d.tier, d.human_reason, d.flagged_at,
+               d.chat_url, d.message_count,
+               (SELECT content FROM dm_messages WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1) as last_msg,
+               (SELECT direction FROM dm_messages WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1) as last_dir
+        FROM dms d
+        WHERE d.conversation_status = 'needs_human'
+        ORDER BY d.flagged_at DESC
+    """).fetchall()
+
+    if not rows:
+        print("No conversations flagged for human attention.")
+        return
+
+    print(f"=== {len(rows)} conversations need HUMAN attention ===\n")
+    for r in rows:
+        ts = r['flagged_at'].strftime("%m/%d %H:%M") if r['flagged_at'] else "?"
+        last = (r['last_msg'] or "")[:150]
+        print(f"  DM #{r['id']} [{r['platform']}] {r['their_author']} (T{r['tier'] or 1}, {r['message_count']} msgs)")
+        print(f"    REASON: {r['human_reason']}")
+        print(f"    Flagged: {ts}")
+        print(f"    Last msg ({r['last_dir']}): {last}")
+        if r['chat_url']:
+            print(f"    URL: {r['chat_url']}")
+        print()
+
+
 def set_chat_url(conn, dm_id, url):
     conn.execute("UPDATE dms SET chat_url = %s WHERE id = %s", (url, dm_id))
     conn.commit()
@@ -317,7 +374,13 @@ def main():
     p_status = sub.add_parser("set-status", help="Set conversation status")
     p_status.add_argument("--dm-id", type=int, required=True)
     p_status.add_argument("--status", required=True,
-                          choices=["active", "needs_reply", "stale", "converted", "closed"])
+                          choices=["active", "needs_reply", "stale", "converted", "closed", "needs_human"])
+
+    p_flag = sub.add_parser("flag-human", help="Flag conversation for human attention")
+    p_flag.add_argument("--dm-id", type=int, required=True)
+    p_flag.add_argument("--reason", required=True)
+
+    sub.add_parser("show-flagged", help="Show conversations needing human attention")
 
     args = parser.parse_args()
 
@@ -346,6 +409,10 @@ def main():
         set_tier(conn, args.dm_id, args.tier)
     elif args.command == "set-status":
         set_status(conn, args.dm_id, args.status)
+    elif args.command == "flag-human":
+        flag_human(conn, args.dm_id, args.reason)
+    elif args.command == "show-flagged":
+        show_flagged(conn)
 
     conn.close()
 
