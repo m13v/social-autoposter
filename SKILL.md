@@ -221,7 +221,7 @@ FROM replies r JOIN posts p ON r.post_id = p.id
 WHERE r.status='pending' ORDER BY r.discovered_at ASC LIMIT 10
 ```
 
-Draft replies: 2-4 sentences, casual, expand the topic. Apply Tiered Reply Strategy. Max 5 replies per run.
+Draft replies: 1-4 sentences, casual. Apply Tiered Reply Strategy and Reply Archetypes (see engage scripts). Max 5 replies per run.
 
 Post via browser (Reddit/X) or API (Moltbook). Update:
 ```sql
@@ -285,9 +285,18 @@ GOOD body: Paragraphs, incomplete thoughts, personal details, casual tone, ends 
 
 **Tier 1 — Default (no link):** Genuine engagement. Expand topic, ask follow-ups. Most replies.
 
-**Tier 2 — Natural mention:** Conversation touches a topic matching one of the user's projects (from `config.json → projects[].topics`). Mention casually, link only if it adds value. Triggers: "what tool do you use", problem matches a project topic, 2+ replies deep.
+**Tier 2 — Natural mention:** Conversation touches a project topic (`config.json → projects[].topics`). Mention casually. Triggers: direct tool question, problem match, 2+ replies deep.
 
-**Tier 3 — Direct ask:** They ask for link/try/source. Give it immediately using `projects[].website` or `projects[].github` from config.json.
+**Tier 3 — Direct ask:** They ask for link/try/source. Give it using `projects[].website` or `projects[].github`.
+
+## Reply Archetypes — rotate, never repeat same type consecutively:
+- **Short affirm** (1 sentence, no product tie-in): "love this" / "underrated take"
+- **Pure question** (1-2 sentences): Ask something. Don't mention our work.
+- **Respectful pushback**: Disagree or add nuance. "I've seen the opposite..."
+- **Story/anecdote**: Specific experience WITHOUT product tie-back.
+- **Builder reply**: Relate to our work. MAX 30% of replies.
+
+Anti-patterns: never open with "exactly"/"yeah totally"/"100%". Don't bridge every reply to our product.
 
 ---
 
