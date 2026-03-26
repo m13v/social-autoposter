@@ -363,8 +363,9 @@ $DM_DATA
 
 ## After each DM:
 
-Success:
+Success (BOTH steps required):
   psql "\$DATABASE_URL" -c "UPDATE dms SET status='sent', our_dm_content='DM_TEXT', sent_at=NOW() WHERE id=DM_ID;"
+  python3 $REPO_DIR/scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "DM_TEXT"
 
 Failed (rate limit, blocked, error):
   psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='REASON' WHERE id=DM_ID;"
