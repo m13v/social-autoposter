@@ -61,14 +61,7 @@ python3 ~/social-autoposter/scripts/update_stats.py --quiet
 
 ## Workflow: Post (`/social-autoposter`)
 
-### 1. Rate limit check
-
-```sql
-SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours'
-```
-Max 40 posts per 24 hours. Stop if at limit.
-
-### 2. Find candidate threads
+### 1. Find candidate threads
 
 **Option A — Script (preferred):**
 ```bash
@@ -140,11 +133,7 @@ If `sync_script` is set in config.json, run it after logging.
 
 **Manual only — never run from cron.** Original posts are high-stakes and need human review.
 
-### 1. Rate limit check
-
-Max 1 original post per 24 hours. Max 3 per week.
-
-### 2. Cross-posting check
+### 1. Cross-posting check
 
 ```sql
 SELECT platform, thread_title, posted_at FROM posts
