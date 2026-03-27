@@ -42,7 +42,7 @@ SCAN_PID=$!
 # ═══════════════════════════════════════════════════════
 EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
-        SELECT id, platform, our_url, our_content, thread_title, upvotes
+        SELECT id, platform, our_url, our_content, thread_title, upvotes, project_name
         FROM posts
         WHERE status='active'
           AND posted_at < NOW() - INTERVAL '6 hours'
@@ -66,7 +66,7 @@ $EDITABLE
 
 Process ALL of them. For each post:
 1. Read ~/social-autoposter/config.json to get the projects list.
-2. Pick the project whose topics are the CLOSEST match to thread_title + our_content. Be generous - if the thread is about agents, automation, desktop, memory, or anything related to the project descriptions, it's a match. If truly nothing fits, skip that one. Frame it as recommending a cool tool you've come across, NOT as something you built.
+2. Pick the project whose topics are the CLOSEST match to thread_title + our_content. Check the project_name column first — if set, use that project directly. Otherwise match by topics. Be generous - if the thread is about agents, automation, desktop, memory, or anything related to the project descriptions, it's a match. If truly nothing fits, mark it skipped (see step 10) and move on. Frame it as recommending a cool tool you've come across, NOT as something you built.
 3. **If the matched project has a landing_pages config** (with repo, base_url):
    a. Think about what SEO-optimized guide page would fit this specific thread naturally. Consider the thread's audience, their pain points, industry jargon, and what they'd actually find useful. The page should NOT feel like a landing page — it should feel like a genuine 1000-2000 word guide or resource.
    b. cd into the project repo (landing_pages.repo)
@@ -97,9 +97,11 @@ Process ALL of them. For each post:
    - For LinkedIn (professional tone): "I've been building something related - URL"
 9. After each successful edit, update the DB:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='LINK_TEXT' WHERE id=POST_ID"
+10. If a post is SKIPPED (no project match, comment not found, removed by moderation, bad URL), ALWAYS mark it so it won't be retried:
+   psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='SKIPPED: REASON' WHERE id=POST_ID"
 PROMPT_EOF
 
-    gtimeout 14400 claude -p "$(cat "$PHASE_D_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase D claude exited with code $?"
+    gtimeout 14400 claude -p "$(cat "$PHASE_D_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase D claude exited with code $?"
     rm -f "$PHASE_D_PROMPT"
 else
     log "Phase D: No posts eligible for link edit"
@@ -198,9 +200,6 @@ PROMPT_HEADER
 - **Tier 2 (natural mention):** Conversation touches a topic matching a project in config. Recommend it casually as a tool you've come across.
 - **Tier 3 (direct ask):** They ask for link/tool/source. Give it immediately.
 
-**BEFORE mentioning any product by name or describing what it does:**
-Look up the product's local repo (local_repo path in config.json, e.g. ~/fazm, ~/terminator). Read CLAUDE.md, README.md, source code, package configs - whatever gives you accurate info about features, platforms, and setup.
-Do NOT guess product features, platform support, or setup steps.
 
 ### Reply archetypes — MUST rotate, never use the same type twice in a row:
 - **Short affirm** (1 sentence): "love this framing" / "this is underrated" — no product tie-in
@@ -292,7 +291,7 @@ CRITICAL: ALL Reddit browser calls MUST use mcp__reddit-agent__* tools (e.g. mcp
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_BODY
 
-    gtimeout 5400 claude -p "$(cat "$PHASE_B_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B batch $BATCH_NUM claude exited with code $?"
+    gtimeout 5400 claude -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B batch $BATCH_NUM claude exited with code $?"
     rm -f "$PHASE_B_PROMPT"
 
     # Check if we actually made progress (avoid infinite loop)
@@ -360,9 +359,6 @@ CRITICAL RULES:
 - **NEVER say "I'm in [city]"** or share location/personal details not in config.json.
 - If someone asks for any of the above, respond naturally but deflect: keep the conversation going in the DM without making promises. Example: "honestly easier to hash it out here, what specifically are you trying to set up?"
 
-## PRODUCT KNOWLEDGE (read before mentioning any product)
-Before referencing any project by name or describing features/setup in a DM, look up its local repo (local_repo path in config.json, e.g. ~/fazm, ~/terminator). Read CLAUDE.md, README.md, source code, package configs - whatever gives you accurate info. Do NOT guess what a product does or how to set it up.
-
 DM EXAMPLES (good):
 - "yo your point about token costs scaling with agent count hit home, we're dealing with the exact same thing. what's your setup look like?"
 - "that workaround you mentioned for the accessibility API crash is clever, did it hold up in production?"
@@ -418,7 +414,7 @@ CRITICAL: Each platform MUST use its dedicated browser agent. NEVER use generic 
 If a browser agent tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
 PROMPT_EOF
 
-    gtimeout 3600 claude -p "$(cat "$DM_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase E claude exited with code $?"
+    gtimeout 3600 claude -p "$(cat "$DM_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase E claude exited with code $?"
     rm -f "$DM_PROMPT"
 else
     log "Phase E: No pending DMs"

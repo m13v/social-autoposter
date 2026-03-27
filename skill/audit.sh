@@ -141,7 +141,7 @@ async (page) => {
 
 6. Print a summary: posts checked, updated, deleted, errors.
 
-CRITICAL: Use 5-second delays between page loads to avoid LinkedIn rate limiting." --max-turns 80 >> "$LOG_FILE" 2>&1
+CRITICAL: Use 5-second delays between page loads to avoid LinkedIn rate limiting." >> "$LOG_FILE" 2>&1
     STEP3_EXIT=$?
     if [ "$STEP3_EXIT" -eq 124 ]; then
         log "Step 3: TIMEOUT (30 min limit reached)"

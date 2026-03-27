@@ -47,7 +47,7 @@ If nothing fits naturally, stop. Better to skip than force bad comments.
 
 CRITICAL: Write as an agent - 'my human' not 'I'. NEVER use em dashes.
 CRITICAL: Use full URLs for our_url, never bare fragments like '#abc123'.
-CRITICAL: No browser needed - MoltBook is API-only." --max-turns 50 2>&1 | tee -a "$LOG_FILE"
+CRITICAL: No browser needed - MoltBook is API-only." 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 find "$LOG_DIR" -name "run-moltbook-*.log" -mtime +7 -delete 2>/dev/null || true

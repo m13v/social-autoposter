@@ -134,7 +134,7 @@ STEP2_EOF
     sed -i '' "s|REDDIT_USERNAME_PLACEHOLDER|$REDDIT_USERNAME|g" "$STEP2_PROMPT"
     sed -i '' "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP2_PROMPT"
 
-    gtimeout 1200 claude -p "$(cat "$STEP2_PROMPT")" --max-turns 50 >> "$LOGFILE" 2>&1
+    gtimeout 1200 claude -p "$(cat "$STEP2_PROMPT")" >> "$LOGFILE" 2>&1
     STEP2_EXIT=$?
     rm -f "$STEP2_PROMPT"
     if [ "$STEP2_EXIT" -eq 124 ]; then
@@ -172,97 +172,148 @@ log "Step 4: LinkedIn stats (Claude + Playwright)"
 LINKEDIN_POSTS=$(psql "$DATABASE_URL" -t -A -c "
     SELECT COUNT(*) FROM posts
     WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
-      AND our_url LIKE '%linkedin.com/feed/update/%'
+      AND our_url LIKE '%linkedin.com/%'
       AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days');" 2>/dev/null || echo "0")
 
 if [ "$LINKEDIN_POSTS" -gt 0 ]; then
     STEP4_PROMPT=$(mktemp)
     cat > "$STEP4_PROMPT" <<'STEP4_EOF'
-Scrape LinkedIn engagement stats for posts. Do these steps in order, no deviations:
+Scrape LinkedIn engagement stats for OUR COMMENTS (not the parent post). Do these steps in order, no deviations:
 
 CRITICAL: Use the linkedin-agent browser (mcp__linkedin-agent__* tools) for ALL steps below. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
 If a tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
+
+IMPORTANT CONTEXT: Our LinkedIn posts are COMMENTS on other people's posts, not original posts.
+The our_url field contains the parent post URL. We need to find OUR comment within that post
+and scrape the reactions on OUR comment specifically, not the parent post's reactions.
+Our LinkedIn account name is: LINKEDIN_NAME_PLACEHOLDER
 
 Step 1: Query the database to get LinkedIn posts needing stats updates:
 ```bash
 source ~/social-autoposter/.env
 psql "$DATABASE_URL" -t -A -F '|' -c "
-    SELECT id, our_url FROM posts
+    SELECT id, our_url, LEFT(our_content, 80) as content_prefix FROM posts
     WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
-      AND our_url LIKE '%linkedin.com/feed/update/%'
+      AND our_url LIKE '%linkedin.com/%'
       AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days')
-    ORDER BY id;"
+    ORDER BY id
+    LIMIT 30;"
 ```
 
-Step 2: For each post URL, navigate with mcp__linkedin-agent__browser_navigate, wait for page load, then run mcp__linkedin-agent__browser_run_code with this JavaScript to extract stats:
+Step 2: For each post URL, navigate with mcp__linkedin-agent__browser_navigate, wait for page load.
+Then click "Load more comments" or "Most relevant" dropdown to show all comments if available.
+Then run mcp__linkedin-agent__browser_run_code with this JavaScript to find OUR comment and its reactions:
 
 SCRAPE_JS:
 async (page) => {
-  await page.waitForTimeout(3000);
-  const result = { reactions: 0, comments: 0, views: 0, reposts: 0 };
+  await page.waitForTimeout(4000);
 
-  // Try to get the social counts bar
-  const socialBar = await page.evaluate(() => {
-    const res = { reactions: 0, comments: 0, views: 0, reposts: 0 };
+  // Try to expand all comments - click "Load more comments" buttons
+  const expandBtns = await page.$$('button.comments-comments-list__load-more-comments-button, button[aria-label*="Load more comments"], button[aria-label*="load more"]');
+  for (const btn of expandBtns) {
+    try { await btn.click(); await page.waitForTimeout(2000); } catch(e) {}
+  }
 
-    // Reactions (likes) - look for the social counts section
-    const reactionBtn = document.querySelector('button.social-details-social-counts__reactions-count, span.social-details-social-counts__reactions-count, button[aria-label*="reaction"], span[aria-label*="reaction"]');
-    if (reactionBtn) {
-      const text = reactionBtn.textContent.trim().replace(/,/g, '');
-      const num = parseInt(text, 10);
-      if (!isNaN(num)) res.reactions = num;
-      // Also check aria-label for more accurate count
-      const label = reactionBtn.getAttribute('aria-label') || '';
-      const m = label.match(/([\d,]+)\s*reaction/i);
-      if (m) res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
-    }
+  // Also try clicking "Most recent" sort if available to see all comments
+  const sortBtns = await page.$$('button.comments-sort-order-toggle, button[aria-label*="Sort"]');
+  for (const btn of sortBtns) {
+    try { await btn.click(); await page.waitForTimeout(1000); } catch(e) {}
+  }
+  const recentOpts = await page.$$('text="Most recent"');
+  for (const opt of recentOpts) {
+    try { await opt.click(); await page.waitForTimeout(2000); } catch(e) {}
+  }
 
-    // Comments count
-    const commentBtn = document.querySelector('button.social-details-social-counts__comments, button[aria-label*="comment"], li.social-details-social-counts__comments');
-    if (commentBtn) {
-      const text = commentBtn.textContent.trim();
-      const m = text.match(/([\d,]+)/);
-      if (m) res.comments = parseInt(m[1].replace(/,/g, ''), 10);
-    }
+  const ourName = "LINKEDIN_NAME_JS_PLACEHOLDER";
+  const contentPrefix = "CONTENT_PREFIX_JS_PLACEHOLDER";
 
-    // Views / impressions
-    const viewsEl = document.querySelector('span.social-details-social-counts__impressions, span[aria-label*="impression"], span.analytics-entry-point');
-    if (viewsEl) {
-      const text = viewsEl.textContent.trim().replace(/,/g, '');
-      const m = text.match(/([\d,]+)/);
-      if (m) res.views = parseInt(m[1].replace(/,/g, ''), 10);
-    }
+  const result = await page.evaluate(({ourName, contentPrefix}) => {
+    const res = { reactions: 0, found: false, comment_text_preview: '' };
 
-    // Also try generic approach: find all elements with counts in the social bar
-    document.querySelectorAll('.social-details-social-counts span, .social-details-social-counts button').forEach(el => {
-      const text = el.textContent.trim().toLowerCase();
-      const label = (el.getAttribute('aria-label') || '').toLowerCase();
-      const numMatch = text.match(/([\d,]+)/);
-      if (!numMatch) return;
-      const num = parseInt(numMatch[1].replace(/,/g, ''), 10);
-      if (isNaN(num)) return;
+    // Find all comment containers
+    const commentContainers = document.querySelectorAll(
+      'article.comments-comment-entity, ' +
+      'article.comments-comment-item, ' +
+      '[data-id*="comment"], ' +
+      '.comments-comment-list__comment, ' +
+      '.comments-comments-list .comments-comment-item'
+    );
 
-      if (label.includes('reaction') || label.includes('like')) res.reactions = Math.max(res.reactions, num);
-      else if (label.includes('comment')) res.comments = Math.max(res.comments, num);
-      else if (label.includes('repost') || label.includes('share')) res.reposts = Math.max(res.reposts, num);
-      else if (label.includes('impression') || label.includes('view')) res.views = Math.max(res.views, num);
-    });
+    for (const container of commentContainers) {
+      // Check if this comment is by our account
+      const authorEl = container.querySelector(
+        '.comments-post-meta__name-text, ' +
+        '.comments-comment-item__post-meta .comments-post-meta__name-text, ' +
+        'a.comments-post-meta__name-text, ' +
+        'span.comments-post-meta__name-text, ' +
+        '.comment-entity-header__author-text, ' +
+        'a[data-tracking-control-name*="comment"] span'
+      );
+      const authorText = authorEl ? authorEl.textContent.trim() : '';
 
-    // Fallback: look at all text nodes for "N impressions" pattern
-    const allText = document.body.innerText;
-    const viewMatch = allText.match(/([\d,]+)\s*impressions?/i);
-    if (viewMatch && res.views === 0) {
-      res.views = parseInt(viewMatch[1].replace(/,/g, ''), 10);
+      // Also check comment content to match
+      const contentEl = container.querySelector(
+        '.comments-comment-item__main-content, ' +
+        '.comments-comment-item-content-body, ' +
+        '.comments-comment-entity__content, ' +
+        '.update-components-text'
+      );
+      const commentText = contentEl ? contentEl.textContent.trim() : '';
+
+      // Match by author name OR by content prefix (first 60 chars)
+      const nameMatch = authorText.toLowerCase().includes(ourName.toLowerCase());
+      const prefixClean = contentPrefix.replace(/[^a-z0-9 ]/gi, '').substring(0, 60).toLowerCase();
+      const commentClean = commentText.replace(/[^a-z0-9 ]/gi, '').substring(0, 200).toLowerCase();
+      const contentMatch = prefixClean.length > 20 && commentClean.includes(prefixClean);
+
+      if (nameMatch || contentMatch) {
+        res.found = true;
+        res.comment_text_preview = commentText.substring(0, 80);
+
+        // Get reaction count on this specific comment
+        const reactionEl = container.querySelector(
+          'button.comments-comment-social-bar__reactions-count, ' +
+          'button[aria-label*="reaction"], ' +
+          'span.comments-comment-social-bar__reactions-count, ' +
+          '.social-details-social-counts__reactions-count'
+        );
+        if (reactionEl) {
+          const label = reactionEl.getAttribute('aria-label') || '';
+          const labelMatch = label.match(/([\d,]+)\s*reaction/i);
+          if (labelMatch) {
+            res.reactions = parseInt(labelMatch[1].replace(/,/g, ''), 10);
+          } else {
+            const text = reactionEl.textContent.trim().replace(/,/g, '');
+            const num = parseInt(text, 10);
+            if (!isNaN(num)) res.reactions = num;
+          }
+        }
+
+        // Also check for "Like" button with count
+        if (res.reactions === 0) {
+          const likeBtn = container.querySelector('button[aria-label*="like"], button[aria-label*="Like"]');
+          if (likeBtn) {
+            const label = likeBtn.getAttribute('aria-label') || '';
+            const m = label.match(/([\d,]+)/);
+            if (m) res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
+          }
+        }
+
+        break; // Found our comment, stop searching
+      }
     }
 
     return res;
-  });
+  }, {ourName, contentPrefix});
 
-  return JSON.stringify(socialBar);
+  return JSON.stringify(result);
 }
 
+IMPORTANT: For each post, replace CONTENT_PREFIX_JS_PLACEHOLDER in the JS with the first 80 chars of content_prefix from the DB query (escaped for JS string). This helps match our comment even if the author name format differs.
+
 Step 3: Collect all results into a JSON array and save to /tmp/linkedin_stats.json. Each entry should be:
-  {"url": "<the linkedin post url>", "reactions": N, "comments": N, "views": N, "reposts": N}
+  {"url": "<the linkedin post url>", "reactions": N, "found": true/false}
+Only include entries where found=true.
 
 Process in batches of 10 with 5-second delays between page loads to avoid LinkedIn rate limiting.
 
@@ -270,11 +321,14 @@ Step 4: Run: python3 REPO_DIR_PLACEHOLDER/scripts/scrape_linkedin_stats.py --fro
 
 Step 5: Close the browser tab (mcp__linkedin-agent__browser_tabs action 'close', NOT browser_close).
 
-Done. Report totals. Do NOT read any other files. Do NOT deviate from these steps.
+Done. Report totals (found vs not-found). Do NOT read any other files. Do NOT deviate from these steps.
 STEP4_EOF
+    LINKEDIN_NAME=$(python3 -c "import json; print(json.load(open('$REPO_DIR/config.json'))['accounts']['linkedin']['name'])" 2>/dev/null || echo "Matthew Diakonov")
     sed -i '' "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP4_PROMPT"
+    sed -i '' "s|LINKEDIN_NAME_PLACEHOLDER|$LINKEDIN_NAME|g" "$STEP4_PROMPT"
+    sed -i '' "s|LINKEDIN_NAME_JS_PLACEHOLDER|$LINKEDIN_NAME|g" "$STEP4_PROMPT"
 
-    gtimeout 1800 claude -p "$(cat "$STEP4_PROMPT")" --max-turns 80 >> "$LOGFILE" 2>&1
+    gtimeout 1800 claude -p "$(cat "$STEP4_PROMPT")" >> "$LOGFILE" 2>&1
     STEP4_EXIT=$?
     rm -f "$STEP4_PROMPT"
     if [ "$STEP4_EXIT" -eq 124 ]; then

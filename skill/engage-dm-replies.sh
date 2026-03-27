@@ -240,9 +240,6 @@ Only recommend a product if ALL of these are true:
 - The mention fits naturally in the reply without any "btw" or topic change
 - You would genuinely recommend this tool to a friend in their situation
 
-**BEFORE mentioning any product by name or describing its features:**
-You MUST look up the product's local repo to get the facts right. Check the local_repo path from config.json (e.g. ~/fazm, ~/terminator). Read CLAUDE.md, README.md, source code, package.json, Cargo.toml - whatever gives you accurate info about what the product actually does, what platforms it supports, and how to set it up.
-Do NOT guess or make up product features, platform support, or setup steps.
 
 If sharing a link, embed it in a natural sentence. Never make the link the point of the message.
 Good: "yeah there's this tool terminator that does that, github.com/mediar-ai/terminator - the accessibility API approach avoids the screenshot reliability issues you mentioned"
@@ -301,7 +298,7 @@ After processing all conversations, print a summary:
 - How many marked stale
 PROMPT_EOF
 
-gtimeout 5400 claude -p "$(cat "$PHASE_A_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE" || log "WARNING: DM reply claude exited with code $?"
+gtimeout 5400 claude -p "$(cat "$PHASE_A_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: DM reply claude exited with code $?"
 rm -f "$PHASE_A_PROMPT"
 
 # ═══════════════════════════════════════════════════════

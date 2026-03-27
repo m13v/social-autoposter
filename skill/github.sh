@@ -85,7 +85,7 @@ Run the **Workflow: GitHub Issues** section. Follow every step:
 Post to 5 issues per run. Spread across different repos and topics.
 
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
-CRITICAL: In self-replies, link to SPECIFIC FILES (blob/main/path/to/file.ext), not just repo homepages." --max-turns 50 2>&1 | tee -a "$LOG_FILE"
+CRITICAL: In self-replies, link to SPECIFIC FILES (blob/main/path/to/file.ext), not just repo homepages." 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 

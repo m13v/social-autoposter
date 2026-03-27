@@ -3,16 +3,16 @@
 
 LinkedIn doesn't expose a public API for post stats, so engagement data
 is scraped from the browser by Claude using MCP Playwright (linkedin-agent).
-The browser scraper saves results to a JSON file, then this script reads
-that file and updates the DB.
+The browser scraper navigates to the parent post, finds OUR comment within it,
+and extracts the reaction count on our specific comment (not the parent post).
+Results are saved to a JSON file, then this script reads that file and updates the DB.
 
 Expected JSON format (list of objects):
   [
     {
       "url": "https://www.linkedin.com/feed/update/urn:li:activity:...",
       "reactions": 5,
-      "comments": 2,
-      "views": 1234
+      "found": true
     },
     ...
   ]
@@ -46,7 +46,12 @@ def normalize_linkedin_url(url):
 
 
 def update_linkedin_stats(db, scraped_data, quiet=False):
-    """Match scraped LinkedIn data to DB posts and update."""
+    """Match scraped LinkedIn data to DB posts and update.
+
+    Stats are for OUR COMMENT's reactions (not the parent post).
+    The scraper finds our comment within the parent post and extracts
+    the reaction count on our specific comment.
+    """
     # Build lookup by activity ID
     stats_by_activity = {}
     for item in scraped_data:
@@ -59,7 +64,7 @@ def update_linkedin_stats(db, scraped_data, quiet=False):
     posts = db.execute(
         "SELECT id, our_url FROM posts "
         "WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL "
-        "AND our_url LIKE '%%linkedin.com/feed/update/%%' "
+        "AND our_url LIKE '%%linkedin.com/%%' "
         "ORDER BY id"
     ).fetchall()
 
@@ -75,27 +80,26 @@ def update_linkedin_stats(db, scraped_data, quiet=False):
 
         if activity_id in stats_by_activity:
             item = stats_by_activity[activity_id]
+            # Only update if the scraper actually found our comment
+            if not item.get("found", False):
+                unmatched += 1
+                continue
+
             reactions = item.get("reactions", 0) or 0
-            comments = item.get("comments", 0) or 0
-            views = item.get("views", 0) or 0
-            reposts = item.get("reposts", 0) or 0
 
             engagement = json.dumps({
-                "reactions": reactions,
-                "comments": comments,
-                "views": views,
-                "reposts": reposts,
+                "comment_reactions": reactions,
             })
 
             db.execute(
-                "UPDATE posts SET upvotes=%s, comments_count=%s, views=%s, "
+                "UPDATE posts SET upvotes=%s, comments_count=NULL, views=NULL, "
                 "thread_engagement=%s, engagement_updated_at=NOW(), "
                 "status_checked_at=NOW() WHERE id=%s",
-                [reactions, comments, views, engagement, db_id],
+                [reactions, engagement, db_id],
             )
             matched += 1
             if not quiet:
-                print(f"  [{db_id}] reactions={reactions} comments={comments} views={views}")
+                print(f"  [{db_id}] comment_reactions={reactions}")
         else:
             unmatched += 1
 

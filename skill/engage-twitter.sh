@@ -100,7 +100,7 @@ NEVER prefix with username or any other text (e.g. store '2030180353625948573', 
 After discovery, print a summary: how many new replies found, how many skipped (already tracked, excluded, etc.).
 PROMPT_EOF
 
-gtimeout 3600 claude -p "$(cat "$PHASE_A_PROMPT")" --max-turns 200 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase A claude exited with code $?"
+gtimeout 3600 claude -p "$(cat "$PHASE_A_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase A claude exited with code $?"
 rm -f "$PHASE_A_PROMPT"
 
 # ═══════════════════════════════════════════════════════
@@ -204,7 +204,7 @@ For Twitter/X replies - use the twitter-agent browser (mcp__twitter-agent__* too
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
 
-    gtimeout 5400 claude -p "$(cat "$PHASE_B_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B claude exited with code $?"
+    gtimeout 5400 claude -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B claude exited with code $?"
     rm -f "$PHASE_B_PROMPT"
 fi
 

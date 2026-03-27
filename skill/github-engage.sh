@@ -96,7 +96,7 @@ For light acknowledgments (just 'thanks', emoji reactions, etc), skip them:
 ### Replies to process:
 $PENDING_DATA
 
-Process EVERY reply in this batch." --max-turns 100 2>&1 | tee -a "$LOG_FILE"
+Process EVERY reply in this batch." 2>&1 | tee -a "$LOG_FILE"
 
 # ═══════════════════════════════════════════════════════
 # PHASE C: Summary

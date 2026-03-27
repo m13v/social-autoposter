@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS posts (
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS link_edited_at TIMESTAMP;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS link_edit_content TEXT;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS scan_no_change_count INTEGER DEFAULT 0;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS project_name TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_posts_platform ON posts(platform);
 

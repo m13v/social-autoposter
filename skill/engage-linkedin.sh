@@ -144,7 +144,7 @@ https://www.linkedin.com/feed/update/urn:li:activity:ACTIVITY_ID?commentUrn=urn%
 After discovery, print a summary: how many new replies found, how many skipped (already tracked, excluded, etc.).
 PROMPT_EOF
 
-gtimeout 3600 claude -p "$(cat "$PHASE_A_PROMPT")" --max-turns 200 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase A claude exited with code $?"
+gtimeout 3600 claude -p "$(cat "$PHASE_A_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase A claude exited with code $?"
 rm -f "$PHASE_A_PROMPT"
 
 # ═══════════════════════════════════════════════════════
@@ -248,7 +248,7 @@ For LinkedIn replies - use the linkedin-agent browser (mcp__linkedin-agent__* to
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
 
-    gtimeout 5400 claude -p "$(cat "$PHASE_B_PROMPT")" --max-turns 500 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B claude exited with code $?"
+    gtimeout 5400 claude -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B claude exited with code $?"
     rm -f "$PHASE_B_PROMPT"
 fi
 
