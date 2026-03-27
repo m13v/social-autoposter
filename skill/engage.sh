@@ -67,20 +67,34 @@ $EDITABLE
 Process ALL of them. For each post:
 1. Read ~/social-autoposter/config.json to get the projects list.
 2. Pick the project whose topics are the CLOSEST match to thread_title + our_content. Be generous - if the thread is about agents, automation, desktop, memory, or anything related to the project descriptions, it's a match. If truly nothing fits, skip that one.
-3. Write 1 casual sentence + project link (use website if available, otherwise github).
+3. **If the matched project has a landing_pages config** (with repo, base_url):
+   a. Think about what SEO-optimized guide page would fit this specific thread naturally. Consider the thread's audience, their pain points, industry jargon, and what they'd actually find useful. The page should NOT feel like a landing page — it should feel like a genuine 1000-2000 word guide or resource.
+   b. cd into the project repo (landing_pages.repo)
+   c. Look at existing pages under src/app/t/ to understand the site's style, layout components (Navbar, Footer), and theme
+   d. Create a NEW standalone page as src/app/t/{seo-friendly-slug}/page.tsx — this is a real Next.js page with its own Metadata export, not a JSON entry. Include:
+      - Proper <Metadata> with title, description, openGraph, twitter tags
+      - Reuse the site's Navbar and Footer components (import or inline them)
+      - A full article-style page: hero headline, table of contents, 5-7 content sections, comparison tables with real numbers, bullet lists with specific data points, and a CTA section at the bottom
+      - The content must be 1000-2000 words. Pull real context from the project's config (pricing, features, proof_points, competitive_positioning) and from web research to make it concrete and authoritative
+      - Naturally mention the product as ONE solution among the options discussed — don't make the whole page a sales pitch
+   e. git add the new page && git commit -m "Add guide: SHORT_DESCRIPTION" && git push
+   f. Wait ~35s for Vercel deploy, then curl -sI {base_url}/t/{slug} to verify HTTP 200
+   g. Use THAT page URL in the link edit. If deploy fails, fall back to the project's website URL.
+   **If no landing_pages config**: use website if available, otherwise github.
+4. Write 1 casual sentence + project link.
    - For Moltbook (agent voice): "my human built X for this kind of thing - URL"
    - For Reddit (first person): "fwiw I built something for this - URL"
-4. Append it to our_content with a blank line separator.
-5. For Moltbook: extract comment UUID from our_url (after #comment-), PATCH via:
+5. Append it to our_content with a blank line separator.
+6. For Moltbook: extract comment UUID from our_url (after #comment-), PATCH via:
    source ~/social-autoposter/.env
    curl -s -X PATCH -H "Authorization: Bearer \$MOLTBOOK_API_KEY" \\
      -H "Content-Type: application/json" \\
      -d '{"content": "FULL_CONTENT"}' \\
      "https://www.moltbook.com/api/v1/comments/COMMENT_UUID"
-6. For Reddit: navigate to old.reddit.com comment permalink via the reddit-agent browser (mcp__reddit-agent__* tools), click "edit", append the link text to the existing content, save, verify.
-7. For LinkedIn: navigate to the post URL via the linkedin-agent browser (mcp__linkedin-agent__* tools), find our comment, click the three-dot menu (⋯) on it, click "Edit", append the link text to the existing content, save, verify.
+7. For Reddit: navigate to old.reddit.com comment permalink via the reddit-agent browser (mcp__reddit-agent__* tools), click "edit", append the link text to the existing content, save, verify.
+8. For LinkedIn: navigate to the post URL via the linkedin-agent browser (mcp__linkedin-agent__* tools), find our comment, click the three-dot menu (⋯) on it, click "Edit", append the link text to the existing content, save, verify.
    - For LinkedIn (professional tone): "I've been building something related - URL"
-8. After each successful edit, update the DB:
+9. After each successful edit, update the DB:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='LINK_TEXT' WHERE id=POST_ID"
 PROMPT_EOF
 
