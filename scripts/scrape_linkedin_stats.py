@@ -70,6 +70,7 @@ def update_linkedin_stats(db, scraped_data, quiet=False):
 
     matched = 0
     unmatched = 0
+    removed = 0
 
     for post in posts:
         db_id, our_url = post[0], post[1]
@@ -80,9 +81,31 @@ def update_linkedin_stats(db, scraped_data, quiet=False):
 
         if activity_id in stats_by_activity:
             item = stats_by_activity[activity_id]
-            # Only update if the scraper actually found our comment
+
             if not item.get("found", False):
-                unmatched += 1
+                # Comment not found — use 2-detection confirmation
+                # to avoid false positives from page load failures
+                row = db.execute(
+                    "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [db_id]
+                ).fetchone()
+                detect_count = (row[0] if row else 0) + 1
+                if detect_count >= 2:
+                    db.execute(
+                        "UPDATE posts SET status='removed', deletion_detect_count=%s, "
+                        "status_checked_at=NOW() WHERE id=%s",
+                        [detect_count, db_id],
+                    )
+                    removed += 1
+                    if not quiet:
+                        print(f"  [{db_id}] REMOVED (confirmed after {detect_count} detections)")
+                else:
+                    db.execute(
+                        "UPDATE posts SET deletion_detect_count=%s, "
+                        "status_checked_at=NOW() WHERE id=%s",
+                        [detect_count, db_id],
+                    )
+                    if not quiet:
+                        print(f"  [{db_id}] REMOVAL PENDING (detection {detect_count}/2)")
                 continue
 
             reactions = item.get("reactions", 0) or 0
@@ -94,7 +117,7 @@ def update_linkedin_stats(db, scraped_data, quiet=False):
             db.execute(
                 "UPDATE posts SET upvotes=%s, comments_count=NULL, views=NULL, "
                 "thread_engagement=%s, engagement_updated_at=NOW(), "
-                "status_checked_at=NOW() WHERE id=%s",
+                "status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
                 [reactions, engagement, db_id],
             )
             matched += 1
@@ -107,6 +130,7 @@ def update_linkedin_stats(db, scraped_data, quiet=False):
     return {
         "matched": matched,
         "unmatched": unmatched,
+        "removed": removed,
         "scraped_total": len(scraped_data),
         "db_total": len(posts),
     }
@@ -140,6 +164,7 @@ def main():
         print(
             f"LinkedIn Stats: {result['scraped_total']} scraped, "
             f"{result['matched']} DB posts updated, "
+            f"{result['removed']} removed, "
             f"{result['unmatched']} unmatched"
         )
 
