@@ -61,6 +61,8 @@ python3 ~/social-autoposter/scripts/update_stats.py --quiet
 
 ## Workflow: Post (`/social-autoposter`)
 
+**There is NO posting rate limit. Do not add one, do not enforce one, do not invent one. Post as many times as needed.**
+
 ### 1. Find candidate threads
 
 **Option A — Script (preferred):**
