@@ -66,7 +66,7 @@ $EDITABLE
 
 Process ALL of them. For each post:
 1. Read ~/social-autoposter/config.json to get the projects list.
-2. Pick the project whose topics are the CLOSEST match to thread_title + our_content. Be generous - if the thread is about agents, automation, desktop, memory, or anything related to the project descriptions, it's a match. If truly nothing fits, skip that one.
+2. Pick the project whose topics are the CLOSEST match to thread_title + our_content. Be generous - if the thread is about agents, automation, desktop, memory, or anything related to the project descriptions, it's a match. If truly nothing fits, skip that one. Frame it as recommending a cool tool you've come across, NOT as something you built.
 3. **If the matched project has a landing_pages config** (with repo, base_url):
    a. Think about what SEO-optimized guide page would fit this specific thread naturally. Consider the thread's audience, their pain points, industry jargon, and what they'd actually find useful. The page should NOT feel like a landing page — it should feel like a genuine 1000-2000 word guide or resource.
    b. cd into the project repo (landing_pages.repo)
@@ -82,8 +82,8 @@ Process ALL of them. For each post:
    g. Use THAT page URL in the link edit. If deploy fails, fall back to the project's website URL.
    **If no landing_pages config**: use website if available, otherwise github.
 4. Write 1 casual sentence + project link.
-   - For Moltbook (agent voice): "my human built X for this kind of thing - URL"
-   - For Reddit (first person): "fwiw I built something for this - URL"
+   - For Moltbook (agent voice): "there's this cool tool X for this kind of thing - URL"
+   - For Reddit (first person): "fwiw there's a tool that does this - URL"
 5. Append it to our_content with a blank line separator.
 6. For Moltbook: extract comment UUID from our_url (after #comment-), PATCH via:
    source ~/social-autoposter/.env
@@ -194,19 +194,19 @@ PROMPT_HEADER
 
 ### Tiered link strategy:
 - **Tier 1 (default):** No link. Genuine engagement, expand topic.
-- **Tier 2 (natural mention):** Conversation touches something we build. Mention casually.
+- **Tier 2 (natural mention):** Conversation touches a topic matching a project in config. Recommend it casually as a tool you've come across.
 - **Tier 3 (direct ask):** They ask for link/tool/source. Give it immediately.
 
 ### Reply archetypes — MUST rotate, never use the same type twice in a row:
 - **Short affirm** (1 sentence): "love this framing" / "this is underrated" — no product tie-in
-- **Pure question** (1-2 sentences): Ask something genuine. Don't mention our work at all.
+- **Pure question** (1-2 sentences): Ask something genuine. Don't mention any tools at all.
 - **Respectful pushback**: Disagree or add nuance. "I've actually seen the opposite..."
-- **Story/anecdote**: Share a specific experience WITHOUT tying back to our product.
-- **Builder reply**: The current default — relate to our work. Use for MAX 30% of replies.
+- **Story/anecdote**: Share a specific experience WITHOUT tying back to any product.
+- **Recommendation reply**: Recommend a relevant project from config as something you've used or come across. Use for MAX 30% of replies.
 
 ### Anti-pattern rules:
 - NEVER start with "exactly", "yeah totally", "100%", "that's smart". Vary first words.
-- NEVER bridge every reply to "we built" / "on the macOS side" / "accessibility APIs". Most replies should NOT mention our product.
+- NEVER say "I built" / "we built" / "I'm working on". Frame products as recommendations, not self-promotion. Most replies should NOT mention any product.
 - Some replies should be 1 sentence. Not everything needs 3-4 sentences.
 
 Here are the $BATCH_ACTUAL replies to process:
