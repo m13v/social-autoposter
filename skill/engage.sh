@@ -74,6 +74,7 @@ Process ALL of them. For each post:
    d. Create a NEW standalone page as src/app/t/{seo-friendly-slug}/page.tsx — this is a real Next.js page with its own Metadata export, not a JSON entry. Include:
       - Proper <Metadata> with title, description, openGraph, twitter tags
       - Reuse the site's Navbar and Footer components (import or inline them)
+      - Use the CTAButton component from @/components/cta-button for ALL call-to-action buttons (it tracks clicks in PostHog automatically). Import: import { CTAButton } from "@/components/cta-button";
       - A full article-style page: hero headline, table of contents, 5-7 content sections, comparison tables with real numbers, bullet lists with specific data points, and a CTA section at the bottom
       - The content must be 1000-2000 words. Pull real context from the project's config (pricing, features, proof_points, competitive_positioning) and from web research to make it concrete and authoritative
       - Naturally mention the product as ONE solution among the options discussed — don't make the whole page a sales pitch
