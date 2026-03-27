@@ -114,14 +114,16 @@ curl -s -X POST -H "Authorization: Bearer $MOLTBOOK_API_KEY" -H "Content-Type: a
 On Moltbook: write as agent ("my human" not "I").
 Verify: fetch post by UUID, check `verification_status` is `"verified"`.
 
-### 7. Log + sync
+### 6. Log + sync
 
 ```sql
 INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
   thread_title, thread_content, our_url, our_content, our_account,
-  source_summary, status, posted_at)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
+  source_summary, project_name, status, posted_at)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
 ```
+
+Set `project_name` to the matching project name from `config.json` (e.g., 'Fazm', 'Cyrano', 'Terminator'). Every post/comment MUST be labeled with its target project. If engagement is general/unrelated to any project, use 'general'.
 
 Use the account value from `config.json` for `our_account`.
 
@@ -143,11 +145,11 @@ ORDER BY posted_at DESC;
 
 **NEVER post the same or similar content to multiple subreddits.** This is the #1 AI detection red flag. Each post must be unique to its community.
 
-### 3. Pick one target community
+### 2. Pick one target community
 
 Choose the single best subreddit from `config.json → subreddits` for this topic. Tailor the post to that community's culture and tone.
 
-### 4. Draft the post
+### 3. Draft the post
 
 **Anti-AI-detection checklist** (must pass ALL before posting):
 
@@ -163,22 +165,22 @@ Choose the single best subreddit from `config.json → subreddits` for this topi
 
 **Read it out loud.** If it sounds like a blog post or a ChatGPT response, rewrite it.
 
-### 5. Post it
+### 4. Post it
 
 **Reddit**: old.reddit.com → Submit new text post → paste title + body → submit → verify → capture permalink.
 
-### 6. Log it
+### 5. Log it
 
 ```sql
 INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
   thread_title, thread_content, our_url, our_content, our_account,
-  source_summary, status, posted_at)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
+  source_summary, project_name, status, posted_at)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
 ```
 
-For original posts: `thread_url` = `our_url`, `thread_author` = our account from config.json.
+Set `project_name` to the matching project name from `config.json`. For original posts: `thread_url` = `our_url`, `thread_author` = our account from config.json.
 
-### 7. Mandatory engagement plan
+### 6. Mandatory engagement plan
 
 After posting, you MUST:
 - Check for comments within 2-4 hours
@@ -251,9 +253,9 @@ Visit each post URL via browser. Check status (active/deleted/removed/inactive).
 8. **No em dashes (—).** Use commas, periods, or regular dashes (-) instead. Em dashes are the #1 "ChatGPT tell."
 9. **No markdown formatting in Reddit.** No headers (##), no bold (**text**), no numbered lists. Write in plain paragraphs.
 10. **Never cross-post.** One post per topic per community.
-12. **Include imperfections.** Contractions, sentence fragments, casual asides, occasional lowercase.
-13. **Vary your openings.** Don't always start with credentials. Sometimes just jump into the topic.
-14. **Reply to comments on your posts.** Zero engagement on your own post = bot signal. Reply within 24h.
+11. **Include imperfections.** Contractions, sentence fragments, casual asides, occasional lowercase.
+12. **Vary your openings.** Don't always start with credentials. Sometimes just jump into the topic.
+13. **Reply to comments on your posts.** Zero engagement on your own post = bot signal. Reply within 24h.
 
 ### Bad vs Good (Comments)
 
@@ -285,6 +287,6 @@ GOOD body: Paragraphs, incomplete thoughts, personal details, casual tone, ends 
 
 ## Database Schema
 
-`posts`: id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary
+`posts`: id, platform, thread_url, thread_title, our_url, our_content, our_account, project_name, posted_at, status, upvotes, comments_count, views, source_summary, link_edited_at, link_edit_content
 
 `replies`: id, post_id, platform, their_author, their_content, our_reply_content, status (pending|replied|skipped|error), depth
