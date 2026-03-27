@@ -61,7 +61,14 @@ python3 ~/social-autoposter/scripts/update_stats.py --quiet
 
 ## Workflow: Post (`/social-autoposter`)
 
-### 1. Find candidate threads
+### 1. Rate limit check
+
+```sql
+SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours'
+```
+Max 40 posts per 24 hours. Stop if at limit.
+
+### 2. Find candidate threads
 
 **Option A — Script (preferred):**
 ```bash
@@ -71,7 +78,7 @@ python3 ~/social-autoposter/scripts/find_threads.py --include-moltbook
 **Option B — Browse manually:**
 Browse `/new` and `/hot` on the subreddits from `config.json`. Also check Moltbook via API.
 
-### 2. Pick the best thread
+### 3. Pick the best thread
 
 - You have a genuine angle from `content_angle` in config.json
 - Not already posted in: `SELECT thread_url FROM posts`
@@ -81,15 +88,15 @@ Browse `/new` and `/hot` on the subreddits from `config.json`. Also check Moltbo
   ```
 - If nothing fits naturally, **stop**. Better to skip than force a bad comment.
 
-### 3. Read the thread + top comments
+### 4. Read the thread + top comments
 
 Check tone, length cues, thread age. Find best comment to reply to (high-upvote comments get more visibility).
 
-### 4. Draft the comment
+### 5. Draft the comment
 
 Follow Content Rules below. 2-3 sentences, first person, specific details from `content_angle`. No product links in top-level comments.
 
-### 4. Post it
+### 6. Post it
 
 **Reddit** (browser automation):
 - Navigate to `old.reddit.com` thread URL
@@ -114,7 +121,7 @@ curl -s -X POST -H "Authorization: Bearer $MOLTBOOK_API_KEY" -H "Content-Type: a
 On Moltbook: write as agent ("my human" not "I"). Max 1 post per 30 min.
 Verify: fetch post by UUID, check `verification_status` is `"verified"`.
 
-### 6. Log + sync
+### 7. Log + sync
 
 ```sql
 INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
@@ -133,7 +140,11 @@ If `sync_script` is set in config.json, run it after logging.
 
 **Manual only — never run from cron.** Original posts are high-stakes and need human review.
 
-### 1. Cross-posting check
+### 1. Rate limit check
+
+Max 1 original post per 24 hours. Max 3 per week.
+
+### 2. Cross-posting check
 
 ```sql
 SELECT platform, thread_title, posted_at FROM posts
@@ -143,11 +154,11 @@ ORDER BY posted_at DESC;
 
 **NEVER post the same or similar content to multiple subreddits.** This is the #1 AI detection red flag. Each post must be unique to its community.
 
-### 2. Pick one target community
+### 3. Pick one target community
 
 Choose the single best subreddit from `config.json → subreddits` for this topic. Tailor the post to that community's culture and tone.
 
-### 3. Draft the post
+### 4. Draft the post
 
 **Anti-AI-detection checklist** (must pass ALL before posting):
 
@@ -167,7 +178,7 @@ Choose the single best subreddit from `config.json → subreddits` for this topi
 
 **Reddit**: old.reddit.com → Submit new text post → paste title + body → submit → verify → capture permalink.
 
-### 5. Log it
+### 6. Log it
 
 ```sql
 INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
@@ -178,7 +189,7 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
 
 For original posts: `thread_url` = `our_url`, `thread_author` = our account from config.json.
 
-### 6. Mandatory engagement plan
+### 7. Mandatory engagement plan
 
 After posting, you MUST:
 - Check for comments within 2-4 hours
