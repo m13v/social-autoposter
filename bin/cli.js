@@ -22,7 +22,7 @@ const COPY_TARGETS = [
 ];
 
 // Never overwrite these user files during update
-const USER_FILES = new Set(['config.json', '.env']);
+const USER_FILES = new Set(['config.json', '.env', 'SKILL.md']);
 
 function copyDir(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
