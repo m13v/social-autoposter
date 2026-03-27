@@ -282,6 +282,49 @@ GOOD body: Paragraphs, incomplete thoughts, personal details, casual tone, ends 
 
 **Tier 3 — Direct ask:** They ask for link/try/source. Give it immediately using `projects[].website` or `projects[].github` from config.json.
 
+### Custom Landing Pages (Tier 2 & 3)
+
+When posting a Tier 2 or Tier 3 link for a project that has `landing_pages` in config.json, **create a custom static page first** instead of linking to the generic website.
+
+**Check:** `config.json -> projects[].landing_pages` -- if present, use this workflow.
+
+**Steps:**
+
+1. **Read the thread context** -- topic, pain points discussed, audience segment, specific questions.
+
+2. **Create a page entry** in the project's data file (path: `landing_pages.repo`/`landing_pages.data_file`):
+   ```json
+   {
+     "slug": "short-descriptive-slug",
+     "title": "SEO title targeting the thread audience",
+     "meta_description": "Meta description with thread-relevant keywords",
+     "headline": "Headline addressing the specific pain point from the thread",
+     "subheadline": "Connects the product to their exact problem",
+     "pain_points": ["3 pain points mirroring the thread discussion"],
+     "features": [{"title": "...", "description": "..."}, ...],
+     "cta_text": "CTA relevant to their situation",
+     "cta_url": "https://project-website.com",
+     "context": "Which thread/conversation this page was created for"
+   }
+   ```
+
+3. **Push to GitHub** (Vercel auto-deploys):
+   ```bash
+   cd <landing_pages.repo>
+   git add data/pages.json && git commit -m "Add landing page: <slug>" && git push
+   ```
+
+4. **Wait ~30s** for Vercel build.
+
+5. **Use the custom URL** in your reply: `<landing_pages.base_url>/t/<slug>`
+
+**Rules:**
+- Each page must be unique, tailored to the specific conversation
+- Slug should be descriptive and SEO-friendly (e.g. `pizza-rush-staffing`, `chinese-pos-integration`)
+- Headline addresses the exact pain point from the thread
+- Features highlight the 3 most relevant capabilities for that audience
+- Pages are statically generated at build time (proper HTML, fast, SEO-optimized)
+
 ---
 
 ## Database Schema
