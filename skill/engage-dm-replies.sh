@@ -240,6 +240,14 @@ Only recommend a product if ALL of these are true:
 - The mention fits naturally in the reply without any "btw" or topic change
 - You would genuinely recommend this tool to a friend in their situation
 
+**BEFORE mentioning any product by name or describing its features:**
+You MUST read the product's local README to get the facts right. Local repos:
+- Fazm: ~/fazm/README.md
+- Terminator: ~/terminator/README.md
+- macOS MCP: check ~/mcp-server-macos-use/README.md or ~/terminator/ for docs
+- Other projects: ~/[project-name]/README.md
+Do NOT guess what a product does, what platforms it supports, or what the setup flow looks like. If you can't find the README, stick to what's in config.json and don't elaborate beyond that.
+
 If sharing a link, embed it in a natural sentence. Never make the link the point of the message.
 Good: "yeah there's this tool terminator that does that, github.com/mediar-ai/terminator - the accessibility API approach avoids the screenshot reliability issues you mentioned"
 Bad: "btw I built a tool for that, check out github.com/mediar-ai/terminator if you're curious"
