@@ -52,8 +52,9 @@ Run the **Workflow: GitHub Issues** section. Follow every step:
 5. Read each issue fully (body + existing comments)
 6. Draft helpful comments (follow Content Rules and COMMENT STYLE above - NEVER use em dashes)
 7. Post via: gh issue comment NUMBER -R OWNER/REPO --body \"...\"
-8. Log to database
-9. Self-reply with a link to a SPECIFIC FILE in our repos (not just the repo homepage).
+8. Determine project_name by matching issue topic to config.json projects[].topics
+9. Log to database (MUST include project_name in the INSERT)
+10. Self-reply with a link to a SPECIFIC FILE in our repos (not just the repo homepage).
    Map expertise to files:
    - macOS accessibility/AX/click/screen control -> mediar-ai/mcp-server-macos-use/Sources/MCPServer/main.swift
    - Desktop automation framework/element interaction -> mediar-ai/terminator/crates/terminator/src/element.rs
@@ -80,7 +81,7 @@ Run the **Workflow: GitHub Issues** section. Follow every step:
    - Vector embeddings/semantic search -> m13v/ai-browser-profile/ai_browser_profile/embeddings.py
    - Local knowledge extraction/browser data -> m13v/ai-browser-profile
    - Offline voice/speech recognition -> m13v/fazm/Desktop/Sources/TranscriptionService.swift
-10. Log self-reply to database too
+11. Log self-reply to database too (same project_name)
 
 Post to 5 issues per run. Spread across different repos and topics.
 

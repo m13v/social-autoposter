@@ -24,7 +24,8 @@ Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
 2. Pick the best Reddit thread from the script output
 3. Draft the comment (follow Content Rules - NEVER use em dashes)
 4. Post it using the reddit-agent browser (mcp__reddit-agent__* tools)
-5. Log to database
+5. Determine project_name by matching thread topic to config.json projects[].topics
+6. Log to database (MUST include project_name in the INSERT)
 
 Up to 3 posts per run. If nothing fits, say '## No good thread found' and stop.
 

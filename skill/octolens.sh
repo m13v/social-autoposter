@@ -49,7 +49,8 @@ For each picked candidate, follow the standard social-autoposter posting flow:
 - Read the full thread/post via browser to understand context
 - Draft a natural comment following content_angle from config.json
 - Post via browser automation (reddit-agent for Reddit, twitter-agent for Twitter, etc.)
-- Log to the posts table with source_summary = 'octolens: [keyword]'
+- Determine project_name by matching thread topic to config.json projects[].topics
+- Log to the posts table with source_summary = 'octolens: [keyword]' (MUST include project_name)
 
 Skip if nothing fits naturally. Config is at ~/social-autoposter/config.json" 2>&1 | tee -a "$LOG_FILE"
 

@@ -128,6 +128,17 @@ def update_reddit(db, user_agent, config=None, quiet=False):
             author = comment_data.get("author", "")
             score = comment_data.get("score", 0)
 
+            # Count direct replies to our comment
+            replies_obj = comment_data.get("replies", "")
+            comment_reply_count = 0
+            if replies_obj and isinstance(replies_obj, dict):
+                reply_children = replies_obj.get("data", {}).get("children", [])
+                comment_reply_count = sum(1 for c in reply_children if c.get("kind") == "t1")
+                comment_reply_count += sum(
+                    c.get("data", {}).get("count", 0)
+                    for c in reply_children if c.get("kind") == "more"
+                )
+
             if body in ("[deleted]",) or author == "[deleted]":
                 # Require 2 consecutive deletion detections to avoid false positives
                 # from Reddit API rate limiting / transient errors
@@ -170,11 +181,12 @@ def update_reddit(db, user_agent, config=None, quiet=False):
             db.execute(
                 "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
                 "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
-                [score, thread_comments, engagement, post_id],
+                [score, comment_reply_count, engagement, post_id],
             )
             updated += 1
-            results.append({"id": post_id, "score": score, "thread_score": thread_score,
-                            "thread_comments": thread_comments, "title": thread_title})
+            results.append({"id": post_id, "score": score, "comment_replies": comment_reply_count,
+                            "thread_score": thread_score, "thread_comments": thread_comments,
+                            "title": thread_title})
         else:
             # our_url is a thread URL without a comment ID
             # Check if it's our original post (we are the thread author)

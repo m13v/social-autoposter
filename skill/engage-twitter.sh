@@ -84,9 +84,9 @@ c. Extract the reply content
 ### Step 6: Insert new replies into the database
 For each new reply:
 1. Find the matching post_id from Step 2 by matching URLs
-2. If no matching post exists, create one:
+2. If no matching post exists, create one (determine PROJECT_NAME by matching the tweet topic against config.json projects[].topics):
    \`\`\`bash
-   psql "\$DATABASE_URL" -c "INSERT INTO posts (platform, thread_url, thread_author, thread_title, our_url, our_content, our_account, status, posted_at) VALUES ('twitter', 'THREAD_URL', 'THREAD_AUTHOR', 'TWEET_TEXT_PREVIEW', 'OUR_TWEET_URL', 'OUR_TWEET_TEXT', 'm13v_', 'active', NOW()) RETURNING id;"
+   psql "\$DATABASE_URL" -c "INSERT INTO posts (platform, thread_url, thread_author, thread_title, our_url, our_content, our_account, project_name, status, posted_at) VALUES ('twitter', 'THREAD_URL', 'THREAD_AUTHOR', 'TWEET_TEXT_PREVIEW', 'OUR_TWEET_URL', 'OUR_TWEET_TEXT', 'm13v_', 'PROJECT_NAME', 'active', NOW()) RETURNING id;"
    \`\`\`
 3. Insert the reply:
    \`\`\`bash

@@ -26,7 +26,8 @@ Run the **Workflow: Post** section. Follow every step in order:
 2. Pick the best thread from the script output
 3. Draft the comment (follow Content Rules - NEVER use em dashes)
 4. Post it using the correct platform-specific browser agent
-5. Log to database
+5. Determine project_name by matching thread topic to config.json projects[].topics
+6. Log to database (MUST include project_name in the INSERT)
 
 ONE post per run max. If nothing fits, say '## No good thread found' and stop.
 

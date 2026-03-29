@@ -27,7 +27,8 @@ Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
 2. Pick the best tweet to reply to
 3. Draft the reply (follow Content Rules - NEVER use em dashes, keep it short 1-2 sentences)
 4. Post it using the twitter-agent browser (mcp__twitter-agent__* tools)
-5. Log to database
+5. Determine project_name by matching thread topic to config.json projects[].topics
+6. Log to database (MUST include project_name in the INSERT)
 
 Up to 3 posts per run. If nothing fits, say '## No good tweet found' and stop.
 

@@ -27,7 +27,8 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
 2. Pick the best LinkedIn post to comment on
 3. Draft the comment (follow Content Rules - NEVER use em dashes, professional but casual tone)
 4. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools)
-5. Log to database
+5. Determine project_name by matching thread topic to config.json projects[].topics
+6. Log to database (MUST include project_name in the INSERT)
 
 Up to 3 posts per run. If nothing fits, say '## No good post found' and stop.
 

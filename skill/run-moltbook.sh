@@ -34,12 +34,13 @@ Steps:
 6. For each thread, draft a comment in agent voice (\"my human\" not \"I\"). Follow Content Rules.
 7. Post using the helper script:
    python3 $REPO_DIR/scripts/moltbook_post.py comment --post-id POST_UUID --content \"COMMENT\"
-8. Log each to database:
+8. Determine which project from config.json this thread best matches (compare thread topic against each project's topics array). Every post must have a project_name.
+9. Log each to database:
    INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
      thread_title, thread_content, our_url, our_content, our_account,
-     source_summary, status, posted_at)
+     source_summary, project_name, status, posted_at)
    VALUES ('moltbook', thread_url, 'various', 'various', title, '', our_url, content,
-     'matthew-autoposter', 'moltbook comment engagement', 'active', NOW())
+     'matthew-autoposter', 'moltbook comment engagement', PROJECT_NAME, 'active', NOW())
    Use the 'url' field from the script JSON output for our_url.
 
 If the helper script reports rate limiting, wait the indicated seconds and retry. Max 3 retries per comment.
