@@ -94,7 +94,7 @@ Run the **Workflow: GitHub Issues** section. Follow every step:
    - Offline voice/speech recognition -> m13v/fazm/Desktop/Sources/TranscriptionService.swift
 11. Log self-reply to database too (same project_name)
 
-Post to 5 issues per run. Spread across different repos and topics.
+Post to 10 issues per run. Spread across different repos and topics.
 
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
 CRITICAL: In self-replies, link to SPECIFIC FILES (blob/main/path/to/file.ext), not just repo homepages." 2>&1 | tee -a "$LOG_FILE"

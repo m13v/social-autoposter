@@ -44,7 +44,7 @@ Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
 4. Post it using the reddit-agent browser (mcp__reddit-agent__* tools)
 5. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT)
 
-Up to 3 posts per run. If nothing fits, say '## No good thread found' and stop.
+Up to 100 posts per run. If nothing fits, say '## No good thread found' and stop.
 
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
 CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close).

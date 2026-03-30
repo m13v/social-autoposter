@@ -50,15 +50,6 @@ function generatePlists() {
 
   const plists = [
     {
-      file: 'com.m13v.social-autoposter.plist',
-      label: 'com.m13v.social-autoposter',
-      script: `${DEST}/skill/run.sh`,
-      interval: 3600,
-      runAtLoad: true,
-      stdoutLog: `${DEST}/skill/logs/launchd-stdout.log`,
-      stderrLog: `${DEST}/skill/logs/launchd-stderr.log`,
-    },
-    {
       file: 'com.m13v.social-stats.plist',
       label: 'com.m13v.social-stats',
       script: `${DEST}/skill/stats.sh`,

@@ -12,10 +12,13 @@
     "config.example.json",
     ".env.example",
     "SKILL.md",
-    "skill/run.sh",
+    "skill/run-reddit.sh",
+    "skill/run-twitter.sh",
+    "skill/run-linkedin.sh",
+    "skill/run-moltbook.sh",
+    "skill/run-github.sh",
     "skill/stats.sh",
     "skill/engage.sh",
-    "skill/github.sh",
     "setup/SKILL.md"
   ],
   "keywords": [

@@ -76,15 +76,16 @@ def get_recent_posts(limit=5):
     return [row[0] for row in rows]
 
 
-def check_rate_limit(max_per_day=None):
-    """Return (posts_today, can_post). No limit by default."""
+def check_rate_limit(max_per_day=4000):
+    """Return (posts_today, can_post). Default limit: 4000/day."""
     conn = dbmod.get_conn()
     row = conn.execute(
         "SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours' AND platform != 'github_issues'"
     ).fetchone()
     conn.close()
     count = row[0]
-    return count, True
+    can_post = count < max_per_day if max_per_day else True
+    return count, can_post
 
 
 def fetch_reddit_threads(subreddits, sort="new", limit=10, user_agent="social-autoposter/1.0"):
@@ -354,11 +355,27 @@ def main():
     parser.add_argument("--include-twitter", action="store_true", help="Generate X/Twitter search URLs")
     parser.add_argument("--include-linkedin", action="store_true", help="Generate LinkedIn search URLs")
     parser.add_argument("--include-github", action="store_true", help="Search GitHub issues via gh CLI")
+    parser.add_argument("--project", default=None, help="Use topics/subreddits from a specific project in config.json")
     parser.add_argument("--force", action="store_true", help="Skip rate limit check")
     args = parser.parse_args()
 
     config = load_config()
-    subreddits = args.subreddits.split(",") if args.subreddits else config.get("subreddits", [])
+
+    # If --project is specified, use that project's config for topics/subreddits
+    project_config = None
+    if args.project:
+        for p in config.get("projects", []):
+            if p["name"].lower() == args.project.lower():
+                project_config = p
+                break
+        if not project_config:
+            print(json.dumps({"error": f"project '{args.project}' not found", "threads": []}))
+            sys.exit(1)
+
+    subreddits = args.subreddits.split(",") if args.subreddits else (
+        project_config.get("subreddits", config.get("subreddits", []))
+        if project_config else config.get("subreddits", [])
+    )
     reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "")
     user_agent = f"social-autoposter/1.0 (u/{reddit_username})" if reddit_username else "social-autoposter/1.0"
 
@@ -384,21 +401,32 @@ def main():
         threads.extend(fetch_moltbook_threads(moltbook_key))
 
     if args.include_twitter:
-        twitter_topics = config.get("twitter_topics", [])
+        # Use project-specific topics if available, fall back to global
+        twitter_topics = (
+            project_config.get("twitter_topics", config.get("twitter_topics", []))
+            if project_config else config.get("twitter_topics", [])
+        )
         if args.topic:
             twitter_topics = [t for t in twitter_topics if args.topic.lower() in t.lower()]
         raw_excl = config.get("exclusions", {})
         threads.extend(generate_twitter_search_urls(twitter_topics, exclusions=raw_excl))
 
     if args.include_linkedin:
-        linkedin_topics = config.get("linkedin_topics", [])
+        linkedin_topics = (
+            project_config.get("linkedin_topics", config.get("linkedin_topics", []))
+            if project_config else config.get("linkedin_topics", [])
+        )
         if args.topic:
             linkedin_topics = [t for t in linkedin_topics if args.topic.lower() in t.lower()]
         raw_excl = config.get("exclusions", {})
         threads.extend(generate_linkedin_search_urls(linkedin_topics, exclusions=raw_excl))
 
     if args.include_github:
-        github_topics = config.get("accounts", {}).get("github", {}).get("search_topics", [])
+        github_topics = (
+            project_config.get("github_search_topics",
+                config.get("accounts", {}).get("github", {}).get("search_topics", []))
+            if project_config else config.get("accounts", {}).get("github", {}).get("search_topics", [])
+        )
         if args.topic:
             github_topics = [t for t in github_topics if args.topic.lower() in t.lower()]
         raw_excl = config.get("exclusions", {})
@@ -410,6 +438,7 @@ def main():
     output = {
         "posts_today": posts_today,
         "can_post": can_post,
+        "project": project_config["name"] if project_config else None,
         "total_found": len(threads),
         "candidates": len(candidates),
         "recent_post_snippets": [p[:100] if p else "" for p in recent_posts],
