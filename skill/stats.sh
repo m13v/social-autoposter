@@ -208,20 +208,28 @@ SCRAPE_JS:
 async (page) => {
   await page.waitForTimeout(4000);
 
-  // Try to expand all comments - click "Load more comments" buttons
-  const expandBtns = await page.$$('button.comments-comments-list__load-more-comments-button, button[aria-label*="Load more comments"], button[aria-label*="load more"]');
+  // CRITICAL: Comments don't render until you interact with the page.
+  // Click the comment textbox to trigger comment loading.
+  const commentBox = await page.$('[contenteditable="true"], [role="textbox"]');
+  if (commentBox) {
+    try { await commentBox.click(); await page.waitForTimeout(3000); } catch(e) {}
+  }
+
+  // Try to expand all comments - click "Load more comments" / "See previous replies"
+  const expandBtns = await page.$$('button[aria-label*="Load more comments"], button[aria-label*="load more"], button[aria-label*="See previous replies"], button[aria-label*="Load previous replies"]');
   for (const btn of expandBtns) {
     try { await btn.click(); await page.waitForTimeout(2000); } catch(e) {}
   }
 
-  // Also try clicking "Most recent" sort if available to see all comments
-  const sortBtns = await page.$$('button.comments-sort-order-toggle, button[aria-label*="Sort"]');
-  for (const btn of sortBtns) {
-    try { await btn.click(); await page.waitForTimeout(1000); } catch(e) {}
-  }
-  const recentOpts = await page.$$('text="Most recent"');
-  for (const opt of recentOpts) {
-    try { await opt.click(); await page.waitForTimeout(2000); } catch(e) {}
+  // Switch to "Most recent" sort to see all comments
+  const sortBtn = await page.$('button[class*="comments-sort-order-toggle"]');
+  if (sortBtn) {
+    try {
+      await sortBtn.click();
+      await page.waitForTimeout(1000);
+      const recentOpt = await page.$('li:has-text("Most recent"), div[role="option"]:has-text("Most recent"), span:has-text("Most recent")');
+      if (recentOpt) { await recentOpt.click(); await page.waitForTimeout(3000); }
+    } catch(e) {}
   }
 
   const ourName = "LINKEDIN_NAME_JS_PLACEHOLDER";
@@ -230,33 +238,25 @@ async (page) => {
   const result = await page.evaluate(({ourName, contentPrefix}) => {
     const res = { reactions: 0, found: false, comment_text_preview: '' };
 
-    // Find all comment containers
+    // Find all comment containers (current LinkedIn DOM uses article.comments-comment-entity)
     const commentContainers = document.querySelectorAll(
       'article.comments-comment-entity, ' +
-      'article.comments-comment-item, ' +
-      '[data-id*="comment"], ' +
-      '.comments-comment-list__comment, ' +
-      '.comments-comments-list .comments-comment-item'
+      'article.comments-comment-item'
     );
 
     for (const container of commentContainers) {
-      // Check if this comment is by our account
+      // Author name: current LinkedIn uses .comments-comment-meta__description-title
       const authorEl = container.querySelector(
-        '.comments-post-meta__name-text, ' +
-        '.comments-comment-item__post-meta .comments-post-meta__name-text, ' +
-        'a.comments-post-meta__name-text, ' +
-        'span.comments-post-meta__name-text, ' +
-        '.comment-entity-header__author-text, ' +
-        'a[data-tracking-control-name*="comment"] span'
+        '.comments-comment-meta__description-title, ' +
+        '.comments-post-meta__name-text'
       );
       const authorText = authorEl ? authorEl.textContent.trim() : '';
 
-      // Also check comment content to match
+      // Comment content: current LinkedIn uses .update-components-text inside the article
       const contentEl = container.querySelector(
+        '.update-components-text, ' +
         '.comments-comment-item__main-content, ' +
-        '.comments-comment-item-content-body, ' +
-        '.comments-comment-entity__content, ' +
-        '.update-components-text'
+        '.comments-comment-item-content-body'
       );
       const commentText = contentEl ? contentEl.textContent.trim() : '';
 
@@ -270,32 +270,21 @@ async (page) => {
         res.found = true;
         res.comment_text_preview = commentText.substring(0, 80);
 
-        // Get reaction count on this specific comment
+        // Reaction count: look for button with aria-label "N Reaction(s) on ..."
+        // Current class: comments-comment-social-bar__reactions-count--cr
         const reactionEl = container.querySelector(
-          'button.comments-comment-social-bar__reactions-count, ' +
-          'button[aria-label*="reaction"], ' +
-          'span.comments-comment-social-bar__reactions-count, ' +
-          '.social-details-social-counts__reactions-count'
+          'button[class*="comments-comment-social-bar__reactions-count"], ' +
+          'button[aria-label*="Reaction"]'
         );
         if (reactionEl) {
           const label = reactionEl.getAttribute('aria-label') || '';
-          const labelMatch = label.match(/([\d,]+)\s*reaction/i);
+          const labelMatch = label.match(/([\d,]+)\s*[Rr]eaction/);
           if (labelMatch) {
             res.reactions = parseInt(labelMatch[1].replace(/,/g, ''), 10);
           } else {
             const text = reactionEl.textContent.trim().replace(/,/g, '');
             const num = parseInt(text, 10);
             if (!isNaN(num)) res.reactions = num;
-          }
-        }
-
-        // Also check for "Like" button with count
-        if (res.reactions === 0) {
-          const likeBtn = container.querySelector('button[aria-label*="like"], button[aria-label*="Like"]');
-          if (likeBtn) {
-            const label = likeBtn.getAttribute('aria-label') || '';
-            const m = label.match(/([\d,]+)/);
-            if (m) res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
           }
         }
 
