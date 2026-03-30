@@ -17,6 +17,11 @@ LOG_FILE="$LOG_DIR/github-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== GitHub Issues Run: $(date) ===" | tee "$LOG_FILE"
 
+# Pick project based on weight distribution
+PROJECT=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform github_issues 2>/dev/null || echo "Fazm")
+PROJECT_JSON=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform github_issues --json 2>/dev/null || echo "{}")
+echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
+
 # Load exclusions from config
 EXCLUDED_REPOS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('github_repos',[])))" 2>/dev/null || echo "")
 EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('authors',[])))" 2>/dev/null || echo "")
@@ -25,6 +30,12 @@ claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Also read $REPO_DIR/config.json for accounts, projects, and search_topics.
+
+## TARGET PROJECT FOR THIS RUN: $PROJECT
+You MUST find GitHub issues relevant to this project and comment about it.
+Project config: $PROJECT_JSON
+Use this project's github_search_topics if available, otherwise use the global search_topics.
+The project_name for all posts this run MUST be '$PROJECT'.
 
 EXCLUSIONS — do NOT interact with these:
 - Excluded repos/orgs: $EXCLUDED_REPOS
@@ -44,7 +55,8 @@ COMMENT STYLE (what gets replies):
 - Share specific implementation details (file names, metrics, tradeoffs), not generic advice.
 
 Run the **Workflow: GitHub Issues** section. Follow every step:
-1. Search for relevant issues using topics from config.json -> accounts.github.search_topics
+1. Search for relevant issues using the $PROJECT project's github_search_topics (from its config above).
+   If the project doesn't have github_search_topics, use config.json -> accounts.github.search_topics.
    Rotate through different search topics each run - don't always search the same keywords.
    Use: gh search issues \"TOPIC\" --limit 10 --state open --sort updated
 3. Check dedup: SELECT thread_url FROM posts WHERE platform='github_issues'
@@ -52,8 +64,7 @@ Run the **Workflow: GitHub Issues** section. Follow every step:
 5. Read each issue fully (body + existing comments)
 6. Draft helpful comments (follow Content Rules and COMMENT STYLE above - NEVER use em dashes)
 7. Post via: gh issue comment NUMBER -R OWNER/REPO --body \"...\"
-8. Determine project_name by matching issue topic to config.json projects[].topics
-9. Log to database (MUST include project_name in the INSERT)
+8. Log to database with project_name='$PROJECT' (MUST include project_name in the INSERT)
 10. Self-reply with a link to a SPECIFIC FILE in our repos (not just the repo homepage).
    Map expertise to files:
    - macOS accessibility/AX/click/screen control -> mediar-ai/mcp-server-macos-use/Sources/MCPServer/main.swift
