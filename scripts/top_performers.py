@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
 
 MIN_CONTENT_LEN = 30  # skip posts with empty/placeholder content
+MIN_UPVOTES = 10  # only show posts with meaningful engagement
 
 
 def get_project_platform_summary(conn, project=None, platform=None):
@@ -68,12 +69,19 @@ def get_project_platform_summary(conn, project=None, platform=None):
     return cur.fetchall()
 
 
-def get_top_posts(conn, project=None, platform=None, limit=15):
-    """Top performing posts with full factual details."""
+def get_top_posts(conn, project=None, platform=None, limit=15, min_upvotes=None):
+    """Top performing posts with full factual details.
+
+    Only returns posts with >= min_upvotes (default MIN_UPVOTES).
+    If project is given and has no posts meeting the threshold,
+    returns None so the caller can fall back to general posts.
+    """
+    if min_upvotes is None:
+        min_upvotes = MIN_UPVOTES
     where_clauses = [
         "status = 'active'",
         "upvotes IS NOT NULL",
-        "upvotes > 0",
+        f"upvotes >= {min_upvotes}",
         "our_content IS NOT NULL",
         f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
         "platform NOT IN ('github_issues')",
@@ -153,7 +161,8 @@ def format_post(row, include_thread_content=True):
     return "\n".join(lines)
 
 
-def format_report(summary, top, bottom, project=None, platform=None, top_by_group=None):
+def format_report(summary, top, bottom, project=None, platform=None,
+                   top_by_group=None, fallback_top=None):
     """Format the full report."""
     lines = []
     filters = []
@@ -173,7 +182,7 @@ def format_report(summary, top, bottom, project=None, platform=None, top_by_grou
 
     # Per-project top performers (when no project filter)
     if top_by_group:
-        lines.append("### Top Posts by Project")
+        lines.append(f"### Top Posts by Project (>= {MIN_UPVOTES} upvotes)")
         for group_name, posts in top_by_group.items():
             if not posts:
                 continue
@@ -181,10 +190,19 @@ def format_report(summary, top, bottom, project=None, platform=None, top_by_grou
             for p in posts:
                 lines.append(format_post(p))
                 lines.append("")
-    else:
-        # Filtered view — show all top posts together
-        lines.append(f"### Top {len(top)} Posts")
+    elif top:
+        # Filtered view with results
+        lines.append(f"### Top {len(top)} Posts for {project or 'all projects'} (>= {MIN_UPVOTES} upvotes)")
         for p in top:
+            lines.append(format_post(p))
+            lines.append("")
+    elif fallback_top:
+        # No project-specific posts met threshold — show general high performers
+        platform_label = f" on {platform}" if platform else ""
+        lines.append(f"### No {project} posts with >= {MIN_UPVOTES} upvotes{platform_label}.")
+        lines.append(f"### Showing top posts from OTHER projects{platform_label} as reference:")
+        lines.append("")
+        for p in fallback_top:
             lines.append(format_post(p))
             lines.append("")
 
