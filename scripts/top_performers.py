@@ -231,6 +231,12 @@ def main():
     top = get_top_posts(conn, project=args.project, platform=args.platform, limit=args.top)
     bottom = get_bottom_posts(conn, project=args.project, platform=args.platform, limit=args.bottom)
 
+    # If project was specified but no posts met the threshold, fall back to
+    # general high-performing posts on the same platform
+    fallback_top = None
+    if args.project and not top:
+        fallback_top = get_top_posts(conn, project=None, platform=args.platform, limit=args.top)
+
     # When no project filter, also get top 5 per project for focused examples
     top_by_group = None
     if not args.project:
@@ -242,10 +248,10 @@ def main():
             f"SELECT DISTINCT COALESCE(project_name, '(no project)') FROM posts "
             f"WHERE status = 'active' AND platform NOT IN ('github_issues') "
             f"AND our_content IS NOT NULL AND LENGTH(our_content) >= %s "
-            f"AND upvotes IS NOT NULL AND upvotes > 0 "
+            f"AND upvotes IS NOT NULL AND upvotes >= %s "
             f"{platform_filter} "
             f"ORDER BY 1",
-            [MIN_CONTENT_LEN] + platform_params
+            [MIN_CONTENT_LEN, MIN_UPVOTES] + platform_params
         )
         projects = [row[0] for row in cur.fetchall()]
         for proj in projects:
@@ -256,7 +262,7 @@ def main():
                 f"SELECT id, platform, upvotes, comments_count, views, "
                 f"our_content, thread_title, thread_content, "
                 f"project_name, posted_at::date, our_account "
-                f"FROM posts WHERE status = 'active' AND upvotes > 0 "
+                f"FROM posts WHERE status = 'active' AND upvotes >= {MIN_UPVOTES} "
                 f"AND our_content IS NOT NULL AND LENGTH(our_content) >= {MIN_CONTENT_LEN} "
                 f"AND platform NOT IN ('github_issues') "
                 f"{where_extra} {platform_filter} "
@@ -272,12 +278,13 @@ def main():
             "summary": [dict(row) for row in summary],
             "top_posts": [dict(row) for row in top],
             "bottom_posts": [dict(row) for row in bottom],
+            "fallback_top": [dict(row) for row in fallback_top] if fallback_top else [],
         }
         print(json.dumps(output, indent=2, default=str))
     else:
         print(format_report(summary, top, bottom,
                             project=args.project, platform=args.platform,
-                            top_by_group=top_by_group))
+                            top_by_group=top_by_group, fallback_top=fallback_top))
 
 
 if __name__ == "__main__":
