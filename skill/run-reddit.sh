@@ -15,9 +15,15 @@ LOG_FILE="$LOG_DIR/run-reddit-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Reddit Post Run: $(date) ===" | tee "$LOG_FILE"
 
+# Generate top performers feedback report (Reddit-specific)
+TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform reddit 2>/dev/null || echo "(top performers report unavailable)")
+
 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
+
+## FEEDBACK FROM PAST PERFORMANCE (use this to write better comments):
+$TOP_REPORT
 
 Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
 1. Find candidate threads: python3 $REPO_DIR/scripts/find_threads.py (Reddit only, no --include-moltbook)
@@ -25,7 +31,7 @@ Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
 3. Draft the comment (follow Content Rules - NEVER use em dashes)
 4. Post it using the reddit-agent browser (mcp__reddit-agent__* tools)
 5. Determine project_name by matching thread topic to config.json projects[].topics
-6. Log to database (MUST include project_name in the INSERT)
+6. Log to database (MUST include project_name AND feedback_report_used=TRUE in the INSERT)
 
 Up to 3 posts per run. If nothing fits, say '## No good thread found' and stop.
 

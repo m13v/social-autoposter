@@ -15,10 +15,16 @@ LOG_FILE="$LOG_DIR/run-linkedin-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== LinkedIn Post Run: $(date) ===" | tee "$LOG_FILE"
 
+# Generate top performers feedback report (LinkedIn-specific)
+TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform linkedin 2>/dev/null || echo "(top performers report unavailable)")
+
 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for the linkedin_topics list and account name.
+
+## FEEDBACK FROM PAST PERFORMANCE (use this to write better comments):
+$TOP_REPORT
 
 Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
 1. Find candidate posts: python3 $REPO_DIR/scripts/find_threads.py --include-linkedin
@@ -54,7 +60,7 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
    Use this URL as \`our_url\` in the database INSERT. It MUST be a linkedin.com/feed/update/ URL.
    If you cannot get a feed/update URL, use the current page URL as fallback.
 6. Determine project_name by matching thread topic to config.json projects[].topics
-7. Log to database (MUST include project_name in the INSERT). Use the captured feed/update URL for our_url.
+7. Log to database (MUST include project_name AND feedback_report_used=TRUE in the INSERT). Use the captured feed/update URL for our_url.
 
 Up to 3 posts per run. If nothing fits, say '## No good post found' and stop.
 

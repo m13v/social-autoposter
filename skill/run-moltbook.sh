@@ -15,10 +15,16 @@ LOG_FILE="$LOG_DIR/run-moltbook-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== MoltBook Post Run: $(date) ===" | tee "$LOG_FILE"
 
+# Generate top performers feedback report (Moltbook-specific)
+TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform moltbook 2>/dev/null || echo "(top performers report unavailable)")
+
 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for the moltbook account and content_angle.
+
+## FEEDBACK FROM PAST PERFORMANCE (use this to write better comments):
+$TOP_REPORT
 
 Run the **Workflow: Post** section for **MoltBook ONLY**. Post up to 5 comments per run.
 
@@ -35,7 +41,7 @@ Steps:
 7. Post using the helper script:
    python3 $REPO_DIR/scripts/moltbook_post.py comment --post-id POST_UUID --content \"COMMENT\"
 8. Determine which project from config.json this thread best matches (compare thread topic against each project's topics array). Every post must have a project_name.
-9. Log each to database:
+9. Log each to database (include feedback_report_used=TRUE):
    INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
      thread_title, thread_content, our_url, our_content, our_account,
      source_summary, project_name, status, posted_at)

@@ -15,10 +15,16 @@ LOG_FILE="$LOG_DIR/run-twitter-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Twitter Post Run: $(date) ===" | tee "$LOG_FILE"
 
+# Generate top performers feedback report (Twitter-specific)
+TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter 2>/dev/null || echo "(top performers report unavailable)")
+
 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for the twitter_topics list and account handle.
+
+## FEEDBACK FROM PAST PERFORMANCE (use this to write better replies):
+$TOP_REPORT
 
 Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
 1. Find candidate tweets: python3 $REPO_DIR/scripts/find_threads.py --include-twitter
@@ -28,7 +34,7 @@ Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
 3. Draft the reply (follow Content Rules - NEVER use em dashes, keep it short 1-2 sentences)
 4. Post it using the twitter-agent browser (mcp__twitter-agent__* tools)
 5. Determine project_name by matching thread topic to config.json projects[].topics
-6. Log to database (MUST include project_name in the INSERT)
+6. Log to database (MUST include project_name AND feedback_report_used=TRUE in the INSERT)
 
 Up to 3 posts per run. If nothing fits, say '## No good tweet found' and stop.
 
