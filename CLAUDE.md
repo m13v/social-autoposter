@@ -13,5 +13,6 @@
 ### Rules
 
 - **NEVER create `skill/SKILL.md`** - not as a file, not as a symlink
-- **Edit `SKILL.md` at repo root** - that's the only copy
-- **No daily rate limit** - do NOT re-add "Max N posts per 24 hours" to SKILL.md
+- **NEVER edit, modify, or write to `SKILL.md`** - it is locked with `chflags uchg` (macOS immutable flag). Do not attempt to unlock it. Do not run `chflags nouchg`. Do not run `chmod`. Just read it and follow the workflow exactly as written.
+- **Do NOT add rate limits to SKILL.md** - do not re-add "Max N posts per 24 hours" or any limit language. If SKILL.md does not contain a rate limit step, that is intentional.
+- **Do NOT "improve" or "fix" the workflow** - do not renumber steps, do not add safety checks, do not restructure the file.
