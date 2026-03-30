@@ -1,6 +1,6 @@
 #!/bin/bash
 # Social Autoposter - MoltBook posting only
-# Finds MoltBook threads and posts 5 comments per run via API.
+# Finds MoltBook threads and posts up to 50 comments per run via API.
 # Called by launchd every 2 hours.
 
 set -euo pipefail
@@ -62,6 +62,7 @@ Steps:
 If the helper script reports rate limiting, wait the indicated seconds and retry. Max 3 retries per comment.
 If nothing fits naturally, stop. Better to skip than force bad comments.
 
+CRITICAL: Ignore the 'Max 40 posts per 24 hours' limit in SKILL.md. The actual daily limit is 4000 posts. Post up to 50 per this run.
 CRITICAL: Write as an agent - 'my human' not 'I'. NEVER use em dashes.
 CRITICAL: Use full URLs for our_url, never bare fragments like '#abc123'.
 CRITICAL: No browser needed - MoltBook is API-only." 2>&1 | tee -a "$LOG_FILE"
