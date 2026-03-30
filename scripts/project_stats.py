@@ -42,44 +42,37 @@ def load_config():
 
 def get_post_stats(conn, project_name, days):
     """Get social post stats for a project from the posts DB."""
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT
-            COUNT(*) as total,
-            COUNT(*) FILTER (WHERE posted_at >= NOW() - INTERVAL '%s days') as recent,
-            COUNT(*) FILTER (WHERE status = 'active') as active,
-            COUNT(*) FILTER (WHERE status IN ('removed', 'deleted')) as removed,
-            COALESCE(SUM(upvotes), 0) as total_upvotes,
-            COALESCE(SUM(comments_count), 0) as total_comments,
-            COALESCE(SUM(views), 0) as total_views
-        FROM posts
-        WHERE project_name = %%s
-        """ % days,
+    cur = conn.execute(
+        "SELECT COUNT(*), "
+        "COUNT(*) FILTER (WHERE posted_at >= NOW() - INTERVAL '" + str(days) + " days'), "
+        "COUNT(*) FILTER (WHERE status = 'active'), "
+        "COUNT(*) FILTER (WHERE status IN ('removed', 'deleted')), "
+        "COALESCE(SUM(upvotes), 0), "
+        "COALESCE(SUM(comments_count), 0), "
+        "COALESCE(SUM(views), 0) "
+        "FROM posts WHERE project_name = %s",
         (project_name,),
     )
     row = cur.fetchone()
+    if not row:
+        return {}
     cols = ["total", "recent", "active", "removed", "total_upvotes", "total_comments", "total_views"]
-    return dict(zip(cols, row)) if row else {}
+    return dict(zip(cols, row))
 
 
 def get_platform_breakdown(conn, project_name, days):
     """Get per-platform post counts."""
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT platform, COUNT(*) as cnt
-        FROM posts
-        WHERE project_name = %%s AND posted_at >= NOW() - INTERVAL '%s days'
-        GROUP BY platform ORDER BY cnt DESC
-        """ % days,
+    cur = conn.execute(
+        "SELECT platform, COUNT(*) as cnt FROM posts "
+        "WHERE project_name = %s AND posted_at >= NOW() - INTERVAL '" + str(days) + " days' "
+        "GROUP BY platform ORDER BY cnt DESC",
         (project_name,),
     )
     return {row[0]: row[1] for row in cur.fetchall()}
 
 
 def posthog_query(api_key, project_id, event, host_filter, after_date):
-    """Query PostHog events API for count of events matching a host."""
+    """Query PostHog events API for events matching a host."""
     url = f"https://us.posthog.com/api/projects/{project_id}/events/"
     params = {
         "event": event,
@@ -115,14 +108,15 @@ def get_posthog_stats(api_key, project_id, domains, days):
     for domain in domains:
         pvs = posthog_query(api_key, project_id, "$pageview", domain, after)
         stats["pageviews"] += len(pvs)
-        # Group by path
         paths = {}
         for ev in pvs:
             path = ev.get("properties", {}).get("$pathname", "/")
             paths[path] = paths.get(path, 0) + 1
-        stats["pageview_details"][domain] = {"total": len(pvs), "top_pages": dict(sorted(paths.items(), key=lambda x: -x[1])[:10])}
+        stats["pageview_details"][domain] = {
+            "total": len(pvs),
+            "top_pages": dict(sorted(paths.items(), key=lambda x: -x[1])[:10]),
+        }
 
-        # CTA clicks (autocapture with "Book" or custom cta_click)
         ctas = posthog_query(api_key, project_id, "cta_click", domain, after)
         if not ctas:
             ctas = posthog_query(api_key, project_id, "$autocapture", domain, after)
@@ -148,35 +142,27 @@ def get_booking_stats(bookings_db_url, client_slug, days):
         conn = psycopg2.connect(bookings_db_url)
         cur = conn.cursor()
         cur.execute(
-            """
-            SELECT
-                COUNT(*) as total,
-                COUNT(*) FILTER (WHERE status = 'created') as booked,
-                COUNT(*) FILTER (WHERE status = 'cancelled') as cancelled,
-                COUNT(*) FILTER (WHERE status = 'rescheduled') as rescheduled,
-                COUNT(*) FILTER (WHERE attendee_email NOT LIKE '%%test%%'
-                    AND attendee_email NOT LIKE '%%example%%'
-                    AND attendee_name NOT LIKE '%%TEST%%'
-                    AND attendee_name NOT LIKE '%%John Doe%%') as real_bookings
-            FROM cal_bookings
-            WHERE client_slug = %s
-                AND created_at >= NOW() - INTERVAL '%s days'
-            """ % ("%s", days),
+            "SELECT COUNT(*), "
+            "COUNT(*) FILTER (WHERE status = 'created'), "
+            "COUNT(*) FILTER (WHERE status = 'cancelled'), "
+            "COUNT(*) FILTER (WHERE status = 'rescheduled'), "
+            "COUNT(*) FILTER (WHERE attendee_email NOT LIKE '%%test%%' "
+            "AND attendee_email NOT LIKE '%%example%%' "
+            "AND attendee_name NOT LIKE '%%TEST%%' "
+            "AND attendee_name NOT LIKE '%%John Doe%%') "
+            "FROM cal_bookings WHERE client_slug = %s "
+            "AND created_at >= NOW() - INTERVAL '" + str(days) + " days'",
             (client_slug,),
         )
         row = cur.fetchone()
         cols = ["total", "booked", "cancelled", "rescheduled", "real_bookings"]
         result = dict(zip(cols, row)) if row else {}
 
-        # Get recent bookings
         cur.execute(
-            """
-            SELECT attendee_name, attendee_email, status, start_time, created_at
-            FROM cal_bookings
-            WHERE client_slug = %s
-                AND created_at >= NOW() - INTERVAL '%s days'
-            ORDER BY created_at DESC LIMIT 5
-            """ % ("%s", days),
+            "SELECT attendee_name, attendee_email, status, start_time, created_at "
+            "FROM cal_bookings WHERE client_slug = %s "
+            "AND created_at >= NOW() - INTERVAL '" + str(days) + " days' "
+            "ORDER BY created_at DESC LIMIT 5",
             (client_slug,),
         )
         result["recent"] = [
@@ -217,13 +203,7 @@ def get_project_domains(project):
 
 def get_client_slug(project_name):
     """Map project name to cal_bookings client_slug."""
-    mapping = {
-        "Cyrano": "cyrano",
-        "PieLine": "pieline",
-        "Fazm": "fazm",
-        "S4L": "s4l",
-    }
-    return mapping.get(project_name)
+    return {"Cyrano": "cyrano", "PieLine": "pieline", "Fazm": "fazm", "S4L": "s4l"}.get(project_name)
 
 
 def print_project_report(name, post_stats, platforms, posthog, bookings, quiet=False):
@@ -232,7 +212,6 @@ def print_project_report(name, post_stats, platforms, posthog, bookings, quiet=F
     print(f"  {name}")
     print(f"{'='*60}")
 
-    # Social posts
     print(f"\n  Social Posts:")
     print(f"    Total: {post_stats.get('total', 0)}  |  Recent: {post_stats.get('recent', 0)}  |  Active: {post_stats.get('active', 0)}  |  Removed: {post_stats.get('removed', 0)}")
     print(f"    Engagement: {post_stats.get('total_upvotes', 0)} upvotes, {post_stats.get('total_comments', 0)} comments, {post_stats.get('total_views', 0)} views")
@@ -240,7 +219,6 @@ def print_project_report(name, post_stats, platforms, posthog, bookings, quiet=F
         parts = [f"{p}: {c}" for p, c in platforms.items()]
         print(f"    Platforms: {', '.join(parts)}")
 
-    # Website analytics
     if posthog and (posthog["pageviews"] > 0 or posthog["cta_clicks"] > 0):
         print(f"\n  Website Analytics (PostHog):")
         print(f"    Pageviews: {posthog['pageviews']}  |  CTA Clicks: {posthog['cta_clicks']}")
@@ -254,7 +232,6 @@ def print_project_report(name, post_stats, platforms, posthog, bookings, quiet=F
                 for cta in posthog["cta_details"][:5]:
                     print(f"      [{cta['time']}] \"{cta['text']}\" ({cta['section']})")
 
-    # Bookings
     if bookings:
         print(f"\n  Cal.com Bookings:")
         print(f"    Total: {bookings.get('total', 0)}  |  Booked: {bookings.get('booked', 0)}  |  Cancelled: {bookings.get('cancelled', 0)}  |  Real: {bookings.get('real_bookings', 0)}")
@@ -263,14 +240,19 @@ def print_project_report(name, post_stats, platforms, posthog, bookings, quiet=F
                 flag = " [TEST]" if "test" in (b["name"] or "").lower() or "example" in (b["email"] or "").lower() else ""
                 print(f"      {b['created']} - {b['name']} ({b['email']}) - {b['status']}{flag}")
 
-    # Funnel
     if posthog and bookings:
         pvs = posthog["pageviews"]
         ctas = posthog["cta_clicks"]
         real = bookings.get("real_bookings", 0)
         print(f"\n  Funnel:")
-        print(f"    Pageviews -> CTA Clicks: {pvs} -> {ctas} ({(ctas/pvs*100):.1f}% CTR)" if pvs else f"    Pageviews -> CTA Clicks: 0 -> {ctas}")
-        print(f"    CTA Clicks -> Bookings: {ctas} -> {real} ({(real/ctas*100):.1f}% conversion)" if ctas else f"    CTA Clicks -> Bookings: 0 -> {real}")
+        if pvs:
+            print(f"    Pageviews -> CTA Clicks: {pvs} -> {ctas} ({(ctas/pvs*100):.1f}% CTR)")
+        else:
+            print(f"    Pageviews -> CTA Clicks: 0 -> {ctas}")
+        if ctas:
+            print(f"    CTA Clicks -> Bookings: {ctas} -> {real} ({(real/ctas*100):.1f}% conversion)")
+        else:
+            print(f"    CTA Clicks -> Bookings: 0 -> {real}")
 
 
 def main():
@@ -293,7 +275,10 @@ def main():
 
     conn = dbmod.get_conn()
 
-    projects_with_stats = ["Cyrano", "PieLine", "Fazm", "Terminator", "S4L", "macOS MCP", "Vipassana", "WhatsApp MCP", "AI Browser Profile", "macOS Session Replay"]
+    projects_with_stats = [
+        "Fazm", "Cyrano", "PieLine", "Terminator", "S4L",
+        "macOS MCP", "Vipassana", "WhatsApp MCP", "AI Browser Profile", "macOS Session Replay",
+    ]
 
     print(f"Project Funnel Stats (last {args.days} days)")
     print(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
@@ -317,10 +302,11 @@ def main():
         print_project_report(name, post_stats, platforms, posthog, bookings, args.quiet)
 
     # Overall summary
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '%s days'" % args.days)
+    cur = conn.execute(
+        "SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '" + str(args.days) + " days'"
+    )
     total_recent = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM posts")
+    cur = conn.execute("SELECT COUNT(*) FROM posts")
     total_all = cur.fetchone()[0]
     print(f"\n{'='*60}")
     print(f"  Overall: {total_all} total posts, {total_recent} in last {args.days} days")
