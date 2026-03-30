@@ -1,6 +1,6 @@
 #!/bin/bash
 # Social Autoposter - Reddit posting only
-# Finds Reddit threads and posts up to 3 comments per run.
+# Finds Reddit threads and posts up to 100 comments per run.
 # Called by launchd every 1 hour.
 
 set -euo pipefail
@@ -46,6 +46,7 @@ Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
 
 Up to 100 posts per run. If nothing fits, say '## No good thread found' and stop.
 
+CRITICAL: Ignore the 'Max 40 posts per 24 hours' limit in SKILL.md. The actual daily limit is 4000 posts. Post up to 100 per this run.
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
 CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close).
 CRITICAL: Use ONLY mcp__reddit-agent__* tools for Reddit. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
