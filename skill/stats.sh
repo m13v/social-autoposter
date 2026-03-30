@@ -200,8 +200,8 @@ psql "$DATABASE_URL" -t -A -F '|' -c "
     LIMIT 30;"
 ```
 
-Step 2: For each post URL, navigate with mcp__linkedin-agent__browser_navigate, wait for page load.
-Then click "Load more comments" or "Most relevant" dropdown to show all comments if available.
+Step 2: For each post URL, STRIP the ?commentUrn=... query parameter before navigating (it breaks comment rendering).
+Navigate with mcp__linkedin-agent__browser_navigate to the clean URL, wait for page load.
 Then run mcp__linkedin-agent__browser_run_code with this JavaScript to find OUR comment and its reactions:
 
 SCRAPE_JS:
@@ -209,27 +209,19 @@ async (page) => {
   await page.waitForTimeout(4000);
 
   // CRITICAL: Comments don't render until you interact with the page.
-  // Click the comment textbox to trigger comment loading.
-  const commentBox = await page.$('[contenteditable="true"], [role="textbox"]');
-  if (commentBox) {
-    try { await commentBox.click(); await page.waitForTimeout(3000); } catch(e) {}
+  // Scroll down past the post, then click the "Comment" action button.
+  // Do NOT use commentUrn param in the URL — it breaks comment rendering.
+  await page.evaluate(() => window.scrollBy(0, 600));
+  await page.waitForTimeout(2000);
+  const commentActionBtn = await page.$('button[aria-label="Comment"]');
+  if (commentActionBtn) {
+    try { await commentActionBtn.click(); await page.waitForTimeout(5000); } catch(e) {}
   }
 
   // Try to expand all comments - click "Load more comments" / "See previous replies"
   const expandBtns = await page.$$('button[aria-label*="Load more comments"], button[aria-label*="load more"], button[aria-label*="See previous replies"], button[aria-label*="Load previous replies"]');
   for (const btn of expandBtns) {
     try { await btn.click(); await page.waitForTimeout(2000); } catch(e) {}
-  }
-
-  // Switch to "Most recent" sort to see all comments
-  const sortBtn = await page.$('button[class*="comments-sort-order-toggle"]');
-  if (sortBtn) {
-    try {
-      await sortBtn.click();
-      await page.waitForTimeout(1000);
-      const recentOpt = await page.$('li:has-text("Most recent"), div[role="option"]:has-text("Most recent"), span:has-text("Most recent")');
-      if (recentOpt) { await recentOpt.click(); await page.waitForTimeout(3000); }
-    } catch(e) {}
   }
 
   const ourName = "LINKEDIN_NAME_JS_PLACEHOLDER";
