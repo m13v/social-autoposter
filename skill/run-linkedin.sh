@@ -27,8 +27,34 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
 2. Pick the best LinkedIn post to comment on
 3. Draft the comment (follow Content Rules - NEVER use em dashes, professional but casual tone)
 4. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools)
-5. Determine project_name by matching thread topic to config.json projects[].topics
-6. Log to database (MUST include project_name in the INSERT)
+5. **CAPTURE THE POST URL** — BEFORE closing the tab, extract the actual post URL.
+   After posting the comment, run this JS via mcp__linkedin-agent__browser_run_code:
+   \`\`\`javascript
+   async (page) => {
+     const url = page.url();
+     // If on a feed/update page, use it directly
+     if (url.includes('/feed/update/')) return url.split('?')[0];
+     // Otherwise extract from the page - find the post's share/permalink
+     const shareLink = await page.evaluate(() => {
+       // Look for the post's activity URN in the page
+       const postEl = document.querySelector('[data-urn*=\"activity\"], [data-id*=\"activity\"]');
+       if (postEl) {
+         const urn = postEl.getAttribute('data-urn') || postEl.getAttribute('data-id');
+         const match = urn.match(/activity:(\\d+)/);
+         if (match) return 'https://www.linkedin.com/feed/update/urn:li:activity:' + match[1] + '/';
+       }
+       // Fallback: check URL bar or og:url meta
+       const ogUrl = document.querySelector('meta[property=\"og:url\"]');
+       if (ogUrl) return ogUrl.content;
+       return null;
+     });
+     return shareLink || url;
+   }
+   \`\`\`
+   Use this URL as \`our_url\` in the database INSERT. It MUST be a linkedin.com/feed/update/ URL.
+   If you cannot get a feed/update URL, use the current page URL as fallback.
+6. Determine project_name by matching thread topic to config.json projects[].topics
+7. Log to database (MUST include project_name in the INSERT). Use the captured feed/update URL for our_url.
 
 Up to 3 posts per run. If nothing fits, say '## No good post found' and stop.
 
