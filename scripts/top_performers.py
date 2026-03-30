@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Generate a feedback report from top/bottom performing posts.
 
-Queries NeonDB for engagement data and outputs a structured report
-that Claude reads before drafting new comments. This is the
-self-improvement feedback loop.
+Queries NeonDB for engagement data and outputs a factual report
+organized by project and platform. This is the self-improvement
+feedback loop — Claude reads this before drafting new comments.
 
 Usage:
-    python3 scripts/top_performers.py [--platform reddit|twitter|linkedin|moltbook]
-    python3 scripts/top_performers.py --platform reddit --limit 10
+    python3 scripts/top_performers.py
+    python3 scripts/top_performers.py --platform reddit
+    python3 scripts/top_performers.py --project Fazm
+    python3 scripts/top_performers.py --project Fazm --platform reddit
+    python3 scripts/top_performers.py --top 20
 """
 
 import argparse
@@ -18,189 +21,179 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
 
+MIN_CONTENT_LEN = 30  # skip posts with empty/placeholder content
 
-def get_top_posts(conn, platform=None, limit=10):
-    """Get top performing posts by upvotes."""
-    where = "WHERE status = 'active' AND upvotes IS NOT NULL AND upvotes > 0"
+
+def get_project_platform_summary(conn, project=None, platform=None):
+    """Post count and avg upvotes per project per platform.
+
+    When project/platform are given, show:
+    - The filtered project across all platforms (for cross-platform context)
+    - The filtered platform across all projects (for competitive context)
+    """
+    where_clauses = [
+        "status = 'active'",
+        "platform NOT IN ('github_issues','hackernews','dev','youtube','github')",
+        "our_content IS NOT NULL",
+        f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
+    ]
+
+    if project and platform:
+        # Show this project on all platforms + this platform for all projects
+        filter_sql = f"(COALESCE(project_name, '(no project)') = %s OR platform = %s)"
+        params = [project, platform]
+    elif project:
+        filter_sql = "COALESCE(project_name, '(no project)') = %s"
+        params = [project]
+    elif platform:
+        filter_sql = "platform = %s"
+        params = [platform]
+    else:
+        filter_sql = None
+        params = []
+
+    if filter_sql:
+        where_clauses.append(filter_sql)
+
+    where = " AND ".join(where_clauses)
+    cur = conn.execute(
+        f"SELECT COALESCE(project_name, '(no project)') as proj, platform, "
+        f"COUNT(*) as cnt, "
+        f"AVG(COALESCE(upvotes,0))::numeric(10,1) as avg_up, "
+        f"MAX(upvotes) as max_up "
+        f"FROM posts WHERE {where} "
+        f"GROUP BY project_name, platform ORDER BY proj, avg_up DESC",
+        params
+    )
+    return cur.fetchall()
+
+
+def get_top_posts(conn, project=None, platform=None, limit=15):
+    """Top performing posts with full factual details."""
+    where_clauses = [
+        "status = 'active'",
+        "upvotes IS NOT NULL",
+        "upvotes > 0",
+        "our_content IS NOT NULL",
+        f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
+        "platform NOT IN ('github_issues')",
+    ]
     params = []
+    if project:
+        where_clauses.append("project_name = %s")
+        params.append(project)
     if platform:
-        where += " AND platform = %s"
+        where_clauses.append("platform = %s")
         params.append(platform)
+
+    where = " AND ".join(where_clauses)
     cur = conn.execute(
         f"SELECT id, platform, upvotes, comments_count, views, "
-        f"our_content, thread_title, project_name, "
-        f"LENGTH(our_content) as content_len, posted_at::date "
-        f"FROM posts {where} "
+        f"our_content, thread_title, thread_content, "
+        f"project_name, posted_at::date, our_account "
+        f"FROM posts WHERE {where} "
         f"ORDER BY upvotes DESC LIMIT %s",
         params + [limit]
     )
     return cur.fetchall()
 
 
-def get_bottom_posts(conn, platform=None, limit=5):
-    """Get worst performing posts (negative or zero upvotes)."""
-    where = "WHERE status = 'active' AND upvotes IS NOT NULL AND upvotes < 1"
+def get_bottom_posts(conn, project=None, platform=None, limit=10):
+    """Worst performing posts."""
+    where_clauses = [
+        "status = 'active'",
+        "upvotes IS NOT NULL",
+        "upvotes < 1",
+        "our_content IS NOT NULL",
+        f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
+        "platform NOT IN ('github_issues')",
+    ]
     params = []
+    if project:
+        where_clauses.append("project_name = %s")
+        params.append(project)
     if platform:
-        where += " AND platform = %s"
+        where_clauses.append("platform = %s")
         params.append(platform)
+
+    where = " AND ".join(where_clauses)
     cur = conn.execute(
-        f"SELECT id, platform, upvotes, comments_count, "
-        f"our_content, thread_title, project_name, "
-        f"LENGTH(our_content) as content_len, posted_at::date "
-        f"FROM posts {where} "
+        f"SELECT id, platform, upvotes, comments_count, views, "
+        f"our_content, thread_title, thread_content, "
+        f"project_name, posted_at::date, our_account "
+        f"FROM posts WHERE {where} "
         f"ORDER BY upvotes ASC LIMIT %s",
         params + [limit]
     )
     return cur.fetchall()
 
 
-def get_platform_stats(conn):
-    """Get aggregate stats per platform."""
-    cur = conn.execute(
-        "SELECT platform, COUNT(*), "
-        "AVG(COALESCE(upvotes,0))::numeric(10,1) as avg_up, "
-        "AVG(COALESCE(comments_count,0))::numeric(10,1) as avg_comments, "
-        "MAX(upvotes) as max_up, "
-        "AVG(LENGTH(our_content))::int as avg_len "
-        "FROM posts WHERE status = 'active' AND platform NOT IN ('github_issues','hackernews','dev','youtube','github') "
-        "GROUP BY platform ORDER BY avg_up DESC"
-    )
-    return cur.fetchall()
-
-
-def get_top_subreddits(conn, min_posts=3, limit=10):
-    """Get subreddits ranked by avg upvotes."""
-    cur = conn.execute(
-        "SELECT "
-        "  CASE WHEN thread_url LIKE '%%/r/%%' "
-        "    THEN SPLIT_PART(SPLIT_PART(thread_url, '/r/', 2), '/', 1) "
-        "    ELSE 'unknown' END as subreddit, "
-        "COUNT(*) as cnt, "
-        "AVG(COALESCE(upvotes,0))::numeric(10,1) as avg_up, "
-        "MAX(upvotes) as max_up "
-        "FROM posts "
-        "WHERE platform = 'reddit' AND status = 'active' AND upvotes IS NOT NULL "
-        "GROUP BY subreddit HAVING COUNT(*) >= %s "
-        "ORDER BY avg_up DESC LIMIT %s",
-        [min_posts, limit]
-    )
-    return cur.fetchall()
-
-
-def get_content_length_analysis(conn, platform=None):
-    """Analyze performance by content length buckets."""
-    where = "WHERE status = 'active' AND upvotes IS NOT NULL AND our_content IS NOT NULL AND LENGTH(our_content) > 0"
-    params = []
-    if platform:
-        where += " AND platform = %s"
-        params.append(platform)
-    cur = conn.execute(
-        f"SELECT "
-        f"  CASE "
-        f"    WHEN LENGTH(our_content) < 100 THEN 'short (<100 chars)' "
-        f"    WHEN LENGTH(our_content) < 250 THEN 'medium (100-250 chars)' "
-        f"    WHEN LENGTH(our_content) < 500 THEN 'long (250-500 chars)' "
-        f"    ELSE 'very long (500+ chars)' END as bucket, "
-        f"  COUNT(*) as cnt, "
-        f"  AVG(COALESCE(upvotes,0))::numeric(10,1) as avg_up, "
-        f"  MAX(upvotes) as max_up "
-        f"FROM posts {where} "
-        f"GROUP BY bucket ORDER BY avg_up DESC",
-        params
-    )
-    return cur.fetchall()
-
-
-def get_project_performance(conn):
-    """Get performance by project_name."""
-    cur = conn.execute(
-        "SELECT COALESCE(project_name, '(no project)') as proj, COUNT(*), "
-        "AVG(COALESCE(upvotes,0))::numeric(10,1) as avg_up, "
-        "MAX(upvotes) as max_up "
-        "FROM posts WHERE status = 'active' AND upvotes IS NOT NULL "
-        "AND platform NOT IN ('github_issues') "
-        "GROUP BY project_name HAVING COUNT(*) >= 3 "
-        "ORDER BY avg_up DESC"
-    )
-    return cur.fetchall()
-
-
-def format_report(top, bottom, platform_stats, top_subs, length_analysis, project_perf, platform=None):
-    """Format everything into a concise report for Claude."""
+def format_post(row, include_thread_content=True):
+    """Format a single post as factual text."""
     lines = []
-    scope = f" ({platform})" if platform else ""
-    lines.append(f"## Top Performers Report{scope}")
+    upvotes = row[2] if row[2] is not None else 0
+    comments = row[3] if row[3] is not None else 0
+    views = row[4] if row[4] is not None else 0
+    our_content = row[5] or ""
+    thread_title = row[6] or ""
+    thread_content = row[7] or ""
+    project = row[8] or "(no project)"
+    date = row[9]
+    account = row[10] or ""
+
+    header = f"[{upvotes} upvotes, {comments} comments, {views} views] {row[1]} | {project} | {date}"
+    lines.append(header)
+
+    if thread_title:
+        lines.append(f"  Thread: {thread_title[:150]}")
+    if include_thread_content and thread_content:
+        snippet = thread_content[:200].replace('\n', ' ')
+        lines.append(f"  Thread body: {snippet}")
+    lines.append(f"  Our comment: {our_content[:400]}")
+    return "\n".join(lines)
+
+
+def format_report(summary, top, bottom, project=None, platform=None, top_by_group=None):
+    """Format the full report."""
+    lines = []
+    filters = []
+    if project:
+        filters.append(f"project={project}")
+    if platform:
+        filters.append(f"platform={platform}")
+    scope = f" ({', '.join(filters)})" if filters else ""
+    lines.append(f"## Performance Feedback Report{scope}")
     lines.append("")
 
-    # Platform stats
-    lines.append("### Platform Averages")
-    for row in platform_stats:
-        lines.append(f"- {row[0]}: {row[1]} posts, avg {row[2]} upvotes, avg {row[3]} comments, max {row[4]}, avg length {row[5]} chars")
+    # Summary table
+    lines.append("### Posts per Project per Platform")
+    for row in summary:
+        lines.append(f"  {row[0]:<20} {row[1]:<12} {row[2]:>5} posts  avg_upvotes={row[3]}  best={row[4]}")
     lines.append("")
 
-    # Content length
-    lines.append("### What Length Works Best")
-    for row in length_analysis:
-        lines.append(f"- {row[0]}: {row[1]} posts, avg {row[2]} upvotes, max {row[3]}")
-    lines.append("")
-
-    # Top subreddits
-    if top_subs:
-        lines.append("### Best Subreddits")
-        for row in top_subs:
-            lines.append(f"- r/{row[0]}: {row[1]} posts, avg {row[2]} upvotes, max {row[3]}")
-        lines.append("")
-
-    # Project performance
-    if project_perf:
-        lines.append("### Project Performance")
-        for row in project_perf:
-            lines.append(f"- {row[0]}: {row[1]} posts, avg {row[2]} upvotes, max {row[3]}")
-        lines.append("")
-
-    # Top posts with content
-    lines.append("### Top 10 Posts (learn from these)")
-    for row in top:
-        content = row[5] or "(empty)"
-        # Truncate long content
-        if len(content) > 300:
-            content = content[:300] + "..."
-        lines.append(f"- [{row[2]} upvotes, {row[1]}, {row[8]} chars] thread: \"{row[6] or '(none)'}\"")
-        lines.append(f"  content: {content}")
-    lines.append("")
+    # Per-project top performers (when no project filter)
+    if top_by_group:
+        lines.append("### Top Posts by Project")
+        for group_name, posts in top_by_group.items():
+            if not posts:
+                continue
+            lines.append(f"\n#### {group_name}")
+            for p in posts:
+                lines.append(format_post(p))
+                lines.append("")
+    else:
+        # Filtered view — show all top posts together
+        lines.append(f"### Top {len(top)} Posts")
+        for p in top:
+            lines.append(format_post(p))
+            lines.append("")
 
     # Bottom posts
-    lines.append("### Bottom 5 Posts (avoid these patterns)")
-    for row in bottom:
-        content = row[4] or "(empty)"
-        if len(content) > 200:
-            content = content[:200] + "..."
-        lines.append(f"- [{row[2]} upvotes, {row[1]}, {row[7]} chars] thread: \"{row[5] or '(none)'}\"")
-        lines.append(f"  content: {content}")
-    lines.append("")
-
-    # Synthesized rules
-    lines.append("### Patterns to Follow")
-
-    # Analyze top posts for patterns
-    top_lengths = [row[8] for row in top if row[8] and row[8] > 0]
-    avg_top_len = sum(top_lengths) / len(top_lengths) if top_lengths else 200
-    bottom_lengths = [row[7] for row in bottom if row[7] and row[7] > 0]
-    avg_bottom_len = sum(bottom_lengths) / len(bottom_lengths) if bottom_lengths else 300
-
-    lines.append(f"- Top posts average {int(avg_top_len)} chars, bottom posts average {int(avg_bottom_len)} chars")
-
-    # Check if top posts mention products less
-    top_with_links = sum(1 for row in top if row[5] and ('http' in (row[5] or '') or '.ai' in (row[5] or '') or '.com' in (row[5] or '')))
-    bottom_with_links = sum(1 for row in bottom if row[4] and ('http' in (row[4] or '') or '.ai' in (row[4] or '') or '.com' in (row[4] or '')))
-    if top:
-        lines.append(f"- {top_with_links}/{len(top)} top posts contain links vs {bottom_with_links}/{len(bottom)} bottom posts")
-
-    lines.append("- Write like texting a coworker, not writing a blog post")
-    lines.append("- Lead with a specific personal experience or observation, not a general statement")
-    lines.append("- Avoid 'been building in this space' or 'building a macOS app' without concrete details")
-    lines.append("")
+    if bottom:
+        lines.append(f"### Bottom {len(bottom)} Posts (avoid these patterns)")
+        for p in bottom:
+            lines.append(format_post(p, include_thread_content=False))
+            lines.append("")
 
     return "\n".join(lines)
 
@@ -208,31 +201,65 @@ def format_report(top, bottom, platform_stats, top_subs, length_analysis, projec
 def main():
     parser = argparse.ArgumentParser(description="Generate top performers feedback report")
     parser.add_argument("--platform", default=None, help="Filter to specific platform")
-    parser.add_argument("--limit", type=int, default=10, help="Number of top posts to show")
-    parser.add_argument("--json", action="store_true", help="Output as JSON instead of text")
+    parser.add_argument("--project", default=None, help="Filter to specific project")
+    parser.add_argument("--top", type=int, default=15, help="Number of top posts to show (per group or total)")
+    parser.add_argument("--bottom", type=int, default=10, help="Number of bottom posts to show")
+    parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
     conn = dbmod.get_conn()
 
-    top = get_top_posts(conn, platform=args.platform, limit=args.limit)
-    bottom = get_bottom_posts(conn, platform=args.platform, limit=5)
-    platform_stats = get_platform_stats(conn)
-    top_subs = get_top_subreddits(conn) if not args.platform or args.platform == "reddit" else []
-    length_analysis = get_content_length_analysis(conn, platform=args.platform)
-    project_perf = get_project_performance(conn)
+    summary = get_project_platform_summary(conn, project=args.project, platform=args.platform)
+    top = get_top_posts(conn, project=args.project, platform=args.platform, limit=args.top)
+    bottom = get_bottom_posts(conn, project=args.project, platform=args.platform, limit=args.bottom)
+
+    # When no project filter, also get top 5 per project for focused examples
+    top_by_group = None
+    if not args.project:
+        top_by_group = {}
+        platform_filter = "AND platform = %s" if args.platform else ""
+        platform_params = [args.platform] if args.platform else []
+        # Get distinct projects (respecting platform filter)
+        cur = conn.execute(
+            f"SELECT DISTINCT COALESCE(project_name, '(no project)') FROM posts "
+            f"WHERE status = 'active' AND platform NOT IN ('github_issues') "
+            f"AND our_content IS NOT NULL AND LENGTH(our_content) >= %s "
+            f"AND upvotes IS NOT NULL AND upvotes > 0 "
+            f"{platform_filter} "
+            f"ORDER BY 1",
+            [MIN_CONTENT_LEN] + platform_params
+        )
+        projects = [row[0] for row in cur.fetchall()]
+        for proj in projects:
+            proj_filter = proj if proj != "(no project)" else None
+            where_extra = "AND project_name = %s" if proj_filter else "AND project_name IS NULL"
+            params = ([proj_filter] if proj_filter else []) + platform_params
+            cur = conn.execute(
+                f"SELECT id, platform, upvotes, comments_count, views, "
+                f"our_content, thread_title, thread_content, "
+                f"project_name, posted_at::date, our_account "
+                f"FROM posts WHERE status = 'active' AND upvotes > 0 "
+                f"AND our_content IS NOT NULL AND LENGTH(our_content) >= {MIN_CONTENT_LEN} "
+                f"AND platform NOT IN ('github_issues') "
+                f"{where_extra} {platform_filter} "
+                f"ORDER BY upvotes DESC LIMIT 5",
+                params
+            )
+            top_by_group[proj] = cur.fetchall()
 
     conn.close()
 
     if args.json:
         output = {
+            "summary": [dict(row) for row in summary],
             "top_posts": [dict(row) for row in top],
             "bottom_posts": [dict(row) for row in bottom],
-            "platform_stats": [dict(row) for row in platform_stats],
-            "length_analysis": [dict(row) for row in length_analysis],
         }
         print(json.dumps(output, indent=2, default=str))
     else:
-        print(format_report(top, bottom, platform_stats, top_subs, length_analysis, project_perf, platform=args.platform))
+        print(format_report(summary, top, bottom,
+                            project=args.project, platform=args.platform,
+                            top_by_group=top_by_group))
 
 
 if __name__ == "__main__":

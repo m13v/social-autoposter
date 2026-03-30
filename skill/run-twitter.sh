@@ -15,26 +15,36 @@ LOG_FILE="$LOG_DIR/run-twitter-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Twitter Post Run: $(date) ===" | tee "$LOG_FILE"
 
-# Generate top performers feedback report (Twitter-specific)
-TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter 2>/dev/null || echo "(top performers report unavailable)")
+# Pick project based on weight distribution
+PROJECT=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform twitter 2>/dev/null || echo "Fazm")
+PROJECT_JSON=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform twitter --json 2>/dev/null || echo "{}")
+echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
+
+# Generate top performers feedback report (Twitter + project-specific)
+TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter --project "$PROJECT" 2>/dev/null || echo "(top performers report unavailable)")
 
 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
-Read $REPO_DIR/config.json for the twitter_topics list and account handle.
+Read $REPO_DIR/config.json for account handle.
+
+## TARGET PROJECT FOR THIS RUN: $PROJECT
+You MUST find tweets relevant to this project and reply about it.
+Project config: $PROJECT_JSON
+Use this project's content_angle/voice if it has one, otherwise use the global content_angle.
+The project_name for all posts this run MUST be '$PROJECT'.
 
 ## FEEDBACK FROM PAST PERFORMANCE (use this to write better replies):
 $TOP_REPORT
 
 Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
-1. Find candidate tweets: python3 $REPO_DIR/scripts/find_threads.py --include-twitter
+1. Find candidate tweets: python3 $REPO_DIR/scripts/find_threads.py --include-twitter --project '$PROJECT'
    From the output, pick ONLY twitter candidates (discovery_method: search_url).
    Browse the search URL via mcp__twitter-agent__browser_navigate to find actual tweets.
-2. Pick the best tweet to reply to
-3. Draft the reply (follow Content Rules - NEVER use em dashes, keep it short 1-2 sentences)
+2. Pick the best tweet relevant to $PROJECT to reply to
+3. Draft the reply using the project's voice/angle (follow Content Rules - NEVER use em dashes, keep it short 1-2 sentences)
 4. Post it using the twitter-agent browser (mcp__twitter-agent__* tools)
-5. Determine project_name by matching thread topic to config.json projects[].topics
-6. Log to database (MUST include project_name AND feedback_report_used=TRUE in the INSERT)
+5. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT)
 
 Up to 3 posts per run. If nothing fits, say '## No good tweet found' and stop.
 

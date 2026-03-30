@@ -15,23 +15,34 @@ LOG_FILE="$LOG_DIR/run-reddit-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Reddit Post Run: $(date) ===" | tee "$LOG_FILE"
 
-# Generate top performers feedback report (Reddit-specific)
-TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform reddit 2>/dev/null || echo "(top performers report unavailable)")
+# Pick project based on weight distribution
+PROJECT=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform reddit 2>/dev/null || echo "Fazm")
+PROJECT_JSON=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform reddit --json 2>/dev/null || echo "{}")
+echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
+
+# Generate top performers feedback report (Reddit + project-specific)
+TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform reddit --project "$PROJECT" 2>/dev/null || echo "(top performers report unavailable)")
 
 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
+Read $REPO_DIR/config.json for project details.
+
+## TARGET PROJECT FOR THIS RUN: $PROJECT
+You MUST find threads relevant to this project and post about it.
+Project config: $PROJECT_JSON
+Use this project's content_angle/voice if it has one, otherwise use the global content_angle.
+The project_name for all posts this run MUST be '$PROJECT'.
 
 ## FEEDBACK FROM PAST PERFORMANCE (use this to write better comments):
 $TOP_REPORT
 
 Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
-1. Find candidate threads: python3 $REPO_DIR/scripts/find_threads.py (Reddit only, no --include-moltbook)
-2. Pick the best Reddit thread from the script output
-3. Draft the comment (follow Content Rules - NEVER use em dashes)
+1. Find candidate threads: python3 $REPO_DIR/scripts/find_threads.py --project '$PROJECT'
+2. Pick the best Reddit thread relevant to the $PROJECT project
+3. Draft the comment using the project's voice/angle (follow Content Rules - NEVER use em dashes)
 4. Post it using the reddit-agent browser (mcp__reddit-agent__* tools)
-5. Determine project_name by matching thread topic to config.json projects[].topics
-6. Log to database (MUST include project_name AND feedback_report_used=TRUE in the INSERT)
+5. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT)
 
 Up to 3 posts per run. If nothing fits, say '## No good thread found' and stop.
 
