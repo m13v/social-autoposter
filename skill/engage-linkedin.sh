@@ -125,9 +125,13 @@ c. Extract the comment URN from data-id attribute
 For each new reply (not already in the existing list from Step 1):
 
 1. Find the matching post_id from Step 2 by matching the activity URL
-2. If no matching post exists, create one (determine PROJECT_NAME by matching the post topic against config.json projects[].topics):
+2. If no matching post exists, create one (determine PROJECT_NAME by matching the post topic against config.json projects[].topics).
+   IMPORTANT: The our_url MUST be a linkedin.com/feed/update/ URL (the activity URL of the post we commented on).
+   Extract it from the notification URL or from the post page. If the URL contains an activity ID (e.g. in commentUrn), construct:
+   https://www.linkedin.com/feed/update/urn:li:activity:ACTIVITY_ID/
+   NEVER use profile URLs (/in/...), search URLs (/search/...), or empty strings for our_url.
    \`\`\`bash
-   psql "\$DATABASE_URL" -c "INSERT INTO posts (platform, thread_url, thread_author, thread_title, our_url, our_content, our_account, project_name, status, posted_at) VALUES ('linkedin', 'THREAD_URL', 'THREAD_AUTHOR', 'THREAD_TITLE', 'OUR_POST_URL', 'OUR_POST_CONTENT', 'm13v', 'PROJECT_NAME', 'active', NOW()) RETURNING id;"
+   psql "\$DATABASE_URL" -c "INSERT INTO posts (platform, thread_url, thread_author, thread_title, our_url, our_content, our_account, project_name, status, posted_at) VALUES ('linkedin', 'THREAD_URL', 'THREAD_AUTHOR', 'THREAD_TITLE', 'FEED_UPDATE_URL', 'OUR_POST_CONTENT', 'm13v', 'PROJECT_NAME', 'active', NOW()) RETURNING id;"
    \`\`\`
 3. Insert the reply:
    \`\`\`bash
