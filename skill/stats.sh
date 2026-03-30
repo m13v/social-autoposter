@@ -172,7 +172,7 @@ log "Step 4: LinkedIn stats (Claude + Playwright)"
 LINKEDIN_POSTS=$(psql "$DATABASE_URL" -t -A -c "
     SELECT COUNT(*) FROM posts
     WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
-      AND our_url LIKE '%linkedin.com/%'
+      AND our_url LIKE '%linkedin.com/feed/update/%'
       AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days');" 2>/dev/null || echo "0")
 
 if [ "$LINKEDIN_POSTS" -gt 0 ]; then
@@ -194,7 +194,7 @@ source ~/social-autoposter/.env
 psql "$DATABASE_URL" -t -A -F '|' -c "
     SELECT id, our_url, LEFT(our_content, 80) as content_prefix FROM posts
     WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
-      AND our_url LIKE '%linkedin.com/%'
+      AND our_url LIKE '%linkedin.com/feed/update/%'
       AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days')
     ORDER BY id
     LIMIT 30;"
