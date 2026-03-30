@@ -61,14 +61,9 @@ python3 ~/social-autoposter/scripts/update_stats.py --quiet
 
 ## Workflow: Post (`/social-autoposter`)
 
-### 1. Rate limit check
+**There is NO posting rate limit. Do not add one, do not enforce one, do not invent one. Post as many times as needed.**
 
-```sql
-SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours'
-```
-Max 40 posts per 24 hours. Stop if at limit.
-
-### 2. Find candidate threads
+### 1. Find candidate threads
 
 **Option A — Script (preferred):**
 ```bash
@@ -78,7 +73,7 @@ python3 ~/social-autoposter/scripts/find_threads.py --include-moltbook
 **Option B — Browse manually:**
 Browse `/new` and `/hot` on the subreddits from `config.json`. Also check Moltbook via API.
 
-### 3. Pick the best thread
+### 2. Pick the best thread
 
 - You have a genuine angle from `content_angle` in config.json
 - Not already posted in: `SELECT thread_url FROM posts`
@@ -88,15 +83,15 @@ Browse `/new` and `/hot` on the subreddits from `config.json`. Also check Moltbo
   ```
 - If nothing fits naturally, **stop**. Better to skip than force a bad comment.
 
-### 4. Read the thread + top comments
+### 3. Read the thread + top comments
 
 Check tone, length cues, thread age. Find best comment to reply to (high-upvote comments get more visibility).
 
-### 5. Draft the comment
+### 4. Draft the comment
 
 Follow Content Rules below. 2-3 sentences, first person, specific details from `content_angle`. No product links in top-level comments.
 
-### 6. Post it
+### 5. Post it
 
 **Reddit** (browser automation):
 - Navigate to `old.reddit.com` thread URL
@@ -118,17 +113,19 @@ curl -s -X POST -H "Authorization: Bearer $MOLTBOOK_API_KEY" -H "Content-Type: a
   -d '{"title": "...", "content": "...", "type": "text", "submolt_name": "general"}' \
   "https://www.moltbook.com/api/v1/posts"
 ```
-On Moltbook: write as agent ("my human" not "I"). Max 1 post per 30 min.
+On Moltbook: write as agent ("my human" not "I").
 Verify: fetch post by UUID, check `verification_status` is `"verified"`.
 
-### 7. Log + sync
+### 6. Log + sync
 
 ```sql
 INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
   thread_title, thread_content, our_url, our_content, our_account,
-  source_summary, status, posted_at)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
+  source_summary, project_name, status, posted_at)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
 ```
+
+Set `project_name` to the matching project name from `config.json` (e.g., 'Fazm', 'Cyrano', 'Terminator'). Every post/comment MUST be labeled with its target project. If engagement is general/unrelated to any project, use 'general'.
 
 Use the account value from `config.json` for `our_account`.
 
@@ -140,11 +137,7 @@ If `sync_script` is set in config.json, run it after logging.
 
 **Manual only — never run from cron.** Original posts are high-stakes and need human review.
 
-### 1. Rate limit check
-
-Max 1 original post per 24 hours. Max 3 per week.
-
-### 2. Cross-posting check
+### 1. Cross-posting check
 
 ```sql
 SELECT platform, thread_title, posted_at FROM posts
@@ -154,11 +147,11 @@ ORDER BY posted_at DESC;
 
 **NEVER post the same or similar content to multiple subreddits.** This is the #1 AI detection red flag. Each post must be unique to its community.
 
-### 3. Pick one target community
+### 2. Pick one target community
 
 Choose the single best subreddit from `config.json → subreddits` for this topic. Tailor the post to that community's culture and tone.
 
-### 4. Draft the post
+### 3. Draft the post
 
 **Anti-AI-detection checklist** (must pass ALL before posting):
 
@@ -174,22 +167,22 @@ Choose the single best subreddit from `config.json → subreddits` for this topi
 
 **Read it out loud.** If it sounds like a blog post or a ChatGPT response, rewrite it.
 
-### 5. Post it
+### 4. Post it
 
 **Reddit**: old.reddit.com → Submit new text post → paste title + body → submit → verify → capture permalink.
 
-### 6. Log it
+### 5. Log it
 
 ```sql
 INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
   thread_title, thread_content, our_url, our_content, our_account,
-  source_summary, status, posted_at)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
+  source_summary, project_name, status, posted_at)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
 ```
 
-For original posts: `thread_url` = `our_url`, `thread_author` = our account from config.json.
+Set `project_name` to the matching project name from `config.json`. For original posts: `thread_url` = `our_url`, `thread_author` = our account from config.json.
 
-### 7. Mandatory engagement plan
+### 6. Mandatory engagement plan
 
 After posting, you MUST:
 - Check for comments within 2-4 hours
@@ -225,7 +218,7 @@ FROM replies r JOIN posts p ON r.post_id = p.id
 WHERE r.status='pending' ORDER BY r.discovered_at ASC LIMIT 10
 ```
 
-Draft replies: 2-4 sentences, casual, expand the topic. Apply Tiered Reply Strategy. Max 5 replies per run.
+Draft replies: 2-4 sentences, casual, expand the topic. Apply Tiered Reply Strategy.
 
 Post via browser (Reddit/X) or API (Moltbook). Update:
 ```sql
@@ -235,7 +228,7 @@ UPDATE replies SET status='replied', our_reply_content=%s, our_reply_url=%s,
 
 ### Phase C: X/Twitter replies (browser required)
 
-Navigate to `https://x.com/notifications/mentions`. Find replies to the handle in config.json. Respond to substantive ones (max 5). Log to `replies` table.
+Navigate to `https://x.com/notifications/mentions`. Find replies to the handle in config.json. Respond to substantive ones. Log to `replies` table.
 
 ---
 
@@ -262,10 +255,9 @@ Visit each post URL via browser. Check status (active/deleted/removed/inactive).
 8. **No em dashes (—).** Use commas, periods, or regular dashes (-) instead. Em dashes are the #1 "ChatGPT tell."
 9. **No markdown formatting in Reddit.** No headers (##), no bold (**text**), no numbered lists. Write in plain paragraphs.
 10. **Never cross-post.** One post per topic per community.
-11. **Space posts out.** Max 1 original post per day, max 3 per week. Don't spam.
-12. **Include imperfections.** Contractions, sentence fragments, casual asides, occasional lowercase.
-13. **Vary your openings.** Don't always start with credentials. Sometimes just jump into the topic.
-14. **Reply to comments on your posts.** Zero engagement on your own post = bot signal. Reply within 24h.
+11. **Include imperfections.** Contractions, sentence fragments, casual asides, occasional lowercase.
+12. **Vary your openings.** Don't always start with credentials. Sometimes just jump into the topic.
+13. **Reply to comments on your posts.** Zero engagement on your own post = bot signal. Reply within 24h.
 
 ### Bad vs Good (Comments)
 
@@ -297,6 +289,6 @@ GOOD body: Paragraphs, incomplete thoughts, personal details, casual tone, ends 
 
 ## Database Schema
 
-`posts`: id, platform, thread_url, thread_title, our_url, our_content, our_account, posted_at, status, upvotes, comments_count, views, source_summary
+`posts`: id, platform, thread_url, thread_title, our_url, our_content, our_account, project_name, posted_at, status, upvotes, comments_count, views, source_summary, link_edited_at, link_edit_content
 
 `replies`: id, post_id, platform, their_author, their_content, our_reply_content, status (pending|replied|skipped|error), depth
