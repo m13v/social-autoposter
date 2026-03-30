@@ -294,7 +294,10 @@ def main():
         platforms = get_platform_breakdown(conn, name, args.days)
 
         domains = get_project_domains(proj)
-        posthog = get_posthog_stats(api_key, project_id, domains, args.days) if domains else None
+        ph_override = proj.get("posthog", {})
+        ph_key = os.environ.get(ph_override.get("api_key_env", ""), api_key)
+        ph_pid = ph_override.get("project_id", project_id)
+        posthog = get_posthog_stats(ph_key, ph_pid, domains, args.days) if domains else None
 
         client_slug = get_client_slug(name)
         bookings = get_booking_stats(bookings_db_url, client_slug, args.days) if client_slug else None
