@@ -271,4 +271,4 @@ Social Autoposter Setup Complete
   Update:      npx social-autoposter update
 ```
 
-Tell the user: "Your stats pages are ready — they'll show posts as soon as your first run completes and the data is written to Neon. Bookmark the links above."
+Tell the user: "Your stats pages are ready — they'll show posts as soon as your first run completes and syncs to Neon (happens automatically after each post run). Bookmark the links above."
