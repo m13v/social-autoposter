@@ -161,13 +161,28 @@ def comment_on_post(token, person_urn, activity_id, text):
         resp = r.json()
         comment_id = resp.get("id", "")
         real_activity_id = extract_activity_id_from_response(resp, activity_id)
-        comment_urn = f"urn:li:comment:(activity:{real_activity_id},{comment_id})"
+        comment_urn = resp.get("$URN", f"urn:li:comment:(urn:li:activity:{real_activity_id},{comment_id})")
         our_url = f"https://www.linkedin.com/feed/update/urn:li:activity:{real_activity_id}/"
         print(json.dumps({"ok": True, "comment_urn": comment_urn, "our_url": our_url, "activity_id": real_activity_id}))
         return comment_urn
     else:
         print(json.dumps({"ok": False, "status": r.status_code, "error": r.text}))
         sys.exit(1)
+
+
+def normalize_comment_urn(urn):
+    """Normalize comment URN to the format LinkedIn API expects.
+
+    Pipeline stores: urn:li:comment:(activity:ID,COMMENT_ID)
+    API expects:     urn:li:comment:(urn:li:activity:ID,COMMENT_ID)
+    """
+    import re
+    # If it has (activity:ID without urn:li: prefix, add it
+    return re.sub(
+        r"\(activity:(\d+)",
+        r"(urn:li:activity:\1",
+        urn,
+    )
 
 
 def reply_to_comment(token, person_urn, activity_id, parent_comment_urn, text):
@@ -177,7 +192,7 @@ def reply_to_comment(token, person_urn, activity_id, parent_comment_urn, text):
     data = {
         "actor": person_urn,
         "message": {"text": text},
-        "parentComment": parent_comment_urn,
+        "parentComment": normalize_comment_urn(parent_comment_urn),
     }
     r = requests.post(
         f"https://api.linkedin.com/v2/socialActions/{encoded_urn}/comments",
@@ -188,7 +203,7 @@ def reply_to_comment(token, person_urn, activity_id, parent_comment_urn, text):
         resp = r.json()
         reply_id = resp.get("id", "")
         real_activity_id = extract_activity_id_from_response(resp, activity_id)
-        reply_urn = f"urn:li:comment:(activity:{real_activity_id},{reply_id})"
+        reply_urn = resp.get("$URN", f"urn:li:comment:(urn:li:activity:{real_activity_id},{reply_id})")
         permalink = (
             f"https://www.linkedin.com/feed/update/urn:li:activity:{real_activity_id}"
             f"?commentUrn={urllib.parse.quote(reply_urn, safe='')}"
