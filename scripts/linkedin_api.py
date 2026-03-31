@@ -210,6 +210,14 @@ def like_post(token, person_urn, activity_id):
         headers=v2_headers(token),
         json=data,
     )
+    if r.status_code == 404 and not activity_id.startswith("urn:li:"):
+        share_urn = f"urn:li:share:{activity_id}"
+        encoded_share = urllib.parse.quote(share_urn, safe="")
+        r = requests.post(
+            f"https://api.linkedin.com/v2/socialActions/{encoded_share}/likes",
+            headers=v2_headers(token),
+            json=data,
+        )
     if r.status_code == 201:
         print(json.dumps({"ok": True, "activity_id": activity_id}))
     else:
