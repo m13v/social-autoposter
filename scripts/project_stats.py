@@ -234,6 +234,9 @@ def print_project_report(name, post_stats, platforms, posthog, bookings, seo_pag
         parts = [f"{p}: {c}" for p, c in platforms.items()]
         print(f"    Platforms: {', '.join(parts)}")
 
+    if seo_pages > 0:
+        print(f"\n  SEO Pages: {seo_pages}")
+
     if posthog and (posthog["pageviews"] > 0 or posthog["cta_clicks"] > 0):
         print(f"\n  Website Analytics (PostHog):")
         print(f"    Pageviews: {posthog['pageviews']}  |  CTA Clicks: {posthog['cta_clicks']}")
@@ -314,10 +317,12 @@ def main():
         ph_pid = ph_override.get("project_id", project_id)
         posthog = get_posthog_stats(ph_key, ph_pid, domains, args.days) if domains else None
 
+        seo_pages = get_seo_page_count(proj)
+
         client_slug = get_client_slug(name)
         bookings = get_booking_stats(bookings_db_url, client_slug, args.days) if client_slug else None
 
-        print_project_report(name, post_stats, platforms, posthog, bookings, args.quiet)
+        print_project_report(name, post_stats, platforms, posthog, bookings, seo_pages, args.quiet)
 
     # Overall summary
     cur = conn.execute(
