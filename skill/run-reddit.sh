@@ -43,7 +43,14 @@ $TOP_REPORT
 
 Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
 1. Find candidate threads: python3 $REPO_DIR/scripts/find_threads.py --project '$PROJECT'
-2. Pick the best Reddit thread relevant to the $PROJECT project
+2. DEDUP CHECK (MANDATORY before every post): Before commenting on any Reddit thread, check if we already posted on it:
+   \`\`\`bash
+   source ~/social-autoposter/.env
+   psql \"\$DATABASE_URL\" -t -A -c \"SELECT id, LEFT(our_content, 80) FROM posts WHERE platform='reddit' AND thread_url = 'THREAD_URL' LIMIT 1;\"
+   \`\`\`
+   Replace THREAD_URL with the exact Reddit thread URL (old.reddit.com format).
+   If any row is returned, SKIP that thread and pick another one. Log: \"Skipped Reddit thread THREAD_URL (already posted, post_id=ID)\".
+3. Pick the best Reddit thread relevant to the $PROJECT project
 3. Draft the comment using the project's voice/angle (follow Content Rules - NEVER use em dashes)
 4. Post it using the reddit-agent browser (mcp__reddit-agent__* tools)
 5. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT)
