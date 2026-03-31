@@ -45,7 +45,15 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
 1. Find candidate posts: python3 $REPO_DIR/scripts/find_threads.py --include-linkedin --project '$PROJECT'
    From the output, pick ONLY linkedin candidates (discovery_method: search_url).
    Browse the search URL via mcp__linkedin-agent__browser_navigate to find actual posts.
-2. Pick the best LinkedIn post relevant to $PROJECT to comment on
+2. DEDUP CHECK (MANDATORY before every post): Before commenting on any LinkedIn post, check if we already posted on it.
+   Extract the activity ID from the post URL (the numeric ID in \`urn:li:activity:ACTIVITY_ID\` or from the feed/update URL).
+   \`\`\`bash
+   source ~/social-autoposter/.env
+   psql \"\$DATABASE_URL\" -t -A -c \"SELECT id, LEFT(our_content, 80) FROM posts WHERE platform='linkedin' AND (thread_url LIKE '%ACTIVITY_ID%' OR our_url LIKE '%ACTIVITY_ID%') LIMIT 1;\"
+   \`\`\`
+   Replace ACTIVITY_ID with the post's numeric activity ID.
+   If any row is returned, SKIP that post and pick another one. Log: \"Skipped LinkedIn post ACTIVITY_ID (already posted, post_id=ID)\".
+3. Pick the best LinkedIn post relevant to $PROJECT to comment on
 3. Draft the comment using the project's voice/angle (follow Content Rules - NEVER use em dashes, professional but casual tone)
 4. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools)
 5. **CAPTURE THE POST URL** — BEFORE closing the tab, extract the actual post URL.
