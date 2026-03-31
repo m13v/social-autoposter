@@ -6,9 +6,8 @@
 set -euo pipefail
 
 # Platform lock: wait up to 60min for previous github run to finish, then skip
-LOCK_FILE="/tmp/social-autoposter-github.lock"
-exec 200>"$LOCK_FILE"
-flock -w 3600 200 || { echo "Previous github run still active after 60min, skipping"; exit 0; }
+source "$(dirname "$0")/lock.sh"
+acquire_lock "github" 3600
 
 # Load secrets
 # shellcheck source=/dev/null
