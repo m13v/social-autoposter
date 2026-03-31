@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Octolens mention engagement - find mentions via Octolens and engage
 set -euo pipefail
+
+# Octolens lock: wait up to 60min for previous run to finish, then skip
+LOCK_FILE="/tmp/social-autoposter-octolens.lock"
+exec 200>"$LOCK_FILE"
+flock -w 3600 200 || { echo "Previous octolens run still active after 60min, skipping"; exit 0; }
+
 cd ~/social-autoposter
 
 # Load env
