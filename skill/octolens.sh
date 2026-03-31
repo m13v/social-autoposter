@@ -3,9 +3,8 @@
 set -euo pipefail
 
 # Octolens lock: wait up to 60min for previous run to finish, then skip
-LOCK_FILE="/tmp/social-autoposter-octolens.lock"
-exec 200>"$LOCK_FILE"
-flock -w 3600 200 || { echo "Previous octolens run still active after 60min, skipping"; exit 0; }
+source "$(dirname "$0")/lock.sh"
+acquire_lock "octolens" 3600
 
 cd ~/social-autoposter
 
