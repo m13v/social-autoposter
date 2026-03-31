@@ -10,9 +10,8 @@
 set -uo pipefail
 
 # Audit lock: wait up to 60min for previous audit run to finish, then skip
-LOCK_FILE="/tmp/social-autoposter-audit.lock"
-exec 200>"$LOCK_FILE"
-flock -w 3600 200 || { echo "Previous audit run still active after 60min, skipping"; exit 0; }
+source "$(dirname "$0")/lock.sh"
+acquire_lock "audit" 3600
 
 # Load secrets
 # shellcheck source=/dev/null
