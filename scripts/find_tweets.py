@@ -74,6 +74,7 @@ def main():
 
     already_posted = get_already_posted()
     candidates = []
+    seen_ids = set()
 
     for topic in topics:
         # Build exclusion string
@@ -87,9 +88,10 @@ def main():
             continue
 
         for t in tweets:
-            # Skip if already posted
-            if t["id"] in already_posted:
+            # Skip if already posted or already in candidates
+            if t["id"] in already_posted or t["id"] in seen_ids:
                 continue
+            seen_ids.add(t["id"])
             # Skip excluded authors
             if t["author_username"].lower() in excluded_accounts:
                 continue
