@@ -9,9 +9,8 @@
 set -uo pipefail
 
 # Stats lock: wait up to 60min for previous stats run to finish, then skip
-LOCK_FILE="/tmp/social-autoposter-stats.lock"
-exec 200>"$LOCK_FILE"
-flock -w 3600 200 || { echo "Previous stats run still active after 60min, skipping"; exit 0; }
+source "$(dirname "$0")/lock.sh"
+acquire_lock "stats" 3600
 
 REPO_DIR="$HOME/social-autoposter"
 SKILL_FILE="$REPO_DIR/SKILL.md"
