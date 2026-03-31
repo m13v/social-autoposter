@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # engage-twitter.sh — X/Twitter engagement loop
-# Phase A: Discover replies/mentions from Twitter notifications (browser-based)
-# Phase B: Respond to pending Twitter replies
+# Phase A: Discover replies/mentions via Twitter API (no browser needed)
+# Phase B: Respond to pending Twitter replies via browser (API can't reply to most tweets)
 # Called by launchd every 3 hours.
 
 set -euo pipefail
@@ -86,7 +86,8 @@ EXCLUSIONS - do NOT engage with these accounts (skip and mark as 'skipped' with 
 - Excluded authors: $EXCLUDED_AUTHORS
 - Excluded Twitter accounts: $EXCLUDED_TWITTER
 
-CRITICAL: Post replies using python3 $REPO_DIR/scripts/twitter_api.py, NOT browser tools. The Twitter API handles all posting.
+CRITICAL - Browser agent rule: ONLY use mcp__twitter-agent__* tools for posting. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
+CRITICAL: If a browser agent tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). If still blocked, skip that item and move on.
 
 ## Respond to pending Twitter/X replies ($PENDING_COUNT total)
 
@@ -126,15 +127,15 @@ CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql)
 NEVER use psql directly for reply status updates.
 
 MANDATORY reply flow for every item:
-  Step 1: python3 reply_db.py processing ID      <- mark BEFORE posting
-  Step 2: Post reply via Twitter API (NOT browser):
-          python3 $REPO_DIR/scripts/twitter_api.py post "REPLY_TEXT" --reply-to THEIR_TWEET_ID
-          This returns JSON with the new tweet's id and url.
+  Step 1: python3 reply_db.py processing ID      <- mark BEFORE touching browser
+  Step 2: Post reply via twitter-agent browser (mcp__twitter-agent__* tools):
+          - Navigate to the tweet URL (their_comment_url)
+          - Take a snapshot to find the reply box
+          - Click the reply box, type the reply text, and submit
+          - After posting, capture the URL of our reply tweet
   Step 3: python3 reply_db.py replied ID "reply text" REPLY_URL   <- mark AFTER success
-If Step 2 fails with an error, mark as 'skipped' with reason 'api_error'.
-If their tweet was deleted (404), mark as 'skipped' with reason 'tweet_not_found'.
-
-CRITICAL: Post replies using python3 $REPO_DIR/scripts/twitter_api.py, NOT browser tools. Browser is NOT needed.
+If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run.
+If the tweet has been deleted or is unavailable, mark as 'skipped' with reason 'tweet_not_found'.
 
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
