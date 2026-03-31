@@ -129,7 +129,7 @@ Set `project_name` to the matching project name from `config.json` (e.g., 'Fazm'
 
 Use the account value from `config.json` for `our_account`.
 
-If `sync_script` is set in config.json, run it after logging.
+Posts are written directly to the Neon Postgres database. No separate post-sync step is required.
 
 ---
 
@@ -198,7 +198,7 @@ After posting, you MUST:
 python3 ~/social-autoposter/scripts/update_stats.py
 ```
 
-After running, view updated stats at `https://s4l.ai/stats/[handle]`. The DB syncs to Neon Postgres via `syncfield.sh` (called automatically by `stats.sh`). Changes appear on the website within ~5 minutes.
+After running, view updated stats at `https://s4l.ai/stats/[handle]`. Stats are read from the same Neon Postgres database used by the posting pipeline. Changes appear on the website within ~5 minutes.
 
 ---
 
