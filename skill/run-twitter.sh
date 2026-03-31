@@ -48,9 +48,13 @@ $TOP_REPORT
 ## CANDIDATE TWEETS (found via API search, already deduped against DB):
 $CANDIDATES
 
+If the API candidates above are weak (off-topic, non-English, low engagement), you may also
+browse Twitter search URLs via mcp__twitter-agent__browser_navigate to find better tweets.
+
 Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
 1. From the candidates above, pick the best tweets relevant to $PROJECT to reply to.
    Skip any that are not a good fit (too promotional, off-topic, etc.).
+   If no good candidates, search via browser: mcp__twitter-agent__browser_navigate to a search URL.
 2. DEDUP CHECK (MANDATORY before every post): Before replying to any tweet, check if we already posted on it:
    \`\`\`bash
    source ~/social-autoposter/.env
@@ -59,19 +63,17 @@ Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
    Replace TWEET_STATUS_ID with the tweet's numeric status ID (from the URL).
    If any row is returned, SKIP that tweet and pick another one. Log: \"Skipped tweet TWEET_URL (already posted, post_id=ID)\".
 3. Draft the reply using the project's voice/angle (follow Content Rules - NEVER use em dashes, keep it short 1-2 sentences)
-4. Post it using the Twitter API:
-   \`\`\`bash
-   python3 $REPO_DIR/scripts/twitter_api.py post \"REPLY_TEXT\" --reply-to TWEET_ID
-   \`\`\`
+4. Post it using the twitter-agent browser (mcp__twitter-agent__* tools):
+   - Navigate to the tweet URL
+   - Click the reply box, type your reply, click Reply
 5. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT).
-   Use the tweet URL and ID returned by the API post command.
 
 Up to 50 posts per run. If nothing fits, say '## No good tweet found' and stop.
 
 CRITICAL: Ignore the 'Max 40 posts per 24 hours' limit in SKILL.md. The actual daily limit is 4000 posts. Post up to 50 per this run.
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
-CRITICAL: Post tweets using python3 $REPO_DIR/scripts/twitter_api.py, NOT browser tools. Browser is NOT needed for posting.
-CRITICAL: If the API returns an error, log it and skip to the next candidate." 2>&1 | tee -a "$LOG_FILE"
+CRITICAL: Use ONLY mcp__twitter-agent__* tools for browser actions. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
+CRITICAL: If a browser tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). If still blocked, skip and move on." 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 find "$LOG_DIR" -name "run-twitter-*.log" -mtime +7 -delete 2>/dev/null || true
