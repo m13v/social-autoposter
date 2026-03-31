@@ -256,12 +256,19 @@ MANDATORY reply flow for every item:
   Step 3: python3 reply_db.py replied ID "text" [url]   <- mark AFTER success
 If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run.
 
-For LinkedIn replies - use the linkedin-agent browser (mcp__linkedin-agent__* tools):
-1. Navigate to their_comment_url (the post with commentUrn query param).
-2. Find the specific comment in the page. Take a snapshot to locate it.
-3. Click "Reply" on that comment, type the reply text, and submit.
-4. After posting, construct the permalink URL for our reply and store it.
-5. If you can't find the comment or it's been deleted, mark as 'skipped' with reason 'comment_not_found'.
+For LinkedIn replies - use the LinkedIn API (NOT browser) to post replies:
+1. Extract the activity ID from their_comment_url or their_comment_id.
+   - From their_comment_id like \`urn:li:comment:(activity:7438226125077549056,7438815640536170496)\`, the activity ID is \`7438226125077549056\` and the full URN is the parent_comment_urn.
+   - From their_comment_url, extract the activity ID from the URL path.
+2. Post the reply via API:
+   \`\`\`bash
+   python3 $REPO_DIR/scripts/linkedin_api.py reply ACTIVITY_ID "PARENT_COMMENT_URN" "YOUR REPLY TEXT"
+   \`\`\`
+   This returns JSON with {ok, reply_urn, permalink}. Use permalink as the reply URL.
+3. If the API call fails (e.g., token expired, comment deleted), fall back to browser:
+   - Navigate to their_comment_url via linkedin-agent browser
+   - Find the comment, click Reply, type, submit
+4. If both API and browser fail, mark as 'skipped' with reason 'comment_not_found'.
 
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
