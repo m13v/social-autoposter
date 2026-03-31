@@ -67,7 +67,7 @@ Also load author+post pairs we have already replied to (to avoid replying to the
 \`\`\`bash
 psql "\$DATABASE_URL" -t -A -c "SELECT DISTINCT r.their_author || '|||' || p.our_url FROM replies r JOIN posts p ON r.post_id = p.id WHERE r.platform='linkedin' AND r.status IN ('replied','pending','processing');"
 \`\`\`
-Save this list. When inserting a new reply, skip it if the same author+post pair is already in this list. One reply per author per thread is enough.
+Save this list. When inserting a new reply, skip it if the same author+post pair is already in this list. One reply per author per thread is enough. In the summary, report these as "skipped (author already engaged on thread)" with the author name and activity URL.
 
 ### Step 2: Load our LinkedIn posts for matching
 \`\`\`bash
@@ -155,7 +155,11 @@ Example: urn:li:comment:(activity:7438226125077549056,7438815640536170496)
 CRITICAL - LinkedIn comment permalink URL format:
 https://www.linkedin.com/feed/update/urn:li:activity:ACTIVITY_ID?commentUrn=urn%3Ali%3Acomment%3A%28activity%3AACTIVITY_ID%2CCOMMENT_ID%29
 
-After discovery, print a summary: how many new replies found, how many skipped (already tracked, excluded, etc.).
+After discovery, print a summary: how many new replies found, how many skipped by category:
+- "already tracked" (comment URN already in DB)
+- "author already engaged on thread" (same author+post pair — list each with author name and activity ID)
+- "excluded author"
+- "own account"
 PROMPT_EOF
 
 gtimeout 3600 claude -p "$(cat "$PHASE_A_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase A claude exited with code $?"
