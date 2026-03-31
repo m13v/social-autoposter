@@ -45,10 +45,17 @@ Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
 1. Find candidate tweets: python3 $REPO_DIR/scripts/find_threads.py --include-twitter --project '$PROJECT'
    From the output, pick ONLY twitter candidates (discovery_method: search_url).
    Browse the search URL via mcp__twitter-agent__browser_navigate to find actual tweets.
-2. Pick the best tweet relevant to $PROJECT to reply to
-3. Draft the reply using the project's voice/angle (follow Content Rules - NEVER use em dashes, keep it short 1-2 sentences)
-4. Post it using the twitter-agent browser (mcp__twitter-agent__* tools)
-5. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT)
+2. DEDUP CHECK (MANDATORY before every post): Before replying to any tweet, check if we already posted on it:
+   \`\`\`bash
+   source ~/social-autoposter/.env
+   psql \"\$DATABASE_URL\" -t -A -c \"SELECT id, LEFT(our_content, 80) FROM posts WHERE thread_url LIKE '%TWEET_STATUS_ID%' LIMIT 1;\"
+   \`\`\`
+   Replace TWEET_STATUS_ID with the tweet's numeric status ID (from the URL).
+   If any row is returned, SKIP that tweet and pick another one. Log: \"Skipped tweet TWEET_URL (already posted, post_id=ID)\".
+3. Pick the best tweet relevant to $PROJECT to reply to
+4. Draft the reply using the project's voice/angle (follow Content Rules - NEVER use em dashes, keep it short 1-2 sentences)
+5. Post it using the twitter-agent browser (mcp__twitter-agent__* tools)
+6. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT)
 
 Up to 50 posts per run. If nothing fits, say '## No good tweet found' and stop.
 
