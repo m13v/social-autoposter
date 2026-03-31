@@ -9,9 +9,8 @@
 set -euo pipefail
 
 # Engage lock: wait up to 60min for previous engage run to finish, then skip
-LOCK_FILE="/tmp/social-autoposter-engage.lock"
-exec 200>"$LOCK_FILE"
-flock -w 3600 200 || { echo "Previous engage run still active after 60min, skipping"; exit 0; }
+source "$(dirname "$0")/lock.sh"
+acquire_lock "engage" 3600
 
 # Load secrets
 # shellcheck source=/dev/null
