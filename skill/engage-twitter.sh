@@ -86,8 +86,7 @@ EXCLUSIONS - do NOT engage with these accounts (skip and mark as 'skipped' with 
 - Excluded authors: $EXCLUDED_AUTHORS
 - Excluded Twitter accounts: $EXCLUDED_TWITTER
 
-CRITICAL - Browser agent rule: ONLY use mcp__twitter-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
-CRITICAL: If a browser agent tool call is blocked or times out, DO NOT fall back to any other browser tool. Wait 30 seconds and retry the same agent. Repeat up to 3 times. If still blocked, skip that item and move on.
+CRITICAL: Post replies using python3 $REPO_DIR/scripts/twitter_api.py, NOT browser tools. The Twitter API handles all posting.
 
 ## Respond to pending Twitter/X replies ($PENDING_COUNT total)
 
