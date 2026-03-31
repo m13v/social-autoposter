@@ -112,9 +112,32 @@ def create_post(token, person_urn, text):
         sys.exit(1)
 
 
+def resolve_post_urn(identifier):
+    """Convert an activity ID or share ID to the appropriate URN for API calls.
+
+    The pipeline extracts activity IDs from browser data-urn attributes.
+    LinkedIn's socialActions API accepts both urn:li:activity: and urn:li:share: URNs.
+    """
+    if identifier.startswith("urn:li:"):
+        return identifier
+    return f"urn:li:activity:{identifier}"
+
+
+def extract_activity_id_from_response(resp, fallback_id):
+    """Extract the real activity ID from a comment response's $URN field."""
+    urn = resp.get("$URN", "")
+    import re
+    m = re.search(r"activity:(\d+)", urn)
+    return m.group(1) if m else fallback_id
+
+
 def comment_on_post(token, person_urn, activity_id, text):
-    """Comment on a LinkedIn post. Returns the comment URN."""
-    post_urn = f"urn:li:activity:{activity_id}"
+    """Comment on a LinkedIn post. Returns the comment URN.
+
+    Accepts activity IDs (from browser data-urn), share IDs, or full URNs.
+    If urn:li:activity fails with 404, retries with urn:li:share.
+    """
+    post_urn = resolve_post_urn(activity_id)
     encoded_urn = urllib.parse.quote(post_urn, safe="")
     data = {
         "actor": person_urn,
@@ -125,12 +148,22 @@ def comment_on_post(token, person_urn, activity_id, text):
         headers=v2_headers(token),
         json=data,
     )
+    # If activity URN 404s, retry with share URN (post API returns share IDs)
+    if r.status_code == 404 and not activity_id.startswith("urn:li:"):
+        share_urn = f"urn:li:share:{activity_id}"
+        encoded_share = urllib.parse.quote(share_urn, safe="")
+        r = requests.post(
+            f"https://api.linkedin.com/v2/socialActions/{encoded_share}/comments",
+            headers=v2_headers(token),
+            json=data,
+        )
     if r.status_code == 201:
         resp = r.json()
-        comment_id = resp.get("id", resp.get("$URN", ""))
-        comment_urn = f"urn:li:comment:(activity:{activity_id},{comment_id})"
-        our_url = f"https://www.linkedin.com/feed/update/urn:li:activity:{activity_id}/"
-        print(json.dumps({"ok": True, "comment_urn": comment_urn, "our_url": our_url, "activity_id": activity_id}))
+        comment_id = resp.get("id", "")
+        real_activity_id = extract_activity_id_from_response(resp, activity_id)
+        comment_urn = f"urn:li:comment:(activity:{real_activity_id},{comment_id})"
+        our_url = f"https://www.linkedin.com/feed/update/urn:li:activity:{real_activity_id}/"
+        print(json.dumps({"ok": True, "comment_urn": comment_urn, "our_url": our_url, "activity_id": real_activity_id}))
         return comment_urn
     else:
         print(json.dumps({"ok": False, "status": r.status_code, "error": r.text}))
@@ -139,7 +172,7 @@ def comment_on_post(token, person_urn, activity_id, text):
 
 def reply_to_comment(token, person_urn, activity_id, parent_comment_urn, text):
     """Reply to a specific comment on a LinkedIn post."""
-    post_urn = f"urn:li:activity:{activity_id}"
+    post_urn = resolve_post_urn(activity_id)
     encoded_urn = urllib.parse.quote(post_urn, safe="")
     data = {
         "actor": person_urn,
@@ -153,10 +186,11 @@ def reply_to_comment(token, person_urn, activity_id, parent_comment_urn, text):
     )
     if r.status_code == 201:
         resp = r.json()
-        reply_id = resp.get("id", resp.get("$URN", ""))
-        reply_urn = f"urn:li:comment:(activity:{activity_id},{reply_id})"
+        reply_id = resp.get("id", "")
+        real_activity_id = extract_activity_id_from_response(resp, activity_id)
+        reply_urn = f"urn:li:comment:(activity:{real_activity_id},{reply_id})"
         permalink = (
-            f"https://www.linkedin.com/feed/update/urn:li:activity:{activity_id}"
+            f"https://www.linkedin.com/feed/update/urn:li:activity:{real_activity_id}"
             f"?commentUrn={urllib.parse.quote(reply_urn, safe='')}"
         )
         print(json.dumps({"ok": True, "reply_urn": reply_urn, "permalink": permalink}))
@@ -168,7 +202,7 @@ def reply_to_comment(token, person_urn, activity_id, parent_comment_urn, text):
 
 def like_post(token, person_urn, activity_id):
     """Like/react to a LinkedIn post."""
-    post_urn = f"urn:li:activity:{activity_id}"
+    post_urn = resolve_post_urn(activity_id)
     encoded_urn = urllib.parse.quote(post_urn, safe="")
     data = {"actor": person_urn}
     r = requests.post(
