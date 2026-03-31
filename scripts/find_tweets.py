@@ -78,7 +78,7 @@ def main():
     for topic in topics:
         # Build exclusion string
         exclude_str = " ".join(f"-from:{acct}" for acct in excluded_accounts)
-        query = f"{topic} {exclude_str} min_faves:5 -is:retweet lang:en".strip()
+        query = f"{topic} {exclude_str} -is:retweet lang:en".strip()
 
         try:
             tweets = twitter_api.search_recent_tweets(query, max_results=args.max)
