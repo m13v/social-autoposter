@@ -59,6 +59,34 @@ elif cmd == "audit":
         print(f"Found {len(rows)} author-thread pairs with multiple replies:")
         for row in rows:
             print(f"  {row[0]} ({row[1]}) x{row[3]} on {row[2][:80]}... ids={row[4]}")
+elif cmd == "audit-posts":
+    # reply_db.py audit-posts [platform]
+    # Show thread_urls where we posted multiple times (duplicate posts to same thread)
+    platform = sys.argv[2] if len(sys.argv) > 2 else None
+    where = "WHERE thread_url IS NOT NULL AND status='active'"
+    params = []
+    if platform:
+        where += " AND platform=%s"
+        params.append(platform)
+    cur = db.execute(f"""
+        SELECT thread_url, platform, COUNT(*) as cnt,
+               array_agg(id ORDER BY posted_at) as post_ids,
+               array_agg(LEFT(our_content, 60) ORDER BY posted_at) as contents
+        FROM posts
+        {where}
+        GROUP BY thread_url, platform
+        HAVING COUNT(*) > 1
+        ORDER BY COUNT(*) DESC
+    """, params)
+    rows = cur.fetchall()
+    if not rows:
+        print("No duplicate posts to same thread found.")
+    else:
+        print(f"Found {len(rows)} threads with multiple posts:")
+        for row in rows:
+            print(f"  {row[1]} x{row[2]} on {row[0][:80]}... ids={row[3]}")
+            for c in row[4]:
+                print(f"    -> {c}")
 elif cmd == "status":
     cur = db.execute("SELECT status, COUNT(*) FROM replies GROUP BY status ORDER BY status")
     for row in cur.fetchall():
