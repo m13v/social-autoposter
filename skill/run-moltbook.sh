@@ -5,6 +5,11 @@
 
 set -euo pipefail
 
+# Platform lock: wait up to 60min for previous run to finish, then skip
+LOCK_FILE="/tmp/social-autoposter-moltbook.lock"
+exec 200>"$LOCK_FILE"
+flock -w 3600 200 || { echo "Previous moltbook run still active after 60min, skipping"; exit 0; }
+
 [ -f "$HOME/social-autoposter/.env" ] && source "$HOME/social-autoposter/.env"
 
 REPO_DIR="$HOME/social-autoposter"
