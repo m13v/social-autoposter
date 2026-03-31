@@ -201,12 +201,27 @@ def get_project_domains(project):
     return domains
 
 
+def get_seo_page_count(project):
+    """Count SEO landing pages in the project's website repo (src/app/t/*/page.tsx)."""
+    lp = project.get("landing_pages")
+    if not isinstance(lp, dict):
+        return 0
+    repo = lp.get("repo", "")
+    if not repo:
+        return 0
+    repo = os.path.expanduser(repo)
+    t_dir = os.path.join(repo, "src", "app", "t")
+    if not os.path.isdir(t_dir):
+        return 0
+    return sum(1 for d in os.listdir(t_dir) if os.path.isfile(os.path.join(t_dir, d, "page.tsx")))
+
+
 def get_client_slug(project_name):
     """Map project name to cal_bookings client_slug."""
     return {"Cyrano": "cyrano", "PieLine": "pieline", "Fazm": "fazm", "S4L": "s4l"}.get(project_name)
 
 
-def print_project_report(name, post_stats, platforms, posthog, bookings, quiet=False):
+def print_project_report(name, post_stats, platforms, posthog, bookings, seo_pages=0, quiet=False):
     """Print formatted report for one project."""
     print(f"\n{'='*60}")
     print(f"  {name}")
