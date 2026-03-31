@@ -250,9 +250,20 @@ If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on t
 For LinkedIn replies - use the linkedin-agent browser (mcp__linkedin-agent__* tools):
 1. Navigate to their_comment_url (the post with commentUrn query param).
 2. Find the specific comment in the page. Take a snapshot to locate it.
-3. Click "Reply" on that comment, type the reply text, and submit.
-4. After posting, construct the permalink URL for our reply and store it.
-5. If you can't find the comment or it's been deleted, mark as 'skipped' with reason 'comment_not_found'.
+3. DEDUP CHECK: Before replying, check if we already have a reply on this comment. Use browser_run_code:
+   \`\`\`javascript
+   async (page) => {
+     // Find all reply authors under the target comment thread
+     const replies = document.querySelectorAll('.comments-comment-entity .comments-post-meta__name-text, .comments-reply-item .comments-post-meta__name-text');
+     const authors = [...replies].map(el => el.innerText.trim().toLowerCase());
+     const alreadyReplied = authors.some(a => a.includes('matthew diakonov') || a.includes('m13v'));
+     return JSON.stringify({ alreadyReplied, authors });
+   }
+   \`\`\`
+   If alreadyReplied is true, mark as 'skipped' with reason 'already_replied' and move on.
+4. Click "Reply" on that comment, type the reply text, and submit.
+5. After posting, construct the permalink URL for our reply and store it.
+6. If you can't find the comment or it's been deleted, mark as 'skipped' with reason 'comment_not_found'.
 
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
