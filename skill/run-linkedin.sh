@@ -54,35 +54,30 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
    Replace ACTIVITY_ID with the post's numeric activity ID.
    If any row is returned, SKIP that post and pick another one. Log: \"Skipped LinkedIn post ACTIVITY_ID (already posted, post_id=ID)\".
 3. Pick the best LinkedIn post relevant to $PROJECT to comment on
-3. Draft the comment using the project's voice/angle (follow Content Rules - NEVER use em dashes, professional but casual tone)
-4. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools)
-5. **CAPTURE THE POST URL** — BEFORE closing the tab, extract the actual post URL.
-   After posting the comment, run this JS via mcp__linkedin-agent__browser_run_code:
+3. **EXTRACT THE ACTIVITY ID** — Before commenting, extract the numeric activity ID from the post.
+   Run this JS via mcp__linkedin-agent__browser_run_code to get the activity ID:
    \`\`\`javascript
    async (page) => {
      const url = page.url();
-     // If on a feed/update page, use it directly
-     if (url.includes('/feed/update/')) return url.split('?')[0];
-     // Otherwise extract from the page - find the post's share/permalink
-     const shareLink = await page.evaluate(() => {
-       // Look for the post's activity URN in the page
-       const postEl = document.querySelector('[data-urn*=\"activity\"], [data-id*=\"activity\"]');
-       if (postEl) {
-         const urn = postEl.getAttribute('data-urn') || postEl.getAttribute('data-id');
-         const match = urn.match(/activity:(\\d+)/);
-         if (match) return 'https://www.linkedin.com/feed/update/urn:li:activity:' + match[1] + '/';
-       }
-       // Fallback: check URL bar or og:url meta
-       const ogUrl = document.querySelector('meta[property=\"og:url\"]');
-       if (ogUrl) return ogUrl.content;
-       return null;
-     });
-     return shareLink || url;
+     let match = url.match(/activity[:%3A](\\d+)/i);
+     if (match) return match[1];
+     const postEl = document.querySelector('[data-urn*=\"activity\"], [data-id*=\"activity\"]');
+     if (postEl) {
+       const urn = postEl.getAttribute('data-urn') || postEl.getAttribute('data-id');
+       match = urn.match(/activity:(\\d+)/);
+       if (match) return match[1];
+     }
+     return null;
    }
    \`\`\`
-   Use this URL as \`our_url\` in the database INSERT. It MUST be a linkedin.com/feed/update/ URL.
-   If you cannot get a feed/update URL, use the current page URL as fallback.
-6. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT). Use the captured feed/update URL for our_url.
+4. Draft the comment using the project's voice/angle (follow Content Rules - NEVER use em dashes, professional but casual tone)
+5. **POST VIA API** (NOT browser) — Use the LinkedIn API to post the comment:
+   \`\`\`bash
+   python3 $REPO_DIR/scripts/linkedin_api.py comment ACTIVITY_ID "YOUR COMMENT TEXT"
+   \`\`\`
+   This returns JSON with {ok, comment_urn, our_url, activity_id}. Use our_url for the database INSERT.
+   If the API call fails, fall back to browser posting as before.
+6. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT). Use the our_url from the API response.
 
 Up to 30 posts per run. If nothing fits, say '## No good post found' and stop.
 
