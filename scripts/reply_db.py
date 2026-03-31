@@ -34,6 +34,31 @@ elif cmd == "skip_batch":
         db.execute("UPDATE replies SET status='skipped', skip_reason=%s WHERE id=%s", [data["reason"], rid])
     db.commit()
     print(f"ok {len(data['ids'])}")
+elif cmd == "audit":
+    # reply_db.py audit [platform]
+    # Show author+thread pairs where we replied more than once
+    platform = sys.argv[2] if len(sys.argv) > 2 else None
+    where = "WHERE r.status='replied'"
+    params = []
+    if platform:
+        where += " AND r.platform=%s"
+        params.append(platform)
+    cur = db.execute(f"""
+        SELECT r.their_author, r.platform, p.our_url, COUNT(*) as cnt,
+               array_agg(r.id ORDER BY r.replied_at) as reply_ids
+        FROM replies r JOIN posts p ON r.post_id = p.id
+        {where}
+        GROUP BY r.their_author, r.platform, p.our_url
+        HAVING COUNT(*) > 1
+        ORDER BY COUNT(*) DESC
+    """, params)
+    rows = cur.fetchall()
+    if not rows:
+        print("No duplicate author-thread engagements found.")
+    else:
+        print(f"Found {len(rows)} author-thread pairs with multiple replies:")
+        for row in rows:
+            print(f"  {row[0]} ({row[1]}) x{row[3]} on {row[2][:80]}... ids={row[4]}")
 elif cmd == "status":
     cur = db.execute("SELECT status, COUNT(*) FROM replies GROUP BY status ORDER BY status")
     for row in cur.fetchall():
