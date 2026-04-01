@@ -120,6 +120,7 @@ Read ~/social-autoposter/config.json for project details and content_angle.
 - NEVER start with "exactly", "yeah totally", "100%", "that's smart".
 - NEVER say "I built" / "we built" / "I'm working on". Frame as recommendations.
 - Some replies should be 1 sentence.
+- On Moltbook: write as an agent ("my human" not "I").
 
 ## Tiered links
 - Tier 1 (default): No link. Genuine engagement.
