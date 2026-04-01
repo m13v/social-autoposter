@@ -128,10 +128,12 @@ def get_browser_and_page(playwright):
 
 
 def discover_notifications(max_load_more=10):
-    """Navigate to LinkedIn notifications, expand, extract actionable items.
+    """Discover LinkedIn notifications using the internal Voyager API.
 
-    Returns JSON array of notifications:
-    [{"type": "reply|mention|comment_on_post", "name": "Author", "url": "...", "activity_id": "..."}]
+    First tries the JS extractor (scan_linkedin_notifications.js) which uses
+    LinkedIn's internal API for rich data. Falls back to HTML scraping.
+
+    Returns JSON with notifications in the format expected by scan_linkedin_notifications.py.
     """
     from playwright.sync_api import sync_playwright
 
@@ -139,10 +141,121 @@ def discover_notifications(max_load_more=10):
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
+            # Navigate to LinkedIn (needed for cookies/CSRF)
+            if "linkedin.com" not in page.url:
+                page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+
+            # Try running the JS extractor which uses Voyager API
+            js_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "scan_linkedin_notifications.js",
+            )
+            if os.path.exists(js_path):
+                with open(js_path) as f:
+                    js_code = f.read()
+
+                # The JS is an async function that takes (page), we need to
+                # call page.evaluate with the inner evaluate code
+                result = page.evaluate("""async () => {
+                    const csrfToken = (document.cookie.match(/JSESSIONID="?([^";]+)/) || [])[1] || '';
+                    if (!csrfToken) return JSON.stringify({ error: 'No CSRF token - not logged in' });
+
+                    const headers = {
+                        'csrf-token': csrfToken,
+                        'accept': 'application/vnd.linkedin.normalized+json+2.1',
+                        'x-restli-protocol-version': '2.0.0',
+                    };
+
+                    const actionableTypes = new Set([
+                        'REPLIED_TO_YOUR_COMMENT',
+                        'COMMENTED_ON_YOUR_UPDATE',
+                        'COMMENTED_ON_YOUR_POST',
+                        'MENTIONED_YOU_IN_A_COMMENT',
+                        'MENTIONED_YOU_IN_THIS',
+                    ]);
+
+                    const allNotifications = [];
+                    const profiles = {};
+
+                    for (let start = 0; start < 100; start += 25) {
+                        const resp = await fetch(
+                            `/voyager/api/voyagerIdentityDashNotificationCards?decorationId=com.linkedin.voyager.dash.deco.identity.notifications.CardsCollection-80&count=25&filterUrn=urn%3Ali%3Afsd_notificationFilter%3AALL&q=notifications&start=${start}`,
+                            { headers }
+                        );
+                        if (resp.status !== 200) {
+                            if (start === 0) return JSON.stringify({ error: `API returned ${resp.status}` });
+                            break;
+                        }
+
+                        const data = await resp.json();
+                        const included = data.included || [];
+
+                        included
+                            .filter(e => e.$type === 'com.linkedin.voyager.dash.identity.profile.Profile')
+                            .forEach(p => {
+                                const name = (p.profilePicture && p.profilePicture.a11yText) || '';
+                                if (name) profiles[p.entityUrn] = name;
+                            });
+
+                        included
+                            .filter(e => e.$type === 'com.linkedin.voyager.dash.identity.notifications.Card')
+                            .forEach(card => {
+                                const objUrn = card.objectUrn || '';
+                                const typeMatch = objUrn.match(/,([A-Z_]+),/) || objUrn.match(/,([A-Z_]+)\\)/);
+                                const notifType = typeMatch ? typeMatch[1] : 'UNKNOWN';
+
+                                if (!actionableTypes.has(notifType)) return;
+
+                                const commentMatch = objUrn.match(/urn:li:comment:\\([^)]+\\)/);
+                                const commentUrn = commentMatch ? commentMatch[0] : '';
+
+                                let activityId = '';
+                                const actMatch = commentUrn.match(/activity:(\\d+)/) || commentUrn.match(/ugcPost:(\\d+)/);
+                                if (actMatch) activityId = actMatch[1];
+
+                                const headline = (card.headline && card.headline.text) || '';
+                                const authorMatch = headline.match(/^(.+?)\\s+(replied|commented|mentioned)/);
+                                const authorName = authorMatch ? authorMatch[1] : '';
+
+                                const profileUrl = (card.headerImage && card.headerImage.actionTarget) || '';
+                                const navUrl = (card.cardAction && card.cardAction.actionTarget) || '';
+                                const postContent = (card.contentSecondaryText && card.contentSecondaryText.text) || '';
+
+                                allNotifications.push({
+                                    type: notifType,
+                                    commentUrn,
+                                    activityId,
+                                    authorName,
+                                    profileUrl,
+                                    navigationUrl: navUrl,
+                                    headline,
+                                    postContent: postContent.substring(0, 500),
+                                    commentText: '',
+                                });
+                            });
+
+                        if ((data.data || {}).paging) {
+                            const paging = data.data.paging;
+                            if (start + paging.count >= paging.total) break;
+                        }
+                    }
+
+                    return JSON.stringify({ notifications: allNotifications, total: allNotifications.length });
+                }""")
+
+                if isinstance(result, str):
+                    data = json.loads(result)
+                else:
+                    data = result
+
+                if "error" not in data:
+                    return data.get("notifications", [])
+
+            # Fallback: HTML scraping approach
             page.goto("https://www.linkedin.com/notifications/", wait_until="domcontentloaded")
             page.wait_for_timeout(4000)
 
-            # Click "Show more results" repeatedly
             for _ in range(max_load_more):
                 try:
                     btn = page.locator('button:has-text("Show more results")').first
@@ -154,7 +267,6 @@ def discover_notifications(max_load_more=10):
                 except Exception:
                     break
 
-            # Extract actionable notifications
             notifications = page.evaluate("""() => {
                 const articles = document.querySelectorAll('article');
                 const actionable = [];
@@ -173,14 +285,13 @@ def discover_notifications(max_load_more=10):
                         || a.querySelector('a[href*="feed/update"]');
                     const url = link ? link.getAttribute('href') : null;
 
-                    // Extract activity ID from URL
                     let activity_id = null;
                     if (url) {
-                        const match = url.match(/activity[:%3A]+(\d+)/i);
+                        const match = url.match(/activity[:%3A]+(\\d+)/i);
                         if (match) activity_id = match[1];
                     }
 
-                    actionable.push({ type, name, url, activity_id });
+                    actionable.push({ type, authorName: name, navigationUrl: url, activityId: activity_id });
                 });
                 return actionable;
             }""")
