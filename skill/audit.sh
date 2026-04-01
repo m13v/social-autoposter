@@ -94,13 +94,15 @@ if [ "$LINKEDIN_COUNT" -gt 0 ]; then
 
         [ "$BATCH_JSON" = "" ] || [ "$BATCH_JSON" = "null" ] && break
 
-        AUDIT_RESULT=$(python3 "$REPO_DIR/scripts/linkedin_browser.py" audit-batch "$BATCH_JSON" 2>/dev/null)
+        AUDIT_TMPFILE=$(mktemp)
+        python3 "$REPO_DIR/scripts/linkedin_browser.py" audit-batch "$BATCH_JSON" > "$AUDIT_TMPFILE" 2>/dev/null
 
-        if [ $? -eq 0 ] && [ -n "$AUDIT_RESULT" ]; then
-            python3 -c "
-import json, os, psycopg2
+        if [ $? -eq 0 ] && [ -s "$AUDIT_TMPFILE" ]; then
+            python3 - "$AUDIT_TMPFILE" <<'PYEOF' 2>&1 | tee -a "$LOG_FILE"
+import json, os, sys, psycopg2
 
-results = json.loads('''$AUDIT_RESULT''')
+with open(sys.argv[1]) as f:
+    results = json.load(f)
 conn = psycopg2.connect(os.environ['DATABASE_URL'])
 cur = conn.cursor()
 deleted = 0
@@ -109,14 +111,16 @@ for r in results:
         cur.execute('UPDATE posts SET status=%s, status_checked_at=NOW() WHERE id=%s', ('deleted', r['id']))
         deleted += 1
     elif r.get('status') != 'error':
-        cur.execute('''UPDATE posts SET upvotes=%s, comments_count=%s, views=%s,
-            engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s''',
+        cur.execute('UPDATE posts SET upvotes=%s, comments_count=%s, views=%s, engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s',
             (r.get('reactions', 0), r.get('comments', 0), r.get('views', 0), r['id']))
 conn.commit()
 cur.close()
 conn.close()
 print(f'Batch: {len(results)} checked, {deleted} deleted')
-" 2>&1 | tee -a "$LOG_FILE"
+PYEOF
+            rm -f "$AUDIT_TMPFILE"
+        else
+            rm -f "$AUDIT_TMPFILE"
         fi
 
         BATCH_SIZE=$(echo "$BATCH_JSON" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
