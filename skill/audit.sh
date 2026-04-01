@@ -66,7 +66,7 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════
-# STEP 3: LinkedIn audit (browser required)
+# STEP 3: LinkedIn audit (Python CDP — no LLM tokens)
 # ═══════════════════════════════════════════════════════
 LINKEDIN_COUNT=$(psql "$DATABASE_URL" -t -A -c "
     SELECT COUNT(*) FROM posts
@@ -74,86 +74,58 @@ LINKEDIN_COUNT=$(psql "$DATABASE_URL" -t -A -c "
       AND our_url LIKE '%linkedin.com/feed/update/%';" 2>/dev/null || echo "0")
 
 if [ "$LINKEDIN_COUNT" -gt 0 ]; then
-    log "Step 3: LinkedIn audit — $LINKEDIN_COUNT active LinkedIn posts to check (Claude + Playwright)"
+    log "Step 3: LinkedIn audit — $LINKEDIN_COUNT active LinkedIn posts to check (Python CDP)"
 
-    gtimeout 1800 claude -p "You are the Social Autoposter audit bot.
+    # Process in batches of 30
+    OFFSET=0
+    TOTAL_CHECKED=0
+    TOTAL_DELETED=0
 
-Execute a LinkedIn post audit. There are $LINKEDIN_COUNT active LinkedIn posts to check.
+    while true; do
+        BATCH_JSON=$(psql "$DATABASE_URL" -t -A -c "
+            SELECT json_agg(q) FROM (
+                SELECT id, our_url as url
+                FROM posts
+                WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
+                  AND our_url LIKE '%linkedin.com/feed/update/%'
+                ORDER BY id
+                LIMIT 30 OFFSET $OFFSET
+            ) q;" 2>/dev/null)
 
-CRITICAL: Use the linkedin-agent browser (mcp__linkedin-agent__* tools) for ALL LinkedIn operations. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
-If a tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
+        [ "$BATCH_JSON" = "" ] || [ "$BATCH_JSON" = "null" ] && break
 
-Follow these steps exactly:
+        AUDIT_RESULT=$(python3 "$REPO_DIR/scripts/linkedin_browser.py" audit-batch "$BATCH_JSON" 2>/dev/null)
 
-1. Query the DB for all active LinkedIn posts:
-   source ~/social-autoposter/.env
-   psql \"\$DATABASE_URL\" -t -A -F '|' -c \"
-     SELECT id, our_url FROM posts
-     WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
-       AND our_url LIKE '%linkedin.com/feed/update/%'
-     ORDER BY id;\"
+        if [ $? -eq 0 ] && [ -n "$AUDIT_RESULT" ]; then
+            python3 -c "
+import json, os, psycopg2
 
-2. For each post, use mcp__linkedin-agent__browser_navigate to visit the URL.
-   Process in batches of 10 with 5-second delays between page loads.
+results = json.loads('''$AUDIT_RESULT''')
+conn = psycopg2.connect(os.environ['DATABASE_URL'])
+cur = conn.cursor()
+deleted = 0
+for r in results:
+    if r.get('status') == 'deleted':
+        cur.execute('UPDATE posts SET status=%s, status_checked_at=NOW() WHERE id=%s', ('deleted', r['id']))
+        deleted += 1
+    elif r.get('status') != 'error':
+        cur.execute('''UPDATE posts SET upvotes=%s, comments_count=%s, views=%s,
+            engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s''',
+            (r.get('reactions', 0), r.get('comments', 0), r.get('views', 0), r['id']))
+conn.commit()
+cur.close()
+conn.close()
+print(f'Batch: {len(results)} checked, {deleted} deleted')
+" 2>&1 | tee -a "$LOG_FILE"
+        fi
 
-3. For each post, run mcp__linkedin-agent__browser_run_code with this JavaScript:
-async (page) => {
-  await page.waitForTimeout(3000);
-  const result = await page.evaluate(() => {
-    const res = { reactions: 0, comments: 0, views: 0, reposts: 0, status: 'active' };
+        BATCH_SIZE=$(echo "$BATCH_JSON" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+        TOTAL_CHECKED=$((TOTAL_CHECKED + BATCH_SIZE))
+        [ "$BATCH_SIZE" -lt 30 ] && break
+        OFFSET=$((OFFSET + 30))
+    done
 
-    // Check if post is unavailable
-    const bodyText = document.body.innerText.toLowerCase();
-    if (bodyText.includes('this content isn') || bodyText.includes('page not found') ||
-        bodyText.includes('this post was removed') || bodyText.includes('no longer available')) {
-      res.status = 'deleted';
-      return res;
-    }
-
-    // Reactions
-    const reactionBtn = document.querySelector('button.social-details-social-counts__reactions-count, span.social-details-social-counts__reactions-count, button[aria-label*=\"reaction\"], span[aria-label*=\"reaction\"]');
-    if (reactionBtn) {
-      const label = reactionBtn.getAttribute('aria-label') || '';
-      const m = label.match(/([\d,]+)\\s*reaction/i);
-      if (m) res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
-      else { const t = reactionBtn.textContent.trim().replace(/,/g, ''); const n = parseInt(t, 10); if (!isNaN(n)) res.reactions = n; }
-    }
-
-    // Comments
-    const commentBtn = document.querySelector('button.social-details-social-counts__comments, button[aria-label*=\"comment\"]');
-    if (commentBtn) { const m = commentBtn.textContent.trim().match(/([\d,]+)/); if (m) res.comments = parseInt(m[1].replace(/,/g, ''), 10); }
-
-    // Views / impressions
-    const viewsEl = document.querySelector('span.social-details-social-counts__impressions, span[aria-label*=\"impression\"], span.analytics-entry-point');
-    if (viewsEl) { const m = viewsEl.textContent.trim().match(/([\d,]+)/); if (m) res.views = parseInt(m[1].replace(/,/g, ''), 10); }
-
-    // Fallback impressions
-    const viewMatch = document.body.innerText.match(/([\d,]+)\\s*impressions?/i);
-    if (viewMatch && res.views === 0) res.views = parseInt(viewMatch[1].replace(/,/g, ''), 10);
-
-    return res;
-  });
-  return JSON.stringify(result);
-}
-
-4. For each post:
-   - If status is 'deleted': UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=<id>
-   - Otherwise: UPDATE posts SET upvotes=<reactions>, comments_count=<comments>, views=<views>,
-       thread_engagement='<json>', engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=<id>
-
-5. Close browser tabs after done (mcp__linkedin-agent__browser_tabs action 'close', NOT browser_close).
-
-6. Print a summary: posts checked, updated, deleted, errors.
-
-CRITICAL: Use 5-second delays between page loads to avoid LinkedIn rate limiting." >> "$LOG_FILE" 2>&1
-    STEP3_EXIT=$?
-    if [ "$STEP3_EXIT" -eq 124 ]; then
-        log "Step 3: TIMEOUT (30 min limit reached)"
-    elif [ "$STEP3_EXIT" -ne 0 ]; then
-        log "Step 3: FAILED (exit $STEP3_EXIT)"
-    else
-        log "Step 3: Done"
-    fi
+    log "Step 3: Done — $TOTAL_CHECKED posts audited"
 else
     log "Step 3: SKIPPED — no active LinkedIn posts to audit"
 fi
