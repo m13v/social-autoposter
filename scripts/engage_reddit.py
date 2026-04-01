@@ -235,15 +235,15 @@ def run_claude(prompt, timeout=300):
     if mcp_config:
         cmd += ["--strict-mcp-config", "--mcp-config", mcp_config]
     cmd += ["--tools", "Bash,Read"]
-    cmd.append(prompt)
     # Set API key for bare mode (which skips OAuth)
     env = os.environ.copy()
     api_key = get_api_key()
     if api_key:
         env["ANTHROPIC_API_KEY"] = api_key
     try:
+        # Pass prompt via stdin (too long for CLI arg)
         result = subprocess.run(
-            cmd, env=env,
+            cmd, env=env, input=prompt,
             capture_output=True, text=True, timeout=timeout,
         )
         # Parse JSON output for usage stats
