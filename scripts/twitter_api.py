@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Twitter/X API wrapper for social-autoposter.
 
-Provides programmatic access to Twitter via tweepy, replacing browser automation
-for reading tweets, searching, fetching mentions, and posting/replying.
+Read-only operations via tweepy: search tweets, fetch mentions, get tweet details.
+Writing (posting/replying) is done via browser automation because Twitter API
+returns 403 on replies due to "who can reply" permissions.
 
-Requires env vars: TWITTER_API_KEY, TWITTER_API_KEY_SECRET,
-TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_TOKEN_SECRET, TWITTER_BEARER_TOKEN
+Requires env vars: TWITTER_BEARER_TOKEN (for all read operations),
+TWITTER_API_KEY + TWITTER_API_KEY_SECRET + TWITTER_ACCESS_TOKEN +
+TWITTER_ACCESS_TOKEN_SECRET (for get_me only)
 """
 
 import os
@@ -140,24 +142,6 @@ def get_mentions(user_id, since_id=None, max_results=100):
     return results
 
 
-def post_tweet(text, reply_to_id=None):
-    """Post a tweet or reply. Returns tweet id and url."""
-    client = get_write_client()
-    kwargs = {"text": text}
-    if reply_to_id:
-        kwargs["in_reply_to_tweet_id"] = reply_to_id
-
-    resp = client.create_tweet(**kwargs)
-    tweet_id = resp.data["id"]
-    me = get_me()
-    url = f"https://x.com/{me.username}/status/{tweet_id}"
-    return {"id": tweet_id, "url": url}
-
-
-def delete_tweet(tweet_id):
-    """Delete a tweet."""
-    client = get_write_client()
-    client.delete_tweet(tweet_id)
 
 
 def get_tweet(tweet_id):
@@ -200,13 +184,6 @@ if __name__ == "__main__":
     s.add_argument("--since-id", default=None)
     s.add_argument("--max", type=int, default=20)
 
-    s = sub.add_parser("post")
-    s.add_argument("text")
-    s.add_argument("--reply-to", default=None)
-
-    s = sub.add_parser("delete")
-    s.add_argument("tweet_id")
-
     s = sub.add_parser("get")
     s.add_argument("tweet_id")
 
@@ -226,14 +203,6 @@ if __name__ == "__main__":
         me = get_me()
         results = get_mentions(me.id, since_id=args.since_id, max_results=args.max)
         print(json.dumps(results, indent=2))
-
-    elif args.cmd == "post":
-        result = post_tweet(args.text, reply_to_id=args.reply_to)
-        print(json.dumps(result, indent=2))
-
-    elif args.cmd == "delete":
-        delete_tweet(args.tweet_id)
-        print("Deleted")
 
     elif args.cmd == "get":
         result = get_tweet(args.tweet_id)
