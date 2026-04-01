@@ -18,17 +18,94 @@ Usage:
     python3 linkedin_browser.py activity-id "https://www.linkedin.com/feed/update/..."
 
 Requires: pip install playwright && playwright install chromium
+
+Connects to the running linkedin-agent MCP browser via CDP (Chrome DevTools Protocol)
+to reuse the existing logged-in session. Falls back to launching a new browser if
+the linkedin-agent is not running.
 """
 
 import json
 import os
+import re
+import subprocess
 import sys
+
 
 STORAGE_STATE = os.path.expanduser("~/.claude/browser-sessions.json")
 VIEWPORT = {"width": 911, "height": 1016}
 
 
-def get_browser_context(playwright):
+def find_linkedin_cdp_port():
+    """Find the CDP port of the running linkedin-agent MCP browser.
+
+    Prefers ports with actual logged-in LinkedIn pages (feed, notifications)
+    over ports that just have a login page.
+    """
+    try:
+        ps_out = subprocess.check_output(
+            ["ps", "aux"], text=True, stderr=subprocess.DEVNULL
+        )
+        ports = set()
+        for line in ps_out.splitlines():
+            if "chromium" not in line.lower() and "chrome" not in line.lower():
+                continue
+            m = re.search(r"remote-debugging-port=(\d+)", line)
+            if m:
+                ports.add(int(m.group(1)))
+
+        import urllib.request
+
+        best_port = None
+        for port in sorted(ports):
+            try:
+                resp = urllib.request.urlopen(
+                    f"http://localhost:{port}/json", timeout=2
+                )
+                pages = json.loads(resp.read())
+                linkedin_urls = [
+                    p.get("url", "") for p in pages
+                    if "linkedin.com" in p.get("url", "")
+                ]
+                if not linkedin_urls:
+                    continue
+                # Prefer ports with logged-in pages (feed, update, notifications, search)
+                logged_in = any(
+                    ("feed" in u or "notifications" in u or "search" in u or "update" in u)
+                    and "login" not in u and "uas/" not in u
+                    for u in linkedin_urls
+                )
+                if logged_in:
+                    return port
+                if best_port is None:
+                    best_port = port
+            except Exception:
+                continue
+        return best_port
+    except Exception:
+        pass
+    return None
+
+
+def get_browser_and_page(playwright):
+    """Connect to the linkedin-agent MCP browser via CDP, or launch a new one.
+
+    Returns (browser, page, is_cdp). Caller must close browser when done
+    (only if is_cdp is False).
+    """
+    cdp_port = find_linkedin_cdp_port()
+
+    if cdp_port:
+        browser = playwright.chromium.connect_over_cdp(
+            f"http://localhost:{cdp_port}"
+        )
+        # Use the first context (the linkedin-agent's logged-in context)
+        contexts = browser.contexts
+        if contexts:
+            context = contexts[0]
+            page = context.new_page()
+            return browser, page, True
+
+    # Fallback: launch new headless browser
     browser = playwright.chromium.launch(
         headless=True,
         args=["--disable-blink-features=AutomationControlled"],
@@ -38,7 +115,8 @@ def get_browser_context(playwright):
         viewport=VIEWPORT,
         user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     )
-    return browser, context
+    page = context.new_page()
+    return browser, page, False
 
 
 def discover_notifications(max_load_more=10):
@@ -50,8 +128,7 @@ def discover_notifications(max_load_more=10):
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser, context = get_browser_context(p)
-        page = context.new_page()
+        browser, page, is_cdp = get_browser_and_page(p)
 
         try:
             page.goto("https://www.linkedin.com/notifications/", wait_until="domcontentloaded")
@@ -103,8 +180,9 @@ def discover_notifications(max_load_more=10):
             return notifications
 
         finally:
-            context.close()
-            browser.close()
+            page.close()
+            if not is_cdp:
+                browser.close()
 
 
 def get_comment_context(comment_url):
@@ -116,8 +194,7 @@ def get_comment_context(comment_url):
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser, context = get_browser_context(p)
-        page = context.new_page()
+        browser, page, is_cdp = get_browser_and_page(p)
 
         try:
             page.goto(comment_url, wait_until="domcontentloaded")
@@ -184,8 +261,9 @@ def get_comment_context(comment_url):
             return result
 
         finally:
-            context.close()
-            browser.close()
+            page.close()
+            if not is_cdp:
+                browser.close()
 
 
 def search_posts(search_url, max_posts=10):
@@ -197,8 +275,7 @@ def search_posts(search_url, max_posts=10):
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser, context = get_browser_context(p)
-        page = context.new_page()
+        browser, page, is_cdp = get_browser_and_page(p)
 
         try:
             page.goto(search_url, wait_until="domcontentloaded")
@@ -281,8 +358,9 @@ def search_posts(search_url, max_posts=10):
             return result
 
         finally:
-            context.close()
-            browser.close()
+            page.close()
+            if not is_cdp:
+                browser.close()
 
 
 def extract_activity_id(post_url):
@@ -302,8 +380,7 @@ def extract_activity_id(post_url):
 
     # If we got it from URL, still fetch post text for context
     with sync_playwright() as p:
-        browser, context = get_browser_context(p)
-        page = context.new_page()
+        browser, page, is_cdp = get_browser_and_page(p)
 
         try:
             page.goto(post_url, wait_until="domcontentloaded")
@@ -345,8 +422,9 @@ def extract_activity_id(post_url):
             return result
 
         finally:
-            context.close()
-            browser.close()
+            page.close()
+            if not is_cdp:
+                browser.close()
 
 
 def main():
