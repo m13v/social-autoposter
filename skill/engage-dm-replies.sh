@@ -383,19 +383,22 @@ print('\n'.join(lines))
 
     # Send email notification via Resend (requires RESEND_API_KEY and NOTIFICATION_EMAIL in .env)
     if [ -n "${RESEND_API_KEY:-}" ] && [ -n "${NOTIFICATION_EMAIL:-}" ]; then
+        NOTIF_FROM="${NOTIFICATION_FROM:-Social Autoposter <onboarding@resend.dev>}"
+        EMAIL_JSON=$(NOTIF_FROM="$NOTIF_FROM" NOTIF_TO="$NOTIFICATION_EMAIL" NOTIF_COUNT="$FLAGGED_COUNT" python3 -c "
+import json, os, sys
+body = sys.stdin.read()
+print(json.dumps({
+    'from': os.environ['NOTIF_FROM'],
+    'to': [os.environ['NOTIF_TO']],
+    'subject': 'DM Escalation: ' + os.environ['NOTIF_COUNT'] + ' conversations need you',
+    'text': 'The following DM conversations have been flagged for your personal attention:\n\n' + body + '\nReview: python3 ~/social-autoposter/scripts/dm_conversation.py show-flagged'
+}))
+" <<< "$FLAGGED_BODY" 2>/dev/null)
+
         curl -s -X POST 'https://api.resend.com/emails' \
             -H "Authorization: Bearer $RESEND_API_KEY" \
             -H 'Content-Type: application/json' \
-            -d "$(python3 -c "
-import json
-body = '''$FLAGGED_BODY'''
-print(json.dumps({
-    'from': '$NOTIFICATION_FROM' if '$NOTIFICATION_FROM' else 'Social Autoposter <onboarding@resend.dev>',
-    'to': ['$NOTIFICATION_EMAIL'],
-    'subject': f'DM Escalation: $FLAGGED_COUNT conversations need you',
-    'text': 'The following DM conversations have been flagged for your personal attention:\n\n' + body + '\nReview: python3 ~/social-autoposter/scripts/dm_conversation.py show-flagged'
-}))
-" 2>/dev/null)" > /dev/null 2>&1 || log "WARNING: Failed to send escalation email"
+            -d "$EMAIL_JSON" > /dev/null 2>&1 || log "WARNING: Failed to send escalation email"
         log "Email notification sent to $NOTIFICATION_EMAIL"
     elif [ -n "${RESEND_API_KEY:-}" ] && [ -z "${NOTIFICATION_EMAIL:-}" ]; then
         log "WARNING: RESEND_API_KEY set but NOTIFICATION_EMAIL missing — skipping email"
