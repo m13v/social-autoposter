@@ -1096,6 +1096,30 @@ def main():
         result = audit_batch(sys.argv[2])
         print(json.dumps(result, indent=2))
 
+    elif cmd == "unread-dms":
+        result = unread_dms()
+        print(json.dumps(result, indent=2))
+
+    elif cmd == "read-conversation":
+        if len(sys.argv) < 3:
+            print(
+                "Usage: linkedin_browser.py read-conversation <thread_url>",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        result = read_conversation(sys.argv[2])
+        print(json.dumps(result, indent=2))
+
+    elif cmd == "send-dm":
+        if len(sys.argv) < 4:
+            print(
+                "Usage: linkedin_browser.py send-dm <thread_url> <message>",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        result = send_dm(sys.argv[2], sys.argv[3])
+        print(json.dumps(result, indent=2))
+
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         print(__doc__)
