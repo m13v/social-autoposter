@@ -198,7 +198,7 @@ if [ "$LINKEDIN_POSTS" -gt 0 ]; then
 
     if [ "$STEP4_EXIT" -eq 0 ] && [ -s "$STATS_TMPFILE" ]; then
         # Update DB with results
-        python3 - "$STATS_TMPFILE" <<'PYEOF' 2>&1 | tee -a "$LOGFILE"
+        DATABASE_URL="$DATABASE_URL" python3 - "$STATS_TMPFILE" <<'PYEOF' 2>&1 | tee -a "$LOGFILE"
 import json, os, sys, psycopg2
 
 with open(sys.argv[1]) as f:
