@@ -35,12 +35,17 @@ log "=== DM Reply Engagement Run: $(date) ==="
 REDDIT_USERNAME=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(c.get('accounts',{}).get('reddit',{}).get('username',''))" 2>/dev/null || echo "")
 EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('authors',[])))" 2>/dev/null || echo "")
 
-# Load projects for context
+# Load projects for context (including booking link info)
 PROJECTS=$(python3 -c "
 import json
 c = json.load(open('$REPO_DIR/config.json'))
 for p in c.get('projects', []):
-    print(f\"- {p['name']}: {p.get('description','')} | website: {p.get('website','')} | github: {p.get('github','')}\")
+    line = f\"- {p['name']}: {p.get('description','')} | website: {p.get('website','')} | github: {p.get('github','')}\"
+    if p.get('booking_link'):
+        line += f\" | booking_link: {p['booking_link']}\"
+    if p.get('booking_link_auto_share'):
+        line += ' | booking_link_auto_share: true'
+    print(line)
 " 2>/dev/null || echo "")
 
 # ═══════════════════════════════════════════════════════
@@ -52,7 +57,7 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT d.id as dm_id, d.platform, d.their_author, d.tier,
                d.chat_url, d.their_content as original_comment,
-               d.comment_context,
+               d.comment_context, d.project_name,
                last_in.content as last_inbound_msg,
                last_in.message_at as inbound_at,
                (SELECT COUNT(*) FROM dm_messages WHERE dm_id = d.id) as total_messages,
@@ -135,7 +140,7 @@ $PROJECTS
    e. If no existing DM record exists for this user, the script will tell you. Create one:
       \`\`\`bash
       source ~/social-autoposter/.env
-      psql "\$DATABASE_URL" -c "INSERT INTO dms (platform, their_author, status, conversation_status, tier) VALUES ('reddit', 'USERNAME', 'sent', 'active', 1) RETURNING id;"
+      psql "\$DATABASE_URL" -c "INSERT INTO dms (platform, their_author, status, conversation_status, tier, project_name) VALUES ('reddit', 'USERNAME', 'sent', 'active', 1, NULL) RETURNING id;"
       \`\`\`
       Then set the chat URL:
       \`\`\`bash
@@ -202,16 +207,33 @@ Check conversation_history. SKIP (do nothing, don't mark stale) if:
 - Their message is a one-word/emoji response with nothing to respond to
 - The conversation has no natural continuation
 
-### Step 1: Should a HUMAN handle this?
-Flag for human (do NOT auto-reply) if:
-- They asked for a call, meeting, or scheduled time
+### Step 1: Should a HUMAN handle this? (with booking link exception)
+
+**BOOKING LINK AUTO-SHARE (Cyrano & PieLine only):**
+If the conversation's project_name is "Cyrano" or "PieLine" (or you can infer the project from conversation context), AND they asked for a call, meeting, demo, or scheduled time:
+- Do NOT flag for human. Instead, share the booking link naturally in your reply.
+- Cyrano booking link: https://cal.com/cyranohq/s4l-demo
+- PieLine booking link: https://cal.com/team/pieline-demo/pieline-demo
+- Example: "yeah for sure, here's a link to grab a time: https://cal.com/cyranohq/s4l-demo — Soorya will walk you through it"
+- After sending, set the project if not already set:
+  \`\`\`bash
+  python3 scripts/dm_conversation.py set-project --dm-id DM_ID --project "Cyrano"
+  \`\`\`
+- Then set tier to 3:
+  \`\`\`bash
+  python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier 3
+  \`\`\`
+- This ONLY applies to Cyrano and PieLine. All other projects still flag for human.
+
+**Flag for human (do NOT auto-reply) if:**
+- They asked for a call/meeting/demo BUT the conversation is NOT about Cyrano or PieLine
 - They invited us to a podcast, interview, or event
 - They offered a collaboration or business proposal
 - They asked to move to another platform (Telegram, email, etc.)
-- They need a specific personal commitment ("when are you free?", "can you demo this?")
-- They asked about pricing or business terms
+- They need a specific personal commitment ("when are you free?", "can you demo this?") that isn't a booking link scenario
+- They asked about pricing or business terms (UNLESS it's Cyrano/PieLine and pricing is in config.json — then answer from config)
 - They're frustrated or upset
-- The conversation is 8+ messages deep and going really well (high-value relationship)
+- The conversation is 8+ messages deep and going really well (high-value relationship) AND isn't a booking link scenario
 - You're not sure how to respond authentically
 
 \`\`\`bash
@@ -229,7 +251,7 @@ Your reply should:
 - NEVER repeat a question or point you already made in a previous message
 
 COMMITMENT GUARDRAILS (never violate these in any reply):
-- NEVER suggest, offer, or agree to calls, meetings, demos, or video chats. Keep it in the DM.
+- NEVER suggest, offer, or agree to calls, meetings, demos, or video chats — UNLESS the conversation is about Cyrano or PieLine and they asked first (then share the booking link). Keep it in the DM otherwise.
 - NEVER agree to podcast appearances, X Spaces, interviews, or live events.
 - NEVER offer to move to another platform (Telegram, Discord, email, etc.). Stay in this DM thread.
 - NEVER promise to share specific links or resources you don't have right now in config.json projects.
@@ -249,8 +271,9 @@ If sharing a link, embed it in a natural sentence. Never make the link the point
 Good: "yeah there's this tool terminator that does that, github.com/mediar-ai/terminator - the accessibility API approach avoids the screenshot reliability issues you mentioned"
 Bad: "btw I built a tool for that, check out github.com/mediar-ai/terminator if you're curious"
 
-Update tier ONLY when a product is recommended or when they explicitly ask for tools:
+Update tier AND project ONLY when a product is recommended or when they explicitly ask for tools:
 \`\`\`bash
+python3 scripts/dm_conversation.py set-project --dm-id DM_ID --project "PROJECT_NAME"
 python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier N
 \`\`\`
 
