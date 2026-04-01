@@ -25,6 +25,7 @@ REPO_DIR = os.path.expanduser("~/social-autoposter")
 CONFIG_PATH = os.path.join(REPO_DIR, "config.json")
 REPLY_DB = os.path.join(REPO_DIR, "scripts", "reply_db.py")
 REDDIT_MCP_CONFIG = os.path.expanduser("~/.claude/browser-agent-configs/reddit-agent-mcp.json")
+API_KEY_KEYCHAIN_SERVICE = "Anthropic API Key Fazm"
 
 
 def load_config():
@@ -210,18 +211,39 @@ def ensure_mcp_config():
     return None
 
 
+def get_api_key():
+    """Retrieve Anthropic API key from macOS keychain."""
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", API_KEY_KEYCHAIN_SERVICE, "-w"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
 def run_claude(prompt, timeout=300):
     """Run claude -p with the given prompt. Returns (success, output, usage_dict)."""
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
     mcp_config = ensure_mcp_config()
     cmd = ["claude", "-p", "--output-format", "json"]
+    # Use bare mode for minimal overhead (skips hooks, CLAUDE.md, skills, plugins)
+    cmd.append("--bare")
     if mcp_config:
         cmd += ["--strict-mcp-config", "--mcp-config", mcp_config]
-    cmd += ["--tools", "Bash,Read", "--disable-slash-commands"]
+    cmd += ["--tools", "Bash,Read"]
     cmd.append(prompt)
+    # Set API key for bare mode (which skips OAuth)
+    env = os.environ.copy()
+    api_key = get_api_key()
+    if api_key:
+        env["ANTHROPIC_API_KEY"] = api_key
     try:
         result = subprocess.run(
-            cmd,
+            cmd, env=env,
             capture_output=True, text=True, timeout=timeout,
         )
         # Parse JSON output for usage stats
