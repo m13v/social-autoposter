@@ -98,7 +98,7 @@ if [ "$LINKEDIN_COUNT" -gt 0 ]; then
         python3 "$REPO_DIR/scripts/linkedin_browser.py" audit-batch "$BATCH_JSON" > "$AUDIT_TMPFILE" 2>/dev/null
 
         if [ $? -eq 0 ] && [ -s "$AUDIT_TMPFILE" ]; then
-            python3 - "$AUDIT_TMPFILE" <<'PYEOF' 2>&1 | tee -a "$LOG_FILE"
+            DATABASE_URL="$DATABASE_URL" python3 - "$AUDIT_TMPFILE" <<'PYEOF' 2>&1 | tee -a "$LOG_FILE"
 import json, os, sys, psycopg2
 
 with open(sys.argv[1]) as f:
