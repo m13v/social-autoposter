@@ -191,17 +191,30 @@ CRITICAL: Close browser tabs after posting (browser_tabs action 'close').
 
 
 def run_claude(prompt, timeout=300):
-    """Run claude -p with the given prompt. Returns (success, output)."""
+    """Run claude -p with the given prompt. Returns (success, output, usage_dict)."""
+    usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
     try:
         result = subprocess.run(
-            ["claude", "-p", prompt],
+            ["claude", "-p", "--output-format", "json", prompt],
             capture_output=True, text=True, timeout=timeout,
         )
-        return result.returncode == 0, result.stdout + result.stderr
+        # Parse JSON output for usage stats
+        try:
+            data = json.loads(result.stdout)
+            usage["cost_usd"] = data.get("total_cost_usd", 0.0)
+            u = data.get("usage", {})
+            usage["input_tokens"] = u.get("input_tokens", 0)
+            usage["output_tokens"] = u.get("output_tokens", 0)
+            usage["cache_read"] = u.get("cache_read_input_tokens", 0)
+            usage["cache_create"] = u.get("cache_creation_input_tokens", 0)
+            text_output = data.get("result", "")
+        except (json.JSONDecodeError, TypeError):
+            text_output = result.stdout
+        return result.returncode == 0, text_output + result.stderr, usage
     except subprocess.TimeoutExpired:
-        return False, "TIMEOUT"
+        return False, "TIMEOUT", usage
     except Exception as e:
-        return False, str(e)
+        return False, str(e), usage
 
 
 def main():
@@ -222,6 +235,7 @@ def main():
     succeeded = 0
     skipped = 0
     failed = 0
+    total_usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
 
     print(f"[engage_reddit] Starting. limit={args.limit or 'unlimited'}, timeout={args.timeout}s")
 
@@ -272,12 +286,19 @@ def main():
         print(f"[engage_reddit] Processing #{reply['id']} ({reply['platform']}) "
               f"from {reply['their_author']}: {(reply['their_content'] or '')[:60]}...")
 
-        ok, output = run_claude(prompt, timeout=args.per_reply_timeout)
+        ok, output, usage = run_claude(prompt, timeout=args.per_reply_timeout)
         reply_elapsed = time.time() - reply_start
+
+        # Accumulate usage
+        for k in total_usage:
+            total_usage[k] += usage[k]
 
         if ok:
             succeeded += 1
-            print(f"[engage_reddit] #{reply['id']} done ({reply_elapsed:.0f}s)")
+            print(f"[engage_reddit] #{reply['id']} done ({reply_elapsed:.0f}s) "
+                  f"[in={usage['input_tokens']} out={usage['output_tokens']} "
+                  f"cache_r={usage['cache_read']} cache_w={usage['cache_create']} "
+                  f"${usage['cost_usd']:.4f}]")
         else:
             failed += 1
             print(f"[engage_reddit] #{reply['id']} FAILED ({reply_elapsed:.0f}s): {output[:200]}")
@@ -288,8 +309,15 @@ def main():
         time.sleep(2)
 
     total_elapsed = time.time() - start_time
-    print(f"[engage_reddit] Finished. processed={processed} succeeded={succeeded} "
+    print(f"\n[engage_reddit] === SUMMARY ===")
+    print(f"[engage_reddit] processed={processed} succeeded={succeeded} "
           f"skipped={skipped} failed={failed} elapsed={total_elapsed:.0f}s")
+    print(f"[engage_reddit] Total tokens: input={total_usage['input_tokens']} "
+          f"output={total_usage['output_tokens']} "
+          f"cache_read={total_usage['cache_read']} cache_create={total_usage['cache_create']}")
+    print(f"[engage_reddit] Total cost: ${total_usage['cost_usd']:.4f}")
+    if succeeded > 0:
+        print(f"[engage_reddit] Avg cost per reply: ${total_usage['cost_usd'] / succeeded:.4f}")
 
     # Print final status
     subprocess.run(["python3", REPLY_DB, "status"])
