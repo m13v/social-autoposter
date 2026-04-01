@@ -237,6 +237,12 @@ CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql)
   python3 $REPO_DIR/scripts/reply_db.py status
 NEVER use psql directly. reply_db.py is faster (persistent connection, no env sourcing).
 
+### Project tracking on replies
+When you recommend a project in a reply (Tier 2 or Tier 3), set project_name on the reply:
+  source ~/social-autoposter/.env
+  psql "\$DATABASE_URL" -c "UPDATE replies SET project_name='PROJECT_NAME' WHERE id=REPLY_ID;"
+This lets the DM pipeline know which project the conversation is about.
+
 MANDATORY reply flow for every item:
   Step 1: python3 reply_db.py processing ID      ← mark BEFORE touching browser
   Step 2: post reply via browser
@@ -328,6 +334,7 @@ if [ "$DM_PENDING" -gt 0 ]; then
     DM_DATA=$(psql "$DATABASE_URL" -t -A -c "
         SELECT json_agg(q) FROM (
             SELECT d.id, d.platform, d.their_author, d.their_content, d.comment_context,
+                   d.project_name,
                    r.their_comment_url, r.our_reply_content,
                    p.thread_title, p.our_content as our_post_content
             FROM dms d
