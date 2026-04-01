@@ -101,11 +101,35 @@ def log_outbound(conn, dm_id, content, author=None):
 
 
 def log_inbound(conn, dm_id, author, content, message_at=None):
-    """Log a message we received."""
+    """Log a message we received. Includes dedup guard to prevent echo/duplicate logging."""
     row = conn.execute("SELECT platform, their_author FROM dms WHERE id = %s", (dm_id,)).fetchone()
     if not row:
         print(f"ERROR: DM #{dm_id} not found")
         return False
+
+    # Dedup guard: reject inbound if content matches the last outbound message (echo detection)
+    config = load_config()
+    our_account = get_our_account(config, row["platform"])
+
+    # Block if the author is actually us (our own account)
+    if author and author.lstrip("@").lower() == our_account.lstrip("@").lower():
+        print(f"  DEDUP BLOCKED: Author '{author}' is our own account on {row['platform']}. Skipping inbound log.")
+        return False
+
+    # Block if content exactly matches the last outbound message (echo from reading our own sent msg)
+    last_outbound = conn.execute("""
+        SELECT content FROM dm_messages
+        WHERE dm_id = %s AND direction = 'outbound'
+        ORDER BY message_at DESC LIMIT 1
+    """, (dm_id,)).fetchone()
+
+    if last_outbound and last_outbound["content"] and content:
+        # Normalize whitespace for comparison
+        norm_out = " ".join(last_outbound["content"].split()).strip().lower()
+        norm_in = " ".join(content.split()).strip().lower()
+        if norm_out == norm_in:
+            print(f"  DEDUP BLOCKED: Inbound content matches last outbound message for DM #{dm_id}. Likely echo of our own message. Skipping.")
+            return False
 
     ts = message_at or "NOW()"
     if message_at:
