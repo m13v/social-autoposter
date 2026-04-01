@@ -340,7 +340,7 @@ def _send_escalation_email(conn, dm_id, platform, their_author, reason):
         f"DM #{dm_id} [{platform}] with {their_author} needs your attention.\n\n"
         f"Reason: {reason}\n"
         f"Tier: {dm.get('tier') or 1}  Project: {project}\n"
-        f"{f'Chat URL: {dm[\"chat_url\"]}' if dm.get('chat_url') else ''}\n"
+        f"{'Chat URL: ' + dm['chat_url'] if dm.get('chat_url') else ''}\n"
         f"{context_section}\n"
         f"--- Conversation History ---\n{history_text}\n\n"
         f"---\n"
