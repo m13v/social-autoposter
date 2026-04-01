@@ -99,7 +99,7 @@ def find_threads(project_name):
         result = subprocess.run(
             ["python3", os.path.join(REPO_DIR, "scripts", "find_threads.py"),
              "--project", project_name],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=180,
         )
         if result.returncode == 0 and result.stdout.strip():
             data = json.loads(result.stdout.strip())
