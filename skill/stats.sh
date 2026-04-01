@@ -171,7 +171,7 @@ fi
 # ═══════════════════════════════════════════════════════
 # STEP 4: LinkedIn stats (browser required)
 # ═══════════════════════════════════════════════════════
-log "Step 4: LinkedIn stats (Claude + Playwright)"
+log "Step 4: LinkedIn stats (Python CDP — no LLM tokens)"
 
 LINKEDIN_POSTS=$(psql "$DATABASE_URL" -t -A -c "
     SELECT COUNT(*) FROM posts
@@ -180,148 +180,45 @@ LINKEDIN_POSTS=$(psql "$DATABASE_URL" -t -A -c "
       AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days');" 2>/dev/null || echo "0")
 
 if [ "$LINKEDIN_POSTS" -gt 0 ]; then
-    STEP4_PROMPT=$(mktemp)
-    cat > "$STEP4_PROMPT" <<'STEP4_EOF'
-Scrape LinkedIn engagement stats for OUR COMMENTS (not the parent post). Do these steps in order, no deviations:
+    # Build JSON array of posts for batch processing
+    POSTS_JSON=$(psql "$DATABASE_URL" -t -A -c "
+        SELECT json_agg(q) FROM (
+            SELECT id, our_url as url, LEFT(our_content, 80) as content_prefix
+            FROM posts
+            WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
+              AND our_url LIKE '%linkedin.com/feed/update/%'
+              AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days')
+            ORDER BY id
+            LIMIT 30
+        ) q;" 2>/dev/null)
 
-CRITICAL: Use the linkedin-agent browser (mcp__linkedin-agent__* tools) for ALL steps below. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
-If a tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
-
-IMPORTANT CONTEXT: Our LinkedIn posts are COMMENTS on other people's posts, not original posts.
-The our_url field contains the parent post URL. We need to find OUR comment within that post
-and scrape the reactions on OUR comment specifically, not the parent post's reactions.
-Our LinkedIn account name is: LINKEDIN_NAME_PLACEHOLDER
-
-Step 1: Query the database to get LinkedIn posts needing stats updates:
-```bash
-source ~/social-autoposter/.env
-psql "$DATABASE_URL" -t -A -F '|' -c "
-    SELECT id, our_url, LEFT(our_content, 80) as content_prefix FROM posts
-    WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
-      AND our_url LIKE '%linkedin.com/feed/update/%'
-      AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days')
-    ORDER BY id
-    LIMIT 30;"
-```
-
-Step 2: For each post URL, STRIP the ?commentUrn=... query parameter before navigating (it breaks comment rendering).
-Navigate with mcp__linkedin-agent__browser_navigate to the clean URL, wait for page load.
-Then run mcp__linkedin-agent__browser_run_code with this JavaScript to find OUR comment and its reactions:
-
-SCRAPE_JS:
-async (page) => {
-  await page.waitForTimeout(4000);
-
-  // CRITICAL: Comments don't render until you interact with the page.
-  // Scroll down past the post, then click the "Comment" action button.
-  // Do NOT use commentUrn param in the URL — it breaks comment rendering.
-  await page.evaluate(() => window.scrollBy(0, 600));
-  await page.waitForTimeout(2000);
-  const commentActionBtn = await page.$('button[aria-label="Comment"]');
-  if (commentActionBtn) {
-    try { await commentActionBtn.click(); await page.waitForTimeout(5000); } catch(e) {}
-  }
-
-  // Try to expand all comments - click "Load more comments" / "See previous replies"
-  const expandBtns = await page.$$('button[aria-label*="Load more comments"], button[aria-label*="load more"], button[aria-label*="See previous replies"], button[aria-label*="Load previous replies"]');
-  for (const btn of expandBtns) {
-    try { await btn.click(); await page.waitForTimeout(2000); } catch(e) {}
-  }
-
-  const ourName = "LINKEDIN_NAME_JS_PLACEHOLDER";
-  const contentPrefix = "CONTENT_PREFIX_JS_PLACEHOLDER";
-
-  const result = await page.evaluate(({ourName, contentPrefix}) => {
-    const res = { reactions: 0, found: false, comment_text_preview: '' };
-
-    // Find all comment containers (current LinkedIn DOM uses article.comments-comment-entity)
-    const commentContainers = document.querySelectorAll(
-      'article.comments-comment-entity, ' +
-      'article.comments-comment-item'
-    );
-
-    for (const container of commentContainers) {
-      // Author name: current LinkedIn uses .comments-comment-meta__description-title
-      const authorEl = container.querySelector(
-        '.comments-comment-meta__description-title, ' +
-        '.comments-post-meta__name-text'
-      );
-      const authorText = authorEl ? authorEl.textContent.trim() : '';
-
-      // Comment content: current LinkedIn uses .update-components-text inside the article
-      const contentEl = container.querySelector(
-        '.update-components-text, ' +
-        '.comments-comment-item__main-content, ' +
-        '.comments-comment-item-content-body'
-      );
-      const commentText = contentEl ? contentEl.textContent.trim() : '';
-
-      // Match by author name OR by content prefix (first 60 chars)
-      const nameMatch = authorText.toLowerCase().includes(ourName.toLowerCase());
-      const prefixClean = contentPrefix.replace(/[^a-z0-9 ]/gi, '').substring(0, 60).toLowerCase();
-      const commentClean = commentText.replace(/[^a-z0-9 ]/gi, '').substring(0, 200).toLowerCase();
-      const contentMatch = prefixClean.length > 20 && commentClean.includes(prefixClean);
-
-      if (nameMatch || contentMatch) {
-        res.found = true;
-        res.comment_text_preview = commentText.substring(0, 80);
-
-        // Reaction count: look for button with aria-label "N Reaction(s) on ..."
-        // Current class: comments-comment-social-bar__reactions-count--cr
-        const reactionEl = container.querySelector(
-          'button[class*="comments-comment-social-bar__reactions-count"], ' +
-          'button[aria-label*="Reaction"]'
-        );
-        if (reactionEl) {
-          const label = reactionEl.getAttribute('aria-label') || '';
-          const labelMatch = label.match(/([\d,]+)\s*[Rr]eaction/);
-          if (labelMatch) {
-            res.reactions = parseInt(labelMatch[1].replace(/,/g, ''), 10);
-          } else {
-            const text = reactionEl.textContent.trim().replace(/,/g, '');
-            const num = parseInt(text, 10);
-            if (!isNaN(num)) res.reactions = num;
-          }
-        }
-
-        break; // Found our comment, stop searching
-      }
-    }
-
-    return res;
-  }, {ourName, contentPrefix});
-
-  return JSON.stringify(result);
-}
-
-IMPORTANT: For each post, replace CONTENT_PREFIX_JS_PLACEHOLDER in the JS with the first 80 chars of content_prefix from the DB query (escaped for JS string). This helps match our comment even if the author name format differs.
-
-Step 3: Collect all results into a JSON array and save to /tmp/linkedin_stats.json. Each entry should be:
-  {"url": "<the linkedin post url>", "reactions": N, "found": true/false}
-Only include entries where found=true.
-
-Process in batches of 10 with 5-second delays between page loads to avoid LinkedIn rate limiting.
-
-Step 4: Run: python3 REPO_DIR_PLACEHOLDER/scripts/scrape_linkedin_stats.py --from-json /tmp/linkedin_stats.json
-
-Step 5: Close the browser tab (mcp__linkedin-agent__browser_tabs action 'close', NOT browser_close).
-
-Done. Report totals (found vs not-found). Do NOT read any other files. Do NOT deviate from these steps.
-STEP4_EOF
-    LINKEDIN_NAME=$(python3 -c "import json; print(json.load(open('$REPO_DIR/config.json'))['accounts']['linkedin']['name'])" 2>/dev/null || echo "Matthew Diakonov")
-    sed -i '' "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP4_PROMPT"
-    sed -i '' "s|LINKEDIN_NAME_PLACEHOLDER|$LINKEDIN_NAME|g" "$STEP4_PROMPT"
-    sed -i '' "s|LINKEDIN_NAME_JS_PLACEHOLDER|$LINKEDIN_NAME|g" "$STEP4_PROMPT"
-
-    gtimeout 1800 claude -p "$(cat "$STEP4_PROMPT")" >> "$LOGFILE" 2>&1
+    STATS_JSON=$(python3 "$REPO_DIR/scripts/linkedin_browser.py" stats-batch "$POSTS_JSON" 2>/dev/null)
     STEP4_EXIT=$?
-    rm -f "$STEP4_PROMPT"
-    if [ "$STEP4_EXIT" -eq 124 ]; then
-        log "Step 4: TIMEOUT (30 min limit reached)"
-    elif [ "$STEP4_EXIT" -ne 0 ]; then
-        log "Step 4: FAILED (exit $STEP4_EXIT)"
-    else
+
+    if [ "$STEP4_EXIT" -eq 0 ] && [ -n "$STATS_JSON" ]; then
+        # Update DB with results
+        python3 -c "
+import json, os, psycopg2
+
+results = json.loads('''$STATS_JSON''')
+conn = psycopg2.connect(os.environ['DATABASE_URL'])
+cur = conn.cursor()
+found = 0
+for r in results:
+    if r.get('found'):
+        found += 1
+        cur.execute('''UPDATE posts SET upvotes=%s, engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s''',
+                    (r.get('reactions', 0), r['id']))
+    else:
+        cur.execute('''UPDATE posts SET status_checked_at=NOW() WHERE id=%s''', (r['id'],))
+conn.commit()
+cur.close()
+conn.close()
+print(f'LinkedIn stats: {found}/{len(results)} comments found, updated')
+" 2>&1 | tee -a "$LOGFILE"
         log "Step 4: Done"
+    else
+        log "Step 4: FAILED (exit $STEP4_EXIT)"
     fi
 else
     log "Step 4: SKIPPED — no LinkedIn posts need stats update ($LINKEDIN_POSTS found)"
