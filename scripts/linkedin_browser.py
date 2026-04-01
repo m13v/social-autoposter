@@ -734,7 +734,9 @@ def audit_post(post_url):
                 const bodyText = document.body.innerText.toLowerCase();
                 if (bodyText.includes('this content isn') ||
                     bodyText.includes('page not found') ||
+                    bodyText.includes('post not found') ||
                     bodyText.includes('this post was removed') ||
+                    bodyText.includes('this post wa') ||
                     bodyText.includes('no longer available') ||
                     bodyText.includes('this post has been removed')) {
                     res.status = 'deleted';
