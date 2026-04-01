@@ -388,8 +388,11 @@ def get_comment_context(comment_url):
 def search_posts(search_url, max_posts=10):
     """Browse a LinkedIn search URL and extract posts with activity IDs.
 
-    Returns JSON array:
-    [{"activity_id": "...", "author": "...", "preview": "...", "company_url": "..."}]
+    Extracts activity IDs by opening each post's control menu ("...") and
+    reading the Report link, which contains the activity URN. LinkedIn's new
+    React rendering no longer exposes activity IDs in DOM attributes.
+
+    Returns JSON: {"activity_ids": [...], "posts": [{activity_id, author, preview, text}, ...]}
     """
     from playwright.sync_api import sync_playwright
 
@@ -398,83 +401,100 @@ def search_posts(search_url, max_posts=10):
 
         try:
             page.goto(search_url, wait_until="domcontentloaded")
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(6000)
 
-            # Click all "Comment" buttons to expose activity IDs
-            comment_buttons = page.locator('button').filter(has_text="Comment").all()
-            for i, btn in enumerate(comment_buttons[:max_posts]):
+            # Extract post data by clicking each post's control menu
+            menu_buttons = page.locator(
+                'button[aria-label*="Open control menu for post"]'
+            ).all()
+
+            posts = []
+            activity_ids = []
+
+            for i, btn in enumerate(menu_buttons[:max_posts]):
                 try:
-                    btn.click()
-                    page.wait_for_timeout(2000)
-                except Exception:
-                    pass
-
-            # Also try "Load more" and repeat
-            try:
-                load_more = page.locator('button:has-text("Load more")').first
-                if load_more.is_visible(timeout=2000):
-                    load_more.click()
-                    page.wait_for_timeout(3000)
-            except Exception:
-                pass
-
-            # Extract all data
-            result = page.evaluate("""() => {
-                const html = document.body.innerHTML;
-
-                // Get activity IDs from comment URNs in HTML
-                const commentUrnMatches = html.match(/urn:li:comment:\\(urn:li:activity:(\\d+)/g) || [];
-                const activityFromComments = commentUrnMatches.map(m => {
-                    const match = m.match(/activity:(\\d+)/);
-                    return match ? match[1] : null;
-                }).filter(Boolean);
-
-                // Also get from direct activity URNs
-                const activityMatches = (html.match(/urn:li:activity:(\\d+)/g) || []).map(m => {
-                    return m.match(/activity:(\\d+)/)[1];
-                });
-
-                const allActivities = [...new Set([...activityFromComments, ...activityMatches])];
-
-                // Get post previews from list items
-                const posts = [];
-                const listItems = document.querySelectorAll('li');
-                listItems.forEach(li => {
-                    const text = li.innerText || '';
-                    if (text.length < 100) return;
-                    if (!text.includes('Like') || !text.includes('Comment')) return;
-
-                    // Find author (company or person name)
-                    const authorLink = li.querySelector('a[href*="/company/"], a[href*="/in/"]');
-                    const author = authorLink ? authorLink.textContent.trim().split('\\n')[0] : null;
-                    const companyUrl = authorLink ? authorLink.getAttribute('href') : null;
-
-                    // Get post text
-                    const paragraphs = li.querySelectorAll('p, span');
-                    let preview = '';
-                    paragraphs.forEach(p => {
-                        const t = p.innerText.trim();
-                        if (t.length > 50 && t.length < 2000 && !t.includes('Like') && !t.includes('Comment')) {
-                            if (preview.length < 300) preview += t + ' ';
+                    # Get the post container text before clicking menu
+                    post_info = page.evaluate("""(btn) => {
+                        // Walk up to find the post container (look for Like/Comment buttons)
+                        let container = btn.closest('[class]');
+                        for (let j = 0; j < 10 && container; j++) {
+                            const text = container.innerText || '';
+                            if (text.includes('Like') && text.includes('Comment') && text.length > 100) {
+                                break;
+                            }
+                            container = container.parentElement;
                         }
-                    });
+                        if (!container) return null;
 
-                    if (author || preview.length > 50) {
-                        posts.push({
+                        // Author
+                        const authorLink = container.querySelector('a[href*="/in/"], a[href*="/company/"]');
+                        const author = authorLink ? authorLink.textContent.trim().split('\\n')[0] : null;
+                        const profileUrl = authorLink ? authorLink.getAttribute('href') : null;
+
+                        // Post text - get substantial text content
+                        const spans = container.querySelectorAll('span, p');
+                        let text = '';
+                        for (const s of spans) {
+                            const t = s.innerText.trim();
+                            if (t.length > 50 && t.length < 3000 &&
+                                !t.includes('Like') && !t.includes('Comment') &&
+                                !t.includes('Repost') && !t.includes('Send') &&
+                                !t.includes('Follow')) {
+                                if (!text.includes(t.substring(0, 40))) {
+                                    text += t + ' ';
+                                }
+                                if (text.length > 500) break;
+                            }
+                        }
+
+                        return {
                             author: author ? author.substring(0, 100) : null,
-                            company_url: companyUrl,
-                            preview: preview.trim().substring(0, 300),
-                        });
-                    }
-                });
+                            profile_url: profileUrl,
+                            text: text.trim().substring(0, 500),
+                        };
+                    }""", btn.element_handle())
 
-                return {
-                    activity_ids: allActivities,
-                    posts: posts.slice(0, 15),
-                };
-            }""")
+                    # Click the menu button
+                    btn.click()
+                    page.wait_for_timeout(1000)
 
-            return result
+                    # Extract activity ID from the Report link
+                    activity_id = page.evaluate("""() => {
+                        const reportLink = document.querySelector('a[href*="report-in-modal"]');
+                        if (!reportLink) return null;
+                        const href = reportLink.getAttribute('href') || '';
+                        const match = href.match(/updateUrn=urn%3Ali%3Aactivity%3A(\\d+)/);
+                        if (match) return match[1];
+                        const match2 = href.match(/activity%3A(\\d+)/);
+                        return match2 ? match2[1] : null;
+                    }""")
+
+                    # Close the menu by pressing Escape
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(500)
+
+                    if activity_id:
+                        activity_ids.append(activity_id)
+                        post = {
+                            "activity_id": activity_id,
+                            "author": post_info.get("author") if post_info else None,
+                            "profile_url": post_info.get("profile_url") if post_info else None,
+                            "text": post_info.get("text", "") if post_info else "",
+                            "preview": (post_info.get("text", "")[:300] if post_info else ""),
+                        }
+                        posts.append(post)
+
+                except Exception:
+                    # Close any open menu
+                    try:
+                        page.keyboard.press("Escape")
+                    except Exception:
+                        pass
+
+            return {
+                "activity_ids": activity_ids,
+                "posts": posts,
+            }
 
         finally:
             if not is_cdp:
