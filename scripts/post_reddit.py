@@ -93,20 +93,39 @@ def get_top_performers(project_name, platform="reddit"):
     return "(top performers report unavailable)"
 
 
+_ratelimit_remaining = None
+_ratelimit_reset = None
+
+
 def search_reddit(query, sort="new", limit=25, user_agent="social-autoposter/1.0"):
-    """Search Reddit for threads matching a query."""
+    """Search Reddit for threads matching a query. Respects rate limit headers."""
+    global _ratelimit_remaining, _ratelimit_reset
     import urllib.request
     import urllib.parse
+    from datetime import datetime, timezone
+
+    # If we know we're out of requests, wait for reset
+    if _ratelimit_remaining is not None and _ratelimit_remaining <= 1 and _ratelimit_reset:
+        wait = int(_ratelimit_reset) + 2
+        print(f"[post_reddit] Rate limit near zero, waiting {wait}s for reset...")
+        time.sleep(wait)
+
     encoded = urllib.parse.quote(query)
     url = f"https://old.reddit.com/search.json?q={encoded}&sort={sort}&limit={limit}&type=link"
     req = urllib.request.Request(url, headers={"User-Agent": user_agent})
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
+        resp = urllib.request.urlopen(req, timeout=15)
+        # Read rate limit headers
+        _ratelimit_remaining = float(resp.headers.get("X-Ratelimit-Remaining", 100))
+        _ratelimit_reset = float(resp.headers.get("X-Ratelimit-Reset", 0))
+        used = resp.headers.get("X-Ratelimit-Used", "?")
+        print(f"[post_reddit] Rate limit: {_ratelimit_remaining:.0f} remaining, "
+              f"{used} used, resets in {_ratelimit_reset:.0f}s")
+
+        data = json.loads(resp.read())
         threads = []
         for child in data.get("data", {}).get("children", []):
             post = child.get("data", {})
-            from datetime import datetime, timezone
             created = post.get("created_utc", 0)
             age_hours = (datetime.now(timezone.utc).timestamp() - created) / 3600 if created else 999
             threads.append({
@@ -121,6 +140,19 @@ def search_reddit(query, sort="new", limit=25, user_agent="social-autoposter/1.0
                 "selftext": post.get("selftext", "")[:500],
             })
         return threads
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            reset = e.headers.get("X-Ratelimit-Reset", "?")
+            print(f"[post_reddit] Rate limited on '{query}', resets in {reset}s. Waiting...")
+            try:
+                wait = int(float(reset)) + 2
+                time.sleep(wait)
+                # Retry once after waiting
+                return search_reddit(query, sort, limit, user_agent)
+            except (ValueError, TypeError):
+                pass
+        print(f"[post_reddit] search error for '{query}': {e}", file=sys.stderr)
+        return []
     except Exception as e:
         print(f"[post_reddit] search error for '{query}': {e}", file=sys.stderr)
         return []
