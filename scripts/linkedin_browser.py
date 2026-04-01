@@ -1152,8 +1152,8 @@ def read_conversation(thread_url, max_messages=20):
     Navigates to the thread URL and extracts the most recent messages
     with their author, content, and direction (inbound/outbound).
 
-    Returns: {"author": "...", "messages": [{"sender": "...", "content": "...",
-              "time": "...", "is_ours": bool}, ...]}
+    Returns: {"partner_name": "...", "messages": [{"sender": "...", "content": "...",
+              "time": "..."}, ...], "total_found": N}
     """
     from playwright.sync_api import sync_playwright
 
@@ -1161,67 +1161,103 @@ def read_conversation(thread_url, max_messages=20):
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
-            page.goto(thread_url, wait_until="domcontentloaded")
+            # Strip filter params from URL
+            clean_url = re.sub(r"\?filter=.*", "", thread_url)
+            page.goto(clean_url, wait_until="domcontentloaded")
             page.wait_for_timeout(4000)
 
             result = page.evaluate("""(maxMessages) => {
-                // Get the conversation partner name from the header
-                const headerBtn = document.querySelector(
-                    'section[class*="msg-thread"] h2, ' +
-                    'dt button[class*="msg-thread"]'
-                );
+                // Get the conversation partner name from the h2 heading
+                // in the conversation detail header
                 let partnerName = '';
-                // Try getting from the definition term / heading area
-                const dt = document.querySelector('dt button');
-                if (dt) partnerName = dt.textContent.trim();
-                if (!partnerName && headerBtn) {
-                    partnerName = headerBtn.textContent.trim();
-                }
+                const h2 = document.querySelector('h2');
+                if (h2) partnerName = h2.textContent.trim();
 
-                // Find all message events (msg-s-event-listitem or similar)
-                const msgEvents = document.querySelectorAll(
-                    '[class*="msg-s-event-listitem"], ' +
-                    '[class*="msg-s-message-list__event"]'
+                // LinkedIn groups messages by sender in listitem blocks.
+                // Each message group has:
+                //   - A "NAME sent the following messages at TIME" descriptor
+                //   - One or more message content blocks with paragraphs
+                // We need to walk the list items in the conversation thread.
+
+                const threadList = document.querySelector(
+                    'ul[class*="msg-s-message-list"]'
                 );
-
-                const messages = [];
-                for (const event of msgEvents) {
-                    // Sender name from profile link or sender element
-                    const senderEl = event.querySelector(
-                        '[class*="msg-s-message-group__name"], ' +
-                        'a[class*="msg-s-message-group__profile-link"], ' +
-                        'button[class*="msg-s-message-group__name"], ' +
-                        'span[class*="msg-s-message-group__name"]'
-                    );
-                    let sender = senderEl ? senderEl.textContent.trim() : '';
-
-                    // Message content
-                    const contentEl = event.querySelector(
-                        '[class*="msg-s-event-listitem__body"], ' +
-                        'p[class*="msg-s-event-listitem__body"]'
-                    );
-                    let content = '';
-                    if (contentEl) {
-                        content = contentEl.innerText.trim();
-                    } else {
-                        // Fallback: get all paragraphs
-                        const paras = event.querySelectorAll('p');
-                        for (const p of paras) {
-                            const t = p.innerText.trim();
-                            if (t.length > 5 && !t.includes('Sponsored')) {
-                                content += t + '\\n';
+                // Fallback: find the list that contains message items
+                const allLists = document.querySelectorAll('ul');
+                let msgList = threadList;
+                if (!msgList) {
+                    for (const ul of allLists) {
+                        const items = ul.querySelectorAll('li');
+                        if (items.length > 0) {
+                            // Check if any item has a time element and paragraph
+                            for (const item of items) {
+                                if (item.querySelector('time') &&
+                                    item.querySelector('p')) {
+                                    msgList = ul;
+                                    break;
+                                }
                             }
                         }
-                        content = content.trim();
+                        if (msgList) break;
+                    }
+                }
+
+                const messages = [];
+                if (!msgList) return {partner_name: partnerName, messages: [], total_found: 0};
+
+                const items = msgList.querySelectorAll(':scope > li');
+                let currentSender = '';
+                let currentTime = '';
+
+                for (const item of items) {
+                    // Check for sender info: "NAME sent the following messages at TIME"
+                    const senderDesc = item.textContent || '';
+                    const senderMatch = senderDesc.match(
+                        /^(.+?)\\s+sent the following message/
+                    );
+                    if (senderMatch) {
+                        currentSender = senderMatch[1].trim();
                     }
 
-                    if (!content) continue;
+                    // Also try to extract sender from profile link
+                    const profileLink = item.querySelector(
+                        'a[href*="/in/"] span, a[href*="/in/"]'
+                    );
+                    if (profileLink) {
+                        const name = profileLink.textContent.trim();
+                        // Filter out "View profile" type text
+                        if (name && name.length > 2 && name.length < 60 &&
+                            !name.includes('View') && !name.includes('profile')) {
+                            currentSender = name;
+                        }
+                    }
 
-                    // Timestamp
-                    const timeEl = event.querySelector('time');
-                    const time = timeEl ? timeEl.textContent.trim() : '';
+                    // Time element
+                    const timeEl = item.querySelector('time');
+                    if (timeEl) {
+                        currentTime = timeEl.textContent.trim().replace(/^[•·]\\s*/, '');
+                    }
 
-                    messages.push({sender, content, time});
+                    // Message content from paragraphs
+                    const paras = item.querySelectorAll('p');
+                    let content = '';
+                    for (const p of paras) {
+                        const t = p.innerText.trim();
+                        if (t.length > 0) {
+                            content += (content ? '\\n' : '') + t;
+                        }
+                    }
+
+                    // Skip items with no real content or just metadata
+                    if (!content || content.length < 3) continue;
+                    // Skip "sent the following messages" descriptors
+                    if (content.includes('sent the following message')) continue;
+
+                    messages.push({
+                        sender: currentSender,
+                        content: content,
+                        time: currentTime,
+                    });
                 }
 
                 // Take last N messages
@@ -1246,7 +1282,7 @@ def send_dm(thread_url, message):
     """Send a message in a LinkedIn DM conversation.
 
     Navigates to the thread URL, types the message in the compose box,
-    and sends it.
+    and clicks Send.
 
     Returns: {"ok": true, "thread_url": "..."} or {"ok": false, "error": "..."}
     """
@@ -1256,24 +1292,27 @@ def send_dm(thread_url, message):
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
-            page.goto(thread_url, wait_until="domcontentloaded")
+            clean_url = re.sub(r"\?filter=.*", "", thread_url)
+            page.goto(clean_url, wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
 
-            # Find the message input box
+            # Find the message input box using the placeholder text
             msg_box = None
-            # Try contenteditable div first (LinkedIn's rich text editor)
             try:
-                msg_box = page.locator(
-                    'div[role="textbox"][contenteditable="true"],'
-                    'div[aria-label*="Write a message"],'
-                    'div[class*="msg-form__contenteditable"]'
-                ).first
+                msg_box = page.get_by_role("textbox", name="Write a message")
                 msg_box.wait_for(timeout=5000)
             except Exception:
                 pass
 
+            # Fallback: contenteditable div
             if not msg_box:
-                return {"ok": False, "error": "message_box_not_found"}
+                try:
+                    msg_box = page.locator(
+                        'div[role="textbox"][contenteditable="true"]'
+                    ).first
+                    msg_box.wait_for(timeout=3000)
+                except Exception:
+                    return {"ok": False, "error": "message_box_not_found"}
 
             # Click the message box to focus it
             msg_box.click()
@@ -1283,18 +1322,23 @@ def send_dm(thread_url, message):
             page.keyboard.type(message, delay=10)
             page.wait_for_timeout(500)
 
-            # Press Enter to send (LinkedIn DMs send on Enter)
-            page.keyboard.press("Enter")
+            # Click Send button (it enables after typing)
+            try:
+                send_btn = page.get_by_role("button", name="Send").first
+                send_btn.wait_for(timeout=3000)
+                send_btn.click()
+            except Exception:
+                # Fallback: press Enter
+                page.keyboard.press("Enter")
+
             page.wait_for_timeout(2000)
 
             # Verify the message appeared
             sent = page.evaluate("""(msg) => {
-                const events = document.querySelectorAll(
-                    '[class*="msg-s-event-listitem"], p'
-                );
                 const msgStart = msg.substring(0, 50);
-                for (const e of events) {
-                    if (e.innerText && e.innerText.includes(msgStart)) {
+                const paras = document.querySelectorAll('p');
+                for (const p of paras) {
+                    if (p.innerText && p.innerText.includes(msgStart)) {
                         return true;
                     }
                 }
