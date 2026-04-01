@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Reddit posting orchestrator.
 
-Finds candidate threads and posts comments one at a time, each in its own
-bare-mode Claude session. This avoids loading all MCP servers/skills/CLAUDE.md
-and prevents context accumulation across multiple posts.
+Spawns a single Claude session that uses reddit_tools.py (search, fetch) to find
+threads and browser MCP to post. Claude decides which threads are relevant.
 
 Usage:
     python3 scripts/post_reddit.py
-    python3 scripts/post_reddit.py --dry-run          # Print prompt for first candidate
+    python3 scripts/post_reddit.py --dry-run          # Print prompt without executing
     python3 scripts/post_reddit.py --limit 3           # Post at most 3 comments
     python3 scripts/post_reddit.py --timeout 3600      # Global timeout in seconds
+    python3 scripts/post_reddit.py --project Cyrano    # Override project selection
 """
 
 import argparse
@@ -64,7 +64,6 @@ def ensure_mcp_config():
 
 
 def pick_project(platform="reddit"):
-    """Use pick_project.py to select the next project."""
     try:
         result = subprocess.run(
             ["python3", os.path.join(REPO_DIR, "scripts", "pick_project.py"),
@@ -79,7 +78,6 @@ def pick_project(platform="reddit"):
 
 
 def get_top_performers(project_name, platform="reddit"):
-    """Get top performers report for feedback."""
     try:
         result = subprocess.run(
             ["python3", os.path.join(REPO_DIR, "scripts", "top_performers.py"),
@@ -90,192 +88,33 @@ def get_top_performers(project_name, platform="reddit"):
             return result.stdout.strip()
     except Exception:
         pass
-    return "(top performers report unavailable)"
+    return ""
 
 
-_ratelimit_remaining = None
-_ratelimit_reset = None
-
-
-def search_reddit(query, sort="new", limit=25, user_agent="social-autoposter/1.0"):
-    """Search Reddit for threads matching a query. Respects rate limit headers."""
-    global _ratelimit_remaining, _ratelimit_reset
-    import urllib.request
-    import urllib.parse
-    from datetime import datetime, timezone
-
-    # If we know we're out of requests, wait for reset
-    if _ratelimit_remaining is not None and _ratelimit_remaining <= 1 and _ratelimit_reset:
-        wait = int(_ratelimit_reset) + 2
-        print(f"[post_reddit] Rate limit near zero, waiting {wait}s for reset...")
-        time.sleep(wait)
-
-    encoded = urllib.parse.quote(query)
-    url = f"https://old.reddit.com/search.json?q={encoded}&sort={sort}&limit={limit}&type=link"
-    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
-    try:
-        resp = urllib.request.urlopen(req, timeout=15)
-        # Read rate limit headers
-        _ratelimit_remaining = float(resp.headers.get("X-Ratelimit-Remaining", 100))
-        _ratelimit_reset = float(resp.headers.get("X-Ratelimit-Reset", 0))
-        used = resp.headers.get("X-Ratelimit-Used", "?")
-        print(f"[post_reddit] Rate limit: {_ratelimit_remaining:.0f} remaining, "
-              f"{used} used, resets in {_ratelimit_reset:.0f}s")
-
-        data = json.loads(resp.read())
-        threads = []
-        for child in data.get("data", {}).get("children", []):
-            post = child.get("data", {})
-            created = post.get("created_utc", 0)
-            age_hours = (datetime.now(timezone.utc).timestamp() - created) / 3600 if created else 999
-            threads.append({
-                "platform": "reddit",
-                "subreddit": f"r/{post.get('subreddit', '')}",
-                "url": f"https://old.reddit.com{post.get('permalink', '')}",
-                "title": post.get("title", ""),
-                "author": post.get("author", ""),
-                "score": post.get("score", 0),
-                "num_comments": post.get("num_comments", 0),
-                "age_hours": round(age_hours, 1),
-                "selftext": post.get("selftext", "")[:500],
-            })
-        return threads
-    except urllib.error.HTTPError as e:
-        if e.code == 429:
-            reset = e.headers.get("X-Ratelimit-Reset", "?")
-            print(f"[post_reddit] Rate limited on '{query}', resets in {reset}s. Waiting...")
-            try:
-                wait = int(float(reset)) + 2
-                time.sleep(wait)
-                # Retry once after waiting
-                return search_reddit(query, sort, limit, user_agent)
-            except (ValueError, TypeError):
-                pass
-        print(f"[post_reddit] search error for '{query}': {e}", file=sys.stderr)
-        return []
-    except Exception as e:
-        print(f"[post_reddit] search error for '{query}': {e}", file=sys.stderr)
-        return []
-
-
-def find_threads_by_search(project, config):
-    """Search Reddit using project topics instead of fetching all subreddits.
-
-    Makes ~N API calls (one per topic) instead of ~133 (one per subreddit).
-    """
-    import random
-    topics = project.get("topics", [])
-    if not topics:
-        print("[post_reddit] WARNING: project has no topics, can't search")
-        return []
-
-    # Shuffle topics so different runs explore different queries
-    topics = list(topics)
-    random.shuffle(topics)
-
-    reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "")
-    user_agent = f"social-autoposter/1.0 (u/{reddit_username})" if reddit_username else "social-autoposter/1.0"
-
-    # Load already-posted URLs and exclusions for filtering
+def get_recent_comments(limit=5):
+    dbmod.load_env()
     conn = dbmod.get_conn()
-    already_posted = set()
-    cur = conn.execute("SELECT thread_url FROM posts WHERE thread_url IS NOT NULL")
-    already_posted = {row[0] for row in cur.fetchall()}
-
-    exclusions = config.get("exclusions", {})
-    excluded_authors = {a.lower() for a in exclusions.get("authors", [])}
-    excluded_keywords = [k.lower() for k in exclusions.get("keywords", [])]
-    excluded_subs = {s.lower().lstrip("r/") for s in exclusions.get("subreddits", [])}
-    conn.close()
-
-    all_threads = []
-    seen_urls = set()
-
-    # Pre-compute topic relevance keywords (used to filter irrelevant threads cheaply)
-    topic_words = set()
-    for tp in topics:
-        topic_words.add(tp.lower())  # full phrases like "security cameras"
-        for w in tp.lower().split():
-            if len(w) > 3:  # individual words like "security", "cameras", "trespassing"
-                topic_words.add(w)
-
-    for topic in topics:
-        threads = search_reddit(topic, user_agent=user_agent)
-        filtered = 0
-        for t in threads:
-            # Dedup within this run
-            if t["url"] in seen_urls:
-                continue
-            seen_urls.add(t["url"])
-            # Already posted
-            if t["url"] in already_posted:
-                continue
-            # Excluded author
-            if t["author"].lower() in excluded_authors:
-                continue
-            # Excluded subreddit
-            if t["subreddit"].lower().lstrip("r/") in excluded_subs:
-                continue
-            # Excluded keywords
-            text = f"{t['title']} {t['selftext']}".lower()
-            if any(kw in text for kw in excluded_keywords):
-                continue
-            # Relevance check: thread must mention at least one topic keyword
-            # This prevents wasting Claude sessions on r/NatureofPredators etc
-            if not any(tw in text for tw in topic_words):
-                filtered += 1
-                continue
-            all_threads.append(t)
-
-        print(f"[post_reddit] Searched '{topic}': {len(threads)} results, "
-              f"{filtered} filtered irrelevant, {len(all_threads)} candidates total")
-
-        print(f"[post_reddit] Searched '{topic}': {len(threads)} results, {len(all_threads)} candidates total")
-        time.sleep(2)  # Rate limit: 2s between searches
-
-        # Stop early if we have plenty of candidates
-        if len(all_threads) >= 50:
-            break
-
-    # Sort: prefer threads with some engagement but not too old
-    all_threads.sort(key=lambda t: (t["num_comments"] > 0, t["score"]), reverse=True)
-    return all_threads
-
-
-def check_already_posted(conn, thread_url):
-    """Check if we already posted in this thread."""
-    cur = conn.execute(
-        "SELECT id, LEFT(our_content, 80) FROM posts "
-        "WHERE platform='reddit' AND thread_url = %s LIMIT 1",
-        [thread_url],
-    )
-    row = cur.fetchone()
-    return row is not None
-
-
-def get_recent_comments(conn, limit=5):
-    """Fetch our last N Reddit comments for repetition checking."""
     cur = conn.execute(
         "SELECT LEFT(our_content, 150) FROM posts "
         "WHERE platform='reddit' ORDER BY id DESC LIMIT %s",
         [limit],
     )
-    return [row[0] for row in cur.fetchall()]
+    results = [row[0] for row in cur.fetchall()]
+    conn.close()
+    return results
 
 
-def build_prompt(thread, project, top_report, recent_comments, config):
-    """Build a minimal prompt for posting one comment."""
+def build_prompt(project, config, limit, top_report, recent_comments):
+    """Build prompt that gives Claude tools to search, evaluate, and post."""
     reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "Deep_Ad1959")
-    content_angle = config.get("content_angle", "")
+    content_angle = project.get("content_angle", config.get("content_angle", ""))
 
-    # Use project-specific content_angle if available
-    if project.get("content_angle"):
-        content_angle = project["content_angle"]
-
-    thread_json = json.dumps(thread, indent=2)
     project_json = json.dumps({k: project.get(k) for k in
-        ["name", "description", "website", "github", "topics", "features"]
+        ["name", "description", "website", "github", "topics", "features",
+         "demo_video", "booking_link", "pricing"]
         if project.get(k)}, indent=2)
+
+    topics_list = project.get("topics", [])
 
     recent_ctx = ""
     if recent_comments:
@@ -286,18 +125,14 @@ Your last {len(recent_comments)} comments (don't repeat talking points):
 """
 
     top_ctx = ""
-    if top_report and top_report != "(top performers report unavailable)":
-        # Truncate to keep prompt small
+    if top_report:
         lines = top_report.split("\n")[:30]
         top_ctx = f"""
-## Feedback from past performance (use to write better comments):
+## Feedback from past performance:
 {chr(10).join(lines)}
 """
 
-    return f"""Post a comment on this Reddit thread. You are the Social Autoposter.
-
-## Thread
-{thread_json}
+    return f"""You are the Social Autoposter. Post {limit} comment(s) on relevant Reddit threads for this project.
 
 ## Project: {project.get('name', 'general')}
 {project_json}
@@ -305,33 +140,46 @@ Your last {len(recent_comments)} comments (don't repeat talking points):
 ## Content angle
 {content_angle}
 {recent_ctx}{top_ctx}
-## Content rules
-- Write like texting a coworker. Lowercase OK, fragments OK.
-- First person, specific details from the content angle above.
-- NO em dashes. Use commas, periods, or regular dashes (-).
-- No markdown in Reddit (no ##, **, numbered lists).
-- Include imperfections: contractions, casual asides, occasional lowercase.
-- Vary openings. Don't always start with credentials.
-- 2-3 sentences. Reply to a high-upvote comment for visibility, not just OP.
-- No product links in top-level comments. Earn attention first.
-- If the thread doesn't connect to the content angle, output SKIP and stop.
 
-## Anti-AI-detection
-- No em dashes, no markdown headers/bold/lists
-- Contains at least one imperfection
-- Reads like a real person, not an essay
-- Not too long, 2-4 short sentences max
+## Your tools (call via Bash)
 
-## Execution steps
+1. **Search**: Find threads by topic
+   python3 ~/social-autoposter/scripts/reddit_tools.py search "QUERY" --limit 15
+   Returns JSON array with subreddit, title, score, selftext preview, already_posted flag.
 
-1. Read the thread: use mcp__reddit-agent__browser_navigate to {thread['url']}
-   Check tone, length, top comments. Find the best comment to reply to.
+2. **Fetch thread**: Get full thread + top comments
+   python3 ~/social-autoposter/scripts/reddit_tools.py fetch "THREAD_URL"
+   Returns thread info + top 15 comments with their thing IDs and body text.
 
-2. Draft your comment (2-3 sentences, following rules above).
-   If nothing fits naturally, output SKIP and stop.
+3. **Check dedup**: Check if we already posted in a thread
+   python3 ~/social-autoposter/scripts/reddit_tools.py already-posted "THREAD_URL"
 
-3. Post via mcp__reddit-agent__browser_run_code. Find the target comment's thing ID
-   from the page, then use this pattern:
+4. **Log post**: After posting, log to database
+   python3 ~/social-autoposter/scripts/reddit_tools.py log-post "THREAD_URL" "OUR_PERMALINK" "OUR_TEXT" "{project.get('name', 'general')}" "THREAD_AUTHOR" "THREAD_TITLE" --account {reddit_username}
+
+5. **Post via browser**: Navigate and post using mcp__reddit-agent__browser_* tools (see below)
+
+## Workflow
+
+1. Search for 2-3 of these topics (pick the most specific ones): {json.dumps(topics_list)}
+   Review the results. Skip threads marked already_posted=true.
+
+2. From the search results, pick the most relevant threads where you can add genuine value.
+   Consider: subreddit relevance, thread topic, engagement level, whether our content angle fits.
+   SKIP threads from fiction/gaming/meme subreddits that happen to match keywords.
+
+3. For each promising thread, fetch it to read the full discussion and comments.
+   Pick the best comment to reply to (high-upvote for visibility, or OP if appropriate).
+
+4. Draft your reply (2-3 sentences), then post via browser MCP.
+
+5. Log the post, then move to the next thread. Stop after {limit} successful post(s).
+
+## Posting via browser MCP
+
+Navigate to the thread: mcp__reddit-agent__browser_navigate to the thread URL.
+Then post via mcp__reddit-agent__browser_run_code with this JS pattern:
+
 ```javascript
 async (page) => {{
   const OUR_USERNAME = '{reddit_username}';
@@ -358,28 +206,39 @@ async (page) => {{
   return newComments.length > 0 ? await newComments[newComments.length - 1].getAttribute('href') : null;
 }}
 ```
-   Replace COMMENT_THING_ID with the actual Reddit thing ID (e.g. t1_abc123 or t3_xyz for OP).
-   Replace REPLY_TEXT_HERE with your drafted text as a JS string literal.
-   Use thing.evaluate() for clicks (NOT direct .click()).
+Replace COMMENT_THING_ID with the thing ID (e.g. t1_abc123 or t3_xyz for OP).
+Replace REPLY_TEXT_HERE with your text as a JS string literal.
+Use thing.evaluate() for clicks (NOT direct .click()).
 
-4. After posting, log to database:
-```bash
-source ~/social-autoposter/.env
-psql "$DATABASE_URL" -c "INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle, thread_title, thread_content, our_url, our_content, our_account, source_summary, project_name, status, posted_at, feedback_report_used) VALUES ('reddit', 'THREAD_URL', 'THREAD_AUTHOR', 'THREAD_AUTHOR', 'THREAD_TITLE', '', 'OUR_PERMALINK', 'OUR_COMMENT_TEXT', '{reddit_username}', '', '{project.get('name', 'general')}', 'active', NOW(), TRUE);"
-```
-   Replace placeholders with actual values. Escape single quotes in text by doubling them.
+## Content rules
+- Write like texting a coworker. Lowercase OK, fragments OK.
+- First person, specific details from content angle.
+- NO em dashes. Use commas, periods, or regular dashes (-).
+- No markdown on Reddit (no ##, **, numbered lists).
+- Imperfections: contractions, casual asides, occasional lowercase.
+- Vary openings. 2-4 short sentences max.
+- Reply to high-upvote comments for visibility, not just OP.
 
-5. Close the browser tab: mcp__reddit-agent__browser_tabs with action 'close'.
+## Anti-patterns
+- NEVER start with "exactly", "yeah totally", "100%", "that's smart".
+- NEVER say "I built" / "we built" / "I'm working on". Frame as recommendations.
+- No product links in top-level comments. Earn attention first.
 
-6. Output DONE when finished, or SKIP if no good angle.
+## Guardrails
+- NEVER suggest calls, meetings, demos.
+- NEVER promise to share links/files not in project config.
+- NEVER offer to DM. NEVER make time-bound promises.
 
-CRITICAL: Use ONLY mcp__reddit-agent__* tools. NEVER use generic tools.
+CRITICAL: Use ONLY mcp__reddit-agent__* browser tools. NEVER use generic mcp__playwright-extension__* or others.
+CRITICAL: Close browser tab after each post: mcp__reddit-agent__browser_tabs action 'close'.
 CRITICAL: If browser times out, wait 30s and retry up to 3 times.
+
+Output DONE when finished with all {limit} post(s), or DONE with a count if you posted fewer.
 """
 
 
-def run_claude(prompt, timeout=300):
-    """Run claude -p in bare mode. Returns (success, output, usage)."""
+def run_claude(prompt, timeout=600):
+    """Run claude -p in bare mode."""
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
     mcp_config = ensure_mcp_config()
     cmd = ["claude", "-p", "--output-format", "json", "--bare"]
@@ -414,23 +273,14 @@ def run_claude(prompt, timeout=300):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Reddit posting (one thread at a time)")
-    parser.add_argument("--dry-run", action="store_true", help="Print prompt for first candidate")
+    parser = argparse.ArgumentParser(description="Reddit posting orchestrator")
+    parser.add_argument("--dry-run", action="store_true", help="Print prompt without executing")
     parser.add_argument("--limit", type=int, default=1, help="Max comments to post (default: 1)")
-    parser.add_argument("--timeout", type=int, default=3600, help="Global timeout in seconds")
-    parser.add_argument("--per-post-timeout", type=int, default=300, help="Timeout per claude session")
+    parser.add_argument("--timeout", type=int, default=3600, help="Timeout for Claude session")
     parser.add_argument("--project", default=None, help="Override project selection")
     args = parser.parse_args()
 
-    dbmod.load_env()
-    conn = dbmod.get_conn()
     config = load_config()
-
-    start_time = time.time()
-    posted = 0
-    skipped = 0
-    failed = 0
-    total_usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
 
     # Pick project
     if args.project:
@@ -451,79 +301,36 @@ def main():
     project_name = project.get("name", "general")
     print(f"[post_reddit] Project: {project_name}")
 
-    # Get feedback
+    # Get context
     top_report = get_top_performers(project_name)
+    recent_comments = get_recent_comments()
 
-    # Find threads by searching project topics (not fetching all subreddits)
-    threads = find_threads_by_search(project, config)
-    if not threads:
-        print("[post_reddit] No candidate threads found. Done.")
+    # Build prompt
+    prompt = build_prompt(project, config, args.limit, top_report, recent_comments)
+
+    if args.dry_run:
+        print(f"=== DRY RUN ===")
+        print(f"Prompt length: {len(prompt)} chars")
+        print(prompt)
+        print("=== END DRY RUN ===")
         return
 
-    print(f"[post_reddit] Found {len(threads)} candidate threads")
+    print(f"[post_reddit] Starting Claude session (limit={args.limit}, timeout={args.timeout}s)")
+    start = time.time()
 
-    # Get recent comments for repetition check
-    recent_comments = get_recent_comments(conn)
+    ok, output, usage = run_claude(prompt, timeout=args.timeout)
+    elapsed = time.time() - start
 
-    for thread in threads:
-        if args.limit and posted >= args.limit:
-            break
-        if time.time() - start_time > args.timeout:
-            print(f"[post_reddit] Global timeout reached ({args.timeout}s). Stopping.")
-            break
-
-        # Dedup check
-        if check_already_posted(conn, thread["url"]):
-            print(f"[post_reddit] Skipping (already posted): {thread['url']}")
-            skipped += 1
-            continue
-
-        prompt = build_prompt(thread, project, top_report, recent_comments, config)
-
-        if args.dry_run:
-            print(f"=== DRY RUN: Prompt for thread ===")
-            print(f"Thread: {thread['title'][:80]}")
-            print(f"URL: {thread['url']}")
-            print(f"Prompt length: {len(prompt)} chars")
-            print(prompt)
-            print("=== END DRY RUN ===")
-            break
-
-        post_start = time.time()
-        print(f"[post_reddit] Posting on: {thread['title'][:60]}... ({thread['url']})")
-
-        ok, output, usage = run_claude(prompt, timeout=args.per_post_timeout)
-        elapsed = time.time() - post_start
-
-        for k in total_usage:
-            total_usage[k] += usage[k]
-
-        if ok and "SKIP" not in output[:100]:
-            posted += 1
-            print(f"[post_reddit] Posted ({elapsed:.0f}s) "
-                  f"[in={usage['input_tokens']} out={usage['output_tokens']} "
-                  f"cache_r={usage['cache_read']} cache_w={usage['cache_create']} "
-                  f"${usage['cost_usd']:.4f}]")
-        elif "SKIP" in (output or "")[:100]:
-            skipped += 1
-            print(f"[post_reddit] Skipped (no good angle) ({elapsed:.0f}s) ${usage['cost_usd']:.4f}")
-        else:
-            failed += 1
-            print(f"[post_reddit] FAILED ({elapsed:.0f}s): {(output or '')[:200]}")
-
-        time.sleep(2)
-
-    total_elapsed = time.time() - start_time
     print(f"\n[post_reddit] === SUMMARY ===")
-    print(f"[post_reddit] posted={posted} skipped={skipped} failed={failed} elapsed={total_elapsed:.0f}s")
-    print(f"[post_reddit] Total tokens: input={total_usage['input_tokens']} "
-          f"output={total_usage['output_tokens']} "
-          f"cache_read={total_usage['cache_read']} cache_create={total_usage['cache_create']}")
-    print(f"[post_reddit] Total cost: ${total_usage['cost_usd']:.4f}")
-    if posted > 0:
-        print(f"[post_reddit] Avg cost per post: ${total_usage['cost_usd'] / posted:.4f}")
-
-    conn.close()
+    print(f"[post_reddit] elapsed={elapsed:.0f}s success={ok}")
+    print(f"[post_reddit] Tokens: input={usage['input_tokens']} output={usage['output_tokens']} "
+          f"cache_read={usage['cache_read']} cache_create={usage['cache_create']}")
+    print(f"[post_reddit] Cost: ${usage['cost_usd']:.4f}")
+    if output:
+        # Show last few lines of Claude's output
+        lines = output.strip().split("\n")
+        for line in lines[-5:]:
+            print(f"[post_reddit] {line}")
 
 
 if __name__ == "__main__":
