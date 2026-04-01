@@ -55,7 +55,10 @@ Two keys, same project (330744):
 The script prints per-project:
 - Social post counts (total, recent, active, removed) with platform breakdown
 - Engagement totals (upvotes, comments, views)
+- SEO landing page count (total pages created by the social-autoposter pipeline)
 - PostHog pageviews with top pages breakdown
 - CTA click details (button text, section, timestamp)
 - Cal.com booking stats (total, booked, cancelled, real vs test)
 - Funnel conversion rates (pageviews -> CTAs -> bookings)
+
+Full funnel: social posts -> SEO pages created -> pageviews -> CTA clicks -> bookings
