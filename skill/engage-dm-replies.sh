@@ -96,6 +96,71 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════
+# PHASE 0: Send pending human replies from email escalations
+# ═══════════════════════════════════════════════════════
+HUMAN_REPLIES=$(psql "$DATABASE_URL" -t -A -c "
+    SELECT json_agg(json_build_object(
+        'id', h.id, 'dm_id', h.dm_id, 'platform', h.platform,
+        'their_author', h.their_author, 'reply_content', h.reply_content,
+        'chat_url', d.chat_url, 'project_name', h.project_name
+    ))
+    FROM human_dm_replies h
+    JOIN dms d ON d.id = h.dm_id
+    WHERE h.status = 'pending'
+    ORDER BY h.created_at ASC;" 2>/dev/null || echo "null")
+
+if [ "$HUMAN_REPLIES" != "null" ] && [ -n "$HUMAN_REPLIES" ]; then
+    HR_COUNT=$(echo "$HUMAN_REPLIES" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+    log "Phase 0: $HR_COUNT pending human replies to send"
+
+    PHASE0_PROMPT=$(mktemp)
+    cat > "$PHASE0_PROMPT" <<PHASE0_EOF
+You are the Social Autoposter DM delivery bot.
+
+Read $SKILL_FILE for content rules (tone, anti-AI detection, no em dashes).
+
+## Task: Send pending human replies as DMs
+
+The following replies were written by the human operator via email and need to be sent as DMs on the respective platforms. Send each one EXACTLY as written — do NOT rephrase, do NOT add anything.
+
+Pending human replies:
+$HUMAN_REPLIES
+
+For each reply:
+
+1. Navigate to the conversation on the correct platform using chat_url (or find the conversation with their_author).
+   - **Reddit Chat** (mcp__reddit-agent__* tools)
+   - **LinkedIn Messages** (mcp__linkedin-agent__* tools)
+   - **X/Twitter DMs** (mcp__twitter-agent__* tools) — if encrypted DM passcode dialog appears, enter: $TWITTER_DM_PASSCODE
+2. Type and send the reply_content VERBATIM.
+3. Log the outbound message:
+   \`\`\`bash
+   cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "THE_EXACT_REPLY_TEXT"
+   \`\`\`
+4. Mark the human reply as sent:
+   \`\`\`bash
+   psql "$DATABASE_URL" -c "UPDATE human_dm_replies SET status = 'sent', sent_at = NOW() WHERE id = REPLY_ID"
+   \`\`\`
+5. Update the DM conversation status back to active:
+   \`\`\`bash
+   cd ~/social-autoposter && python3 scripts/dm_conversation.py set-status --dm-id DM_ID --status active
+   \`\`\`
+
+If sending fails for a reply, mark it as failed:
+\`\`\`bash
+psql "$DATABASE_URL" -c "UPDATE human_dm_replies SET status = 'failed' WHERE id = REPLY_ID"
+\`\`\`
+PHASE0_EOF
+
+    # The main Claude agent session will process this prompt alongside phases A-D
+    PHASE0_INSTRUCTIONS=$(cat "$PHASE0_PROMPT")
+    rm -f "$PHASE0_PROMPT"
+else
+    log "Phase 0: No pending human replies"
+    PHASE0_INSTRUCTIONS=""
+fi
+
+# ═══════════════════════════════════════════════════════
 # PHASE A: Scan Reddit Chat for new inbound messages
 # ═══════════════════════════════════════════════════════
 log "Phase A: Scanning Reddit Chat for new inbound messages..."
@@ -121,6 +186,12 @@ CRITICAL - Browser agent rules:
 NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
 If a tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to other tools.
 
+$( [ -n "$PHASE0_INSTRUCTIONS" ] && echo "$PHASE0_INSTRUCTIONS
+
+---
+
+After completing Phase 0 (human replies), proceed with the scanning and auto-reply phases below.
+" )
 Our projects (for context when conversations touch relevant topics):
 $PROJECTS
 
@@ -322,6 +393,7 @@ python3 scripts/dm_conversation.py set-status --dm-id DM_ID --status stale
 - Saying "cool I'll hit you up on [platform]" when you can't actually do that
 
 After processing all conversations, print a summary:
+- How many human replies delivered (Phase 0)
 - How many new inbound messages found per platform
 - How many replies sent
 - How many flagged for human attention (list each with reason)
