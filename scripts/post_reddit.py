@@ -101,11 +101,23 @@ def find_threads(project_name):
              "--project", project_name],
             capture_output=True, text=True, timeout=180,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            data = json.loads(result.stdout.strip())
+        stdout = result.stdout.strip()
+        if stdout:
+            # find_threads.py may print errors to stderr but JSON to stdout
+            data = json.loads(stdout)
             return data.get("threads", [])
-    except Exception:
-        pass
+    except json.JSONDecodeError:
+        # stdout might have stderr mixed in, try to extract JSON
+        try:
+            import re
+            match = re.search(r'\{.*\}', result.stdout, re.DOTALL)
+            if match:
+                data = json.loads(match.group())
+                return data.get("threads", [])
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"[post_reddit] find_threads error: {e}")
     return []
 
 
