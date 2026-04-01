@@ -140,6 +140,14 @@ CREATE TABLE IF NOT EXISTS dm_messages (
 CREATE INDEX IF NOT EXISTS idx_dm_messages_dm_id ON dm_messages(dm_id);
 CREATE INDEX IF NOT EXISTS idx_dm_messages_direction ON dm_messages(direction);
 
+-- Add project tracking to replies (posts already has project_name)
+ALTER TABLE replies ADD COLUMN IF NOT EXISTS project_name TEXT;
+
+-- Add project tracking and booking link support to DMs
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS project_name TEXT;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS human_reason TEXT;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS flagged_at TIMESTAMP;
+
 CREATE TABLE IF NOT EXISTS thread_comments (
     id SERIAL PRIMARY KEY,
     thread_id INTEGER,
