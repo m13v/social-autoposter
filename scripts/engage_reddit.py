@@ -24,6 +24,7 @@ import db as dbmod
 REPO_DIR = os.path.expanduser("~/social-autoposter")
 CONFIG_PATH = os.path.join(REPO_DIR, "config.json")
 REPLY_DB = os.path.join(REPO_DIR, "scripts", "reply_db.py")
+REDDIT_MCP_CONFIG = os.path.expanduser("~/.claude/browser-agent-configs/reddit-agent-mcp.json")
 
 
 def load_config():
@@ -190,12 +191,37 @@ CRITICAL: Close browser tabs after posting (browser_tabs action 'close').
 """
 
 
+def ensure_mcp_config():
+    """Create a minimal MCP config with only the reddit-agent server."""
+    if os.path.exists(REDDIT_MCP_CONFIG):
+        return REDDIT_MCP_CONFIG
+    # Extract reddit-agent config from ~/.claude.json
+    claude_json = os.path.expanduser("~/.claude.json")
+    if os.path.exists(claude_json):
+        with open(claude_json) as f:
+            data = json.load(f)
+        reddit_cfg = data.get("mcpServers", {}).get("reddit-agent")
+        if reddit_cfg:
+            mcp = {"mcpServers": {"reddit-agent": reddit_cfg}}
+            os.makedirs(os.path.dirname(REDDIT_MCP_CONFIG), exist_ok=True)
+            with open(REDDIT_MCP_CONFIG, "w") as f:
+                json.dump(mcp, f, indent=2)
+            return REDDIT_MCP_CONFIG
+    return None
+
+
 def run_claude(prompt, timeout=300):
     """Run claude -p with the given prompt. Returns (success, output, usage_dict)."""
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
+    mcp_config = ensure_mcp_config()
+    cmd = ["claude", "-p", "--output-format", "json"]
+    if mcp_config:
+        cmd += ["--strict-mcp-config", "--mcp-config", mcp_config]
+    cmd += ["--tools", "Bash,Read", "--disable-slash-commands"]
+    cmd.append(prompt)
     try:
         result = subprocess.run(
-            ["claude", "-p", "--output-format", "json", prompt],
+            cmd,
             capture_output=True, text=True, timeout=timeout,
         )
         # Parse JSON output for usage stats
