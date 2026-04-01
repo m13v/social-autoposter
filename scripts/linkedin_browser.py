@@ -1259,11 +1259,11 @@ def read_conversation(thread_url, max_messages=20):
                         );
                     }
 
-                    // Message content from paragraphs
-                    const paras = item.querySelectorAll('p');
+                    // Message content from headings (subject lines) and paragraphs
+                    const contentEls = item.querySelectorAll('h3, p');
                     let content = '';
-                    for (const p of paras) {
-                        const t = p.innerText.trim();
+                    for (const el of contentEls) {
+                        const t = el.innerText.trim();
                         if (t.length > 0) {
                             content += (content ? '\\n' : '') + t;
                         }
