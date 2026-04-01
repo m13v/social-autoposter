@@ -37,6 +37,7 @@ import argparse
 import json
 import os
 import sys
+import urllib.request
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -303,8 +304,74 @@ def show_summary(conn):
             print(f"    DM #{r['id']} {r['their_author']} [{r['platform']}] - {r['message_count']} msgs, T{r['tier'] or 1}, {r['conversation_status']} (last: {ts})")
 
 
+def _send_escalation_email(conn, dm_id, platform, their_author, reason):
+    """Send an immediate escalation email with conversation history for a single DM."""
+    api_key = os.environ.get("RESEND_API_KEY")
+    to_email = os.environ.get("NOTIFICATION_EMAIL")
+    if not api_key or not to_email:
+        print(f"  WARNING: RESEND_API_KEY or NOTIFICATION_EMAIL not set — skipping escalation email")
+        return
+
+    # Fetch conversation history
+    dm = conn.execute("""
+        SELECT d.id, d.tier, d.chat_url, d.project_name, d.comment_context
+        FROM dms d WHERE d.id = %s
+    """, (dm_id,)).fetchone()
+
+    messages = conn.execute("""
+        SELECT direction, author, content, message_at
+        FROM dm_messages WHERE dm_id = %s ORDER BY message_at ASC
+    """, (dm_id,)).fetchall()
+
+    # Build conversation history text
+    history_lines = []
+    for msg in messages:
+        arrow = ">>" if msg["direction"] == "outbound" else "<<"
+        ts = msg["message_at"].strftime("%Y-%m-%d %H:%M") if msg["message_at"] else "?"
+        history_lines.append(f"  {arrow} [{ts}] {msg['author']}: {msg['content']}")
+
+    history_text = "\n".join(history_lines) if history_lines else "(no messages logged)"
+
+    project = dm.get("project_name") or "unset"
+    context = dm.get("comment_context") or ""
+    context_section = f"\nOriginal context: {context[:300]}\n" if context else ""
+
+    body = (
+        f"DM #{dm_id} [{platform}] with {their_author} needs your attention.\n\n"
+        f"Reason: {reason}\n"
+        f"Tier: {dm.get('tier') or 1}  Project: {project}\n"
+        f"{f'Chat URL: {dm[\"chat_url\"]}' if dm.get('chat_url') else ''}\n"
+        f"{context_section}\n"
+        f"--- Conversation History ---\n{history_text}\n\n"
+        f"---\n"
+        f"Reply to this email to respond. Your reply will be sent as a DM on {platform}.\n"
+    )
+
+    subject = f"[DM #{dm_id}] {their_author} [{platform}] — {reason}"
+
+    payload = json.dumps({
+        "from": "DM Escalation <dm-escalation@s4l.ai>",
+        "to": [to_email],
+        "subject": subject,
+        "text": body,
+        "reply_to": f"dm-{dm_id}@s4l.ai",
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(req)
+        print(f"  Escalation email sent for DM #{dm_id} to {to_email}")
+    except Exception as e:
+        print(f"  WARNING: Failed to send escalation email for DM #{dm_id}: {e}")
+
+
 def flag_human(conn, dm_id, reason):
-    """Flag a conversation as needing human attention."""
+    """Flag a conversation as needing human attention and send escalation email."""
     row = conn.execute("SELECT platform, their_author, conversation_status FROM dms WHERE id = %s", (dm_id,)).fetchone()
     if not row:
         print(f"ERROR: DM #{dm_id} not found")
@@ -316,6 +383,8 @@ def flag_human(conn, dm_id, reason):
     """, (reason, dm_id))
     conn.commit()
     print(f"  FLAGGED DM #{dm_id} ({row['their_author']} [{row['platform']}]) for human attention: {reason}")
+
+    _send_escalation_email(conn, dm_id, row['platform'], row['their_author'], reason)
     return True
 
 
