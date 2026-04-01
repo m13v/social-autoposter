@@ -403,7 +403,64 @@ def search_posts(search_url, max_posts=10):
             page.goto(search_url, wait_until="domcontentloaded")
             page.wait_for_timeout(6000)
 
-            # Extract post data by clicking each post's control menu
+            # First, extract all post metadata from the page
+            post_metadata = page.evaluate("""() => {
+                // Find all "Open control menu for post by X" buttons
+                const menuBtns = document.querySelectorAll(
+                    'button[aria-label*="Open control menu for post"]'
+                );
+                const results = [];
+                for (const btn of menuBtns) {
+                    // Extract author name from aria-label
+                    const label = btn.getAttribute('aria-label') || '';
+                    const authorMatch = label.match(/post by (.+)/);
+                    const author = authorMatch ? authorMatch[1].trim() : null;
+
+                    // Walk up to find the post container
+                    let container = btn;
+                    for (let j = 0; j < 15 && container; j++) {
+                        container = container.parentElement;
+                        const text = container ? (container.innerText || '') : '';
+                        if (text.includes('Like') && text.includes('Comment') && text.length > 200) {
+                            break;
+                        }
+                    }
+
+                    // Profile URL
+                    let profileUrl = null;
+                    if (container) {
+                        const link = container.querySelector('a[href*="/in/"], a[href*="/company/"]');
+                        if (link) profileUrl = link.getAttribute('href');
+                    }
+
+                    // Post text
+                    let text = '';
+                    if (container) {
+                        const spans = container.querySelectorAll('span, p');
+                        for (const s of spans) {
+                            const t = s.innerText.trim();
+                            if (t.length > 50 && t.length < 3000 &&
+                                !t.includes('Like') && !t.includes('Comment') &&
+                                !t.includes('Repost') && !t.includes('Send') &&
+                                !t.includes('Follow') && !t.includes('Open control')) {
+                                if (!text.includes(t.substring(0, 40))) {
+                                    text += t + ' ';
+                                }
+                                if (text.length > 500) break;
+                            }
+                        }
+                    }
+
+                    results.push({
+                        author: author,
+                        profile_url: profileUrl,
+                        text: text.trim().substring(0, 500),
+                    });
+                }
+                return results;
+            }""")
+
+            # Now click each menu button to extract activity IDs
             menu_buttons = page.locator(
                 'button[aria-label*="Open control menu for post"]'
             ).all()
@@ -413,56 +470,6 @@ def search_posts(search_url, max_posts=10):
 
             for i, btn in enumerate(menu_buttons[:max_posts]):
                 try:
-                    # Get the post container text before clicking menu
-                    post_info = page.evaluate("""(btn) => {
-                        // Walk up to find the post container (look for Like/Comment buttons)
-                        let container = btn.closest('[class]');
-                        for (let j = 0; j < 10 && container; j++) {
-                            const text = container.innerText || '';
-                            if (text.includes('Like') && text.includes('Comment') && text.length > 100) {
-                                break;
-                            }
-                            container = container.parentElement;
-                        }
-                        if (!container) return null;
-
-                        // Author - get the first short text from profile link
-                        const authorLink = container.querySelector('a[href*="/in/"], a[href*="/company/"]');
-                        let author = null;
-                        const profileUrl = authorLink ? authorLink.getAttribute('href') : null;
-                        if (authorLink) {
-                            // Try to find just the name span inside the link
-                            const nameSpan = authorLink.querySelector('span');
-                            const rawText = nameSpan ? nameSpan.textContent.trim() : authorLink.textContent.trim();
-                            // Take first line only (name without headline)
-                            author = rawText.split('\\n')[0].trim().split('  ')[0].trim();
-                            if (author.length > 80) author = author.substring(0, 80);
-                        }
-
-                        // Post text - get substantial text content
-                        const spans = container.querySelectorAll('span, p');
-                        let text = '';
-                        for (const s of spans) {
-                            const t = s.innerText.trim();
-                            if (t.length > 50 && t.length < 3000 &&
-                                !t.includes('Like') && !t.includes('Comment') &&
-                                !t.includes('Repost') && !t.includes('Send') &&
-                                !t.includes('Follow')) {
-                                if (!text.includes(t.substring(0, 40))) {
-                                    text += t + ' ';
-                                }
-                                if (text.length > 500) break;
-                            }
-                        }
-
-                        return {
-                            author: author ? author.substring(0, 100) : null,
-                            profile_url: profileUrl,
-                            text: text.trim().substring(0, 500),
-                        };
-                    }""", btn.element_handle())
-
-                    # Click the menu button
                     btn.click()
                     page.wait_for_timeout(1000)
 
@@ -477,23 +484,21 @@ def search_posts(search_url, max_posts=10):
                         return match2 ? match2[1] : null;
                     }""")
 
-                    # Close the menu by pressing Escape
                     page.keyboard.press("Escape")
                     page.wait_for_timeout(500)
 
                     if activity_id:
                         activity_ids.append(activity_id)
-                        post = {
+                        meta = post_metadata[i] if i < len(post_metadata) else {}
+                        posts.append({
                             "activity_id": activity_id,
-                            "author": post_info.get("author") if post_info else None,
-                            "profile_url": post_info.get("profile_url") if post_info else None,
-                            "text": post_info.get("text", "") if post_info else "",
-                            "preview": (post_info.get("text", "")[:300] if post_info else ""),
-                        }
-                        posts.append(post)
+                            "author": meta.get("author"),
+                            "profile_url": meta.get("profile_url"),
+                            "text": meta.get("text", ""),
+                            "preview": meta.get("text", "")[:300],
+                        })
 
                 except Exception:
-                    # Close any open menu
                     try:
                         page.keyboard.press("Escape")
                     except Exception:
