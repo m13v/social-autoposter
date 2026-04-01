@@ -58,25 +58,18 @@ async (page) => {
     await page.waitForTimeout(1500);
 
     // Step 5: Find the edit textbox and get current text
-    // The edit textbox is the second "Text editor for creating comment" (first is the new comment box)
+    // After clicking Edit, a new textbox appears near the Save/Cancel buttons.
+    // It's always the LAST "Text editor for creating comment" textbox on the page
+    // (the first one is the "Add a comment" box at the top).
     const textboxes = page.getByRole('textbox', { name: 'Text editor for creating comment' });
     const count = await textboxes.count();
 
-    let editBox = null;
-    for (let i = 0; i < count; i++) {
-      const box = textboxes.nth(i);
-      const text = await box.innerText();
-      // The edit box has existing content, the new comment box says "Add a comment..."
-      if (text && !text.includes('Add a comment')) {
-        editBox = box;
-        break;
-      }
+    if (count < 2) {
+      return JSON.stringify({ ok: false, error: 'edit_textbox_not_found', textboxCount: count });
     }
 
-    if (!editBox) {
-      return JSON.stringify({ ok: false, error: 'edit_textbox_not_found' });
-    }
-
+    // The edit box is the last one (appears after clicking Edit)
+    const editBox = textboxes.last();
     const currentText = await editBox.innerText();
 
     // Check if link already exists in the comment
@@ -90,10 +83,12 @@ async (page) => {
     // Step 6: Append new text
     const newText = currentText.trimEnd() + params.appendText;
 
-    // Select all and replace with new text
+    // Click into the edit box, go to end, then type the appended text
     await editBox.click();
-    await page.keyboard.press('Meta+a');
-    await editBox.fill(newText);
+    await page.keyboard.press('Meta+End');  // Go to very end
+    await page.keyboard.press('End');
+    await page.waitForTimeout(200);
+    await page.keyboard.type(params.appendText);
     await page.waitForTimeout(500);
 
     // Step 7: Click "Save changes"
