@@ -191,8 +191,17 @@ def find_threads_by_search(project, config):
     all_threads = []
     seen_urls = set()
 
+    # Pre-compute topic relevance keywords (used to filter irrelevant threads cheaply)
+    topic_words = set()
+    for tp in topics:
+        topic_words.add(tp.lower())  # full phrases like "security cameras"
+        for w in tp.lower().split():
+            if len(w) > 3:  # individual words like "security", "cameras", "trespassing"
+                topic_words.add(w)
+
     for topic in topics:
         threads = search_reddit(topic, user_agent=user_agent)
+        filtered = 0
         for t in threads:
             # Dedup within this run
             if t["url"] in seen_urls:
@@ -212,18 +221,14 @@ def find_threads_by_search(project, config):
             if any(kw in text for kw in excluded_keywords):
                 continue
             # Relevance check: thread must mention at least one topic keyword
-            # This prevents wasting Claude sessions on unrelated threads
-            topic_words = set()
-            for tp in topics:
-                for w in tp.lower().split():
-                    if len(w) > 3:  # skip short words like "AI", "DVR"
-                        topic_words.add(w)
-            # Also add the short but specific terms
-            for tp in topics:
-                topic_words.add(tp.lower())
+            # This prevents wasting Claude sessions on r/NatureofPredators etc
             if not any(tw in text for tw in topic_words):
+                filtered += 1
                 continue
             all_threads.append(t)
+
+        print(f"[post_reddit] Searched '{topic}': {len(threads)} results, "
+              f"{filtered} filtered irrelevant, {len(all_threads)} candidates total")
 
         print(f"[post_reddit] Searched '{topic}': {len(threads)} results, {len(all_threads)} candidates total")
         time.sleep(2)  # Rate limit: 2s between searches
