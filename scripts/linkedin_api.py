@@ -178,11 +178,18 @@ def normalize_comment_urn(urn):
     """
     import re
     # If it has (activity:ID without urn:li: prefix, add it
-    return re.sub(
+    urn = re.sub(
         r"\(activity:(\d+)",
         r"(urn:li:activity:\1",
         urn,
     )
+    # If it has (ugcPost:ID without urn:li: prefix, add it
+    urn = re.sub(
+        r"\(ugcPost:(\d+)",
+        r"(urn:li:ugcPost:\1",
+        urn,
+    )
+    return urn
 
 
 def reply_to_comment(token, person_urn, activity_id, parent_comment_urn, text):
