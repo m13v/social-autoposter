@@ -170,7 +170,11 @@ $PROJECTS
    d. Wait for the DM inbox to load
    The passcode is loaded from .env as TWITTER_DM_PASSCODE.
 3. Look for conversations with unread indicators
-4. Same process as above - log inbound messages
+4. For each conversation with new messages:
+   a. Click into the conversation and read the latest messages
+   b. **CRITICAL: Check the message author before logging.** Our Twitter handle is @m13v_. Messages sent BY us (from @m13v_) are OUTBOUND — do NOT log them as inbound. Only log messages from the OTHER person as inbound.
+   c. If you see a message that looks like something we previously sent (same content as a prior outbound), SKIP it — it is an echo of our own message.
+   d. Only call log-inbound for messages that are genuinely from the other person.
 
 ## PHASE D: Reply to all conversations with pending inbound messages
 
