@@ -205,7 +205,7 @@ def find_by_author(conn, author_query):
     """Find DM conversations by author name (case-insensitive partial match)."""
     rows = conn.execute("""
         SELECT d.id, d.platform, d.their_author, d.status, d.conversation_status,
-               d.tier, d.message_count, d.chat_url, d.last_message_at
+               d.tier, d.message_count, d.chat_url, d.last_message_at, d.project_name
         FROM dms d
         WHERE LOWER(d.their_author) LIKE LOWER(%s)
         ORDER BY d.last_message_at DESC NULLS LAST
@@ -217,7 +217,8 @@ def find_by_author(conn, author_query):
 
     for r in rows:
         ts = r['last_message_at'].strftime("%m/%d %H:%M") if r['last_message_at'] else "never"
-        print(f"  DM #{r['id']} [{r['platform']}] {r['their_author']} - {r['status']}/{r['conversation_status']} T{r['tier'] or 1} ({r['message_count']} msgs, last: {ts})")
+        proj = f" [{r['project_name']}]" if r.get('project_name') else ""
+        print(f"  DM #{r['id']} [{r['platform']}] {r['their_author']} - {r['status']}/{r['conversation_status']} T{r['tier'] or 1} ({r['message_count']} msgs, last: {ts}){proj}")
         if r['chat_url']:
             print(f"    URL: {r['chat_url']}")
 
@@ -384,6 +385,10 @@ def main():
     p_status.add_argument("--status", required=True,
                           choices=["active", "needs_reply", "stale", "converted", "closed", "needs_human"])
 
+    p_project = sub.add_parser("set-project", help="Set project name for conversation")
+    p_project.add_argument("--dm-id", type=int, required=True)
+    p_project.add_argument("--project", required=True)
+
     p_flag = sub.add_parser("flag-human", help="Flag conversation for human attention")
     p_flag.add_argument("--dm-id", type=int, required=True)
     p_flag.add_argument("--reason", required=True)
@@ -417,6 +422,8 @@ def main():
         set_tier(conn, args.dm_id, args.tier)
     elif args.command == "set-status":
         set_status(conn, args.dm_id, args.status)
+    elif args.command == "set-project":
+        set_project(conn, args.dm_id, args.project)
     elif args.command == "flag-human":
         flag_human(conn, args.dm_id, args.reason)
     elif args.command == "show-flagged":
