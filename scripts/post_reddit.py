@@ -211,6 +211,18 @@ def find_threads_by_search(project, config):
             text = f"{t['title']} {t['selftext']}".lower()
             if any(kw in text for kw in excluded_keywords):
                 continue
+            # Relevance check: thread must mention at least one topic keyword
+            # This prevents wasting Claude sessions on unrelated threads
+            topic_words = set()
+            for tp in topics:
+                for w in tp.lower().split():
+                    if len(w) > 3:  # skip short words like "AI", "DVR"
+                        topic_words.add(w)
+            # Also add the short but specific terms
+            for tp in topics:
+                topic_words.add(tp.lower())
+            if not any(tw in text for tw in topic_words):
+                continue
             all_threads.append(t)
 
         print(f"[post_reddit] Searched '{topic}': {len(threads)} results, {len(all_threads)} candidates total")
