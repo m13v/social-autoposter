@@ -1026,6 +1026,293 @@ def audit_batch(posts_json):
     return results
 
 
+def unread_dms():
+    """Scan LinkedIn messaging inbox for unread conversations.
+
+    Clicks the "Unread" filter, extracts all visible conversations with
+    their author, preview text, timestamp, and thread URL.
+
+    Returns: [{"author": "...", "preview": "...", "time": "...",
+               "thread_url": "...", "unread_count": N}, ...]
+    """
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser, page, is_cdp = get_browser_and_page(p)
+
+        try:
+            page.goto(
+                "https://www.linkedin.com/messaging/", wait_until="domcontentloaded"
+            )
+            page.wait_for_timeout(4000)
+
+            # Click the "Unread" filter button to show only unread conversations
+            try:
+                unread_btn = page.get_by_role("button", name="Unread")
+                unread_btn.click()
+                page.wait_for_timeout(3000)
+            except Exception:
+                print("Warning: Could not click Unread filter", file=sys.stderr)
+
+            # Extract conversation list data
+            conversations = page.evaluate("""() => {
+                const results = [];
+                const items = document.querySelectorAll(
+                    'li[class*="msg-conversation-listitem"], ' +
+                    'ul[aria-label="Conversation List"] > li'
+                );
+                for (const item of items) {
+                    // Author name from h3 heading
+                    const h3 = item.querySelector('h3');
+                    const author = h3 ? h3.textContent.trim() : null;
+                    if (!author) continue;
+
+                    // Preview text from paragraph
+                    const p = item.querySelector('p');
+                    const preview = p ? p.textContent.trim() : '';
+
+                    // Timestamp from time element
+                    const timeEl = item.querySelector('time');
+                    const time = timeEl ? timeEl.textContent.trim() : '';
+
+                    // Unread count from notification badge
+                    let unreadCount = 0;
+                    const badge = item.querySelector('[class*="notification-badge"]');
+                    if (badge) {
+                        const n = parseInt(badge.textContent.trim(), 10);
+                        if (!isNaN(n)) unreadCount = n;
+                    }
+                    // Fallback: look for "N unread message" text
+                    if (unreadCount === 0) {
+                        const unreadEl = item.querySelector(
+                            '[aria-label*="unread message"]'
+                        );
+                        if (unreadEl) {
+                            const label = unreadEl.getAttribute('aria-label') || '';
+                            const m = label.match(/(\\d+)\\s*unread/);
+                            unreadCount = m ? parseInt(m[1], 10) : 1;
+                        }
+                    }
+
+                    // Sponsored / InMail detection
+                    const text = item.innerText || '';
+                    const isSponsored = text.includes('Sponsored');
+                    const isInMail = text.includes('InMail');
+
+                    results.push({
+                        author,
+                        preview,
+                        time,
+                        unread_count: unreadCount,
+                        is_sponsored: isSponsored,
+                        is_inmail: isInMail,
+                    });
+                }
+                return results;
+            }""")
+
+            # Now click into each conversation to get the thread URL
+            conv_items = page.locator(
+                'ul[aria-label="Conversation List"] > li'
+            ).all()
+
+            for i, item in enumerate(conv_items):
+                if i >= len(conversations):
+                    break
+                try:
+                    # Click the conversation item to open it
+                    item.click()
+                    page.wait_for_timeout(1500)
+                    # Extract thread URL from the page URL
+                    url = page.url
+                    if "/messaging/thread/" in url:
+                        conversations[i]["thread_url"] = url
+                    else:
+                        conversations[i]["thread_url"] = None
+                except Exception:
+                    conversations[i]["thread_url"] = None
+
+            # Filter out empty/sponsored entries
+            conversations = [
+                c for c in conversations
+                if c.get("author") and not c.get("is_sponsored")
+            ]
+
+            return conversations
+
+        finally:
+            if not is_cdp:
+                page.close()
+                browser.close()
+
+
+def read_conversation(thread_url, max_messages=20):
+    """Read messages from a specific LinkedIn conversation thread.
+
+    Navigates to the thread URL and extracts the most recent messages
+    with their author, content, and direction (inbound/outbound).
+
+    Returns: {"author": "...", "messages": [{"sender": "...", "content": "...",
+              "time": "...", "is_ours": bool}, ...]}
+    """
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser, page, is_cdp = get_browser_and_page(p)
+
+        try:
+            page.goto(thread_url, wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
+
+            result = page.evaluate("""(maxMessages) => {
+                // Get the conversation partner name from the header
+                const headerBtn = document.querySelector(
+                    'section[class*="msg-thread"] h2, ' +
+                    'dt button[class*="msg-thread"]'
+                );
+                let partnerName = '';
+                // Try getting from the definition term / heading area
+                const dt = document.querySelector('dt button');
+                if (dt) partnerName = dt.textContent.trim();
+                if (!partnerName && headerBtn) {
+                    partnerName = headerBtn.textContent.trim();
+                }
+
+                // Find all message events (msg-s-event-listitem or similar)
+                const msgEvents = document.querySelectorAll(
+                    '[class*="msg-s-event-listitem"], ' +
+                    '[class*="msg-s-message-list__event"]'
+                );
+
+                const messages = [];
+                for (const event of msgEvents) {
+                    // Sender name from profile link or sender element
+                    const senderEl = event.querySelector(
+                        '[class*="msg-s-message-group__name"], ' +
+                        'a[class*="msg-s-message-group__profile-link"], ' +
+                        'button[class*="msg-s-message-group__name"], ' +
+                        'span[class*="msg-s-message-group__name"]'
+                    );
+                    let sender = senderEl ? senderEl.textContent.trim() : '';
+
+                    // Message content
+                    const contentEl = event.querySelector(
+                        '[class*="msg-s-event-listitem__body"], ' +
+                        'p[class*="msg-s-event-listitem__body"]'
+                    );
+                    let content = '';
+                    if (contentEl) {
+                        content = contentEl.innerText.trim();
+                    } else {
+                        // Fallback: get all paragraphs
+                        const paras = event.querySelectorAll('p');
+                        for (const p of paras) {
+                            const t = p.innerText.trim();
+                            if (t.length > 5 && !t.includes('Sponsored')) {
+                                content += t + '\\n';
+                            }
+                        }
+                        content = content.trim();
+                    }
+
+                    if (!content) continue;
+
+                    // Timestamp
+                    const timeEl = event.querySelector('time');
+                    const time = timeEl ? timeEl.textContent.trim() : '';
+
+                    messages.push({sender, content, time});
+                }
+
+                // Take last N messages
+                const recent = messages.slice(-maxMessages);
+
+                return {
+                    partner_name: partnerName,
+                    messages: recent,
+                    total_found: messages.length,
+                };
+            }""", max_messages)
+
+            return result
+
+        finally:
+            if not is_cdp:
+                page.close()
+                browser.close()
+
+
+def send_dm(thread_url, message):
+    """Send a message in a LinkedIn DM conversation.
+
+    Navigates to the thread URL, types the message in the compose box,
+    and sends it.
+
+    Returns: {"ok": true, "thread_url": "..."} or {"ok": false, "error": "..."}
+    """
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser, page, is_cdp = get_browser_and_page(p)
+
+        try:
+            page.goto(thread_url, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+
+            # Find the message input box
+            msg_box = None
+            # Try contenteditable div first (LinkedIn's rich text editor)
+            try:
+                msg_box = page.locator(
+                    'div[role="textbox"][contenteditable="true"],'
+                    'div[aria-label*="Write a message"],'
+                    'div[class*="msg-form__contenteditable"]'
+                ).first
+                msg_box.wait_for(timeout=5000)
+            except Exception:
+                pass
+
+            if not msg_box:
+                return {"ok": False, "error": "message_box_not_found"}
+
+            # Click the message box to focus it
+            msg_box.click()
+            page.wait_for_timeout(500)
+
+            # Type the message using keyboard (not fill - React compatibility)
+            page.keyboard.type(message, delay=10)
+            page.wait_for_timeout(500)
+
+            # Press Enter to send (LinkedIn DMs send on Enter)
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(2000)
+
+            # Verify the message appeared
+            sent = page.evaluate("""(msg) => {
+                const events = document.querySelectorAll(
+                    '[class*="msg-s-event-listitem"], p'
+                );
+                const msgStart = msg.substring(0, 50);
+                for (const e of events) {
+                    if (e.innerText && e.innerText.includes(msgStart)) {
+                        return true;
+                    }
+                }
+                return false;
+            }""", message)
+
+            return {
+                "ok": True,
+                "thread_url": page.url,
+                "verified": sent,
+            }
+
+        finally:
+            if not is_cdp:
+                page.close()
+                browser.close()
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
