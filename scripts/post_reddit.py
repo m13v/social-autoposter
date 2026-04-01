@@ -93,32 +93,104 @@ def get_top_performers(project_name, platform="reddit"):
     return "(top performers report unavailable)"
 
 
-def find_threads(project_name):
-    """Get candidate threads from find_threads.py."""
+def search_reddit(query, sort="new", limit=25, user_agent="social-autoposter/1.0"):
+    """Search Reddit for threads matching a query."""
+    import urllib.request
+    import urllib.parse
+    encoded = urllib.parse.quote(query)
+    url = f"https://old.reddit.com/search.json?q={encoded}&sort={sort}&limit={limit}&type=link"
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
     try:
-        result = subprocess.run(
-            ["python3", os.path.join(REPO_DIR, "scripts", "find_threads.py"),
-             "--project", project_name],
-            capture_output=True, text=True, timeout=900,
-        )
-        stdout = result.stdout.strip()
-        if stdout:
-            # find_threads.py may print errors to stderr but JSON to stdout
-            data = json.loads(stdout)
-            return data.get("threads", [])
-    except json.JSONDecodeError:
-        # stdout might have stderr mixed in, try to extract JSON
-        try:
-            import re
-            match = re.search(r'\{.*\}', result.stdout, re.DOTALL)
-            if match:
-                data = json.loads(match.group())
-                return data.get("threads", [])
-        except Exception:
-            pass
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+        threads = []
+        for child in data.get("data", {}).get("children", []):
+            post = child.get("data", {})
+            from datetime import datetime, timezone
+            created = post.get("created_utc", 0)
+            age_hours = (datetime.now(timezone.utc).timestamp() - created) / 3600 if created else 999
+            threads.append({
+                "platform": "reddit",
+                "subreddit": f"r/{post.get('subreddit', '')}",
+                "url": f"https://old.reddit.com{post.get('permalink', '')}",
+                "title": post.get("title", ""),
+                "author": post.get("author", ""),
+                "score": post.get("score", 0),
+                "num_comments": post.get("num_comments", 0),
+                "age_hours": round(age_hours, 1),
+                "selftext": post.get("selftext", "")[:500],
+            })
+        return threads
     except Exception as e:
-        print(f"[post_reddit] find_threads error: {e}")
-    return []
+        print(f"[post_reddit] search error for '{query}': {e}", file=sys.stderr)
+        return []
+
+
+def find_threads_by_search(project, config):
+    """Search Reddit using project topics instead of fetching all subreddits.
+
+    Makes ~N API calls (one per topic) instead of ~133 (one per subreddit).
+    """
+    import random
+    topics = project.get("topics", [])
+    if not topics:
+        print("[post_reddit] WARNING: project has no topics, can't search")
+        return []
+
+    # Shuffle topics so different runs explore different queries
+    topics = list(topics)
+    random.shuffle(topics)
+
+    reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "")
+    user_agent = f"social-autoposter/1.0 (u/{reddit_username})" if reddit_username else "social-autoposter/1.0"
+
+    # Load already-posted URLs and exclusions for filtering
+    conn = dbmod.get_conn()
+    already_posted = set()
+    cur = conn.execute("SELECT thread_url FROM posts WHERE thread_url IS NOT NULL")
+    already_posted = {row[0] for row in cur.fetchall()}
+
+    exclusions = config.get("exclusions", {})
+    excluded_authors = {a.lower() for a in exclusions.get("authors", [])}
+    excluded_keywords = [k.lower() for k in exclusions.get("keywords", [])]
+    excluded_subs = {s.lower().lstrip("r/") for s in exclusions.get("subreddits", [])}
+    conn.close()
+
+    all_threads = []
+    seen_urls = set()
+
+    for topic in topics:
+        threads = search_reddit(topic, user_agent=user_agent)
+        for t in threads:
+            # Dedup within this run
+            if t["url"] in seen_urls:
+                continue
+            seen_urls.add(t["url"])
+            # Already posted
+            if t["url"] in already_posted:
+                continue
+            # Excluded author
+            if t["author"].lower() in excluded_authors:
+                continue
+            # Excluded subreddit
+            if t["subreddit"].lower().lstrip("r/") in excluded_subs:
+                continue
+            # Excluded keywords
+            text = f"{t['title']} {t['selftext']}".lower()
+            if any(kw in text for kw in excluded_keywords):
+                continue
+            all_threads.append(t)
+
+        print(f"[post_reddit] Searched '{topic}': {len(threads)} results, {len(all_threads)} candidates total")
+        time.sleep(2)  # Rate limit: 2s between searches
+
+        # Stop early if we have plenty of candidates
+        if len(all_threads) >= 50:
+            break
+
+    # Sort: prefer threads with some engagement but not too old
+    all_threads.sort(key=lambda t: (t["num_comments"] > 0, t["score"]), reverse=True)
+    return all_threads
 
 
 def check_already_posted(conn, thread_url):
@@ -333,8 +405,8 @@ def main():
     # Get feedback
     top_report = get_top_performers(project_name)
 
-    # Find threads
-    threads = find_threads(project_name)
+    # Find threads by searching project topics (not fetching all subreddits)
+    threads = find_threads_by_search(project, config)
     if not threads:
         print("[post_reddit] No candidate threads found. Done.")
         return
