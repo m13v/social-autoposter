@@ -401,7 +401,27 @@ def search_posts(search_url, max_posts=10):
 
         try:
             page.goto(search_url, wait_until="domcontentloaded")
-            page.wait_for_timeout(6000)
+            page.wait_for_timeout(4000)
+
+            # Wait for search results to render (React lazy loads them)
+            for attempt in range(5):
+                has_posts = page.evaluate("""() => {
+                    return document.querySelectorAll(
+                        'button[aria-label*="Open control menu for post"]'
+                    ).length;
+                }""")
+                if has_posts > 0:
+                    break
+                # Scroll a bit to trigger lazy loading
+                page.evaluate("() => window.scrollBy(0, 500)")
+                page.wait_for_timeout(2000)
+
+            if not has_posts:
+                # One more attempt: scroll to bottom and back
+                page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(3000)
+                page.evaluate("() => window.scrollTo(0, 0)")
+                page.wait_for_timeout(2000)
 
             # First, extract all post metadata from the page
             post_metadata = page.evaluate("""() => {
