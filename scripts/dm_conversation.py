@@ -133,7 +133,7 @@ def show_history(conn, dm_id):
     """Print full conversation history."""
     dm = conn.execute("""
         SELECT d.id, d.platform, d.their_author, d.chat_url, d.conversation_status,
-               d.tier, d.message_count, d.comment_context
+               d.tier, d.message_count, d.comment_context, d.project_name
         FROM dms d WHERE d.id = %s
     """, (dm_id,)).fetchone()
 
@@ -142,7 +142,8 @@ def show_history(conn, dm_id):
         return
 
     print(f"=== DM #{dm['id']} with {dm['their_author']} [{dm['platform']}] ===")
-    print(f"Status: {dm['conversation_status']}  Tier: {dm['tier']}  Messages: {dm['message_count']}")
+    project = dm.get('project_name') or 'unset'
+    print(f"Status: {dm['conversation_status']}  Tier: {dm['tier']}  Messages: {dm['message_count']}  Project: {project}")
     if dm['chat_url']:
         print(f"Chat URL: {dm['chat_url']}")
     if dm['comment_context']:
@@ -165,7 +166,7 @@ def show_pending(conn):
     """Show conversations that have inbound messages we haven't replied to."""
     rows = conn.execute("""
         SELECT d.id, d.platform, d.their_author, d.chat_url, d.tier,
-               d.message_count, d.last_message_at,
+               d.message_count, d.last_message_at, d.project_name,
                (SELECT content FROM dm_messages
                 WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1) as last_msg,
                (SELECT direction FROM dm_messages
@@ -192,7 +193,8 @@ def show_pending(conn):
         tier_label = f"T{r['tier']}" if r['tier'] else "T1"
         ts = r['last_message_at'].strftime("%m/%d %H:%M") if r['last_message_at'] else "?"
         last = (r['last_msg'] or "")[:100]
-        print(f"  DM #{r['id']} [{r['platform']}] {r['their_author']} ({tier_label}, {r['message_count']} msgs, last: {ts})")
+        proj = f" [{r['project_name']}]" if r.get('project_name') else ""
+        print(f"  DM #{r['id']} [{r['platform']}] {r['their_author']} ({tier_label}, {r['message_count']} msgs, last: {ts}){proj}")
         print(f"    Last: {last}")
         if r['chat_url']:
             print(f"    URL: {r['chat_url']}")
@@ -337,6 +339,12 @@ def set_status(conn, dm_id, status):
     conn.execute("UPDATE dms SET conversation_status = %s WHERE id = %s", (status, dm_id))
     conn.commit()
     print(f"  Set conversation_status={status} for DM #{dm_id}")
+
+
+def set_project(conn, dm_id, project_name):
+    conn.execute("UPDATE dms SET project_name = %s WHERE id = %s", (project_name, dm_id))
+    conn.commit()
+    print(f"  Set project_name={project_name} for DM #{dm_id}")
 
 
 def main():
