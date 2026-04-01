@@ -99,7 +99,7 @@ def find_threads(project_name):
         result = subprocess.run(
             ["python3", os.path.join(REPO_DIR, "scripts", "find_threads.py"),
              "--project", project_name],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True, text=True, timeout=900,
         )
         stdout = result.stdout.strip()
         if stdout:
