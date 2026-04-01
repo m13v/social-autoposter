@@ -233,16 +233,25 @@ $(psql "$DATABASE_URL" -t -A -c "
 
 ## PHASE B: Scan LinkedIn Messages for new messages
 
-1. Navigate to https://www.linkedin.com/messaging/ using the linkedin-agent browser
-2. Look for conversations with unread indicators
-3. For each unread conversation:
-   a. Click into it, read the latest messages
-   b. Identify the sender
-   c. Check if this person is in our DM database:
+1. Get unread LinkedIn conversations using the Python CDP script (no browser MCP needed):
+   \`\`\`bash
+   cd ~/social-autoposter && python3 scripts/linkedin_browser.py unread-dms
+   \`\`\`
+   This returns JSON with: author, preview, time, unread_count, thread_url for each unread conversation.
+
+2. For each unread conversation with a thread_url, read the full messages:
+   \`\`\`bash
+   python3 scripts/linkedin_browser.py read-conversation "THREAD_URL"
+   \`\`\`
+   This returns JSON with: partner_name, messages (each with sender, content, time), total_found.
+
+3. For each conversation:
+   a. Identify the sender from the partner_name
+   b. Check if this person is in our DM database:
       \`\`\`bash
       cd ~/social-autoposter && python3 scripts/dm_conversation.py find --author "PERSON_NAME"
       \`\`\`
-   d. Log inbound messages the same way as Reddit
+   c. Log inbound messages the same way as Reddit
 
 ## PHASE C: Scan X/Twitter DMs for new messages
 
@@ -372,9 +381,11 @@ python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier N
 2. Type the reply in the message input
 3. Press Enter to send
 
-**LinkedIn Messages** (mcp__linkedin-agent__* tools):
-1. Navigate to the conversation
-2. Type and send
+**LinkedIn Messages** (Python CDP script, no browser MCP needed):
+\`\`\`bash
+cd ~/social-autoposter && python3 scripts/linkedin_browser.py send-dm "THREAD_URL" "YOUR_REPLY_TEXT"
+\`\`\`
+Returns JSON with {ok: true, thread_url, verified} on success.
 
 **X/Twitter DMs** (mcp__twitter-agent__* tools):
 1. Navigate to the conversation (if the encrypted DM passcode dialog appears, enter: $TWITTER_DM_PASSCODE and confirm)
