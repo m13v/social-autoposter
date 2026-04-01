@@ -192,32 +192,36 @@ if [ "$LINKEDIN_POSTS" -gt 0 ]; then
             LIMIT 30
         ) q;" 2>/dev/null)
 
-    STATS_JSON=$(python3 "$REPO_DIR/scripts/linkedin_browser.py" stats-batch "$POSTS_JSON" 2>/dev/null)
+    STATS_TMPFILE=$(mktemp)
+    python3 "$REPO_DIR/scripts/linkedin_browser.py" stats-batch "$POSTS_JSON" > "$STATS_TMPFILE" 2>/dev/null
     STEP4_EXIT=$?
 
-    if [ "$STEP4_EXIT" -eq 0 ] && [ -n "$STATS_JSON" ]; then
+    if [ "$STEP4_EXIT" -eq 0 ] && [ -s "$STATS_TMPFILE" ]; then
         # Update DB with results
-        python3 -c "
-import json, os, psycopg2
+        python3 - "$STATS_TMPFILE" <<'PYEOF' 2>&1 | tee -a "$LOGFILE"
+import json, os, sys, psycopg2
 
-results = json.loads('''$STATS_JSON''')
+with open(sys.argv[1]) as f:
+    results = json.load(f)
 conn = psycopg2.connect(os.environ['DATABASE_URL'])
 cur = conn.cursor()
 found = 0
 for r in results:
     if r.get('found'):
         found += 1
-        cur.execute('''UPDATE posts SET upvotes=%s, engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s''',
+        cur.execute('UPDATE posts SET upvotes=%s, engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s',
                     (r.get('reactions', 0), r['id']))
     else:
-        cur.execute('''UPDATE posts SET status_checked_at=NOW() WHERE id=%s''', (r['id'],))
+        cur.execute('UPDATE posts SET status_checked_at=NOW() WHERE id=%s', (r['id'],))
 conn.commit()
 cur.close()
 conn.close()
 print(f'LinkedIn stats: {found}/{len(results)} comments found, updated')
-" 2>&1 | tee -a "$LOGFILE"
+PYEOF
+        rm -f "$STATS_TMPFILE"
         log "Step 4: Done"
     else
+        rm -f "$STATS_TMPFILE"
         log "Step 4: FAILED (exit $STEP4_EXIT)"
     fi
 else
