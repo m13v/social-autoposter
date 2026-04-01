@@ -28,6 +28,7 @@ Environment:
 
 import json
 import os
+import re
 import sys
 import urllib.parse
 
@@ -148,7 +149,18 @@ def comment_on_post(token, person_urn, activity_id, text):
         headers=v2_headers(token),
         json=data,
     )
-    # If activity URN 404s, retry with share URN (post API returns share IDs)
+    # If activity URN fails, try alternative URN formats
+    if r.status_code == 400 and "actual threadUrn" in r.text:
+        # Extract the real URN from error: "actual threadUrn: urn:li:ugcPost:NNNN"
+        m = re.search(r"actual threadUrn:\s*(urn:li:\w+:\d+)", r.text)
+        if m:
+            real_urn = m.group(1)
+            encoded_real = urllib.parse.quote(real_urn, safe="")
+            r = requests.post(
+                f"https://api.linkedin.com/v2/socialActions/{encoded_real}/comments",
+                headers=v2_headers(token),
+                json=data,
+            )
     if r.status_code == 404 and not activity_id.startswith("urn:li:"):
         share_urn = f"urn:li:share:{activity_id}"
         encoded_share = urllib.parse.quote(share_urn, safe="")
