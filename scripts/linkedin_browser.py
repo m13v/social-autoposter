@@ -622,73 +622,81 @@ def scrape_stats(post_url, our_name="Matthew Diakonov", content_prefix=""):
                 except Exception:
                     pass
 
-            # Extract our comment's reaction count
+            # Extract our comment's reaction count using the "View more options" button
+            # as anchor — LinkedIn's new DOM has no stable comment container classes
             result = page.evaluate(
                 """({ourName, contentPrefix}) => {
                 const res = {found: false, reactions: 0, comment_preview: ''};
 
-                // Find all comment containers
-                const containers = document.querySelectorAll(
-                    'article.comments-comment-entity, ' +
-                    'article.comments-comment-item, ' +
-                    'article[class*="comment"]'
-                );
-
-                for (const c of containers) {
-                    // Author name
-                    const authorEl = c.querySelector(
-                        '.comments-comment-meta__description-title, ' +
-                        '.comments-post-meta__name-text, ' +
-                        'a[href*="/in/"] span'
-                    );
-                    const authorText = authorEl ? authorEl.textContent.trim() : '';
-
-                    // Comment content
-                    const contentEl = c.querySelector(
-                        '.update-components-text, ' +
-                        '.comments-comment-item__main-content, ' +
-                        '.comments-comment-item-content-body, ' +
-                        'span[class*="comment"]'
-                    );
-                    const commentText = contentEl ? contentEl.textContent.trim() : '';
-
-                    // Match by name or content
-                    const nameMatch = authorText.toLowerCase().includes(ourName.toLowerCase());
-                    const prefixClean = contentPrefix.replace(/[^a-z0-9 ]/gi, '').substring(0, 60).toLowerCase();
-                    const commentClean = commentText.replace(/[^a-z0-9 ]/gi, '').substring(0, 200).toLowerCase();
-                    const contentMatch = prefixClean.length > 20 && commentClean.includes(prefixClean);
-
-                    if (nameMatch || contentMatch) {
-                        res.found = true;
-                        res.comment_preview = commentText.substring(0, 80);
-
-                        // Reaction count
-                        const reactionEl = c.querySelector(
-                            'button[class*="reactions-count"], ' +
-                            'button[aria-label*="Reaction"]'
-                        );
-                        if (reactionEl) {
-                            const label = reactionEl.getAttribute('aria-label') || '';
-                            const m = label.match(/([\d,]+)\\s*[Rr]eaction/);
-                            if (m) {
-                                res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
-                            } else {
-                                const t = reactionEl.textContent.trim().replace(/,/g, '');
-                                const n = parseInt(t, 10);
-                                if (!isNaN(n)) res.reactions = n;
+                // Strategy 1: Find "View more options for <ourName>'s comment" button
+                const optionsBtns = document.querySelectorAll('button[aria-label*="View more options"]');
+                let commentContainer = null;
+                for (const btn of optionsBtns) {
+                    const label = btn.getAttribute('aria-label') || '';
+                    if (label.toLowerCase().includes(ourName.toLowerCase())) {
+                        // Walk up to find the comment container
+                        commentContainer = btn;
+                        for (let i = 0; i < 8; i++) {
+                            commentContainer = commentContainer.parentElement;
+                            if (!commentContainer) break;
+                            const text = commentContainer.innerText || '';
+                            if (text.length > 30 && text.length < 3000) {
+                                // Check for reaction elements at this level
+                                const reactionEl = commentContainer.querySelector(
+                                    'button[aria-label*="Reaction"], button[aria-label*="reaction"]'
+                                );
+                                if (reactionEl || i >= 3) break;
                             }
                         }
                         break;
                     }
                 }
 
-                // Fallback: if no comment containers matched, try scanning all text
-                if (!res.found) {
-                    const allText = document.body.innerText;
-                    if (allText.toLowerCase().includes(ourName.toLowerCase())) {
-                        res.found = true;
-                        res.comment_preview = '(found by name scan, no reaction data)';
+                if (commentContainer) {
+                    res.found = true;
+                    // Get comment text
+                    const spans = commentContainer.querySelectorAll('span, p');
+                    for (const s of spans) {
+                        const t = s.innerText.trim();
+                        if (t.length > 20 && t.length < 2000 &&
+                            !t.includes(ourName) && !t.includes('View more') &&
+                            !t.includes('Like') && !t.includes('Reply')) {
+                            res.comment_preview = t.substring(0, 80);
+                            break;
+                        }
                     }
+                    // Get reactions
+                    const reactionEl = commentContainer.querySelector(
+                        'button[aria-label*="Reaction"], button[aria-label*="reaction"]'
+                    );
+                    if (reactionEl) {
+                        const label = reactionEl.getAttribute('aria-label') || '';
+                        const m = label.match(/([\d,]+)\\s*[Rr]eaction/);
+                        if (m) res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
+                        else {
+                            const t = reactionEl.textContent.trim().replace(/,/g, '');
+                            const n = parseInt(t, 10);
+                            if (!isNaN(n)) res.reactions = n;
+                        }
+                    }
+                    return res;
+                }
+
+                // Strategy 2: Content prefix match in page text
+                if (contentPrefix) {
+                    const prefixClean = contentPrefix.replace(/[^a-z0-9 ]/gi, '').substring(0, 60).toLowerCase();
+                    const bodyClean = document.body.innerText.replace(/[^a-z0-9 ]/gi, '').toLowerCase();
+                    if (prefixClean.length > 20 && bodyClean.includes(prefixClean)) {
+                        res.found = true;
+                        res.comment_preview = '(found by content match)';
+                        return res;
+                    }
+                }
+
+                // Strategy 3: Name scan fallback
+                if (document.body.innerText.includes(ourName)) {
+                    res.found = true;
+                    res.comment_preview = '(found by name scan)';
                 }
 
                 return res;
@@ -828,46 +836,60 @@ def stats_batch(posts_json):
                     result = page.evaluate(
                         """({ourName, contentPrefix}) => {
                         const res = {found: false, reactions: 0, comment_preview: ''};
-                        const containers = document.querySelectorAll(
-                            'article.comments-comment-entity, ' +
-                            'article.comments-comment-item, ' +
-                            'article[class*="comment"]'
-                        );
-                        for (const c of containers) {
-                            const authorEl = c.querySelector(
-                                '.comments-comment-meta__description-title, ' +
-                                'a[href*="/in/"] span'
-                            );
-                            const authorText = authorEl ? authorEl.textContent.trim() : '';
-                            const contentEl = c.querySelector(
-                                '.update-components-text, ' +
-                                '.comments-comment-item__main-content, ' +
-                                'span[class*="comment"]'
-                            );
-                            const commentText = contentEl ? contentEl.textContent.trim() : '';
-                            const nameMatch = authorText.toLowerCase().includes(ourName.toLowerCase());
-                            const prefixClean = contentPrefix.replace(/[^a-z0-9 ]/gi, '').substring(0, 60).toLowerCase();
-                            const commentClean = commentText.replace(/[^a-z0-9 ]/gi, '').substring(0, 200).toLowerCase();
-                            const contentMatch = prefixClean.length > 20 && commentClean.includes(prefixClean);
-                            if (nameMatch || contentMatch) {
-                                res.found = true;
-                                res.comment_preview = commentText.substring(0, 80);
-                                const reactionEl = c.querySelector(
-                                    'button[class*="reactions-count"], ' +
-                                    'button[aria-label*="Reaction"]'
-                                );
-                                if (reactionEl) {
-                                    const label = reactionEl.getAttribute('aria-label') || '';
-                                    const m = label.match(/([\d,]+)\\s*[Rr]eaction/);
-                                    if (m) res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
-                                    else {
-                                        const t = reactionEl.textContent.trim().replace(/,/g, '');
-                                        const n = parseInt(t, 10);
-                                        if (!isNaN(n)) res.reactions = n;
+
+                        // Strategy 1: Find our comment via "View more options" button
+                        const optionsBtns = document.querySelectorAll('button[aria-label*="View more options"]');
+                        let container = null;
+                        for (const btn of optionsBtns) {
+                            const label = btn.getAttribute('aria-label') || '';
+                            if (label.toLowerCase().includes(ourName.toLowerCase())) {
+                                container = btn;
+                                for (let i = 0; i < 8; i++) {
+                                    container = container.parentElement;
+                                    if (!container) break;
+                                    const t = container.innerText || '';
+                                    if (t.length > 30 && t.length < 3000) {
+                                        const r = container.querySelector('button[aria-label*="Reaction"]');
+                                        if (r || i >= 3) break;
                                     }
                                 }
                                 break;
                             }
+                        }
+                        if (container) {
+                            res.found = true;
+                            const spans = container.querySelectorAll('span, p');
+                            for (const s of spans) {
+                                const t = s.innerText.trim();
+                                if (t.length > 20 && t.length < 2000 && !t.includes(ourName) && !t.includes('Like')) {
+                                    res.comment_preview = t.substring(0, 80);
+                                    break;
+                                }
+                            }
+                            const reactionEl = container.querySelector('button[aria-label*="Reaction"], button[aria-label*="reaction"]');
+                            if (reactionEl) {
+                                const label = reactionEl.getAttribute('aria-label') || '';
+                                const m = label.match(/([\d,]+)\\s*[Rr]eaction/);
+                                if (m) res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
+                            }
+                            return res;
+                        }
+
+                        // Strategy 2: Content prefix match
+                        if (contentPrefix) {
+                            const pc = contentPrefix.replace(/[^a-z0-9 ]/gi, '').substring(0, 60).toLowerCase();
+                            const bc = document.body.innerText.replace(/[^a-z0-9 ]/gi, '').toLowerCase();
+                            if (pc.length > 20 && bc.includes(pc)) {
+                                res.found = true;
+                                res.comment_preview = '(content match)';
+                                return res;
+                            }
+                        }
+
+                        // Strategy 3: Name fallback
+                        if (document.body.innerText.includes(ourName)) {
+                            res.found = true;
+                            res.comment_preview = '(name scan)';
                         }
                         return res;
                     }""",
