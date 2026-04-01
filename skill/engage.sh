@@ -19,7 +19,6 @@ acquire_lock "engage" 3600
 REPO_DIR="$HOME/social-autoposter"
 SKILL_FILE="$REPO_DIR/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"
-BATCH_SIZE=200
 
 if [ -z "${DATABASE_URL:-}" ]; then
     echo "ERROR: DATABASE_URL not set in ~/social-autoposter/.env"
@@ -120,8 +119,8 @@ fi
 sleep 15
 
 # ═══════════════════════════════════════════════════════
-# PHASE B: X/Twitter discovery + all reply engagement
-# Process in batches of $BATCH_SIZE to avoid prompt size limits
+# PHASE B: Reddit/Moltbook reply engagement
+# Processes one reply at a time to avoid context accumulation
 # ═══════════════════════════════════════════════════════
 
 # Reset any 'processing' items older than 2 hours back to 'pending'
@@ -133,190 +132,14 @@ RESET_COUNT=$(psql "$DATABASE_URL" -t -A -c "
     RETURNING id;" | wc -l | tr -d ' ')
 [ "$RESET_COUNT" -gt 0 ] && log "Phase B: Reset $RESET_COUNT stuck 'processing' items back to pending"
 
-# Load exclusions from config for injection into Claude prompts
-EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('authors',[])))" 2>/dev/null || echo "")
-EXCLUDED_TWITTER=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('twitter_accounts',[])))" 2>/dev/null || echo "")
-EXCLUDED_LINKEDIN=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('linkedin_profiles',[])))" 2>/dev/null || echo "")
+PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND platform NOT IN ('linkedin', 'x');")
+log "Phase B: $PENDING_COUNT pending Reddit/Moltbook replies"
 
-BATCH_NUM=0
-
-while true; do
-    PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND platform NOT IN ('linkedin', 'x');")
-
-    if [ "$PENDING_COUNT" -eq 0 ]; then
-        log "Phase B: No pending replies remaining. Done!"
-        break
-    fi
-
-    BATCH_NUM=$((BATCH_NUM + 1))
-    BATCH_ACTUAL=$((PENDING_COUNT < BATCH_SIZE ? PENDING_COUNT : BATCH_SIZE))
-    log "Phase B batch $BATCH_NUM: Processing $BATCH_ACTUAL of $PENDING_COUNT pending replies"
-
-    PHASE_B_PROMPT=$(mktemp)
-    PENDING_DATA=$(psql "$DATABASE_URL" -t -A -c "
-        SELECT json_agg(q) FROM (
-            SELECT r.id, r.platform, r.their_author,
-                   LEFT(r.their_content, 300) as their_content,
-                   r.their_comment_url, r.their_comment_id, r.depth,
-                   LEFT(p.thread_title, 100) as thread_title,
-                   p.thread_url, LEFT(p.our_content, 200) as our_content, p.our_url,
-                   CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post
-            FROM replies r
-            JOIN posts p ON r.post_id = p.id
-            WHERE r.status='pending' AND r.platform NOT IN ('linkedin', 'x')
-            ORDER BY
-                CASE WHEN p.thread_url = p.our_url THEN 0 ELSE 1 END,
-                r.discovered_at ASC
-            LIMIT $BATCH_SIZE
-        ) q;")
-
-    # Write the header portion of the prompt
-    cat > "$PHASE_B_PROMPT" <<PROMPT_HEADER
-You are the Social Autoposter engagement bot.
-
-Read $SKILL_FILE for the full workflow, content rules, and platform details.
-
-EXCLUSIONS — do NOT engage with these accounts (skip and mark as 'skipped' with reason 'excluded_author'):
-- Excluded authors: $EXCLUDED_AUTHORS
-- Excluded Twitter accounts: $EXCLUDED_TWITTER
-- Excluded LinkedIn profiles: $EXCLUDED_LINKEDIN
-
-CRITICAL — Browser agent rule: Each platform MUST use its dedicated browser agent. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
-- Reddit: mcp__reddit-agent__* tools (e.g. mcp__reddit-agent__browser_navigate)
-- Twitter: mcp__twitter-agent__* tools (e.g. mcp__twitter-agent__browser_navigate)
-- LinkedIn: mcp__linkedin-agent__* tools (e.g. mcp__linkedin-agent__browser_navigate)
-Each agent has its own browser lock. Using the wrong agent bypasses the lock and causes session conflicts.
-CRITICAL: If a browser agent tool call is blocked or times out, DO NOT fall back to any other browser tool (especially not macos-use). Wait 30 seconds and retry the same agent. Repeat up to 3 times. If still blocked, skip that item and move on.
-
-PROMPT_HEADER
-
-    # NOTE: LinkedIn and Twitter discovery+engagement are handled by separate dedicated scripts:
-    # - engage-linkedin.sh (launchd: com.m13v.social-engage-linkedin, every 3h)
-    # - engage-twitter.sh  (launchd: com.m13v.social-engage-twitter, every 3h)
-    # This Phase B only handles Reddit replies.
-
-    # Append the main reply processing section
-    cat >> "$PHASE_B_PROMPT" <<PROMPT_BODY
-## Respond to pending replies (batch $BATCH_NUM: $BATCH_ACTUAL of $PENDING_COUNT total)
-
-### Priority order:
-1. **Replies on our original posts** (is_our_original_post=1) — highest priority
-2. **Direct questions** ("what tool", "how do you", "can you share")
-3. **Everything else** — general engagement
-
-### Tiered link strategy:
-- **Tier 1 (default):** No link. Genuine engagement, expand topic.
-- **Tier 2 (natural mention):** Conversation touches a topic matching a project in config. Recommend it casually as a tool you've come across.
-- **Tier 3 (direct ask):** They ask for link/tool/source. Give it immediately.
-
-
-### Reply archetypes — MUST rotate, never use the same type twice in a row:
-- **Short affirm** (1 sentence): "love this framing" / "this is underrated" — no product tie-in
-- **Pure question** (1-2 sentences): Ask something genuine. Don't mention any tools at all.
-- **Respectful pushback**: Disagree or add nuance. "I've actually seen the opposite..."
-- **Story/anecdote**: Share a specific experience WITHOUT tying back to any product.
-- **Recommendation reply**: Recommend a relevant project from config as something you've used or come across. Use for MAX 30% of replies.
-
-### Anti-pattern rules:
-- NEVER start with "exactly", "yeah totally", "100%", "that's smart". Vary first words.
-- NEVER say "I built" / "we built" / "I'm working on". Frame products as recommendations, not self-promotion. Most replies should NOT mention any product.
-- Some replies should be 1 sentence. Not everything needs 3-4 sentences.
-
-### Commitment guardrails (applies to ALL comment replies):
-- NEVER suggest, offer, or agree to calls, meetings, demos, or video chats.
-- NEVER promise to share specific links, files, or resources you don't currently have. Only share links from config.json projects.
-- NEVER offer to "DM you" or "send you" something unless you can deliver it right now in the reply.
-- NEVER make time-bound promises ("I'll share it tomorrow", "will post it this week").
-- If someone asks for a call/meeting/demo, just keep the conversation going in the thread. Don't commit to anything outside the comment thread.
-
-Here are the $BATCH_ACTUAL replies to process:
-$PENDING_DATA
-
-CRITICAL: Process EVERY reply in this batch. For each: either post a response and mark as 'replied', OR mark as 'skipped' with a skip_reason (light acknowledgments, trolls, crypto spam, DM requests, not directed at us).
-
-CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql):
-  python3 $REPO_DIR/scripts/reply_db.py processing ID          # BEFORE browser action
-  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url]   # AFTER posting
-  python3 $REPO_DIR/scripts/reply_db.py skipped ID "reason"
-  python3 $REPO_DIR/scripts/reply_db.py skip_batch '{"ids":[1,2,3],"reason":"..."}'
-  python3 $REPO_DIR/scripts/reply_db.py status
-NEVER use psql directly. reply_db.py is faster (persistent connection, no env sourcing).
-
-### Project tracking on replies
-When you recommend a project in a reply (Tier 2 or Tier 3), set project_name on the reply:
-  source ~/social-autoposter/.env
-  psql "\$DATABASE_URL" -c "UPDATE replies SET project_name='PROJECT_NAME' WHERE id=REPLY_ID;"
-This lets the DM pipeline know which project the conversation is about.
-
-MANDATORY reply flow for every item:
-  Step 1: python3 reply_db.py processing ID      ← mark BEFORE touching browser
-  Step 2: post reply via browser
-  Step 3: python3 reply_db.py replied ID "text" [url]   ← mark AFTER success
-If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run — safe to retry.
-
-GitHub issues engagement is handled by a separate pipeline (github-engage.sh). Skip any github_issues replies in this batch.
-LinkedIn and Twitter engagement are handled by separate pipelines (engage-linkedin.sh, engage-twitter.sh). This batch contains ONLY Reddit and Moltbook replies.
-
-For **reddit** — use the reddit-agent browser (mcp__reddit-agent__* tools) with this FAST posting method (browser_run_code):
-1. First, pre-compose ALL reply texts before opening the browser. Decide skip/reply and draft text for every item.
-2. For each reply: run python3 reply_db.py processing ID, then call mcp__reddit-agent__browser_navigate to their_comment_url.
-3. Then use a SINGLE browser_run_code call with this exact Playwright pattern:
-\`\`\`javascript
-async (page) => {
-  const OUR_USERNAME = 'Deep_Ad1959';
-  const thing = await page.\$('#thing_t1_COMMENT_ID');
-  if (!thing) return 'ERROR: comment not found';
-
-  // Check if we already replied (handles crash-recovery re-runs)
-  const existingReplies = await thing.\$\$('.child .comment');
-  for (const reply of existingReplies) {
-    const author = await reply.\$eval('.author', el => el.textContent).catch(() => '');
-    if (author === OUR_USERNAME) return 'already_replied';
-  }
-
-  await thing.evaluate(el => {
-    const btn = el.querySelector('.flat-list a[onclick*="reply"]');
-    if (btn) btn.click();
-  });
-  await page.waitForSelector('#thing_t1_COMMENT_ID .usertext-edit textarea', { timeout: 3000 });
-  const textarea = await thing.\$('.usertext-edit textarea');
-  await textarea.fill(REPLY_TEXT_HERE);
-  await thing.evaluate(el => {
-    const btn = el.querySelector('.usertext-edit button.save, .usertext-edit .save');
-    if (btn) btn.click();
-  });
-  await page.waitForTimeout(2000);
-  const newComments = await thing.\$\$('.child .comment .bylink');
-  return newComments.length > 0 ? await newComments[newComments.length - 1].getAttribute('href') : null;
-}
-\`\`\`
-Replace COMMENT_ID with the Reddit comment ID (from their_comment_id, without t1_ prefix).
-Replace REPLY_TEXT_HERE with a JS string literal of the reply text.
-IMPORTANT: Use thing.evaluate() for clicks — do NOT use replyBtn.click() directly as it causes Playwright timeouts.
-If the JS returns 'already_replied': call reply_db.py replied ID "" to clean up without posting again.
-If the JS returns null (no permalink found): call reply_db.py replied ID "text" with no URL — do NOT store the string 'posted' or their_comment_url as the URL.
-4. Update DB using reply_db.py (see CRITICAL section above).
-5. Navigate directly to the next reply — no need to close tabs.
-
-Do NOT use browser_snapshot, browser_click, or browser_type for Reddit replies. browser_run_code is 5x faster.
-Do NOT extract permalinks from snapshots — use the JS return value or skip it.
-Do NOT store 'posted' or their_comment_url as our_reply_url — store null/no URL if the permalink is unavailable.
-CRITICAL: ALL Reddit browser calls MUST use mcp__reddit-agent__* tools (e.g. mcp__reddit-agent__browser_run_code, mcp__reddit-agent__browser_navigate). NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools for Reddit.
-
-After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
-PROMPT_BODY
-
-    gtimeout 5400 claude -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B batch $BATCH_NUM claude exited with code $?"
-    rm -f "$PHASE_B_PROMPT"
-
-    # Check if we actually made progress (avoid infinite loop)
-    NEW_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND platform NOT IN ('linkedin', 'x');")
-    if [ "$NEW_PENDING" -ge "$PENDING_COUNT" ]; then
-        log "WARNING: No progress made in batch $BATCH_NUM ($PENDING_COUNT -> $NEW_PENDING). Stopping to avoid infinite loop."
-        break
-    fi
-    log "Batch $BATCH_NUM complete: $PENDING_COUNT -> $NEW_PENDING pending"
-done
+if [ "$PENDING_COUNT" -gt 0 ]; then
+    python3 "$REPO_DIR/scripts/engage_reddit.py" --timeout 5400 2>&1 | tee -a "$LOG_FILE" || log "WARNING: engage_reddit.py exited with code $?"
+else
+    log "Phase B: No pending replies. Skipping."
+fi
 
 # Wait for scanner to finish if still running
 if kill -0 "$SCAN_PID" 2>/dev/null; then
