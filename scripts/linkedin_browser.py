@@ -89,21 +89,29 @@ def find_linkedin_cdp_port():
 def get_browser_and_page(playwright):
     """Connect to the linkedin-agent MCP browser via CDP, or launch a new one.
 
-    Returns (browser, page, is_cdp). Caller must close browser when done
-    (only if is_cdp is False).
+    Returns (browser, page, is_cdp). When is_cdp=True, `page` is a reused
+    existing LinkedIn tab (navigate it, don't close it). When is_cdp=False,
+    it's a new headless page.
     """
     cdp_port = find_linkedin_cdp_port()
 
     if cdp_port:
-        browser = playwright.chromium.connect_over_cdp(
-            f"http://localhost:{cdp_port}"
-        )
-        # Use the first context (the linkedin-agent's logged-in context)
-        contexts = browser.contexts
-        if contexts:
-            context = contexts[0]
-            page = context.new_page()
-            return browser, page, True
+        try:
+            browser = playwright.chromium.connect_over_cdp(
+                f"http://localhost:{cdp_port}"
+            )
+            contexts = browser.contexts
+            if contexts:
+                context = contexts[0]
+                # Reuse an existing LinkedIn tab (new tabs don't inherit cookies)
+                for pg in context.pages:
+                    if "linkedin.com" in pg.url and "login" not in pg.url:
+                        return browser, pg, True
+                # If no LinkedIn tab, try the first page
+                if context.pages:
+                    return browser, context.pages[0], True
+        except Exception:
+            pass
 
     # Fallback: launch new headless browser
     browser = playwright.chromium.launch(
@@ -180,8 +188,8 @@ def discover_notifications(max_load_more=10):
             return notifications
 
         finally:
-            page.close()
             if not is_cdp:
+                page.close()
                 browser.close()
 
 
@@ -261,8 +269,8 @@ def get_comment_context(comment_url):
             return result
 
         finally:
-            page.close()
             if not is_cdp:
+                page.close()
                 browser.close()
 
 
@@ -358,8 +366,8 @@ def search_posts(search_url, max_posts=10):
             return result
 
         finally:
-            page.close()
             if not is_cdp:
+                page.close()
                 browser.close()
 
 
@@ -422,8 +430,8 @@ def extract_activity_id(post_url):
             return result
 
         finally:
-            page.close()
             if not is_cdp:
+                page.close()
                 browser.close()
 
 
