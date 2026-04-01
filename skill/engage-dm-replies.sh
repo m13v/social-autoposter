@@ -195,6 +195,19 @@ After completing Phase 0 (human replies), proceed with the scanning and auto-rep
 Our projects (for context when conversations touch relevant topics):
 $PROJECTS
 
+## Human Reply Knowledge Base
+
+Past human replies to escalated DMs (use as reference for tone and approach when handling similar conversations):
+$(psql "$DATABASE_URL" -t -A -c "
+    SELECT json_agg(json_build_object(
+        'platform', platform, 'project', project_name,
+        'their_author', their_author, 'reply', LEFT(reply_content, 300)
+    ))
+    FROM human_dm_replies
+    WHERE status = 'sent'
+    ORDER BY sent_at DESC
+    LIMIT 20;" 2>/dev/null || echo "null")
+
 ## PHASE A: Scan Reddit Chat for new messages
 
 1. Navigate to https://www.reddit.com/chat using the reddit-agent browser
@@ -421,60 +434,16 @@ DM_SUMMARY=$(psql "$DATABASE_URL" -t -A -c "
 
 log "DM pipeline summary: $DM_SUMMARY"
 
-# Report flagged conversations needing human attention
-FLAGGED=$(psql "$DATABASE_URL" -t -A -c "
-    SELECT json_agg(json_build_object(
-        'dm_id', d.id, 'platform', d.platform, 'author', d.their_author,
-        'reason', d.human_reason, 'chat_url', d.chat_url,
-        'last_msg', (SELECT LEFT(content, 150) FROM dm_messages WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1)
-    ))
-    FROM dms d WHERE d.conversation_status = 'needs_human'
-    ORDER BY d.flagged_at DESC;" 2>/dev/null || echo "null")
+# Report flagged conversations needing human attention (emails already sent per-DM during flagging)
+FLAGGED_COUNT=$(psql "$DATABASE_URL" -t -A -c "
+    SELECT COUNT(*) FROM dms WHERE conversation_status = 'needs_human';" 2>/dev/null || echo "0")
 
-if [ "$FLAGGED" != "null" ] && [ -n "$FLAGGED" ]; then
-    FLAGGED_COUNT=$(echo "$FLAGGED" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
-    log "ACTION REQUIRED: $FLAGGED_COUNT conversations flagged for human attention"
+if [ "$FLAGGED_COUNT" -gt 0 ] 2>/dev/null; then
+    log "ACTION REQUIRED: $FLAGGED_COUNT conversations flagged for human attention (escalation emails already sent per-DM)"
     log "Run: python3 ~/social-autoposter/scripts/dm_conversation.py show-flagged"
 
     # macOS notification
     osascript -e "display notification \"$FLAGGED_COUNT DM conversations need your attention\" with title \"Social DM Escalation\" sound name \"Glass\"" 2>/dev/null || true
-
-    # Build email body
-    FLAGGED_BODY=$(echo "$FLAGGED" | python3 -c "
-import json, sys
-items = json.load(sys.stdin)
-lines = []
-for i in items:
-    lines.append(f\"DM #{i['dm_id']} [{i['platform']}] {i['author']}\")
-    lines.append(f\"  Reason: {i['reason']}\")
-    if i.get('chat_url'): lines.append(f\"  URL: {i['chat_url']}\")
-    if i.get('last_msg'): lines.append(f\"  Last: {i['last_msg'][:120]}\")
-    lines.append('')
-print('\n'.join(lines))
-" 2>/dev/null || echo "Check flagged DMs")
-
-    # Send email notification via Resend (requires RESEND_API_KEY and NOTIFICATION_EMAIL in .env)
-    if [ -n "${RESEND_API_KEY:-}" ] && [ -n "${NOTIFICATION_EMAIL:-}" ]; then
-        NOTIF_FROM="${NOTIFICATION_FROM:-Social Autoposter <onboarding@resend.dev>}"
-        EMAIL_JSON=$(NOTIF_FROM="$NOTIF_FROM" NOTIF_TO="$NOTIFICATION_EMAIL" NOTIF_COUNT="$FLAGGED_COUNT" python3 -c "
-import json, os, sys
-body = sys.stdin.read()
-print(json.dumps({
-    'from': os.environ['NOTIF_FROM'],
-    'to': [os.environ['NOTIF_TO']],
-    'subject': 'DM Escalation: ' + os.environ['NOTIF_COUNT'] + ' conversations need you',
-    'text': 'The following DM conversations have been flagged for your personal attention:\n\n' + body + '\nReview: python3 ~/social-autoposter/scripts/dm_conversation.py show-flagged'
-}))
-" <<< "$FLAGGED_BODY" 2>/dev/null)
-
-        curl -s -X POST 'https://api.resend.com/emails' \
-            -H "Authorization: Bearer $RESEND_API_KEY" \
-            -H 'Content-Type: application/json' \
-            -d "$EMAIL_JSON" > /dev/null 2>&1 || log "WARNING: Failed to send escalation email"
-        log "Email notification sent to $NOTIFICATION_EMAIL"
-    elif [ -n "${RESEND_API_KEY:-}" ] && [ -z "${NOTIFICATION_EMAIL:-}" ]; then
-        log "WARNING: RESEND_API_KEY set but NOTIFICATION_EMAIL missing — skipping email"
-    fi
 fi
 
 # Delete old logs
