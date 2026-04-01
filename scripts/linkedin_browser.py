@@ -579,6 +579,409 @@ def extract_activity_id(post_url):
                 browser.close()
 
 
+def scrape_stats(post_url, our_name="Matthew Diakonov", content_prefix=""):
+    """Navigate to a LinkedIn post and scrape reaction count on our comment.
+
+    Returns JSON: {"found": bool, "reactions": int, "comment_preview": str}
+    """
+    from playwright.sync_api import sync_playwright
+
+    # Strip ?commentUrn= param (breaks comment rendering)
+    clean_url = re.sub(r"\?commentUrn=.*", "", post_url)
+
+    with sync_playwright() as p:
+        browser, page, is_cdp = get_browser_and_page(p)
+
+        try:
+            page.goto(clean_url, wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
+
+            # Scroll down past the post
+            page.evaluate("() => window.scrollBy(0, 600)")
+            page.wait_for_timeout(2000)
+
+            # Click Comment button to expand comments section
+            try:
+                comment_btn = page.locator('button[aria-label="Comment"]').first
+                comment_btn.click(timeout=5000)
+                page.wait_for_timeout(4000)
+            except Exception:
+                pass
+
+            # Try to expand all comments
+            for label in [
+                "Load more comments",
+                "load more",
+                "See previous replies",
+                "Load previous replies",
+            ]:
+                try:
+                    btn = page.locator(f'button[aria-label*="{label}"]').first
+                    btn.click(timeout=3000)
+                    page.wait_for_timeout(2000)
+                except Exception:
+                    pass
+
+            # Extract our comment's reaction count
+            result = page.evaluate(
+                """({ourName, contentPrefix}) => {
+                const res = {found: false, reactions: 0, comment_preview: ''};
+
+                // Find all comment containers
+                const containers = document.querySelectorAll(
+                    'article.comments-comment-entity, ' +
+                    'article.comments-comment-item, ' +
+                    'article[class*="comment"]'
+                );
+
+                for (const c of containers) {
+                    // Author name
+                    const authorEl = c.querySelector(
+                        '.comments-comment-meta__description-title, ' +
+                        '.comments-post-meta__name-text, ' +
+                        'a[href*="/in/"] span'
+                    );
+                    const authorText = authorEl ? authorEl.textContent.trim() : '';
+
+                    // Comment content
+                    const contentEl = c.querySelector(
+                        '.update-components-text, ' +
+                        '.comments-comment-item__main-content, ' +
+                        '.comments-comment-item-content-body, ' +
+                        'span[class*="comment"]'
+                    );
+                    const commentText = contentEl ? contentEl.textContent.trim() : '';
+
+                    // Match by name or content
+                    const nameMatch = authorText.toLowerCase().includes(ourName.toLowerCase());
+                    const prefixClean = contentPrefix.replace(/[^a-z0-9 ]/gi, '').substring(0, 60).toLowerCase();
+                    const commentClean = commentText.replace(/[^a-z0-9 ]/gi, '').substring(0, 200).toLowerCase();
+                    const contentMatch = prefixClean.length > 20 && commentClean.includes(prefixClean);
+
+                    if (nameMatch || contentMatch) {
+                        res.found = true;
+                        res.comment_preview = commentText.substring(0, 80);
+
+                        // Reaction count
+                        const reactionEl = c.querySelector(
+                            'button[class*="reactions-count"], ' +
+                            'button[aria-label*="Reaction"]'
+                        );
+                        if (reactionEl) {
+                            const label = reactionEl.getAttribute('aria-label') || '';
+                            const m = label.match(/([\d,]+)\\s*[Rr]eaction/);
+                            if (m) {
+                                res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
+                            } else {
+                                const t = reactionEl.textContent.trim().replace(/,/g, '');
+                                const n = parseInt(t, 10);
+                                if (!isNaN(n)) res.reactions = n;
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                // Fallback: if no comment containers matched, try scanning all text
+                if (!res.found) {
+                    const allText = document.body.innerText;
+                    if (allText.toLowerCase().includes(ourName.toLowerCase())) {
+                        res.found = true;
+                        res.comment_preview = '(found by name scan, no reaction data)';
+                    }
+                }
+
+                return res;
+            }""",
+                {"ourName": our_name, "contentPrefix": content_prefix},
+            )
+
+            return result
+
+        finally:
+            if not is_cdp:
+                page.close()
+                browser.close()
+
+
+def audit_post(post_url):
+    """Check if a LinkedIn post is still live or has been deleted/removed.
+
+    Returns JSON: {"status": "active"|"deleted", "reactions": int, "comments": int, "views": int}
+    """
+    from playwright.sync_api import sync_playwright
+
+    clean_url = re.sub(r"\?commentUrn=.*", "", post_url)
+
+    with sync_playwright() as p:
+        browser, page, is_cdp = get_browser_and_page(p)
+
+        try:
+            page.goto(clean_url, wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
+
+            result = page.evaluate("""() => {
+                const res = {status: 'active', reactions: 0, comments: 0, views: 0};
+
+                const bodyText = document.body.innerText.toLowerCase();
+                if (bodyText.includes('this content isn') ||
+                    bodyText.includes('page not found') ||
+                    bodyText.includes('this post was removed') ||
+                    bodyText.includes('no longer available') ||
+                    bodyText.includes('this post has been removed')) {
+                    res.status = 'deleted';
+                    return res;
+                }
+
+                // Reactions
+                const reactionBtn = document.querySelector(
+                    'button.social-details-social-counts__reactions-count, ' +
+                    'span.social-details-social-counts__reactions-count, ' +
+                    'button[aria-label*="reaction"], ' +
+                    'span[aria-label*="reaction"]'
+                );
+                if (reactionBtn) {
+                    const label = reactionBtn.getAttribute('aria-label') || '';
+                    const m = label.match(/([\d,]+)\\s*reaction/i);
+                    if (m) res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
+                    else {
+                        const t = reactionBtn.textContent.trim().replace(/,/g, '');
+                        const n = parseInt(t, 10);
+                        if (!isNaN(n)) res.reactions = n;
+                    }
+                }
+
+                // Comments
+                const commentBtn = document.querySelector(
+                    'button.social-details-social-counts__comments, ' +
+                    'button[aria-label*="comment"]'
+                );
+                if (commentBtn) {
+                    const m = commentBtn.textContent.trim().match(/([\d,]+)/);
+                    if (m) res.comments = parseInt(m[1].replace(/,/g, ''), 10);
+                }
+
+                // Views/impressions
+                const viewsEl = document.querySelector(
+                    'span.social-details-social-counts__impressions, ' +
+                    'span[aria-label*="impression"], ' +
+                    'span.analytics-entry-point'
+                );
+                if (viewsEl) {
+                    const m = viewsEl.textContent.trim().match(/([\d,]+)/);
+                    if (m) res.views = parseInt(m[1].replace(/,/g, ''), 10);
+                }
+                if (res.views === 0) {
+                    const viewMatch = document.body.innerText.match(/([\d,]+)\\s*impressions?/i);
+                    if (viewMatch) res.views = parseInt(viewMatch[1].replace(/,/g, ''), 10);
+                }
+
+                return res;
+            }""")
+
+            return result
+
+        finally:
+            if not is_cdp:
+                page.close()
+                browser.close()
+
+
+def stats_batch(posts_json):
+    """Process multiple posts for stats in a single browser session.
+
+    Input: JSON array of [{id, url, content_prefix}]
+    Returns: JSON array of [{id, url, found, reactions, comment_preview}]
+    """
+    import json as _json
+    from playwright.sync_api import sync_playwright
+
+    posts = _json.loads(posts_json) if isinstance(posts_json, str) else posts_json
+    results = []
+
+    with sync_playwright() as p:
+        browser, page, is_cdp = get_browser_and_page(p)
+
+        try:
+            for post in posts:
+                post_id = post.get("id")
+                url = post.get("url", "")
+                content_prefix = post.get("content_prefix", "")
+                clean_url = re.sub(r"\?commentUrn=.*", "", url)
+
+                try:
+                    page.goto(clean_url, wait_until="domcontentloaded")
+                    page.wait_for_timeout(4000)
+
+                    page.evaluate("() => window.scrollBy(0, 600)")
+                    page.wait_for_timeout(2000)
+
+                    try:
+                        comment_btn = page.locator(
+                            'button[aria-label="Comment"]'
+                        ).first
+                        comment_btn.click(timeout=5000)
+                        page.wait_for_timeout(4000)
+                    except Exception:
+                        pass
+
+                    result = page.evaluate(
+                        """({ourName, contentPrefix}) => {
+                        const res = {found: false, reactions: 0, comment_preview: ''};
+                        const containers = document.querySelectorAll(
+                            'article.comments-comment-entity, ' +
+                            'article.comments-comment-item, ' +
+                            'article[class*="comment"]'
+                        );
+                        for (const c of containers) {
+                            const authorEl = c.querySelector(
+                                '.comments-comment-meta__description-title, ' +
+                                'a[href*="/in/"] span'
+                            );
+                            const authorText = authorEl ? authorEl.textContent.trim() : '';
+                            const contentEl = c.querySelector(
+                                '.update-components-text, ' +
+                                '.comments-comment-item__main-content, ' +
+                                'span[class*="comment"]'
+                            );
+                            const commentText = contentEl ? contentEl.textContent.trim() : '';
+                            const nameMatch = authorText.toLowerCase().includes(ourName.toLowerCase());
+                            const prefixClean = contentPrefix.replace(/[^a-z0-9 ]/gi, '').substring(0, 60).toLowerCase();
+                            const commentClean = commentText.replace(/[^a-z0-9 ]/gi, '').substring(0, 200).toLowerCase();
+                            const contentMatch = prefixClean.length > 20 && commentClean.includes(prefixClean);
+                            if (nameMatch || contentMatch) {
+                                res.found = true;
+                                res.comment_preview = commentText.substring(0, 80);
+                                const reactionEl = c.querySelector(
+                                    'button[class*="reactions-count"], ' +
+                                    'button[aria-label*="Reaction"]'
+                                );
+                                if (reactionEl) {
+                                    const label = reactionEl.getAttribute('aria-label') || '';
+                                    const m = label.match(/([\d,]+)\\s*[Rr]eaction/);
+                                    if (m) res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
+                                    else {
+                                        const t = reactionEl.textContent.trim().replace(/,/g, '');
+                                        const n = parseInt(t, 10);
+                                        if (!isNaN(n)) res.reactions = n;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        return res;
+                    }""",
+                        {
+                            "ourName": "Matthew Diakonov",
+                            "contentPrefix": content_prefix,
+                        },
+                    )
+
+                    result["id"] = post_id
+                    result["url"] = url
+                    results.append(result)
+
+                    # Rate limit between pages
+                    page.wait_for_timeout(3000)
+
+                except Exception as e:
+                    results.append(
+                        {
+                            "id": post_id,
+                            "url": url,
+                            "found": False,
+                            "reactions": 0,
+                            "error": str(e)[:100],
+                        }
+                    )
+
+        finally:
+            if not is_cdp:
+                page.close()
+                browser.close()
+
+    return results
+
+
+def audit_batch(posts_json):
+    """Check multiple posts for deleted/active status in a single browser session.
+
+    Input: JSON array of [{id, url}]
+    Returns: JSON array of [{id, url, status, reactions, comments, views}]
+    """
+    import json as _json
+    from playwright.sync_api import sync_playwright
+
+    posts = _json.loads(posts_json) if isinstance(posts_json, str) else posts_json
+    results = []
+
+    with sync_playwright() as p:
+        browser, page, is_cdp = get_browser_and_page(p)
+
+        try:
+            for post in posts:
+                post_id = post.get("id")
+                url = post.get("url", "")
+                clean_url = re.sub(r"\?commentUrn=.*", "", url)
+
+                try:
+                    page.goto(clean_url, wait_until="domcontentloaded")
+                    page.wait_for_timeout(3000)
+
+                    result = page.evaluate("""() => {
+                        const res = {status: 'active', reactions: 0, comments: 0, views: 0};
+                        const bodyText = document.body.innerText.toLowerCase();
+                        if (bodyText.includes('this content isn') ||
+                            bodyText.includes('page not found') ||
+                            bodyText.includes('this post was removed') ||
+                            bodyText.includes('no longer available')) {
+                            res.status = 'deleted';
+                            return res;
+                        }
+                        const reactionBtn = document.querySelector(
+                            'button[aria-label*="reaction"], span[aria-label*="reaction"]'
+                        );
+                        if (reactionBtn) {
+                            const label = reactionBtn.getAttribute('aria-label') || '';
+                            const m = label.match(/([\d,]+)\\s*reaction/i);
+                            if (m) res.reactions = parseInt(m[1].replace(/,/g, ''), 10);
+                        }
+                        const commentBtn = document.querySelector(
+                            'button[aria-label*="comment"]'
+                        );
+                        if (commentBtn) {
+                            const m = commentBtn.textContent.trim().match(/([\d,]+)/);
+                            if (m) res.comments = parseInt(m[1].replace(/,/g, ''), 10);
+                        }
+                        const viewMatch = document.body.innerText.match(/([\d,]+)\\s*impressions?/i);
+                        if (viewMatch) res.views = parseInt(viewMatch[1].replace(/,/g, ''), 10);
+                        return res;
+                    }""")
+
+                    result["id"] = post_id
+                    result["url"] = url
+                    results.append(result)
+
+                    page.wait_for_timeout(3000)
+
+                except Exception as e:
+                    results.append(
+                        {
+                            "id": post_id,
+                            "url": url,
+                            "status": "error",
+                            "error": str(e)[:100],
+                        }
+                    )
+
+        finally:
+            if not is_cdp:
+                page.close()
+                browser.close()
+
+    return results
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -609,6 +1012,44 @@ def main():
             print("Usage: linkedin_browser.py activity-id <post_url>", file=sys.stderr)
             sys.exit(1)
         result = extract_activity_id(sys.argv[2])
+        print(json.dumps(result, indent=2))
+
+    elif cmd == "stats":
+        if len(sys.argv) < 3:
+            print(
+                "Usage: linkedin_browser.py stats <post_url> [content_prefix]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        content_prefix = sys.argv[3] if len(sys.argv) > 3 else ""
+        result = scrape_stats(sys.argv[2], content_prefix=content_prefix)
+        print(json.dumps(result, indent=2))
+
+    elif cmd == "stats-batch":
+        if len(sys.argv) < 3:
+            print(
+                "Usage: linkedin_browser.py stats-batch '<json_array>'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        result = stats_batch(sys.argv[2])
+        print(json.dumps(result, indent=2))
+
+    elif cmd == "audit":
+        if len(sys.argv) < 3:
+            print("Usage: linkedin_browser.py audit <post_url>", file=sys.stderr)
+            sys.exit(1)
+        result = audit_post(sys.argv[2])
+        print(json.dumps(result, indent=2))
+
+    elif cmd == "audit-batch":
+        if len(sys.argv) < 3:
+            print(
+                "Usage: linkedin_browser.py audit-batch '<json_array>'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        result = audit_batch(sys.argv[2])
         print(json.dumps(result, indent=2))
 
     else:
