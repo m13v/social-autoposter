@@ -1167,75 +1167,96 @@ def read_conversation(thread_url, max_messages=20):
             page.wait_for_timeout(4000)
 
             result = page.evaluate("""(maxMessages) => {
-                // Get the conversation partner name from the h2 heading
-                // in the conversation detail header
+                // Get the conversation partner name from the conversation
+                // header. The partner's h2 heading is inside a <dt> or
+                // after the conversation options button area.
                 let partnerName = '';
-                const h2 = document.querySelector('h2');
-                if (h2) partnerName = h2.textContent.trim();
+                // Strategy 1: look for h2 inside a dt (definition term)
+                const dtH2 = document.querySelector('dt h2, dt button');
+                if (dtH2) partnerName = dtH2.textContent.trim();
+                // Strategy 2: look for button that opens options for the conversation
+                if (!partnerName) {
+                    const optBtn = document.querySelector(
+                        'button[aria-label*="Open the options list in your conversation with"]'
+                    );
+                    if (optBtn) {
+                        const label = optBtn.getAttribute('aria-label') || '';
+                        // "...with Matthew Diakonov and Hudson Mafusa"
+                        const m = label.match(/with (?:Matthew Diakonov and )?(.+)/);
+                        if (m) partnerName = m[1].trim();
+                    }
+                }
 
-                // LinkedIn groups messages by sender in listitem blocks.
-                // Each message group has:
-                //   - A "NAME sent the following messages at TIME" descriptor
-                //   - One or more message content blocks with paragraphs
-                // We need to walk the list items in the conversation thread.
-
-                const threadList = document.querySelector(
-                    'ul[class*="msg-s-message-list"]'
-                );
-                // Fallback: find the list that contains message items
+                // Find the message list in the conversation detail panel.
+                // It's the list AFTER the conversation header, containing
+                // message groups with time elements and paragraphs.
+                // The conversation list (sidebar) also has a <ul> but its
+                // items have checkboxes, not message content.
+                let msgList = null;
                 const allLists = document.querySelectorAll('ul');
-                let msgList = threadList;
-                if (!msgList) {
-                    for (const ul of allLists) {
-                        const items = ul.querySelectorAll('li');
-                        if (items.length > 0) {
-                            // Check if any item has a time element and paragraph
-                            for (const item of items) {
-                                if (item.querySelector('time') &&
-                                    item.querySelector('p')) {
-                                    msgList = ul;
-                                    break;
-                                }
-                            }
+                for (const ul of allLists) {
+                    const items = ul.querySelectorAll(':scope > li');
+                    let hasTimeAndPara = false;
+                    for (const item of items) {
+                        const text = item.textContent || '';
+                        if (text.includes('sent the following message') ||
+                            (item.querySelector('time') && item.querySelector('p') &&
+                             !item.querySelector('input[type="checkbox"]'))) {
+                            hasTimeAndPara = true;
+                            break;
                         }
-                        if (msgList) break;
+                    }
+                    if (hasTimeAndPara) {
+                        msgList = ul;
+                        break;
                     }
                 }
 
                 const messages = [];
-                if (!msgList) return {partner_name: partnerName, messages: [], total_found: 0};
+                if (!msgList) return {
+                    partner_name: partnerName, messages: [], total_found: 0
+                };
 
                 const items = msgList.querySelectorAll(':scope > li');
                 let currentSender = '';
                 let currentTime = '';
 
                 for (const item of items) {
-                    // Check for sender info: "NAME sent the following messages at TIME"
-                    const senderDesc = item.textContent || '';
-                    const senderMatch = senderDesc.match(
-                        /^(.+?)\\s+sent the following message/
+                    const itemText = item.textContent || '';
+
+                    // Detect sender from "NAME sent the following messages" descriptor
+                    const senderMatch = itemText.match(
+                        /(.+?)\\s+sent the following message/
                     );
                     if (senderMatch) {
                         currentSender = senderMatch[1].trim();
+                        // Clean up: remove "View NAME's profile" prefix
+                        currentSender = currentSender.replace(
+                            /^View .+'s profile\\s*/, ''
+                        );
                     }
 
-                    // Also try to extract sender from profile link
-                    const profileLink = item.querySelector(
-                        'a[href*="/in/"] span, a[href*="/in/"]'
-                    );
-                    if (profileLink) {
-                        const name = profileLink.textContent.trim();
-                        // Filter out "View profile" type text
-                        if (name && name.length > 2 && name.length < 60 &&
-                            !name.includes('View') && !name.includes('profile')) {
-                            currentSender = name;
+                    // Extract sender name from profile link within this item
+                    const links = item.querySelectorAll('a[href*="/in/"]');
+                    for (const link of links) {
+                        const spans = link.querySelectorAll('span, div');
+                        for (const s of spans) {
+                            const name = s.textContent.trim();
+                            if (name && name.length > 2 && name.length < 60 &&
+                                !name.includes('View') && !name.includes('profile') &&
+                                !name.includes('Status') && !name.includes('degree')) {
+                                currentSender = name;
+                                break;
+                            }
                         }
                     }
 
                     // Time element
                     const timeEl = item.querySelector('time');
                     if (timeEl) {
-                        currentTime = timeEl.textContent.trim().replace(/^[•·]\\s*/, '');
+                        currentTime = timeEl.textContent.trim().replace(
+                            /^[•·\\s]+/, ''
+                        );
                     }
 
                     // Message content from paragraphs
@@ -1248,10 +1269,12 @@ def read_conversation(thread_url, max_messages=20):
                         }
                     }
 
-                    // Skip items with no real content or just metadata
+                    // Skip items with no real content
                     if (!content || content.length < 3) continue;
                     // Skip "sent the following messages" descriptors
                     if (content.includes('sent the following message')) continue;
+                    // Skip metadata items
+                    if (content.includes('degree connection')) continue;
 
                     messages.push({
                         sender: currentSender,
