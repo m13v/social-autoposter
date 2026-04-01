@@ -44,7 +44,9 @@ $TOP_REPORT
 Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
 1. Find candidate posts: python3 $REPO_DIR/scripts/find_threads.py --include-linkedin --project '$PROJECT'
    From the output, pick ONLY linkedin candidates (discovery_method: search_url).
-   Browse the search URL via mcp__linkedin-agent__browser_navigate to find actual posts.
+   For each search URL, run: python3 $REPO_DIR/scripts/linkedin_browser.py search 'SEARCH_URL'
+   This returns {activity_ids: [...], posts: [...]}. Use activity IDs for dedup and commenting.
+   If linkedin_browser.py fails, fall back to browsing via mcp__linkedin-agent__browser_navigate.
 2. DEDUP CHECK (MANDATORY before every post): Before commenting on any LinkedIn post, check if we already posted on it.
    Extract the activity ID from the post URL (the numeric ID in \`urn:li:activity:ACTIVITY_ID\` or from the feed/update URL).
    \`\`\`bash
