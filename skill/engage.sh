@@ -97,7 +97,12 @@ Process ALL of them. For each post:
      -d '{"content": "FULL_CONTENT"}' \\
      "https://www.moltbook.com/api/v1/comments/COMMENT_UUID"
 7. For Reddit: navigate to old.reddit.com comment permalink via the reddit-agent browser (mcp__reddit-agent__* tools), click "edit", append the link text to the existing content, save, verify.
-8. For LinkedIn: navigate to the post URL via the linkedin-agent browser (mcp__linkedin-agent__* tools), find our comment, click the three-dot menu (⋯) on it, click "Edit", append the link text to the existing content, save, verify.
+8. For LinkedIn: use the edit script via linkedin-agent browser (mcp__linkedin-agent__* tools):
+   a. Set params: mcp__linkedin-agent__browser_run_code with code:
+      async (page) => { await page.evaluate(() => { window.__editParams = { postUrl: "POST_URL", appendText: "\\n\\nLINK_TEXT" }; }); }
+   b. Run the script: mcp__linkedin-agent__browser_run_code with filename=$REPO_DIR/scripts/edit_linkedin_comment.js
+   c. Parse the JSON result: {ok:true, newText} means success, {ok:false, error} means failure.
+   d. If error is 'comment_not_found', mark as skipped. If 'link_already_present', mark as skipped (already edited).
    - For LinkedIn (professional tone): "I've been building something related - URL"
 9. After each successful edit, update the DB:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='LINK_TEXT' WHERE id=POST_ID"
