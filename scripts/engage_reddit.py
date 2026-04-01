@@ -155,7 +155,11 @@ async (page) => {{
   const existingReplies = await thing.$$('.child .comment');
   for (const r of existingReplies) {{
     const author = await r.$eval('.author', el => el.textContent).catch(() => '');
-    if (author === OUR_USERNAME) return 'already_replied';
+    if (author === OUR_USERNAME) {{
+      const existingText = await r.$eval('.usertext-body', el => el.textContent.trim()).catch(() => '');
+      const existingLink = await r.$eval('.bylink', el => el.getAttribute('href')).catch(() => '');
+      return JSON.stringify({{already_replied: true, text: existingText, url: existingLink}});
+    }}
   }}
   await thing.evaluate(el => {{
     const btn = el.querySelector('.flat-list a[onclick*="reply"]');
@@ -177,7 +181,8 @@ Replace REPLY_TEXT_HERE with a JS string literal of your drafted text.
 Use thing.evaluate() for clicks (NOT direct .click()).
 
 6. After posting:
-   - If 'already_replied': python3 {REPLY_DB} replied {reply['id']} ""
+   - If result is JSON with already_replied=true: python3 {REPLY_DB} replied {reply['id']} "EXISTING_TEXT" "EXISTING_URL"
+     (extract text and url from the JSON result to store the existing reply content)
    - If permalink returned: python3 {REPLY_DB} replied {reply['id']} "YOUR_TEXT" "PERMALINK_URL"
    - If null (no permalink): python3 {REPLY_DB} replied {reply['id']} "YOUR_TEXT"
 
