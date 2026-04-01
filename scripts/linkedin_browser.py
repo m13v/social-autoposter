@@ -426,10 +426,18 @@ def search_posts(search_url, max_posts=10):
                         }
                         if (!container) return null;
 
-                        // Author
+                        // Author - get the first short text from profile link
                         const authorLink = container.querySelector('a[href*="/in/"], a[href*="/company/"]');
-                        const author = authorLink ? authorLink.textContent.trim().split('\\n')[0] : null;
+                        let author = null;
                         const profileUrl = authorLink ? authorLink.getAttribute('href') : null;
+                        if (authorLink) {
+                            // Try to find just the name span inside the link
+                            const nameSpan = authorLink.querySelector('span');
+                            const rawText = nameSpan ? nameSpan.textContent.trim() : authorLink.textContent.trim();
+                            // Take first line only (name without headline)
+                            author = rawText.split('\\n')[0].trim().split('  ')[0].trim();
+                            if (author.length > 80) author = author.substring(0, 80);
+                        }
 
                         // Post text - get substantial text content
                         const spans = container.querySelectorAll('span, p');
