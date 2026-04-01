@@ -41,35 +41,21 @@ EXCLUDED_LINKEDIN=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.
 # ═══════════════════════════════════════════════════════
 log "Phase A: Scanning LinkedIn notifications via API (no LLM needed)..."
 
-# Step 1: Extract notifications via JS in the linkedin-agent browser
+# Step 1: Extract notifications via Python Playwright (no Claude LLM needed)
+# Connects to the running linkedin-agent browser via CDP
 NOTIF_JSON=$(mktemp)
-NOTIF_RAW=$(claude -p "Run the LinkedIn notification extractor JS file in the linkedin-agent browser.
+python3 "$REPO_DIR/scripts/linkedin_browser.py" notifications > "$NOTIF_JSON" 2>/dev/null
 
-Use mcp__linkedin-agent__browser_navigate to go to https://www.linkedin.com/notifications/ first, wait for it to load.
-Then use mcp__linkedin-agent__browser_run_code with filename parameter set to $REPO_DIR/scripts/scan_linkedin_notifications.js
-
-The JS returns a JSON string. Output ONLY the raw JSON result, nothing else. No markdown, no explanation.
-If the browser is not logged in (redirected to login page), output: {\"error\": \"not_logged_in\"}" 2>/dev/null)
-
-# Extract the JSON from Claude's output (it may have extra text)
-echo "$NOTIF_RAW" | python3 -c "
-import sys, json
-raw = sys.stdin.read()
-# Find the JSON object in the output
-start = raw.find('{')
-if start == -1:
-    print(json.dumps({'error': 'no_json_found', 'raw': raw[:200]}))
-    sys.exit(0)
-# Find matching closing brace
-depth = 0
-for i in range(start, len(raw)):
-    if raw[i] == '{': depth += 1
-    elif raw[i] == '}': depth -= 1
-    if depth == 0:
-        print(raw[start:i+1])
-        sys.exit(0)
-print(json.dumps({'error': 'no_json_found'}))
-" > "$NOTIF_JSON" 2>/dev/null
+# Wrap array in {notifications: [...]} format for scan_linkedin_notifications.py
+python3 -c "
+import json, sys
+try:
+    notifs = json.load(open('$NOTIF_JSON'))
+    if isinstance(notifs, list):
+        json.dump({'notifications': notifs}, open('$NOTIF_JSON', 'w'))
+except Exception as e:
+    json.dump({'error': str(e)}, open('$NOTIF_JSON', 'w'))
+" 2>/dev/null
 
 # Step 2: Process notifications and insert into DB
 python3 "$REPO_DIR/scripts/scan_linkedin_notifications.py" --json-file "$NOTIF_JSON" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase A scan_linkedin_notifications.py exited with code $?"
