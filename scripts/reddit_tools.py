@@ -182,7 +182,7 @@ def cmd_log_post(args):
         [args.thread_url, args.thread_author, args.thread_author, args.thread_title,
          args.our_url, args.our_text, args.account, args.project],
     )
-    conn.connection.commit()
+    conn.commit()
     conn.close()
     print(json.dumps({"logged": True}))
 
