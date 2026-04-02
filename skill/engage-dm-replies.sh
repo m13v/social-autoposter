@@ -265,19 +265,23 @@ $(psql "$DATABASE_URL" -t -A -c "
 
 ## PHASE C: Scan X/Twitter DMs for new messages
 
-1. Navigate to https://x.com/messages using the twitter-agent browser
-2. **ENCRYPTED DM PASSCODE**: Twitter may show an "Enter your passcode" or "encrypted_dm_passcode_required" dialog before you can access DMs. If you see this dialog:
-   a. Find the passcode input field in the snapshot
-   b. Type the passcode: $TWITTER_DM_PASSCODE
-   c. Click "Confirm" or press Enter
-   d. Wait for the DM inbox to load
-   The passcode is loaded from .env as TWITTER_DM_PASSCODE.
-3. Look for conversations with unread indicators
-4. For each conversation with new messages:
-   a. Click into the conversation and read the latest messages
-   b. **CRITICAL: Check the message author before logging.** Our Twitter handle is @m13v_. Messages sent BY us (from @m13v_) are OUTBOUND — do NOT log them as inbound. Only log messages from the OTHER person as inbound.
-   c. If you see a message that looks like something we previously sent (same content as a prior outbound), SKIP it — it is an echo of our own message.
-   d. Only call log-inbound for messages that are genuinely from the other person.
+1. Get unread Twitter DM conversations using the Python CDP script (no browser MCP needed):
+   \`\`\`bash
+   python3 scripts/twitter_browser.py unread-dms
+   \`\`\`
+   This handles the encrypted DM passcode automatically (loaded from .env TWITTER_DM_PASSCODE).
+   Returns JSON array with: author, handle, preview, time, thread_url, is_from_us.
+
+2. For each conversation where is_from_us is false (has unread inbound messages), read the full messages:
+   \`\`\`bash
+   python3 scripts/twitter_browser.py read-conversation "THREAD_URL"
+   \`\`\`
+   Returns JSON with: partner_name, partner_handle, messages (each with sender, content, time, is_from_us), total_found.
+
+3. For each conversation:
+   a. Identify the sender from the partner_name/partner_handle
+   b. **CRITICAL: Only log messages where is_from_us is false as inbound.** Skip our own messages.
+   c. Check if this person is in our DM database and log inbound messages the same way as Reddit.
 
 ## PHASE D: Reply to all conversations with pending inbound messages
 
@@ -397,9 +401,11 @@ cd ~/social-autoposter && python3 scripts/linkedin_browser.py send-dm "THREAD_UR
 \`\`\`
 Returns JSON with {ok: true, thread_url, verified} on success.
 
-**X/Twitter DMs** (mcp__twitter-agent__* tools):
-1. Navigate to the conversation (if the encrypted DM passcode dialog appears, enter: $TWITTER_DM_PASSCODE and confirm)
-2. Type and send
+**X/Twitter DMs** (Python CDP script, no browser MCP needed):
+\`\`\`bash
+cd ~/social-autoposter && python3 scripts/twitter_browser.py send-dm "THREAD_URL" "YOUR_REPLY_TEXT"
+\`\`\`
+Returns JSON with {ok: true, thread_url, verified} on success. Handles the encrypted DM passcode automatically.
 
 ### Step 5: Log the reply
 \`\`\`bash
