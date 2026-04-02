@@ -5,7 +5,7 @@ Two modes:
   1. --from-db: Read from octolens_mentions table (webhook-sourced)
   2. --from-api: Pull directly from Octolens API (no webhook needed)
 
-Output format matches find_threads.py for compatibility with the posting flow.
+Output format matches reddit_tools.py for compatibility with the posting flow.
 
 Usage:
     python3 scripts/octolens_threads.py --from-db
@@ -164,7 +164,7 @@ def fetch_from_api(api_key, limit=50, view_name=None):
 
 
 def mentions_to_candidates(mentions, already_posted):
-    """Convert Octolens mentions to thread candidates matching find_threads.py format."""
+    """Convert Octolens mentions to thread candidates matching reddit_tools.py format."""
     candidates = []
     config = load_config()
     exclusions = config.get("exclusions", {})
@@ -262,7 +262,7 @@ def main():
 
     candidates = mentions_to_candidates(mentions, already_posted)
 
-    # Output as JSON matching find_threads.py format
+    # Output as JSON matching reddit_tools.py format
     output = {
         "source": "octolens",
         "total_mentions": len(mentions),
