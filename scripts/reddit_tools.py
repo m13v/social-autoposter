@@ -94,7 +94,7 @@ def cmd_search(args):
         age_hours = (datetime.now(timezone.utc).timestamp() - created) / 3600 if created else 999
         permalink = f"https://old.reddit.com{post.get('permalink', '')}"
         already = permalink in already_posted
-        threads.append({
+        entry = {
             "subreddit": f"r/{post.get('subreddit', '')}",
             "url": permalink,
             "title": post.get("title", ""),
@@ -104,7 +104,10 @@ def cmd_search(args):
             "age_hours": round(age_hours, 1),
             "selftext": post.get("selftext", "")[:300],
             "already_posted": already,
-        })
+        }
+        if already:
+            entry["SKIP"] = ">>> ALREADY POSTED IN THIS THREAD - DO NOT POST AGAIN <<<"
+        threads.append(entry)
 
     print(json.dumps(threads, indent=2))
 
@@ -174,6 +177,18 @@ def cmd_log_post(args):
     """Log a posted comment to the database."""
     dbmod.load_env()
     conn = dbmod.get_conn()
+
+    # Hard dedup: refuse to insert if we already posted in this thread
+    cur = conn.execute(
+        "SELECT id, LEFT(our_content, 100) FROM posts WHERE platform='reddit' AND thread_url = %s LIMIT 1",
+        [args.thread_url],
+    )
+    existing = cur.fetchone()
+    if existing:
+        conn.close()
+        print(json.dumps({"error": "DUPLICATE_THREAD", "message": "Already posted in this thread", "existing_post_id": existing[0], "content_preview": existing[1]}))
+        return
+
     conn.execute(
         """INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
            thread_title, thread_content, our_url, our_content, our_account,
