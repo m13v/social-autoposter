@@ -383,7 +383,7 @@ def read_conversation(thread_url, max_messages=20):
 
         try:
             try:
-                page.goto(thread_url, wait_until="domcontentloaded", timeout=15000)
+                page.goto(thread_url, wait_until="commit", timeout=10000)
             except Exception:
                 pass
             page.wait_for_timeout(5000)
@@ -569,9 +569,8 @@ def send_dm(thread_url, message):
 
         try:
             try:
-                page.goto(thread_url, wait_until="domcontentloaded", timeout=15000)
+                page.goto(thread_url, wait_until="commit", timeout=10000)
             except Exception:
-                # DM pages may not fire domcontentloaded — just wait
                 pass
             page.wait_for_timeout(5000)
 
