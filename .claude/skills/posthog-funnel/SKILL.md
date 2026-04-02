@@ -62,3 +62,12 @@ The script prints per-project:
 - Funnel conversion rates (pageviews -> CTAs -> bookings)
 
 Full funnel: social posts -> SEO pages created -> pageviews -> CTA clicks -> bookings
+
+## Reporting format
+
+When reporting results to the user, the **Project Highlights table MUST include all funnel columns**:
+
+| Project | Posts | Engagement | SEO Pages | Pageviews | CTA Clicks | CTR | Bookings |
+|---------|-------|-----------|-----------|-----------|------------|-----|----------|
+
+Never omit SEO Pages or CTA Clicks from the summary table — these are core funnel metrics.
