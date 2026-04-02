@@ -134,19 +134,25 @@ Read ~/social-autoposter/config.json for project details and content_angle.
 
 ## Execution steps
 
-1. Decide: reply or skip? If skip (troll, spam, not directed at us, light acknowledgment), run:
+1. First, fetch the full thread context cheaply via Bash (NO browser needed):
+   python3 ~/social-autoposter/scripts/reddit_tools.py fetch '{reply['thread_url']}'
+   This returns JSON with "thread" (title, author, selftext, score, subreddit) and "comments" (id, author, body, score, permalink).
+   Read the output to understand the full conversation context, who said what, and the overall tone.
+
+2. Using the thread context from step 1 AND the reply data above, decide: reply or skip?
+   If skip (troll, spam, not directed at us, light acknowledgment, conversation already resolved), run:
    python3 {REPLY_DB} skipped {reply['id']} "REASON"
-   Then output DONE.
+   Then output DONE. (No browser needed for skips!)
 
-2. If replying, draft 1-3 sentences following the rules above.
+3. If replying, draft 1-3 sentences following the rules above.
 
-3. Mark as processing:
+4. Mark as processing:
    python3 {REPLY_DB} processing {reply['id']}
 
-4. Navigate to the comment:
+5. Navigate to the comment (browser needed only for posting):
    Use mcp__reddit-agent__browser_navigate to: {reply['their_comment_url']}
 
-5. Post via a SINGLE mcp__reddit-agent__browser_run_code call with this JS:
+6. Post via a SINGLE mcp__reddit-agent__browser_run_code call with this JS:
 ```javascript
 async (page) => {{
   const OUR_USERNAME = '{reddit_username}';
@@ -180,17 +186,17 @@ async (page) => {{
 Replace REPLY_TEXT_HERE with a JS string literal of your drafted text.
 Use thing.evaluate() for clicks (NOT direct .click()).
 
-6. After posting:
+7. After posting:
    - If result is JSON with already_replied=true: python3 {REPLY_DB} replied {reply['id']} "EXISTING_TEXT" "EXISTING_URL"
      (extract text and url from the JSON result to store the existing reply content)
    - If permalink returned: python3 {REPLY_DB} replied {reply['id']} "YOUR_TEXT" "PERMALINK_URL"
    - If null (no permalink): python3 {REPLY_DB} replied {reply['id']} "YOUR_TEXT"
 
-7. If you recommended a project (Tier 2/3), also run:
+8. If you recommended a project (Tier 2/3), also run:
    source ~/social-autoposter/.env
    psql "$DATABASE_URL" -c "UPDATE replies SET project_name='PROJECT_NAME' WHERE id={reply['id']};"
 
-8. Output DONE when finished.
+9. Output DONE when finished.
 
 CRITICAL: Use ONLY mcp__reddit-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
 CRITICAL: If browser times out, wait 30s and retry up to 3 times. If still blocked, skip.
