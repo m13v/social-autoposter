@@ -42,7 +42,7 @@ The project_name for all posts this run MUST be '$PROJECT'.
 $TOP_REPORT
 
 Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
-1. Find candidate posts: python3 $REPO_DIR/scripts/find_threads.py --include-linkedin --project '$PROJECT'
+1. Find candidate posts: python3 -c \"import json,urllib.parse; c=json.load(open('$REPO_DIR/config.json')); p=next((x for x in c.get('projects',[]) if x['name'].lower()=='$PROJECT'.lower()),{}); topics=p.get('linkedin_topics',c.get('linkedin_topics',[])); print(json.dumps([{'platform':'linkedin','url':'https://www.linkedin.com/search/results/content/?keywords='+urllib.parse.quote(t)+'&sortBy=%22date_posted%22','title':'Search: '+t,'discovery_method':'search_url','search_topic':t} for t in topics],indent=2))\"
    From the output, pick ONLY linkedin candidates (discovery_method: search_url).
    For each search URL, run: python3 $REPO_DIR/scripts/linkedin_browser.py search 'SEARCH_URL'
    This returns {activity_ids: [...], posts: [...]}. Use activity IDs for dedup and commenting.
