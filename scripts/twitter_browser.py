@@ -382,7 +382,10 @@ def read_conversation(thread_url, max_messages=20):
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
-            page.goto(thread_url, wait_until="domcontentloaded")
+            try:
+                page.goto(thread_url, wait_until="domcontentloaded", timeout=15000)
+            except Exception:
+                pass
             page.wait_for_timeout(5000)
 
             # Handle DM passcode if needed
@@ -565,7 +568,11 @@ def send_dm(thread_url, message):
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
-            page.goto(thread_url, wait_until="domcontentloaded")
+            try:
+                page.goto(thread_url, wait_until="domcontentloaded", timeout=15000)
+            except Exception:
+                # DM pages may not fire domcontentloaded — just wait
+                pass
             page.wait_for_timeout(5000)
 
             # Handle DM passcode if needed
