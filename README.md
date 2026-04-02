@@ -34,7 +34,7 @@ SKILL.md (the playbook)
     ├── /social-autoposter engage → scan replies, respond
     └── /social-autoposter audit  → browser-based full audit
     │
-    ├── scripts/find_threads.py   → thread discovery (no browser)
+    ├── scripts/reddit_tools.py   → Reddit search & thread discovery (no browser)
     ├── scripts/scan_replies.py   → reply scanning (no browser)
     └── scripts/update_stats.py   → stats fetching (no browser)
     │
@@ -55,7 +55,7 @@ social-autoposter/
 │   └── SKILL.md           <- interactive setup wizard skill
 ├── scripts/
 │   ├── db.py              <- Neon Postgres connection wrapper
-│   ├── find_threads.py    <- find candidate threads via Reddit/Moltbook API
+│   ├── reddit_tools.py    <- Reddit search, fetch, dedup, and log-post
 │   ├── scan_replies.py    <- scan for new replies to our posts via API
 │   └── update_stats.py    <- fetch engagement stats via API
 ├── skill/
