@@ -263,7 +263,9 @@ def unread_dms():
             if "chat" not in page.url:
                 return {"ok": False, "error": "not_on_dm_page", "url": page.url}
 
-            # Extract conversation list
+            # Extract conversation list from the accessible link names
+            # Each conversation is a listitem with a link whose accessible
+            # name contains: "user avatar NAME TIME PREVIEW"
             conversations = page.evaluate("""() => {
                 const results = [];
                 const items = document.querySelectorAll('main li, main [role="listitem"]');
@@ -274,27 +276,9 @@ def unread_dms():
                     if (!link) continue;
 
                     const threadUrl = link.href;
-
-                    // Skip non-conversation links
                     if (!threadUrl.match(/\\/i\\/chat\\/[\\d-g]/)) continue;
 
-                    // Extract author name - it's in nested generic divs
-                    // Pattern: div > div > div > div with the name text
-                    const textNodes = [];
-                    const divs = item.querySelectorAll('div, span');
-                    for (const d of divs) {
-                        const t = d.textContent.trim();
-                        if (t && t.length > 0 && t.length < 100) {
-                            textNodes.push(t);
-                        }
-                    }
-
-                    // Author name: first short text that's not a time indicator
-                    let author = '';
-                    let time = '';
-                    let preview = '';
-
-                    // Look for the avatar link to get the handle
+                    // Get the handle from the avatar link
                     let handle = '';
                     const avatarLink = item.querySelector('a[href^="https://x.com/"]');
                     if (avatarLink) {
@@ -303,33 +287,50 @@ def unread_dms():
                         if (m) handle = m[1];
                     }
 
-                    // The link text has the full info in accessible name
-                    const linkName = link.getAttribute('aria-label') || link.textContent || '';
+                    // Extract structured data from the DOM
+                    // The link contains nested divs with: [avatar] [name+time div] [preview div]
+                    // Walk the DOM tree to find text nodes
+                    let author = '';
+                    let time = '';
+                    let preview = '';
 
-                    // Parse from the structured DOM
-                    // Name is in a div that's a sibling of the time div
-                    const nameDiv = item.querySelectorAll('div[dir="ltr"], span[dir="ltr"]');
-                    for (const nd of nameDiv) {
-                        const t = nd.textContent.trim();
-                        // Skip if it's a time, preview, or "You:" prefix
-                        if (t.match(/^\\d+[hmd]$/) || t.match(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)/)) {
-                            time = t;
-                        } else if (!author && t.length > 0 && t.length < 50 &&
-                                   !t.startsWith('You:') && !t.startsWith('@')) {
-                            author = t;
+                    // The link's accessible name has everything
+                    const linkText = (link.getAttribute('aria-label') || '').trim();
+                    if (linkText) {
+                        // Format: "user avatar NAME TIME PREVIEW"
+                        let text = linkText.replace(/^user avatar\\s*/, '');
+                        // Try to parse out components
+                        const timeMatch = text.match(/\\s+(\\d+[hmd]|\\d+w|Just now)\\s+/);
+                        if (timeMatch) {
+                            const idx = text.indexOf(timeMatch[0]);
+                            author = text.substring(0, idx).trim();
+                            time = timeMatch[1];
+                            preview = text.substring(idx + timeMatch[0].length).trim();
                         }
                     }
 
-                    // Get preview text - usually the longest text in the item
-                    const allText = item.textContent || '';
-                    // Preview is after the author name and time
-                    if (author && allText.includes(author)) {
-                        const afterAuthor = allText.substring(
-                            allText.indexOf(author) + author.length
-                        ).trim();
-                        // Remove time prefix
-                        preview = afterAuthor.replace(/^[\\s]*\\d+[hmd][\\s]*/, '').trim();
-                        preview = preview.replace(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat).*?[\\s]+/, '').trim();
+                    // Fallback: parse from child elements directly
+                    if (!author) {
+                        const divs = link.querySelectorAll('div');
+                        const texts = [];
+                        for (const d of divs) {
+                            // Only get leaf-ish nodes
+                            if (d.children.length <= 1) {
+                                const t = d.textContent.trim();
+                                if (t && t.length > 0) texts.push(t);
+                            }
+                        }
+                        // Typically: [name, verified_badge?, time, preview]
+                        for (const t of texts) {
+                            if (t.match(/^\\d+[hmd]$/) || t.match(/^\\d+w$/)) {
+                                time = t;
+                            } else if (!author && t.length > 0 && t.length < 50 &&
+                                       t !== 'user avatar') {
+                                author = t;
+                            } else if (author && !preview && t.length > 5) {
+                                preview = t;
+                            }
+                        }
                     }
 
                     const isFromUs = preview.startsWith('You:');
