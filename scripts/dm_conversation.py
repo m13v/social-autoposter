@@ -380,6 +380,15 @@ def flag_human(conn, dm_id, reason):
         print(f"ERROR: DM #{dm_id} not found")
         return False
 
+    # Skip flagging if we already responded (last message is outbound)
+    last_msg = conn.execute("""
+        SELECT direction FROM dm_messages
+        WHERE dm_id = %s ORDER BY message_at DESC LIMIT 1
+    """, (dm_id,)).fetchone()
+    if last_msg and last_msg["direction"] == "outbound":
+        print(f"  SKIP FLAG DM #{dm_id} ({row['their_author']}): last message is already outbound, no escalation needed")
+        return False
+
     conn.execute("""
         UPDATE dms SET conversation_status = 'needs_human', human_reason = %s, flagged_at = NOW()
         WHERE id = %s
