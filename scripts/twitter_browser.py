@@ -510,27 +510,10 @@ def read_conversation(thread_url, max_messages=20):
                     // checkmark image
                     const innerDivCount = item.querySelectorAll('div').length;
 
-                    // Heuristic: our sent messages have a checkmark img
-                    // next to the timestamp (delivery confirmation).
-                    // Look for img elements that are siblings of time text.
-                    // Our messages: div{content} > div{time + img(check)}
-                    // Their messages: div{content} + div{time} (no img)
-                    const imgs = item.querySelectorAll('img');
-                    // Filter out avatar images — checkmarks are small inline imgs
-                    // near time text. If there's an img that's NOT an avatar,
-                    // it's likely a checkmark.
-                    let hasCheckmark = false;
-                    for (const img of imgs) {
-                        const parent = img.parentElement;
-                        if (!parent) continue;
-                        const parentText = parent.textContent.trim();
-                        // Check if parent also contains a time string
-                        if (parentText.match(/\\d{1,2}:\\d{2}\\s*[AP]M/)) {
-                            hasCheckmark = true;
-                            break;
-                        }
-                    }
-                    isFromUs = hasCheckmark;
+                    // Heuristic: our sent messages have SVG checkmarks
+                    // (delivery confirmation icons) while received messages don't.
+                    const svgCount = item.querySelectorAll('svg').length;
+                    isFromUs = svgCount > 0;
 
                     messages.push({
                         sender: isFromUs ? 'us' : partnerName || partnerHandle || 'them',
