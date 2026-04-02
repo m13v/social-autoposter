@@ -572,32 +572,46 @@ def send_dm(thread_url, message):
             _handle_dm_passcode(page)
             page.wait_for_timeout(2000)
 
+            # Wait for conversation to fully load (the message textbox
+            # appears only after the conversation panel renders)
+            page.wait_for_timeout(2000)
+
             # Find the message input box
             msg_box = None
-            # Try "Unencrypted message" first (common label)
-            try:
-                msg_box = page.get_by_role("textbox", name="Unencrypted message")
-                msg_box.wait_for(timeout=5000)
-            except Exception:
-                pass
+            for attempt in range(2):
+                # Try "Unencrypted message" first (common label)
+                try:
+                    msg_box = page.get_by_role("textbox", name="Unencrypted message")
+                    msg_box.wait_for(state="visible", timeout=8000)
+                    break
+                except Exception:
+                    msg_box = None
 
-            # Fallback: try "Start a new message"
-            if not msg_box:
+                # Fallback: try "Start a new message"
                 try:
                     msg_box = page.get_by_role("textbox", name="Start a new message")
-                    msg_box.wait_for(timeout=3000)
+                    msg_box.wait_for(state="visible", timeout=3000)
+                    break
                 except Exception:
-                    pass
+                    msg_box = None
 
-            # Fallback: any textbox in the compose area
-            if not msg_box:
+                # Fallback: any textbox in the compose area
                 try:
                     msg_box = page.locator(
                         'div[role="textbox"][contenteditable="true"]'
                     ).last
-                    msg_box.wait_for(timeout=3000)
+                    msg_box.wait_for(state="visible", timeout=3000)
+                    break
                 except Exception:
-                    return {"ok": False, "error": "message_box_not_found"}
+                    msg_box = None
+
+                if attempt == 0:
+                    # Maybe page redirected to passcode - try handling again
+                    _handle_dm_passcode(page)
+                    page.wait_for_timeout(3000)
+
+            if not msg_box:
+                return {"ok": False, "error": "message_box_not_found"}
 
             # Click and type
             msg_box.click()
