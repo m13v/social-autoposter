@@ -379,6 +379,17 @@ def main():
     if succeeded > 0:
         print(f"[engage_reddit] Avg cost per reply: ${total_usage['cost_usd'] / succeeded:.4f}")
 
+    # Log run summary for monitoring
+    subprocess.run([
+        "python3", os.path.join(REPO_DIR, "scripts", "log_run.py"),
+        "--script", "engage_reddit",
+        "--posted", str(succeeded),
+        "--skipped", str(skipped),
+        "--failed", str(failed),
+        "--cost", f"{total_usage['cost_usd']:.4f}",
+        "--elapsed", f"{total_elapsed:.0f}",
+    ])
+
     # Print final status
     subprocess.run(["python3", REPLY_DB, "status"])
     conn.close()
