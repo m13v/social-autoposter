@@ -382,11 +382,9 @@ def read_conversation(thread_url, max_messages=20):
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
-            try:
-                page.goto(thread_url, wait_until="commit", timeout=10000)
-            except Exception:
-                pass
-            page.wait_for_timeout(5000)
+            # Navigate using JS to avoid SPA navigation timeouts
+            page.evaluate(f"window.location.href = '{thread_url}'")
+            page.wait_for_timeout(6000)
 
             # Handle DM passcode if needed
             _handle_dm_passcode(page)
@@ -568,11 +566,9 @@ def send_dm(thread_url, message):
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
-            try:
-                page.goto(thread_url, wait_until="commit", timeout=10000)
-            except Exception:
-                pass
-            page.wait_for_timeout(5000)
+            # Navigate using JS to avoid SPA navigation timeouts
+            page.evaluate(f"window.location.href = '{thread_url}'")
+            page.wait_for_timeout(6000)
 
             # Handle DM passcode if needed
             _handle_dm_passcode(page)
