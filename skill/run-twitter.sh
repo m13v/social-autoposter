@@ -63,9 +63,9 @@ Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
    Replace TWEET_STATUS_ID with the tweet's numeric status ID (from the URL).
    If any row is returned, SKIP that tweet and pick another one. Log: \"Skipped tweet TWEET_URL (already posted, post_id=ID)\".
 3. Draft the reply using the project's voice/angle (follow Content Rules - NEVER use em dashes, keep it short 1-2 sentences)
-4. Post it using the twitter-agent browser (mcp__twitter-agent__* tools):
-   - Navigate to the tweet URL
-   - Click the reply box, type your reply, click Reply
+4. Post it using the Python CDP script (no browser MCP needed):
+   python3 scripts/twitter_browser.py reply "TWEET_URL" "YOUR_REPLY_TEXT"
+   Returns JSON with {ok: true, tweet_url, verified} on success.
 5. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT).
 
 Up to 50 posts per run. If nothing fits, say '## No good tweet found' and stop.
