@@ -198,12 +198,12 @@ Report which platforms are ready and which need attention.
 
 ### Step 6: Test run (dry run)
 
-Run the Reddit search tool to verify everything works:
+Run the thread finder to verify everything works:
 ```bash
-python3 "$SKILL_DIR/scripts/reddit_tools.py" search "AI agents" --limit 3
+python3 "$SKILL_DIR/scripts/find_threads.py" --limit 3
 ```
 
-Show the user the candidate threads found. Don't post anything -- just verify the pipeline works.
+Show the user the candidate threads found. Don't post anything — just verify the pipeline works.
 
 Rate limit is 40 posts per 24 hours (enforced by the script).
 
