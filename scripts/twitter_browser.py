@@ -393,55 +393,92 @@ def read_conversation(thread_url, max_messages=20):
                 const maxMessages = params.maxMessages;
                 const ourHandle = params.ourHandle;
 
-                // Get the conversation partner name from the header
-                // The header has the partner's name in a div after the back button
                 let partnerName = '';
                 let partnerHandle = '';
-
-                // Strategy 1: Look for the name in the conversation header area
-                // It's inside main > div > div > div with just the name text
                 const main = document.querySelector('main');
-                if (main) {
-                    // The header typically has: [back btn] [avatar] [name div]
-                    // Find the "View Profile" link to get the handle
-                    const profileLink = main.querySelector('a[href*="x.com/"]');
-                    if (profileLink) {
-                        const href = profileLink.getAttribute('href') || '';
-                        const m = href.match(/x\\.com\\/([^/]+)/);
-                        if (m && m[1] !== ourHandle) partnerHandle = m[1];
-                    }
+                if (!main) return {partner_name: '', partner_handle: '', messages: [], total_found: 0};
 
-                    // Get the name text from near the top of main
-                    // Look for handle text like @username
-                    const handleEls = main.querySelectorAll('div, span');
-                    for (const el of handleEls) {
-                        const t = el.textContent.trim();
-                        if (t.startsWith('@') && t.length > 2 && t.length < 50 &&
-                            !t.includes(' ') && t.substring(1) !== ourHandle) {
-                            partnerHandle = t.substring(1);
+                // Find the conversation panel (the section containing the
+                // message textbox), NOT the sidebar conversation list.
+                // The textbox has aria-label like "Unencrypted message".
+                const textbox = main.querySelector('[role="textbox"]');
+                // Walk up from textbox to find the conversation container
+                // that holds the message list items.
+                let convPanel = null;
+                if (textbox) {
+                    // The conversation panel is typically a sibling of or
+                    // ancestor of the textbox container. Walk up to find
+                    // the div that contains BOTH the message list and textbox.
+                    let el = textbox;
+                    for (let i = 0; i < 10; i++) {
+                        el = el.parentElement;
+                        if (!el) break;
+                        const lis = el.querySelectorAll('li, [role="listitem"]');
+                        if (lis.length >= 2) {
+                            convPanel = el;
+                            break;
                         }
                     }
                 }
 
-                // Find messages in the conversation
-                // Messages are in listitem elements within the main area
-                const items = main ? main.querySelectorAll('li, [role="listitem"]') : [];
+                // Fallback: if no textbox found, try to find the panel
+                // that has "View Profile" text (the conversation header)
+                if (!convPanel) {
+                    const allDivs = main.querySelectorAll('div');
+                    for (const d of allDivs) {
+                        if (d.textContent.includes('View Profile') &&
+                            d.textContent.includes('Joined ') &&
+                            d.querySelectorAll('li').length >= 2) {
+                            convPanel = d;
+                            break;
+                        }
+                    }
+                }
+
+                // Last fallback: use main but filter out sidebar items
+                if (!convPanel) convPanel = main;
+
+                // Extract partner info from profile card in the conversation
+                const profileLink = convPanel.querySelector('a[href*="x.com/"]');
+                if (profileLink) {
+                    const href = profileLink.getAttribute('href') || '';
+                    const m = href.match(/x\\.com\\/([^/]+)/);
+                    if (m && m[1] !== ourHandle) partnerHandle = m[1];
+                }
+
+                // Look for @handle text
+                const handleEls = convPanel.querySelectorAll('div, span');
+                for (const el of handleEls) {
+                    const t = el.textContent.trim();
+                    if (t.startsWith('@') && t.length > 2 && t.length < 50 &&
+                        !t.includes(' ') && t.substring(1) !== ourHandle) {
+                        partnerHandle = t.substring(1);
+                        break;
+                    }
+                }
+
+                // Find messages — only from the conversation panel
+                const items = convPanel.querySelectorAll('li, [role="listitem"]');
                 const messages = [];
                 let currentDate = '';
 
                 for (const item of items) {
                     const text = item.textContent || '';
 
-                    // Date separator (e.g., "Mon, Mar 30", "Yesterday", "Today")
+                    // Skip sidebar conversation items (they contain
+                    // avatar links to x.com/username profiles)
+                    const sidebarLink = item.querySelector('a[href*="/i/chat/"]');
+                    if (sidebarLink) continue;
+
+                    // Date separator
                     if (text.match(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Today|Yesterday)/) &&
                         text.length < 30) {
                         currentDate = text.trim();
                         continue;
                     }
 
-                    // Profile card at the top (has "View Profile" and "Joined")
+                    // Profile card
                     if (text.includes('View Profile') || text.includes('Joined ')) {
-                        // Extract partner name from this card
                         const nameEl = item.querySelector('div[dir="ltr"], span');
                         if (nameEl && !partnerName) {
                             const n = nameEl.textContent.trim();
@@ -454,42 +491,26 @@ def read_conversation(thread_url, max_messages=20):
                         continue;
                     }
 
-                    // Skip empty items
                     if (text.trim().length < 2) continue;
 
                     // Extract message content and time
-                    // Messages have: content div + time div
-                    // Our messages have a checkmark img after the time
-                    const divs = item.querySelectorAll(':scope > div');
-                    if (divs.length === 0) continue;
-
                     let content = '';
                     let time = '';
                     let isFromUs = false;
 
-                    // Check for checkmark (indicates our message)
-                    const checkmark = item.querySelector('img[src*="check"], svg');
-                    const allImgs = item.querySelectorAll('img');
-
-                    // Look for time pattern (e.g., "5:08 PM", "9:59 AM")
                     const timeMatch = text.match(/(\\d{1,2}:\\d{2}\\s*[AP]M)/);
                     if (timeMatch) {
                         time = timeMatch[1];
                     }
 
-                    // Content is everything except the time
-                    // The content div is typically the first child with actual text
+                    // Content: find the deepest div with message text
                     const contentDivs = item.querySelectorAll('div');
                     for (const cd of contentDivs) {
                         const t = cd.textContent.trim();
-                        // Skip time-only divs
                         if (t.match(/^\\d{1,2}:\\d{2}\\s*[AP]M$/)) continue;
-                        // Skip if it's just the time repeated
                         if (t === time) continue;
-                        // Get the deepest div with unique content
                         if (t.length > 2 && t.length < 5000 &&
                             !t.includes('View Profile') && !t.includes('Joined ')) {
-                            // Check if this is a leaf-ish content div
                             const childDivs = cd.querySelectorAll('div');
                             if (childDivs.length <= 2) {
                                 content = t.replace(/(\\d{1,2}:\\d{2}\\s*[AP]M)/g, '').trim();
@@ -500,19 +521,7 @@ def read_conversation(thread_url, max_messages=20):
 
                     if (!content || content.length < 1) continue;
 
-                    // Determine sender: our messages typically appear on the right
-                    // and have a different visual treatment.
-                    // Check for reaction buttons (emoji, reply) which appear on hover
-                    // for received messages
-                    const buttons = item.querySelectorAll('button');
-                    // If the item has exactly the content + time + checkmark pattern,
-                    // it's likely our message
-                    // Heuristic: our messages have fewer child elements and the
-                    // checkmark image
-                    const innerDivCount = item.querySelectorAll('div').length;
-
-                    // Heuristic: our sent messages have SVG checkmarks
-                    // (delivery confirmation icons) while received messages don't.
+                    // Our sent messages have SVG checkmarks (delivery status)
                     const svgCount = item.querySelectorAll('svg').length;
                     isFromUs = svgCount > 0;
 
@@ -524,7 +533,6 @@ def read_conversation(thread_url, max_messages=20):
                     });
                 }
 
-                // Take last N messages
                 const recent = messages.slice(-maxMessages);
 
                 return {
