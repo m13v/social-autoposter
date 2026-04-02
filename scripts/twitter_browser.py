@@ -566,54 +566,43 @@ def send_dm(thread_url, message):
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
-            # Navigate using JS to avoid SPA navigation timeouts
-            page.evaluate(f"window.location.href = '{thread_url}'")
-            page.wait_for_timeout(6000)
+            # Navigate to DM inbox first, then click into conversation.
+            # Direct URL navigation to DM conversations often hangs
+            # because X's SPA doesn't fire domcontentloaded for DM routes.
+            page.evaluate("window.location.href = 'https://x.com/i/chat/'")
+            page.wait_for_timeout(5000)
 
             # Handle DM passcode if needed
             _handle_dm_passcode(page)
             page.wait_for_timeout(2000)
 
-            # Wait for conversation to fully load (the message textbox
-            # appears only after the conversation panel renders)
-            page.wait_for_timeout(2000)
+            # Extract conversation ID from URL and click into it
+            conv_id = thread_url.rstrip("/").split("/")[-1]
+            try:
+                conv_link = page.locator(f'a[href*="{conv_id}"]').first
+                conv_link.click()
+                page.wait_for_timeout(3000)
+            except Exception:
+                return {"ok": False, "error": "conversation_not_found_in_sidebar"}
 
             # Find the message input box
             msg_box = None
-            for attempt in range(2):
-                # Try "Unencrypted message" first (common label)
+            for label in ["Unencrypted message", "Start a new message"]:
                 try:
-                    msg_box = page.get_by_role("textbox", name="Unencrypted message")
-                    msg_box.wait_for(state="visible", timeout=8000)
+                    msg_box = page.get_by_role("textbox", name=label)
+                    msg_box.wait_for(state="visible", timeout=5000)
                     break
                 except Exception:
                     msg_box = None
 
-                # Fallback: try "Start a new message"
-                try:
-                    msg_box = page.get_by_role("textbox", name="Start a new message")
-                    msg_box.wait_for(state="visible", timeout=3000)
-                    break
-                except Exception:
-                    msg_box = None
-
-                # Fallback: any textbox in the compose area
+            if not msg_box:
                 try:
                     msg_box = page.locator(
                         'div[role="textbox"][contenteditable="true"]'
                     ).last
                     msg_box.wait_for(state="visible", timeout=3000)
-                    break
                 except Exception:
-                    msg_box = None
-
-                if attempt == 0:
-                    # Maybe page redirected to passcode - try handling again
-                    _handle_dm_passcode(page)
-                    page.wait_for_timeout(3000)
-
-            if not msg_box:
-                return {"ok": False, "error": "message_box_not_found"}
+                    return {"ok": False, "error": "message_box_not_found"}
 
             # Click and type
             msg_box.click()
