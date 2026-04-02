@@ -134,6 +134,11 @@ Your last {len(recent_comments)} comments (don't repeat talking points):
 
     return f"""You are the Social Autoposter. Post {limit} comment(s) on relevant Reddit threads for this project.
 
+## MANDATORY: One comment per thread
+NEVER post more than one comment per Reddit thread. Before posting in ANY thread, run `already-posted` to check.
+If you already posted in a thread during this session (even moments ago), SKIP that thread entirely.
+The log-post command will REJECT duplicate posts, but you must also check proactively.
+
 ## Project: {project.get('name', 'general')}
 {project_json}
 
