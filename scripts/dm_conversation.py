@@ -36,8 +36,8 @@ Usage:
 import argparse
 import json
 import os
+import subprocess
 import sys
-import urllib.request
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -355,17 +355,20 @@ def _send_escalation_email(conn, dm_id, platform, their_author, reason):
         "subject": subject,
         "text": body,
         "reply_to": f"dm-{dm_id}@s4l.ai",
-    }).encode()
+    })
 
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=payload,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        urllib.request.urlopen(req)
-        print(f"  Escalation email sent for DM #{dm_id} to {to_email}")
+        result = subprocess.run(
+            ["curl", "-s", "-X", "POST", "https://api.resend.com/emails",
+             "-H", f"Authorization: Bearer {api_key}",
+             "-H", "Content-Type: application/json",
+             "-d", payload],
+            capture_output=True, text=True, timeout=30,
+        )
+        if '"id"' in result.stdout:
+            print(f"  Escalation email sent for DM #{dm_id} to {to_email}")
+        else:
+            print(f"  WARNING: Resend API error for DM #{dm_id}: {result.stdout}")
     except Exception as e:
         print(f"  WARNING: Failed to send escalation email for DM #{dm_id}: {e}")
 
