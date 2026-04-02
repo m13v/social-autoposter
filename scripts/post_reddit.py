@@ -337,6 +337,19 @@ def main():
         for line in lines[-5:]:
             print(f"[post_reddit] {line}")
 
+    # Log run summary for monitoring
+    posted = args.limit if ok else 0
+    failed_count = 0 if ok else 1
+    subprocess.run([
+        "python3", os.path.join(REPO_DIR, "scripts", "log_run.py"),
+        "--script", "post_reddit",
+        "--posted", str(posted),
+        "--skipped", "0",
+        "--failed", str(failed_count),
+        "--cost", f"{usage['cost_usd']:.4f}",
+        "--elapsed", f"{elapsed:.0f}",
+    ])
+
 
 if __name__ == "__main__":
     main()
