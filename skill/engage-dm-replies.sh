@@ -120,21 +120,32 @@ Read $SKILL_FILE for content rules (tone, anti-AI detection, no em dashes).
 
 ## Task: Send pending human replies as DMs
 
-The following replies were written by the human operator via email and need to be sent as DMs on the respective platforms. Send each one EXACTLY as written — do NOT rephrase, do NOT add anything.
+The following replies were written by the human operator via email as INSTRUCTIONS for how to respond. Use each reply as a prompt — understand the intent, tone, and key points, then craft a natural DM that:
+- Matches the conversational tone of the thread (casual, texting style, 1-3 sentences)
+- Incorporates the human's key points and decisions
+- Sounds like the same person who sent the previous outbound messages in the conversation
+- Follows all the HARD RULES and COMMITMENT GUARDRAILS from Phase D
+
+The human's reply is your DIRECTION, not the literal message. Think of it as "the human told you what to say, now say it naturally."
 
 Pending human replies:
 $HUMAN_REPLIES
 
 For each reply:
 
-1. Navigate to the conversation on the correct platform using chat_url (or find the conversation with their_author).
+1. First, read the full conversation history:
+   \`\`\`bash
+   cd ~/social-autoposter && python3 scripts/dm_conversation.py history --dm-id DM_ID
+   \`\`\`
+2. Craft a natural DM based on the human's instructions and the conversation context.
+3. Navigate to the conversation on the correct platform using chat_url (or find the conversation with their_author).
    - **Reddit Chat** (mcp__reddit-agent__* tools)
    - **LinkedIn Messages** (mcp__linkedin-agent__* tools)
    - **X/Twitter DMs** (mcp__twitter-agent__* tools) — if encrypted DM passcode dialog appears, enter: $TWITTER_DM_PASSCODE
-2. Type and send the reply_content VERBATIM.
-3. Log the outbound message:
+4. Type and send the crafted reply.
+5. Log the outbound message (log what you ACTUALLY SENT, not the human's instructions):
    \`\`\`bash
-   cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "THE_EXACT_REPLY_TEXT"
+   cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "THE_CRAFTED_REPLY_YOU_SENT"
    \`\`\`
 4. Mark the human reply as sent:
    \`\`\`bash
