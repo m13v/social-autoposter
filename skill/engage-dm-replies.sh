@@ -99,15 +99,14 @@ fi
 # PHASE 0: Send pending human replies from email escalations
 # ═══════════════════════════════════════════════════════
 HUMAN_REPLIES=$(psql "$DATABASE_URL" -t -A -c "
-    SELECT json_agg(json_build_object(
-        'id', h.id, 'dm_id', h.dm_id, 'platform', h.platform,
-        'their_author', h.their_author, 'reply_content', h.reply_content,
-        'chat_url', d.chat_url, 'project_name', h.project_name
-    ))
-    FROM human_dm_replies h
-    JOIN dms d ON d.id = h.dm_id
-    WHERE h.status = 'pending'
-    ORDER BY h.created_at ASC;" 2>/dev/null || echo "null")
+    SELECT json_agg(q) FROM (
+        SELECT h.id, h.dm_id, h.platform, h.their_author, h.reply_content,
+               d.chat_url, h.project_name
+        FROM human_dm_replies h
+        JOIN dms d ON d.id = h.dm_id
+        WHERE h.status = 'pending'
+        ORDER BY h.created_at ASC
+    ) q;" 2>/dev/null || echo "null")
 
 if [ "$HUMAN_REPLIES" != "null" ] && [ -n "$HUMAN_REPLIES" ]; then
     HR_COUNT=$(echo "$HUMAN_REPLIES" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
