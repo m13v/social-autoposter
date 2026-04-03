@@ -352,6 +352,23 @@ def main():
                                 time.sleep(10)
 
                     if post_result and post_result.get("ok"):
+                        # Check if already replied (dedup)
+                        if post_result.get("already_replied"):
+                            existing = post_result.get("existing_text", "")[:200]
+                            existing_url = post_result.get("existing_url", "")
+                            cmd_args = ["python3", REPLY_DB, "replied", str(reply["id"]), existing]
+                            if existing_url:
+                                cmd_args.append(existing_url)
+                            subprocess.run(cmd_args)
+                            succeeded += 1
+                            print(f"[engage_reddit] #{reply['id']} DEDUP (already replied) ({reply_elapsed:.0f}s)")
+                            print(f"[engage_reddit] #{reply['id']} tokens: in={usage['input_tokens']} out={usage['output_tokens']} "
+                                  f"cache_r={usage['cache_read']} cache_w={usage['cache_create']} "
+                                  f"${usage['cost_usd']:.4f}")
+                            processed += 1
+                            time.sleep(2)
+                            continue
+
                         # Mark as replied in DB
                         cmd_args = ["python3", REPLY_DB, "replied", str(reply["id"]), reply_text]
                         subprocess.run(cmd_args)
