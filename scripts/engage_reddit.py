@@ -149,20 +149,16 @@ Read ~/social-autoposter/config.json for project details and content_angle.
 4. Mark as processing:
    python3 {REPLY_DB} processing {reply['id']}
 
-5. First check for duplicate (already replied) via Bash:
-   python3 ~/social-autoposter/scripts/reddit_tools.py fetch '{reply['their_comment_url']}'
-   Look at the comments JSON: if any comment has author='{reddit_username}', we already replied. Run:
-   python3 {REPLY_DB} replied {reply['id']} "EXISTING_TEXT" "EXISTING_URL"
-   Then output DONE.
-
-6. Post the reply using the Python CDP script (NO browser MCP needed):
+5. Post the reply using the Python CDP script (NO browser MCP needed):
    python3 ~/social-autoposter/scripts/reddit_browser.py reply "{reply['their_comment_url']}" "YOUR_DRAFTED_REPLY_TEXT"
    This returns JSON: {{"ok": true, "verified": true}} on success, or {{"ok": false, "error": "..."}} on failure.
    The script connects to the reddit-agent browser via CDP, clicks reply, fills the text, and submits.
+   IMPORTANT: You MUST run this command. Do NOT skip posting. The script handles dedup internally.
 
-7. After posting:
+6. After posting:
    - If ok=true: python3 {REPLY_DB} replied {reply['id']} "YOUR_TEXT"
-   - If ok=false: python3 {REPLY_DB} skipped {reply['id']} "CDP_ERROR: error_message"
+   - If ok=false with error "reply_link_not_found" or "thread_locked": python3 {REPLY_DB} skipped {reply['id']} "REASON"
+   - If ok=false with other error: python3 {REPLY_DB} skipped {reply['id']} "CDP_ERROR: error_message"
 
 8. If you recommended a project (Tier 2/3), also run:
    source ~/social-autoposter/.env
