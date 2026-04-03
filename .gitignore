@@ -17,6 +17,9 @@ scripts/phase_*.py
 # Claude agent runtime files
 .claude/
 
+# Agents keep recreating skill/SKILL.md — ignore it so auto_commit doesn't commit stale copies
+skill/SKILL.md
+
 # Agent-generated browser snapshots and data dumps
 *.yml
 *-notifications.json
