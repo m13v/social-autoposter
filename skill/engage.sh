@@ -249,11 +249,12 @@ Failed (rate limit, blocked, error):
 DMs/Chat disabled:
   psql "\$DATABASE_URL" -c "UPDATE dms SET status='skipped', skip_reason='chat_disabled' WHERE id=DM_ID;"
 
-CRITICAL: Each platform MUST use its dedicated browser agent. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
-- Reddit: mcp__reddit-agent__*
-- Twitter: mcp__twitter-agent__*
-- LinkedIn: mcp__linkedin-agent__*
-If a browser agent tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
+CRITICAL: Prefer Python CDP scripts where available. Fall back to dedicated browser agents when CDP fails.
+- Reddit: python3 scripts/reddit_browser.py (CDP), fall back to mcp__reddit-agent__*
+- Twitter: python3 scripts/twitter_browser.py (CDP), fall back to mcp__twitter-agent__*
+- LinkedIn: python3 scripts/linkedin_browser.py (CDP), fall back to mcp__linkedin-agent__*
+NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
+If a script or tool call fails, wait 30 seconds and retry (up to 3 times).
 PROMPT_EOF
 
     gtimeout 3600 claude -p "$(cat "$DM_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase E claude exited with code $?"
