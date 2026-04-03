@@ -156,6 +156,9 @@ if kill -0 "$SCAN_PID" 2>/dev/null; then
     log "Waiting for Phase A scanner to finish..."
     wait "$SCAN_PID" || true
 fi
+PHASE_A_ELAPSED=$(( $(date +%s) - PHASE_A_START ))
+SCAN_FOUND=$(grep -ci "new repl" "$LOG_FILE" 2>/dev/null || echo 0)
+python3 "$REPO_DIR/scripts/log_run.py" --script "engage_scan_reddit" --posted "$SCAN_FOUND" --skipped 0 --failed 0 --cost 0 --elapsed "$PHASE_A_ELAPSED"
 
 # ═══════════════════════════════════════════════════════
 # PHASE E: Reddit DM engagement (continue conversations via Chat)
