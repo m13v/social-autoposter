@@ -86,8 +86,8 @@ EXCLUSIONS - do NOT engage with these accounts (skip and mark as 'skipped' with 
 - Excluded authors: $EXCLUDED_AUTHORS
 - Excluded Twitter accounts: $EXCLUDED_TWITTER
 
-CRITICAL - Browser agent rule: ONLY use mcp__twitter-agent__* tools for posting. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
-CRITICAL: If a browser agent tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). If still blocked, skip that item and move on.
+CRITICAL - Reply posting: Use the CDP script to post replies. NEVER use mcp__twitter-agent__*, mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* browser tools for posting.
+CRITICAL: If the CDP script fails, retry up to 3 times with 30 seconds between attempts. If still failing, skip that item and move on.
 
 ## Respond to pending Twitter/X replies ($PENDING_COUNT total)
 
@@ -133,12 +133,12 @@ When you recommend a project in a reply (Tier 2 or Tier 3), set project_name on 
 This lets the DM pipeline know which project the conversation is about.
 
 MANDATORY reply flow for every item:
-  Step 1: python3 reply_db.py processing ID      <- mark BEFORE touching browser
-  Step 2: Post reply via twitter-agent browser (mcp__twitter-agent__* tools):
-          - Navigate to the tweet URL (their_comment_url)
-          - Take a snapshot to find the reply box
-          - Click the reply box, type the reply text, and submit
-          - After posting, capture the URL of our reply tweet
+  Step 1: python3 reply_db.py processing ID      <- mark BEFORE posting
+  Step 2: Post reply via CDP script:
+          python3 $REPO_DIR/scripts/twitter_browser.py reply "TWEET_URL" "YOUR_REPLY_TEXT"
+          Returns JSON with {ok: true, tweet_url, verified} on success.
+          Use their_comment_url as TWEET_URL and your generated reply as YOUR_REPLY_TEXT.
+          Extract tweet_url from the JSON response for Step 3.
   Step 3: python3 reply_db.py replied ID "reply text" REPLY_URL   <- mark AFTER success
 If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run.
 If the tweet has been deleted or is unavailable, mark as 'skipped' with reason 'tweet_not_found'.
