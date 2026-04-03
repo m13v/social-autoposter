@@ -306,9 +306,7 @@ def reply_to_comment(comment_permalink, text):
 
         try:
             old_url = _to_old_reddit(comment_permalink)
-            # Add ?context=1 to ensure we see the target comment
-            if "?" not in old_url:
-                old_url += "?context=1"
+            # Don't add ?context= — it shifts the target comment up
             page.goto(old_url, wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
             _ensure_old_reddit(page)
