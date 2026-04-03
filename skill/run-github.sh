@@ -19,6 +19,7 @@ LOG_DIR="$REPO_DIR/skill/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/github-$(date +%Y-%m-%d_%H%M%S).log"
 
+RUN_START=$(date +%s)
 echo "=== GitHub Issues Run: $(date) ===" | tee "$LOG_FILE"
 
 # Pick project based on weight distribution
@@ -104,6 +105,13 @@ CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular da
 CRITICAL: In self-replies, link to SPECIFIC FILES (blob/main/path/to/file.ext), not just repo homepages." 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
+
+# Log run to persistent monitor
+RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+POSTED=$(grep -c "gh issue comment" "$LOG_FILE" 2>/dev/null || echo 0)
+SKIPPED=$(grep -ci "skipped" "$LOG_FILE" 2>/dev/null || echo 0)
+FAILED=$(grep -ci "error\|failed\|FAILED" "$LOG_FILE" 2>/dev/null || echo 0)
+python3 "$REPO_DIR/scripts/log_run.py" --script "post_github" --posted "$POSTED" --skipped "$SKIPPED" --failed "$FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
 
 # Clean up old logs (keep last 7 days)
 find "$LOG_DIR" -name "github-*.log" -mtime +7 -delete 2>/dev/null || true
