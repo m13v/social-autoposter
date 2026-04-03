@@ -189,12 +189,12 @@ Read $SKILL_FILE for content rules (tone, anti-AI detection, no em dashes).
 
 ## Task: Scan for new inbound DM messages and reply to continue conversations
 
-CRITICAL - Browser agent rules:
-- Reddit Chat: use mcp__reddit-agent__* tools ONLY
-- LinkedIn Messages: use mcp__linkedin-agent__* tools ONLY
-- X/Twitter DMs: use mcp__twitter-agent__* tools ONLY
+CRITICAL - Tool rules:
+- Reddit Chat: use Python CDP scripts (scripts/reddit_browser.py) for scanning/reading, fall back to mcp__reddit-agent__* for chat SPA operations
+- LinkedIn Messages: use Python CDP scripts (scripts/linkedin_browser.py) ONLY
+- X/Twitter DMs: use Python CDP scripts (scripts/twitter_browser.py) ONLY
 NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
-If a tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to other tools.
+If a script or tool call fails, wait 30 seconds and retry (up to 3 times).
 
 $( [ -n "$PHASE0_INSTRUCTIONS" ] && echo "$PHASE0_INSTRUCTIONS
 
@@ -218,20 +218,26 @@ $(psql "$DATABASE_URL" -t -A -c "
     ORDER BY sent_at DESC
     LIMIT 20;" 2>/dev/null || echo "null")
 
-## PHASE A: Scan Reddit Chat for new messages
+## PHASE A: Scan Reddit for new messages
 
-1. Navigate to https://www.reddit.com/chat using the reddit-agent browser
-2. Wait for chat sidebar to load (3 seconds)
-3. Look for chat rooms with unread indicators (bold text, notification badges)
-4. For each chat room with unread messages:
-   a. Click into the chat room
-   b. Read the latest messages
-   c. Identify the other person's username
-   d. Log any new inbound messages to the database:
+1. Scan Reddit inbox for comment replies (notifications about replies to our comments):
+   \`\`\`bash
+   cd ~/social-autoposter && python3 scripts/reddit_browser.py unread-dms
+   \`\`\`
+   This returns JSON with: author, subject, preview, time, thread_url, type for each unread item.
+
+2. For Reddit Chat conversations (new reddit SPA), use the reddit-agent browser (mcp__reddit-agent__* tools):
+   a. Navigate to https://www.reddit.com/chat
+   b. Look for chat rooms with unread indicators
+   c. Click into each unread chat room and read messages
+
+3. For each conversation with new inbound messages:
+   a. Identify the sender username
+   b. Log inbound messages:
       \`\`\`bash
       cd ~/social-autoposter && python3 scripts/dm_conversation.py log-inbound --author "USERNAME" --content "MESSAGE_TEXT"
       \`\`\`
-   e. If no existing DM record exists for this user, the script will tell you. Create one:
+   c. If no existing DM record exists for this user, the script will tell you. Create one:
       \`\`\`bash
       source ~/social-autoposter/.env
       psql "\$DATABASE_URL" -c "INSERT INTO dms (platform, their_author, status, conversation_status, tier, project_name) VALUES ('reddit', 'USERNAME', 'sent', 'active', 1, NULL) RETURNING id;"
@@ -390,7 +396,11 @@ python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier N
 
 ### Step 4: Send the reply
 
-**Reddit Chat** (mcp__reddit-agent__* tools):
+**Reddit Chat** (try CDP first, fall back to mcp__reddit-agent__* browser):
+\`\`\`bash
+cd ~/social-autoposter && python3 scripts/reddit_browser.py send-dm "CHAT_URL" "YOUR_REPLY_TEXT"
+\`\`\`
+If the CDP script returns {ok:false} (Reddit Chat SPA may not render via CDP), fall back to using mcp__reddit-agent__* browser tools:
 1. Navigate to the chat room (use chat_url if available, or find via sidebar)
 2. Type the reply in the message input
 3. Press Enter to send
