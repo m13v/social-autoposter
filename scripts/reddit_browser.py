@@ -1163,6 +1163,115 @@ def compose_dm(recipient, subject, body):
                 browser.close()
 
 
+def scrape_views(username, max_scrolls=300):
+    """Scrape Reddit view counts from the user's profile pages.
+
+    Navigates to 4 profile page variants (comments sorted by top/new,
+    submitted sorted by top/new) and extracts view counts from articles.
+
+    Returns: {"ok": true, "total": N, "with_views": N, "results": [{url, views}]}
+    """
+    from playwright.sync_api import sync_playwright
+
+    profile_urls = [
+        f"https://www.reddit.com/user/{username}/comments/?sort=top",
+        f"https://www.reddit.com/user/{username}/comments/?sort=new",
+        f"https://www.reddit.com/user/{username}/submitted/?sort=top&t=all",
+        f"https://www.reddit.com/user/{username}/submitted/?sort=new",
+    ]
+
+    extract_js = """() => {
+        const results = [];
+        document.querySelectorAll("article").forEach(article => {
+            const links = article.querySelectorAll('a[href*="/comments/"]');
+            let url = null;
+            for (const link of links) {
+                const href = link.getAttribute("href");
+                if (href && href.includes("/comments/")) {
+                    if (!url || href.includes("/comment/")) url = href;
+                }
+            }
+            let views = null;
+            for (const el of article.querySelectorAll("*")) {
+                const text = el.textContent.trim();
+                const match = text.match(/^([\\d,.]+)\\s*([KkMm])?\\s+views?$/);
+                if (match) {
+                    let v = parseFloat(match[1].replace(/,/g, ""));
+                    if (match[2] && match[2].toLowerCase() === "k") v *= 1000;
+                    if (match[2] && match[2].toLowerCase() === "m") v *= 1000000;
+                    views = Math.round(v);
+                    break;
+                }
+            }
+            if (url) {
+                results.push({
+                    url: url.startsWith("http") ? url : "https://www.reddit.com" + url,
+                    views: views,
+                });
+            }
+        });
+        return results;
+    }"""
+
+    all_results = {}  # url -> views (deduped, keep non-null)
+
+    with sync_playwright() as p:
+        browser, page, is_cdp = get_browser_and_page(p)
+
+        try:
+            for page_url in profile_urls:
+                page.goto(page_url, wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+
+                # Extract initial articles
+                items = page.evaluate(extract_js)
+                for item in items:
+                    url = item["url"]
+                    if url not in all_results or (item["views"] is not None and all_results[url] is None):
+                        all_results[url] = item["views"]
+
+                # Scroll to load more
+                prev_height = 0
+                same_count = 0
+                scroll_count = 0
+                per_page_max = max_scrolls // 4
+
+                while same_count < 4 and scroll_count < per_page_max:
+                    cur_height = page.evaluate("document.body.scrollHeight")
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    page.wait_for_timeout(2000)
+
+                    items = page.evaluate(extract_js)
+                    for item in items:
+                        url = item["url"]
+                        if url not in all_results or (item["views"] is not None and all_results[url] is None):
+                            all_results[url] = item["views"]
+
+                    if cur_height == prev_height:
+                        same_count += 1
+                    else:
+                        same_count = 0
+                    prev_height = cur_height
+                    scroll_count += 1
+
+            results_list = [{"url": url, "views": views} for url, views in all_results.items()]
+            with_views = sum(1 for v in all_results.values() if v is not None)
+
+            return {
+                "ok": True,
+                "total": len(results_list),
+                "with_views": with_views,
+                "results": results_list,
+            }
+
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        finally:
+            if not is_cdp:
+                page.close()
+                browser.close()
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -1232,6 +1341,17 @@ def main():
             )
             sys.exit(1)
         result = compose_dm(sys.argv[2], sys.argv[3], sys.argv[4])
+        print(json.dumps(result, indent=2))
+
+    elif cmd == "scrape-views":
+        if len(sys.argv) < 3:
+            print(
+                "Usage: reddit_browser.py scrape-views <username> [max_scrolls]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        max_scrolls = int(sys.argv[3]) if len(sys.argv) > 3 else 300
+        result = scrape_views(sys.argv[2], max_scrolls)
         print(json.dumps(result, indent=2))
 
     else:
