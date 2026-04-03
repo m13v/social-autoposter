@@ -31,6 +31,7 @@ LOG_FILE="$LOG_DIR/audit-$(date +%Y-%m-%d_%H%M%S).log"
 
 log() { echo "[$(date +%H:%M:%S)] $*" >> "$LOG_FILE"; echo "[$(date +%H:%M:%S)] $*"; }
 
+RUN_START=$(date +%s)
 log "=== Audit Pipeline Run: $(date) ==="
 
 # ═══════════════════════════════════════════════════════
@@ -144,6 +145,12 @@ DELETED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE status
 REMOVED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE status='removed';" 2>/dev/null || echo "?")
 
 log "Post status: active=$ACTIVE deleted=$DELETED removed=$REMOVED"
+
+# Log run to persistent monitor
+RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+AUDIT_FAILED=$(( (STEP1_EXIT != 0 ? 1 : 0) + (${STEP2_EXIT:-0} != 0 ? 1 : 0) ))
+python3 "$REPO_DIR/scripts/log_run.py" --script "audit" --posted "$ACTIVE" --skipped 0 --failed "$AUDIT_FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
+
 log "=== Audit Pipeline complete: $(date) ==="
 
 # Clean up old logs (keep last 14 days)
