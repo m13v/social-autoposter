@@ -47,54 +47,33 @@ fi
 # ═══════════════════════════════════════════════════════
 # STEP 2: Reddit view counts (browser required)
 # ═══════════════════════════════════════════════════════
-log "Step 2: Reddit view counts (Claude + Playwright)"
+log "Step 2: Reddit view counts (Python CDP — no LLM tokens)"
 
 REDDIT_USERNAME=$(python3 -c "import json; print(json.load(open('$REPO_DIR/config.json'))['accounts']['reddit']['username'])" 2>/dev/null || echo "")
 
 if [ -n "$REDDIT_USERNAME" ]; then
-    STEP2_PROMPT=$(mktemp)
-    cat > "$STEP2_PROMPT" <<'STEP2_EOF'
-Scrape Reddit view counts from 4 profile pages. Do these steps in order, no deviations:
+    # Scrape views via CDP (no Claude session needed)
+    VIEWS_JSON=$(python3 "$REPO_DIR/scripts/reddit_browser.py" scrape-views "$REDDIT_USERNAME" 300 2>/dev/null)
+    SCRAPE_OK=$(echo "$VIEWS_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('ok', False))" 2>/dev/null)
 
-CRITICAL: Use the reddit-agent browser (mcp__reddit-agent__* tools) for ALL steps below. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
-If a tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
+    if [ "$SCRAPE_OK" = "True" ]; then
+        # Extract results array and save to temp file for scrape_reddit_views.py
+        echo "$VIEWS_JSON" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+with open('/tmp/reddit_views.json', 'w') as f:
+    json.dump(d['results'], f)
+print(f'Scraped {d[\"total\"]} articles, {d[\"with_views\"]} with views')
+" >> "$LOGFILE" 2>&1
 
-For each of the 4 URLs below, do these 3 sub-steps:
-  a) mcp__reddit-agent__browser_run_code code: async (page) => { await page.evaluate(() => { window.__params = {}; }); }
-  b) mcp__reddit-agent__browser_navigate to the URL
-  c) mcp__reddit-agent__browser_run_code filename: ~/social-autoposter/scripts/scrape_reddit_views.js
-  Save the "results" array from the response to the corresponding /tmp/reddit_views_N.json file.
+        python3 "$REPO_DIR/scripts/scrape_reddit_views.py" --from-json /tmp/reddit_views.json >> "$LOGFILE" 2>&1
+        STEP2_EXIT=$?
+    else
+        log "Step 2: CDP scrape failed, output: $(echo "$VIEWS_JSON" | head -c 200)"
+        STEP2_EXIT=1
+    fi
 
-Step 1: URL = https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/comments/?sort=top
-Save results to /tmp/reddit_views_1.json
-
-Step 2: URL = https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/comments/?sort=new
-Save results to /tmp/reddit_views_2.json
-
-Step 3: URL = https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/submitted/?sort=top&t=all
-Save results to /tmp/reddit_views_3.json
-
-Step 4: URL = https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/submitted/?sort=new
-Save results to /tmp/reddit_views_4.json
-
-Step 5: Merge all 4 JSON files into one, deduplicating by URL (keep the entry with non-null views if both exist). Save to /tmp/reddit_views.json
-
-Step 6: Run: python3 REPO_DIR_PLACEHOLDER/scripts/scrape_reddit_views.py --from-json /tmp/reddit_views.json
-
-Step 7: Close the browser tab (mcp__reddit-agent__browser_tabs action 'close', NOT browser_close).
-
-Done. Report totals. Do NOT read any other files. Do NOT deviate from these steps.
-STEP2_EOF
-    # Inject actual values
-    sed -i '' "s|REDDIT_USERNAME_PLACEHOLDER|$REDDIT_USERNAME|g" "$STEP2_PROMPT"
-    sed -i '' "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP2_PROMPT"
-
-    gtimeout 1200 claude -p "$(cat "$STEP2_PROMPT")" >> "$LOGFILE" 2>&1
-    STEP2_EXIT=$?
-    rm -f "$STEP2_PROMPT"
-    if [ "$STEP2_EXIT" -eq 124 ]; then
-        log "Step 2: TIMEOUT (20 min limit reached)"
-    elif [ "$STEP2_EXIT" -ne 0 ]; then
+    if [ "$STEP2_EXIT" -ne 0 ]; then
         log "Step 2: FAILED (exit $STEP2_EXIT)"
     else
         log "Step 2: Done"
