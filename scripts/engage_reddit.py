@@ -149,48 +149,20 @@ Read ~/social-autoposter/config.json for project details and content_angle.
 4. Mark as processing:
    python3 {REPLY_DB} processing {reply['id']}
 
-5. Navigate to the comment (browser needed only for posting):
-   Use mcp__reddit-agent__browser_navigate to: {reply['their_comment_url']}
+5. First check for duplicate (already replied) via Bash:
+   python3 ~/social-autoposter/scripts/reddit_tools.py fetch '{reply['their_comment_url']}'
+   Look at the comments JSON: if any comment has author='{reddit_username}', we already replied. Run:
+   python3 {REPLY_DB} replied {reply['id']} "EXISTING_TEXT" "EXISTING_URL"
+   Then output DONE.
 
-6. Post via a SINGLE mcp__reddit-agent__browser_run_code call with this JS:
-```javascript
-async (page) => {{
-  const OUR_USERNAME = '{reddit_username}';
-  const thing = await page.$('#thing_t1_{reply['their_comment_id'].replace('t1_', '')}');
-  if (!thing) return 'ERROR: comment not found';
-  const existingReplies = await thing.$$('.child .comment');
-  for (const r of existingReplies) {{
-    const author = await r.$eval('.author', el => el.textContent).catch(() => '');
-    if (author === OUR_USERNAME) {{
-      const existingText = await r.$eval('.usertext-body', el => el.textContent.trim()).catch(() => '');
-      const existingLink = await r.$eval('.bylink', el => el.getAttribute('href')).catch(() => '');
-      return JSON.stringify({{already_replied: true, text: existingText, url: existingLink}});
-    }}
-  }}
-  await thing.evaluate(el => {{
-    const btn = el.querySelector('.flat-list a[onclick*="reply"]');
-    if (btn) btn.click();
-  }});
-  await page.waitForSelector('#thing_t1_{reply['their_comment_id'].replace('t1_', '')} .usertext-edit textarea', {{ timeout: 3000 }});
-  const textarea = await thing.$('.usertext-edit textarea');
-  await textarea.fill(REPLY_TEXT_HERE);
-  await thing.evaluate(el => {{
-    const btn = el.querySelector('.usertext-edit button.save, .usertext-edit .save');
-    if (btn) btn.click();
-  }});
-  await page.waitForTimeout(2000);
-  const newComments = await thing.$$('.child .comment .bylink');
-  return newComments.length > 0 ? await newComments[newComments.length - 1].getAttribute('href') : null;
-}}
-```
-Replace REPLY_TEXT_HERE with a JS string literal of your drafted text.
-Use thing.evaluate() for clicks (NOT direct .click()).
+6. Post the reply using the Python CDP script (NO browser MCP needed):
+   python3 ~/social-autoposter/scripts/reddit_browser.py reply "{reply['their_comment_url']}" "YOUR_DRAFTED_REPLY_TEXT"
+   This returns JSON: {{"ok": true, "verified": true}} on success, or {{"ok": false, "error": "..."}} on failure.
+   The script connects to the reddit-agent browser via CDP, clicks reply, fills the text, and submits.
 
 7. After posting:
-   - If result is JSON with already_replied=true: python3 {REPLY_DB} replied {reply['id']} "EXISTING_TEXT" "EXISTING_URL"
-     (extract text and url from the JSON result to store the existing reply content)
-   - If permalink returned: python3 {REPLY_DB} replied {reply['id']} "YOUR_TEXT" "PERMALINK_URL"
-   - If null (no permalink): python3 {REPLY_DB} replied {reply['id']} "YOUR_TEXT"
+   - If ok=true: python3 {REPLY_DB} replied {reply['id']} "YOUR_TEXT"
+   - If ok=false: python3 {REPLY_DB} skipped {reply['id']} "CDP_ERROR: error_message"
 
 8. If you recommended a project (Tier 2/3), also run:
    source ~/social-autoposter/.env
@@ -198,9 +170,7 @@ Use thing.evaluate() for clicks (NOT direct .click()).
 
 9. Output DONE when finished.
 
-CRITICAL: Use ONLY mcp__reddit-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
-CRITICAL: If browser times out, wait 30s and retry up to 3 times. If still blocked, skip.
-CRITICAL: Close browser tabs after posting (browser_tabs action 'close').
+CRITICAL: If the CDP script fails, wait 30s and retry up to 2 times. If still failing, skip the reply.
 """
 
 
@@ -240,12 +210,10 @@ def get_api_key():
 def run_claude(prompt, timeout=300):
     """Run claude -p with the given prompt. Returns (success, output, usage_dict)."""
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
-    mcp_config = ensure_mcp_config()
     cmd = ["claude", "-p", "--output-format", "json"]
     # Use bare mode for minimal overhead (skips hooks, CLAUDE.md, skills, plugins)
     cmd.append("--bare")
-    if mcp_config:
-        cmd += ["--strict-mcp-config", "--mcp-config", mcp_config]
+    # No MCP needed: CDP scripts handle browser automation directly
     cmd += ["--tools", "Bash,Read"]
     # Set API key for bare mode (which skips OAuth)
     env = os.environ.copy()
