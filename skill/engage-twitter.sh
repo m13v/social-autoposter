@@ -29,6 +29,7 @@ LOG_FILE="$LOG_DIR/engage-twitter-$(date +%Y-%m-%d_%H%M%S).log"
 
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 
+RUN_START=$(date +%s)
 log "=== Twitter Engagement Run: $(date) ==="
 
 # Load exclusions from config
@@ -158,6 +159,10 @@ TOTAL_REPLIED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHER
 TOTAL_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='x' AND status='skipped';")
 
 log "Twitter summary: pending=$TOTAL_PENDING replied=$TOTAL_REPLIED skipped=$TOTAL_SKIPPED"
+
+# Log run to persistent monitor
+RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+python3 "$REPO_DIR/scripts/log_run.py" --script "engage_twitter" --posted "$TOTAL_REPLIED" --skipped "$TOTAL_SKIPPED" --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
 
 # Delete old logs
 find "$LOG_DIR" -name "engage-twitter-*.log" -mtime +7 -delete 2>/dev/null || true
