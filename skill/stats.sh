@@ -58,13 +58,14 @@ if [ -n "$REDDIT_USERNAME" ]; then
 
     if [ "$SCRAPE_OK" = "True" ]; then
         # Extract results array and save to temp file for scrape_reddit_views.py
-        echo "$VIEWS_JSON" | python3 -c "
+        SCRAPE_SUMMARY=$(echo "$VIEWS_JSON" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 with open('/tmp/reddit_views.json', 'w') as f:
     json.dump(d['results'], f)
 print(f'Scraped {d[\"total\"]} articles, {d[\"with_views\"]} with views')
-" >> "$LOGFILE" 2>&1
+" 2>&1)
+        log "Step 2: $SCRAPE_SUMMARY"
 
         python3 "$REPO_DIR/scripts/scrape_reddit_views.py" --from-json /tmp/reddit_views.json >> "$LOGFILE" 2>&1
         STEP2_EXIT=$?
