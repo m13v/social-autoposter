@@ -1,6 +1,6 @@
 ---
 name: posthog-funnel
-description: "Full product funnel stats: social posts, pageviews, CTA clicks, bookings. Use when: 'funnel stats', 'product stats', 'how are cyrano/pieline doing', 'posthog funnel', 'project stats'."
+description: "Full product funnel stats: social posts, pageviews, CTA clicks, bookings. Use when: 'funnel stats', 'product stats', 'how are cyrano/pieline doing', 'posthog funnel', 'project stats', 'boost hop', 'boost hop funnel'."
 user_invocable: true
 ---
 
