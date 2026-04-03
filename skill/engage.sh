@@ -95,7 +95,10 @@ Process ALL of them. For each post:
      -H "Content-Type: application/json" \\
      -d '{"content": "FULL_CONTENT"}' \\
      "https://www.moltbook.com/api/v1/comments/COMMENT_UUID"
-7. For Reddit: navigate to old.reddit.com comment permalink via the reddit-agent browser (mcp__reddit-agent__* tools), click "edit", append the link text to the existing content, save, verify.
+7. For Reddit: use the Python CDP script (no browser MCP needed):
+   python3 $REPO_DIR/scripts/reddit_browser.py edit "COMMENT_PERMALINK_URL" "FULL_NEW_CONTENT"
+   Note: pass the FULL content (existing + appended link text), not just the appended part.
+   Parse JSON result: {ok:true} = success, {ok:false, error} = handle error.
 8. For LinkedIn: use the edit script via linkedin-agent browser (mcp__linkedin-agent__* tools):
    a. Set params: mcp__linkedin-agent__browser_run_code with code:
       async (page) => { await page.evaluate(() => { window.__editParams = { postUrl: "POST_URL", appendText: "\\n\\nLINK_TEXT" }; }); }
@@ -213,10 +216,10 @@ $DM_DATA
 
 ## How to send DMs per platform:
 
-### Reddit DMs (use mcp__reddit-agent__* tools)
-1. Navigate to https://www.reddit.com/message/compose/?to=THEIR_AUTHOR
-2. Reddit uses Chat now. Fill in subject (2-4 casual words) and body.
-3. Submit and verify (form clears or chat appears).
+### Reddit DMs (use Python CDP script)
+python3 $REPO_DIR/scripts/reddit_browser.py compose-dm "THEIR_AUTHOR" "SUBJECT" "DM_TEXT"
+Parse JSON result: {ok:true} = success, {ok:false, error} = handle error.
+If compose-dm fails (Reddit may redirect to Chat SPA), fall back to mcp__reddit-agent__* browser tools.
 
 ### LinkedIn DMs (use mcp__linkedin-agent__* tools)
 1. Navigate to https://www.linkedin.com/messaging/
