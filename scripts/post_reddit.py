@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Reddit posting orchestrator.
 
-Spawns a single Claude session that uses reddit_tools.py (search, fetch) to find
-threads and browser MCP to post. Claude decides which threads are relevant.
+Spawns a Claude session per post that uses reddit_tools.py (search, fetch) to find
+threads and drafts replies. Python orchestrator handles CDP posting and DB logging.
 
 Usage:
     python3 scripts/post_reddit.py
@@ -15,6 +15,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -24,8 +25,9 @@ import db as dbmod
 
 REPO_DIR = os.path.expanduser("~/social-autoposter")
 CONFIG_PATH = os.path.join(REPO_DIR, "config.json")
-REDDIT_MCP_CONFIG = os.path.expanduser("~/.claude/browser-agent-configs/reddit-agent-mcp.json")
 API_KEY_KEYCHAIN_SERVICE = "Anthropic API Key Fazm"
+REDDIT_BROWSER = os.path.join(REPO_DIR, "scripts", "reddit_browser.py")
+REDDIT_TOOLS = os.path.join(REPO_DIR, "scripts", "reddit_tools.py")
 
 
 def load_config():
@@ -43,23 +45,6 @@ def get_api_key():
             return result.stdout.strip()
     except Exception:
         pass
-    return None
-
-
-def ensure_mcp_config():
-    if os.path.exists(REDDIT_MCP_CONFIG):
-        return REDDIT_MCP_CONFIG
-    claude_json = os.path.expanduser("~/.claude.json")
-    if os.path.exists(claude_json):
-        with open(claude_json) as f:
-            data = json.load(f)
-        reddit_cfg = data.get("mcpServers", {}).get("reddit-agent")
-        if reddit_cfg:
-            mcp = {"mcpServers": {"reddit-agent": reddit_cfg}}
-            os.makedirs(os.path.dirname(REDDIT_MCP_CONFIG), exist_ok=True)
-            with open(REDDIT_MCP_CONFIG, "w") as f:
-                json.dump(mcp, f, indent=2)
-            return REDDIT_MCP_CONFIG
     return None
 
 
@@ -105,8 +90,7 @@ def get_recent_comments(limit=5):
 
 
 def build_prompt(project, config, limit, top_report, recent_comments):
-    """Build prompt that gives Claude tools to search, evaluate, and post."""
-    reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "Deep_Ad1959")
+    """Build prompt for Claude to search, evaluate, and draft replies (no posting)."""
     content_angle = project.get("content_angle", config.get("content_angle", ""))
 
     project_json = json.dumps({k: project.get(k) for k in
@@ -132,12 +116,7 @@ Your last {len(recent_comments)} comments (don't repeat talking points):
 {chr(10).join(lines)}
 """
 
-    return f"""You are the Social Autoposter. Post {limit} comment(s) on relevant Reddit threads for this project.
-
-## MANDATORY: One comment per thread
-NEVER post more than one comment per Reddit thread. Before posting in ANY thread, run `already-posted` to check.
-If you already posted in a thread during this session (even moments ago), SKIP that thread entirely.
-The log-post command will REJECT duplicate posts, but you must also check proactively.
+    return f"""You are the Social Autoposter. Find {limit} relevant Reddit thread(s) and draft comment(s) for this project.
 
 ## Project: {project.get('name', 'general')}
 {project_json}
@@ -149,20 +128,15 @@ The log-post command will REJECT duplicate posts, but you must also check proact
 ## Your tools (call via Bash)
 
 1. **Search**: Find threads by topic
-   python3 ~/social-autoposter/scripts/reddit_tools.py search "QUERY" --limit 15
+   python3 {REDDIT_TOOLS} search "QUERY" --limit 15
    Returns JSON array with subreddit, title, score, selftext preview, already_posted flag.
 
 2. **Fetch thread**: Get full thread + top comments
-   python3 ~/social-autoposter/scripts/reddit_tools.py fetch "THREAD_URL"
+   python3 {REDDIT_TOOLS} fetch "THREAD_URL"
    Returns thread info + top 15 comments with their thing IDs and body text.
 
 3. **Check dedup**: Check if we already posted in a thread
-   python3 ~/social-autoposter/scripts/reddit_tools.py already-posted "THREAD_URL"
-
-4. **Log post**: After posting, log to database
-   python3 ~/social-autoposter/scripts/reddit_tools.py log-post "THREAD_URL" "OUR_PERMALINK" "OUR_TEXT" "{project.get('name', 'general')}" "THREAD_AUTHOR" "THREAD_TITLE" --account {reddit_username}
-
-5. **Post via browser**: Navigate and post using mcp__reddit-agent__browser_* tools (see below)
+   python3 {REDDIT_TOOLS} already-posted "THREAD_URL"
 
 ## Workflow
 
@@ -174,46 +148,11 @@ The log-post command will REJECT duplicate posts, but you must also check proact
    SKIP threads from fiction/gaming/meme subreddits that happen to match keywords.
 
 3. For each promising thread, fetch it to read the full discussion and comments.
-   Pick the best comment to reply to (high-upvote for visibility, or OP if appropriate).
+   Decide: post a top-level comment, or reply to a high-upvote comment for visibility.
 
-4. Draft your reply (2-3 sentences), then post via browser MCP.
+4. Draft your comment (2-4 sentences), then output a JSON object.
 
-5. Log the post, then move to the next thread. Stop after {limit} successful post(s).
-
-## Posting via browser MCP
-
-Navigate to the thread: mcp__reddit-agent__browser_navigate to the thread URL.
-Then post via mcp__reddit-agent__browser_run_code with this JS pattern:
-
-```javascript
-async (page) => {{
-  const OUR_USERNAME = '{reddit_username}';
-  const thing = await page.$('#thing_COMMENT_THING_ID');
-  if (!thing) return 'ERROR: comment not found';
-  const existingReplies = await thing.$$('.child .comment');
-  for (const r of existingReplies) {{
-    const author = await r.$eval('.author', el => el.textContent).catch(() => '');
-    if (author === OUR_USERNAME) return 'already_replied';
-  }}
-  await thing.evaluate(el => {{
-    const btn = el.querySelector('.flat-list a[onclick*="reply"]');
-    if (btn) btn.click();
-  }});
-  await page.waitForSelector('#thing_COMMENT_THING_ID .usertext-edit textarea', {{ timeout: 3000 }});
-  const textarea = await thing.$('.usertext-edit textarea');
-  await textarea.fill(REPLY_TEXT_HERE);
-  await thing.evaluate(el => {{
-    const btn = el.querySelector('.usertext-edit button.save, .usertext-edit .save');
-    if (btn) btn.click();
-  }});
-  await page.waitForTimeout(2000);
-  const newComments = await thing.$$('.child .comment .bylink');
-  return newComments.length > 0 ? await newComments[newComments.length - 1].getAttribute('href') : null;
-}}
-```
-Replace COMMENT_THING_ID with the thing ID (e.g. t1_abc123 or t3_xyz for OP).
-Replace REPLY_TEXT_HERE with your text as a JS string literal.
-Use thing.evaluate() for clicks (NOT direct .click()).
+5. Stop after {limit} JSON object(s).
 
 ## Content rules
 - Write like texting a coworker. Lowercase OK, fragments OK.
@@ -234,21 +173,27 @@ Use thing.evaluate() for clicks (NOT direct .click()).
 - NEVER promise to share links/files not in project config.
 - NEVER offer to DM. NEVER make time-bound promises.
 
-CRITICAL: Use ONLY mcp__reddit-agent__* browser tools. NEVER use generic mcp__playwright-extension__* or others.
-CRITICAL: Close browser tab after each post: mcp__reddit-agent__browser_tabs action 'close'.
-CRITICAL: If browser times out, wait 30s and retry up to 3 times.
+## Output format
 
-Output DONE when finished with all {limit} post(s), or DONE with a count if you posted fewer.
+For EACH post, output EXACTLY one JSON object on its own line, with no other text around it:
+
+{{"action": "post", "thread_url": "THREAD_URL", "reply_to_url": "COMMENT_PERMALINK_OR_NULL", "text": "YOUR_COMMENT_TEXT", "thread_author": "AUTHOR", "thread_title": "TITLE"}}
+
+- thread_url: the thread URL (e.g. https://old.reddit.com/r/sub/comments/abc/title/)
+- reply_to_url: if replying to a specific comment, its permalink URL. If posting a top-level comment, set to null.
+- text: your drafted comment text
+- thread_author: the thread OP's username
+- thread_title: the thread title
+
+Output {limit} JSON object(s), then output DONE on its own line.
+Do NOT post anything yourself. The orchestrator will handle posting.
 """
 
 
 def run_claude(prompt, timeout=600):
-    """Run claude -p in bare mode."""
+    """Run claude -p in bare mode with Bash tool only (no MCP needed)."""
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
-    mcp_config = ensure_mcp_config()
     cmd = ["claude", "-p", "--output-format", "json", "--bare"]
-    if mcp_config:
-        cmd += ["--strict-mcp-config", "--mcp-config", mcp_config]
     cmd += ["--tools", "Bash,Read"]
     env = os.environ.copy()
     api_key = get_api_key()
@@ -277,6 +222,63 @@ def run_claude(prompt, timeout=600):
         return False, str(e), usage
 
 
+def post_via_cdp(thread_url, reply_to_url, text):
+    """Post a comment or reply via CDP. Returns parsed JSON result."""
+    for attempt in range(3):
+        try:
+            if reply_to_url:
+                cdp_out = subprocess.check_output(
+                    ["python3", REDDIT_BROWSER, "reply", reply_to_url, text],
+                    text=True, timeout=60, stderr=subprocess.DEVNULL,
+                )
+            else:
+                cdp_out = subprocess.check_output(
+                    ["python3", REDDIT_BROWSER, "post-comment", thread_url, text],
+                    text=True, timeout=60, stderr=subprocess.DEVNULL,
+                )
+            result = json.loads(cdp_out)
+            if result.get("ok"):
+                return result
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            print(f"[post_reddit] CDP attempt {attempt + 1} failed: {e}")
+            if attempt < 2:
+                time.sleep(10)
+    return {"ok": False, "error": "all_attempts_failed"}
+
+
+def log_post(thread_url, permalink, text, project_name, thread_author, thread_title, reddit_username):
+    """Log a successful post to the database."""
+    try:
+        subprocess.run(
+            ["python3", REDDIT_TOOLS, "log-post",
+             thread_url, permalink or "", text, project_name,
+             thread_author, thread_title,
+             "--account", reddit_username],
+            capture_output=True, text=True, timeout=15,
+        )
+    except Exception as e:
+        print(f"[post_reddit] WARNING: log-post failed: {e}")
+
+
+def parse_post_decisions(output):
+    """Extract JSON post decisions from Claude's output."""
+    decisions = []
+    for line in output.split("\n"):
+        line = line.strip()
+        if not line or line == "DONE":
+            continue
+        # Try to extract JSON objects with "action": "post"
+        try:
+            match = re.search(r'\{[^{}]*"action"\s*:\s*"post"[^{}]*\}', line)
+            if match:
+                decision = json.loads(match.group())
+                if decision.get("text") and decision.get("thread_url"):
+                    decisions.append(decision)
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return decisions
+
+
 def main():
     parser = argparse.ArgumentParser(description="Reddit posting orchestrator")
     parser.add_argument("--dry-run", action="store_true", help="Print prompt without executing")
@@ -286,6 +288,7 @@ def main():
     args = parser.parse_args()
 
     config = load_config()
+    reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "Deep_Ad1959")
 
     # Pick project
     if args.project:
@@ -323,31 +326,82 @@ def main():
     print(f"[post_reddit] Starting Claude session (limit={args.limit}, timeout={args.timeout}s)")
     start = time.time()
 
+    # Phase 1: Claude searches and drafts (no MCP, no browser)
     ok, output, usage = run_claude(prompt, timeout=args.timeout)
-    elapsed = time.time() - start
+    claude_elapsed = time.time() - start
+
+    print(f"[post_reddit] Claude finished in {claude_elapsed:.0f}s "
+          f"(${usage['cost_usd']:.4f})")
+
+    if not ok:
+        print(f"[post_reddit] Claude FAILED: {output[:300]}")
+        subprocess.run([
+            "python3", os.path.join(REPO_DIR, "scripts", "log_run.py"),
+            "--script", "post_reddit",
+            "--posted", "0", "--skipped", "0", "--failed", "1",
+            "--cost", f"{usage['cost_usd']:.4f}",
+            "--elapsed", f"{claude_elapsed:.0f}",
+        ])
+        sys.exit(1)
+
+    # Phase 2: Parse Claude's decisions and post via CDP
+    decisions = parse_post_decisions(output)
+    print(f"[post_reddit] Claude drafted {len(decisions)} post(s)")
+
+    if not decisions:
+        print(f"[post_reddit] No valid post decisions found in output:")
+        for line in output.strip().split("\n")[-10:]:
+            print(f"  {line}")
+
+    posted = 0
+    failed = 0
+
+    for i, decision in enumerate(decisions):
+        thread_url = decision["thread_url"]
+        reply_to_url = decision.get("reply_to_url")
+        text = decision["text"]
+        thread_author = decision.get("thread_author", "unknown")
+        thread_title = decision.get("thread_title", "unknown")
+
+        target = reply_to_url or thread_url
+        print(f"[post_reddit] Posting {i + 1}/{len(decisions)}: "
+              f"{thread_title[:50]}...")
+
+        result = post_via_cdp(thread_url, reply_to_url, text)
+
+        if result.get("ok"):
+            if result.get("already_replied"):
+                print(f"[post_reddit] DEDUP: already posted in this thread")
+                continue
+
+            permalink = result.get("permalink", "")
+            log_post(thread_url, permalink, text, project_name,
+                     thread_author, thread_title, reddit_username)
+            posted += 1
+            print(f"[post_reddit] POSTED: {permalink or 'ok'}")
+        else:
+            err = result.get("error", "unknown")
+            failed += 1
+            print(f"[post_reddit] CDP FAILED: {err}")
+
+        time.sleep(3)
+
+    total_elapsed = time.time() - start
 
     print(f"\n[post_reddit] === SUMMARY ===")
-    print(f"[post_reddit] elapsed={elapsed:.0f}s success={ok}")
+    print(f"[post_reddit] elapsed={total_elapsed:.0f}s posted={posted} failed={failed}")
     print(f"[post_reddit] Tokens: input={usage['input_tokens']} output={usage['output_tokens']} "
           f"cache_read={usage['cache_read']} cache_create={usage['cache_create']}")
     print(f"[post_reddit] Cost: ${usage['cost_usd']:.4f}")
-    if output:
-        # Show last few lines of Claude's output
-        lines = output.strip().split("\n")
-        for line in lines[-5:]:
-            print(f"[post_reddit] {line}")
 
-    # Log run summary for monitoring
-    posted = args.limit if ok else 0
-    failed_count = 0 if ok else 1
     subprocess.run([
         "python3", os.path.join(REPO_DIR, "scripts", "log_run.py"),
         "--script", "post_reddit",
         "--posted", str(posted),
         "--skipped", "0",
-        "--failed", str(failed_count),
+        "--failed", str(failed),
         "--cost", f"{usage['cost_usd']:.4f}",
-        "--elapsed", f"{elapsed:.0f}",
+        "--elapsed", f"{total_elapsed:.0f}",
     ])
 
 
