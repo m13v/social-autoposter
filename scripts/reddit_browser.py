@@ -207,10 +207,11 @@ def post_comment(thread_url, text):
 
             # Find the top-level comment form.
             # On old.reddit.com, the main comment box is a textarea inside
-            # div.usertext-edit within the comment area (not inside .comment).
+            # form.usertext > div.usertext-edit (not inside .comment elements).
             comment_form = page.locator(
-                ".commentarea > .usertext textarea.usertext-input, "
-                ".commentarea > .usertext-edit textarea"
+                ".commentarea > form.usertext textarea, "
+                ".commentarea > .usertext-edit textarea, "
+                ".commentarea > .usertext textarea"
             ).first
 
             try:
@@ -233,9 +234,9 @@ def post_comment(thread_url, text):
 
             # Click the save/submit button
             save_btn = page.locator(
+                ".commentarea > form.usertext button[type='submit'], "
                 ".commentarea > .usertext button[type='submit'], "
-                ".commentarea > .usertext-edit button[type='submit'], "
-                ".commentarea > .usertext .save-button button"
+                ".commentarea > .usertext-edit button[type='submit']"
             ).first
 
             try:
