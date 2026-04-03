@@ -54,7 +54,8 @@ def find_reddit_cdp_port():
 
     Scans all Chrome/Chromium processes for remote-debugging-port flags,
     then queries each port's /json endpoint for pages with reddit.com
-    or old.reddit.com URLs. Prefers ports with logged-in pages.
+    or old.reddit.com URLs. Strongly prefers old.reddit.com pages
+    (the MCP agent browser) over new reddit pages.
     """
     try:
         ps_out = subprocess.check_output(
@@ -70,7 +71,9 @@ def find_reddit_cdp_port():
 
         import urllib.request
 
-        best_port = None
+        old_reddit_port = None
+        new_reddit_port = None
+        any_reddit_port = None
         for port in sorted(ports):
             try:
                 resp = urllib.request.urlopen(
@@ -81,25 +84,35 @@ def find_reddit_cdp_port():
                     p.get("url", "")
                     for p in pages
                     if "reddit.com" in p.get("url", "")
-                       or "old.reddit.com" in p.get("url", "")
                 ]
                 if not reddit_urls:
                     continue
-                # Prefer ports with logged-in pages (not login page)
-                logged_in = any(
-                    ("old.reddit.com" in u or "/r/" in u or "/chat" in u
-                     or "/message" in u or "reddit.com/u/" in u
-                     or "reddit.com/user/" in u)
+
+                # Strongly prefer old.reddit.com (the MCP agent browser)
+                has_old = any(
+                    "old.reddit.com" in u and "login" not in u
+                    for u in reddit_urls
+                )
+                if has_old and not old_reddit_port:
+                    old_reddit_port = port
+
+                # New reddit with actual content pages
+                has_new = any(
+                    ("/r/" in u or "/chat" in u or "/message" in u
+                     or "reddit.com/u/" in u)
+                    and "old.reddit.com" not in u
                     and "login" not in u
                     for u in reddit_urls
                 )
-                if logged_in:
-                    return port
-                if best_port is None:
-                    best_port = port
+                if has_new and not new_reddit_port:
+                    new_reddit_port = port
+
+                if not any_reddit_port:
+                    any_reddit_port = port
             except Exception:
                 continue
-        return best_port
+
+        return old_reddit_port or new_reddit_port or any_reddit_port
     except Exception:
         pass
     return None
