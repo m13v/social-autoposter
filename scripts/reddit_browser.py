@@ -585,13 +585,33 @@ def unread_dms():
                         ? (timeEl.getAttribute('title') || timeEl.textContent.trim())
                         : '';
 
-                    // Permalink
-                    const permaLink = msg.querySelector(
-                        'a[href*="/message/messages/"]'
-                    );
-                    const permalink = permaLink
-                        ? permaLink.getAttribute('href')
-                        : '';
+                    // Detect comment replies vs actual PMs
+                    // Comment replies link to /comments/ threads in the subject
+                    const commentLink = msg.querySelector('a[href*="/comments/"]');
+                    const isCommentReply = !!commentLink;
+
+                    let threadUrl = '';
+                    let msgType = 'pm';
+
+                    if (isCommentReply) {
+                        // Comment reply: extract the thread permalink
+                        msgType = 'comment_reply';
+                        const href = commentLink.getAttribute('href') || '';
+                        threadUrl = href.startsWith('http')
+                            ? href
+                            : 'https://old.reddit.com' + href;
+                    } else {
+                        // Actual PM: use the message's own permalink
+                        const permaLink = msg.querySelector(
+                            'a.bylink, a[data-event-action="permalink"]'
+                        );
+                        if (permaLink) {
+                            const href = permaLink.getAttribute('href') || '';
+                            threadUrl = href.startsWith('http')
+                                ? href
+                                : 'https://old.reddit.com' + href;
+                        }
+                    }
 
                     if (author) {
                         results.push({
@@ -599,10 +619,8 @@ def unread_dms():
                             subject: subject,
                             preview: body.substring(0, 200),
                             time: time,
-                            thread_url: permalink
-                                ? 'https://old.reddit.com' + permalink
-                                : '',
-                            type: 'pm',
+                            thread_url: threadUrl,
+                            type: msgType,
                         });
                     }
                 }
