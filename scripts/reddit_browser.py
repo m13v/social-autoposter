@@ -318,10 +318,40 @@ def reply_to_comment(comment_permalink, text):
             if "page not found" in page_text.lower():
                 return {"ok": False, "error": "comment_not_found"}
 
-            # On old.reddit.com with a comment permalink, the target comment
-            # is highlighted. Find it and click its "reply" link.
-            # The target comment is the first .comment in .sitetable.nestedlisting
-            # or the one with .target class.
+            # Dedup: check if we already replied to this specific comment
+            already = page.evaluate("""(ourUsername) => {
+                // Find the target comment (highlighted or first in nested listing)
+                const target = document.querySelector(
+                    '.nestedlisting > .comment, .comment.target'
+                );
+                if (!target) return null;
+                // Check direct child replies for our username
+                const childComments = target.querySelectorAll(
+                    ':scope > .child .comment'
+                );
+                for (const c of childComments) {
+                    const author = c.querySelector('a.author');
+                    if (author && author.textContent.trim() === ourUsername) {
+                        const body = c.querySelector('.usertext-body');
+                        const perma = c.querySelector('a.bylink');
+                        return {
+                            already_replied: true,
+                            text: body ? body.textContent.trim().substring(0, 200) : '',
+                            url: perma ? perma.getAttribute('href') : '',
+                        };
+                    }
+                }
+                return null;
+            }""", OUR_USERNAME)
+
+            if already and already.get("already_replied"):
+                return {
+                    "ok": True,
+                    "already_replied": True,
+                    "existing_text": already.get("text", ""),
+                    "existing_url": already.get("url", ""),
+                    "comment_permalink": comment_permalink,
+                }
 
             # Click the reply link on the target comment
             reply_clicked = False
