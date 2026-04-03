@@ -36,6 +36,7 @@ log "=== Engagement Loop Run: $(date) ==="
 # PHASE A: Scan for replies (runs in BACKGROUND)
 # ═══════════════════════════════════════════════════════
 log "Phase A: Scanning for replies (background)..."
+PHASE_A_START=$(date +%s)
 (PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_replies.py" 2>&1 || true) | tee -a "$LOG_FILE" &
 SCAN_PID=$!
 
@@ -43,6 +44,7 @@ SCAN_PID=$!
 # PHASE D: Edit high-performing posts with project link
 # Runs FIRST — processes ALL eligible posts (no limit)
 # ═══════════════════════════════════════════════════════
+PHASE_D_START=$(date +%s)
 EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT id, platform, our_url, our_content, thread_title, upvotes, project_name
@@ -114,8 +116,13 @@ PROMPT_EOF
 
     gtimeout 14400 claude -p "$(cat "$PHASE_D_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase D claude exited with code $?"
     rm -f "$PHASE_D_PROMPT"
+    PHASE_D_ELAPSED=$(( $(date +%s) - PHASE_D_START ))
+    PHASE_D_EDITED=$(grep -ci "link_edited_at=NOW()" "$LOG_FILE" 2>/dev/null || echo 0)
+    PHASE_D_SKIPPED=$(grep -ci "SKIPPED:" "$LOG_FILE" 2>/dev/null || echo 0)
+    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_link_edit" --posted "$PHASE_D_EDITED" --skipped "$PHASE_D_SKIPPED" --failed 0 --cost 0 --elapsed "$PHASE_D_ELAPSED"
 else
     log "Phase D: No posts eligible for link edit"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_link_edit" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed 0
 fi
 
 # Give the scanner a head start to find new replies
@@ -154,6 +161,7 @@ fi
 # PHASE E: Reddit DM engagement (continue conversations via Chat)
 # Finds users who engaged on our posts and DMs them to continue the discussion
 # ═══════════════════════════════════════════════════════
+PHASE_E_START=$(date +%s)
 log "Phase E: Scanning for DM candidates (all platforms)..."
 (PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_dm_candidates.py" 2>&1 || true) | tee -a "$LOG_FILE"
 
@@ -259,8 +267,12 @@ PROMPT_EOF
 
     gtimeout 3600 claude -p "$(cat "$DM_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase E claude exited with code $?"
     rm -f "$DM_PROMPT"
+    PHASE_E_ELAPSED=$(( $(date +%s) - PHASE_E_START ))
+    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_dm_outreach" --posted "$DM_PENDING" --skipped 0 --failed 0 --cost 0 --elapsed "$PHASE_E_ELAPSED"
 else
     log "Phase E: No pending DMs"
+    PHASE_E_ELAPSED=$(( $(date +%s) - PHASE_E_START ))
+    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_dm_outreach" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed "$PHASE_E_ELAPSED"
 fi
 
 # ═══════════════════════════════════════════════════════
