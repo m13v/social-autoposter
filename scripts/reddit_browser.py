@@ -342,30 +342,35 @@ def reply_to_comment(comment_permalink, text):
 
             page.wait_for_timeout(1000)
 
-            # Find the reply textarea that just appeared
-            reply_box = page.locator(
-                ".comment .usertext-edit textarea"
-            ).last
+            # Find the reply textarea that just appeared (pick the visible one)
+            reply_box = None
+            all_ta = page.locator(".comment .usertext-edit textarea")
+            for i in range(all_ta.count()):
+                if all_ta.nth(i).is_visible():
+                    reply_box = all_ta.nth(i)
+                    break
 
-            try:
-                reply_box.wait_for(state="visible", timeout=5000)
-            except Exception:
+            if not reply_box:
                 return {"ok": False, "error": "reply_textarea_not_found"}
 
             # Fill the reply text
             reply_box.fill(text)
             page.wait_for_timeout(1000)
 
-            # Click the save button for this reply form
-            save_btn = page.locator(
+            # Click the save button nearest to the visible reply box
+            save_btn = None
+            all_btns = page.locator(
                 ".comment .usertext-edit button[type='submit']"
-            ).last
+            )
+            for i in range(all_btns.count()):
+                if all_btns.nth(i).is_visible():
+                    save_btn = all_btns.nth(i)
+                    break
 
-            try:
-                save_btn.wait_for(state="visible", timeout=3000)
-                save_btn.click()
-            except Exception:
+            if not save_btn:
                 return {"ok": False, "error": "reply_save_button_not_found"}
+
+            save_btn.click()
 
             page.wait_for_timeout(5000)
 
@@ -438,30 +443,35 @@ def edit_comment(comment_permalink, new_text):
 
             page.wait_for_timeout(1000)
 
-            # Find the edit textarea
-            edit_box = page.locator(
-                ".comment .usertext-edit textarea"
-            ).first
+            # Find the edit textarea (pick the visible one)
+            edit_box = None
+            all_ta = page.locator(".comment .usertext-edit textarea")
+            for i in range(all_ta.count()):
+                if all_ta.nth(i).is_visible():
+                    edit_box = all_ta.nth(i)
+                    break
 
-            try:
-                edit_box.wait_for(state="visible", timeout=5000)
-            except Exception:
+            if not edit_box:
                 return {"ok": False, "error": "edit_textarea_not_found"}
 
             # Clear and fill with new text
             edit_box.fill(new_text)
             page.wait_for_timeout(1000)
 
-            # Click save
-            save_btn = page.locator(
+            # Click save (pick the visible one)
+            save_btn = None
+            all_btns = page.locator(
                 ".comment .usertext-edit button[type='submit']"
-            ).first
+            )
+            for i in range(all_btns.count()):
+                if all_btns.nth(i).is_visible():
+                    save_btn = all_btns.nth(i)
+                    break
 
-            try:
-                save_btn.wait_for(state="visible", timeout=3000)
-                save_btn.click()
-            except Exception:
+            if not save_btn:
                 return {"ok": False, "error": "edit_save_button_not_found"}
+
+            save_btn.click()
 
             page.wait_for_timeout(4000)
 
