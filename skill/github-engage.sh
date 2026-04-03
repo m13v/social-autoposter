@@ -42,6 +42,9 @@ PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHER
 
 if [ "$PENDING_COUNT" -eq 0 ]; then
     log "Phase B: No pending GitHub replies. Done!"
+    RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_github" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
+    find "$LOG_DIR" -name "github-engage-*.log" -mtime +7 -delete 2>/dev/null || true
     exit 0
 fi
 
