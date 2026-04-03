@@ -17,6 +17,7 @@ LOG_DIR="$REPO_DIR/skill/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/run-linkedin-$(date +%Y-%m-%d_%H%M%S).log"
 
+RUN_START=$(date +%s)
 echo "=== LinkedIn Post Run: $(date) ===" | tee "$LOG_FILE"
 
 # Pick project based on weight distribution
@@ -89,4 +90,12 @@ CRITICAL: Use ONLY mcp__linkedin-agent__* tools. NEVER use generic mcp__playwrig
 CRITICAL: If a browser tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). If still blocked, skip and stop." 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
+
+# Log run to persistent monitor
+RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+POSTED=$(grep -c "INSERT INTO posts" "$LOG_FILE" 2>/dev/null || echo 0)
+SKIPPED=$(grep -ci "skipped" "$LOG_FILE" 2>/dev/null || echo 0)
+FAILED=$(grep -ci "error\|failed\|FAILED" "$LOG_FILE" 2>/dev/null || echo 0)
+python3 "$REPO_DIR/scripts/log_run.py" --script "post_linkedin" --posted "$POSTED" --skipped "$SKIPPED" --failed "$FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
+
 find "$LOG_DIR" -name "run-linkedin-*.log" -mtime +7 -delete 2>/dev/null || true
