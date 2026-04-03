@@ -15,6 +15,8 @@ LOG_DIR="skill/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/octolens-$(date +%Y-%m-%d_%H%M%S).log"
 
+RUN_START=$(date +%s)
+REPO_DIR="$HOME/social-autoposter"
 echo "=== Octolens Engagement Run: $(date) ===" | tee "$LOG_FILE"
 
 # Find candidates from Octolens API
@@ -27,6 +29,9 @@ echo "Found $CANDIDATE_COUNT candidates" | tee -a "$LOG_FILE"
 
 if [ "$CANDIDATE_COUNT" = "0" ]; then
     echo "No new candidates to engage with." | tee -a "$LOG_FILE"
+    RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+    python3 "$REPO_DIR/scripts/log_run.py" --script "octolens" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
+    find "$LOG_DIR" -name "octolens-*.log" -mtime +7 -delete 2>/dev/null || true
     exit 0
 fi
 
@@ -60,3 +65,13 @@ For each picked candidate, follow the standard social-autoposter posting flow:
 Skip if nothing fits naturally. Config is at ~/social-autoposter/config.json" 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Done: $(date) ===" | tee -a "$LOG_FILE"
+
+# Log run to persistent monitor
+RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+POSTED=$(grep -c "INSERT INTO posts" "$LOG_FILE" 2>/dev/null || echo 0)
+SKIPPED=$(grep -ci "skipped\|skip" "$LOG_FILE" 2>/dev/null || echo 0)
+FAILED=$(grep -ci "error\|failed\|FAILED" "$LOG_FILE" 2>/dev/null || echo 0)
+python3 "$REPO_DIR/scripts/log_run.py" --script "octolens" --posted "$POSTED" --skipped "$SKIPPED" --failed "$FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
+
+# Clean up old logs (keep last 7 days)
+find "$LOG_DIR" -name "octolens-*.log" -mtime +7 -delete 2>/dev/null || true
