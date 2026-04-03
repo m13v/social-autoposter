@@ -467,11 +467,27 @@ def edit_comment(comment_permalink, new_text):
             if "page not found" in page_text.lower():
                 return {"ok": False, "error": "comment_not_found"}
 
-            # Click the "edit" link on our comment
+            # Find the target comment: on a permalink page, it's the
+            # top-level comment in the nested listing, or has .target class
+            target_comment = page.locator(
+                ".nestedlisting > .comment"
+            ).first
+            try:
+                target_comment.wait_for(state="visible", timeout=5000)
+            except Exception:
+                # Fallback: try .comment.target
+                target_comment = page.locator(".comment.target").first
+                try:
+                    target_comment.wait_for(state="visible", timeout=3000)
+                except Exception:
+                    return {"ok": False, "error": "target_comment_not_found"}
+
+            # Click the "edit" link within the target comment's own flat-list
+            # (use :scope > to avoid matching nested child comments)
             edit_clicked = False
             try:
-                edit_link = page.locator(
-                    ".comment .flat-list a:has-text('edit')"
+                edit_link = target_comment.locator(
+                    ":scope > .entry .flat-list a:has-text('edit')"
                 ).first
                 edit_link.wait_for(state="visible", timeout=5000)
                 edit_link.click()
@@ -484,9 +500,11 @@ def edit_comment(comment_permalink, new_text):
 
             page.wait_for_timeout(1000)
 
-            # Find the edit textarea (pick the visible one)
+            # Find the edit textarea within the target comment's own entry
             edit_box = None
-            all_ta = page.locator(".comment .usertext-edit textarea")
+            all_ta = target_comment.locator(
+                ":scope > .entry .usertext-edit textarea"
+            )
             for i in range(all_ta.count()):
                 if all_ta.nth(i).is_visible():
                     edit_box = all_ta.nth(i)
@@ -499,10 +517,10 @@ def edit_comment(comment_permalink, new_text):
             edit_box.fill(new_text)
             page.wait_for_timeout(1000)
 
-            # Click save (pick the visible one)
+            # Click save within the target comment's own entry
             save_btn = None
-            all_btns = page.locator(
-                ".comment .usertext-edit button[type='submit']"
+            all_btns = target_comment.locator(
+                ":scope > .entry .usertext-edit button[type='submit']"
             )
             for i in range(all_btns.count()):
                 if all_btns.nth(i).is_visible():
@@ -516,16 +534,26 @@ def edit_comment(comment_permalink, new_text):
 
             page.wait_for_timeout(4000)
 
-            # Verify the edit was saved
-            verified = page.evaluate("""(newTextStart) => {
-                const comments = document.querySelectorAll('.comment .usertext-body');
-                for (const c of comments) {
-                    if (c.textContent && c.textContent.includes(newTextStart)) {
-                        return true;
-                    }
+            # Verify the edit was saved within the target comment
+            target_id = target_comment.get_attribute("data-fullname") or ""
+            verified = page.evaluate("""([newTextStart, targetId]) => {
+                let comment;
+                if (targetId) {
+                    comment = document.querySelector(
+                        '.comment[data-fullname="' + targetId + '"]'
+                    );
+                } else {
+                    comment = document.querySelector(
+                        '.nestedlisting > .comment'
+                    );
                 }
-                return false;
-            }""", new_text[:50])
+                if (!comment) return false;
+                const body = comment.querySelector(
+                    ':scope > .entry .usertext-body'
+                );
+                return body && body.textContent &&
+                    body.textContent.includes(newTextStart);
+            }""", [new_text[:50], target_id])
 
             return {
                 "ok": True,
