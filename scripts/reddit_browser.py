@@ -577,79 +577,62 @@ def unread_dms():
             )
             page.wait_for_timeout(5000)
 
-            # Reddit chat is a SPA. Extract visible chat rooms from sidebar.
+            # Reddit Chat sidebar has links like:
+            #   <a href="/chat/room/ID">topic name</a>
+            # Each contains a last-message preview in a child element
+            # with text like "Username: message preview"
             chat_rooms = page.evaluate("""() => {
                 const results = [];
-
-                // The chat sidebar shows rooms. Each room is typically
-                // a clickable element with the username and last message.
-                // Look for elements that contain chat room info.
-
-                // Strategy 1: Find chat room items in the sidebar list
-                const items = document.querySelectorAll(
-                    '[class*="ChatRoom"], [class*="chat-room"], ' +
-                    'a[href*="/chat/"], [role="listitem"]'
+                const links = document.querySelectorAll(
+                    'nav a[href*="/chat/"], a[href*="/chat/room/"]'
                 );
 
-                for (const item of items) {
-                    const text = item.textContent || '';
-                    if (text.length < 3) continue;
+                for (const link of links) {
+                    const href = link.getAttribute('href') || '';
+                    if (!href.includes('/chat/')) continue;
+                    // Skip non-room links
+                    if (href === '/chat/' || href.includes('create')) continue;
 
-                    // Try to extract author and preview
+                    const threadUrl = href.startsWith('http')
+                        ? href
+                        : 'https://www.reddit.com' + href;
+
+                    // Topic/room name from the link's accessible name or text
+                    const topic = (link.getAttribute('aria-label')
+                        || link.textContent || '').trim();
+
+                    // Last message preview — look for child elements
+                    // Format: "Username: message text"
                     let author = '';
                     let preview = '';
-                    let time = '';
-                    let threadUrl = '';
-
-                    // Look for links to chat threads
-                    const link = item.querySelector('a[href*="/chat/"]')
-                        || (item.tagName === 'A' && item.href && item.href.includes('/chat/')
-                            ? item : null);
-                    if (link) {
-                        threadUrl = link.href || link.getAttribute('href') || '';
-                        if (threadUrl && !threadUrl.startsWith('http')) {
-                            threadUrl = 'https://www.reddit.com' + threadUrl;
-                        }
-                    }
-
-                    // Extract text nodes for author/preview
-                    const spans = item.querySelectorAll('span, p, div');
-                    const texts = [];
+                    const allText = link.textContent || '';
+                    // The preview is usually in a nested element
+                    const spans = link.querySelectorAll('span, div, p');
                     for (const s of spans) {
                         const t = s.textContent.trim();
-                        if (t.length > 1 && t.length < 200
-                            && s.children.length <= 1) {
-                            texts.push(t);
+                        // Match "Username: preview text"
+                        const m = t.match(/^(\\S+):\\s*(.+)/);
+                        if (m && m[1].length < 30) {
+                            author = m[1];
+                            preview = m[2].substring(0, 200);
+                            break;
                         }
                     }
 
-                    // Heuristic: first short text is author, longer text is preview
-                    for (const t of texts) {
-                        if (!author && t.length < 40 && !t.includes(' ')) {
-                            author = t;
-                        } else if (!preview && t.length > 3) {
-                            preview = t;
-                        }
-                    }
-
-                    // Check for unread indicator
-                    const hasUnread = item.querySelector(
-                        '[class*="unread"], [class*="badge"], [class*="notification"]'
+                    // Check for unread badge (aria-label with "unread")
+                    const hasUnread = link.querySelector(
+                        '[aria-label*="unread"]'
                     ) !== null;
 
-                    // Also check for bold text (common unread indicator)
-                    const hasBold = item.querySelector('strong, b, [class*="Bold"]')
-                        !== null;
-
-                    if (author && (hasUnread || hasBold || threadUrl)) {
+                    if (topic.length > 1) {
                         results.push({
-                            author: author,
-                            subject: '',
-                            preview: preview.substring(0, 200),
-                            time: time,
+                            author: author || topic,
+                            subject: topic.substring(0, 100),
+                            preview: preview,
+                            time: '',
                             thread_url: threadUrl,
                             type: 'chat',
-                            has_unread: hasUnread || hasBold,
+                            has_unread: hasUnread,
                         });
                     }
                 }
@@ -855,27 +838,35 @@ def send_dm(chat_url, message):
                 page.goto(chat_url, wait_until="domcontentloaded")
                 page.wait_for_timeout(5000)
 
-                # Find the message input box
-                msg_box = None
-
-                # Strategy 1: look for a textarea or contenteditable
-                for selector in [
-                    'textarea[placeholder*="Message"]',
-                    'textarea[placeholder*="message"]',
-                    'textarea',
-                    'div[contenteditable="true"]',
-                    '[role="textbox"]',
-                ]:
-                    try:
-                        el = page.locator(selector).last
-                        if el.is_visible():
-                            msg_box = el
-                            break
-                    except Exception:
-                        continue
+                # Reddit Chat uses a textbox with placeholder "Message"
+                msg_box = page.get_by_role("textbox", name="Write message")
+                try:
+                    msg_box.wait_for(state="visible", timeout=10000)
+                except Exception:
+                    # Fallback selectors
+                    msg_box = None
+                    for selector in [
+                        'textarea[placeholder*="Message"]',
+                        '[role="textbox"]',
+                        'div[contenteditable="true"]',
+                    ]:
+                        try:
+                            el = page.locator(selector).last
+                            if el.is_visible():
+                                msg_box = el
+                                break
+                        except Exception:
+                            continue
 
                 if not msg_box:
                     return {"ok": False, "error": "chat_input_not_found"}
+
+                # Check if textbox is disabled (no chat selected)
+                is_disabled = msg_box.evaluate(
+                    "el => el.disabled || el.getAttribute('aria-disabled') === 'true'"
+                )
+                if is_disabled:
+                    return {"ok": False, "error": "chat_input_disabled_no_chat_selected"}
 
                 # Click and type the message
                 msg_box.click()
@@ -890,26 +881,11 @@ def send_dm(chat_url, message):
 
                 page.wait_for_timeout(1000)
 
-                # Send: try clicking a send button, fallback to Enter
-                sent = False
-                try:
-                    send_btn = page.locator(
-                        'button[aria-label*="Send"], '
-                        'button[aria-label*="send"], '
-                        'button:has-text("Send")'
-                    ).first
-                    if send_btn.is_visible():
-                        send_btn.click()
-                        sent = True
-                except Exception:
-                    pass
-
-                if not sent:
-                    page.keyboard.press("Enter")
-
+                # Send via Enter key (Reddit Chat sends on Enter)
+                page.keyboard.press("Enter")
                 page.wait_for_timeout(3000)
 
-                # Verify message appeared
+                # Verify message appeared in aria-labels
                 msg_start = message[:50]
                 verified = page.evaluate("""(msgStart) => {
                     const body = document.body.textContent || '';
