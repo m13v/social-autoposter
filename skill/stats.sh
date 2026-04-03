@@ -31,6 +31,7 @@ log "=== Stats Pipeline Run: $(date) ==="
 # ═══════════════════════════════════════════════════════
 # STEP 1: API stats (upvotes, comments, deleted/removed)
 # ═══════════════════════════════════════════════════════
+STEP1_START=$(date +%s)
 log "Step 1: API stats (Python)"
 if [ "$QUIET" = "--quiet" ]; then
     python3 "$REPO_DIR/scripts/update_stats.py" --quiet >> "$LOGFILE" 2>&1
@@ -38,15 +39,18 @@ else
     python3 "$REPO_DIR/scripts/update_stats.py" >> "$LOGFILE" 2>&1
 fi
 STEP1_EXIT=$?
+STEP1_ELAPSED=$(( $(date +%s) - STEP1_START ))
 if [ "$STEP1_EXIT" -ne 0 ]; then
     log "Step 1: FAILED (exit $STEP1_EXIT) — continuing to Step 2"
 else
     log "Step 1: Done"
 fi
+python3 "$REPO_DIR/scripts/log_run.py" --script "stats_api" --posted 0 --skipped 0 --failed $((STEP1_EXIT != 0 ? 1 : 0)) --cost 0 --elapsed "$STEP1_ELAPSED"
 
 # ═══════════════════════════════════════════════════════
 # STEP 2: Reddit view counts (browser required)
 # ═══════════════════════════════════════════════════════
+STEP2_START=$(date +%s)
 log "Step 2: Reddit view counts (Python CDP — no LLM tokens)"
 
 REDDIT_USERNAME=$(python3 -c "import json; print(json.load(open('$REPO_DIR/config.json'))['accounts']['reddit']['username'])" 2>/dev/null || echo "")
@@ -81,11 +85,15 @@ print(f'Scraped {d[\"total\"]} articles, {d[\"with_views\"]} with views')
     fi
 else
     log "Step 2: SKIPPED — no Reddit username in config.json"
+    STEP2_EXIT=0
 fi
+STEP2_ELAPSED=$(( $(date +%s) - STEP2_START ))
+python3 "$REPO_DIR/scripts/log_run.py" --script "stats_reddit_views" --posted 0 --skipped 0 --failed $((STEP2_EXIT != 0 ? 1 : 0)) --cost 0 --elapsed "$STEP2_ELAPSED"
 
 # ═══════════════════════════════════════════════════════
 # STEP 3: X/Twitter stats (API via fxtwitter — no browser needed)
 # ═══════════════════════════════════════════════════════
+STEP3_START=$(date +%s)
 log "Step 3: X/Twitter stats (API via fxtwitter)"
 if [ "$QUIET" = "--quiet" ]; then
     python3 "$REPO_DIR/scripts/update_stats.py" --twitter-only --quiet >> "$LOGFILE" 2>&1
@@ -93,15 +101,18 @@ else
     python3 "$REPO_DIR/scripts/update_stats.py" --twitter-only >> "$LOGFILE" 2>&1
 fi
 STEP3_EXIT=$?
+STEP3_ELAPSED=$(( $(date +%s) - STEP3_START ))
 if [ "$STEP3_EXIT" -ne 0 ]; then
     log "Step 3: FAILED (exit $STEP3_EXIT)"
 else
     log "Step 3: Done"
 fi
+python3 "$REPO_DIR/scripts/log_run.py" --script "stats_twitter" --posted 0 --skipped 0 --failed $((STEP3_EXIT != 0 ? 1 : 0)) --cost 0 --elapsed "$STEP3_ELAPSED"
 
 # ═══════════════════════════════════════════════════════
 # STEP 4: LinkedIn stats (browser required)
 # ═══════════════════════════════════════════════════════
+STEP4_START=$(date +%s)
 log "Step 4: LinkedIn stats (Python CDP — no LLM tokens)"
 
 LINKEDIN_POSTS=$(psql "$DATABASE_URL" -t -A -c "
@@ -157,7 +168,10 @@ PYEOF
     fi
 else
     log "Step 4: SKIPPED — no LinkedIn posts need stats update ($LINKEDIN_POSTS found)"
+    STEP4_EXIT=0
 fi
+STEP4_ELAPSED=$(( $(date +%s) - STEP4_START ))
+python3 "$REPO_DIR/scripts/log_run.py" --script "stats_linkedin" --posted 0 --skipped 0 --failed $((STEP4_EXIT != 0 ? 1 : 0)) --cost 0 --elapsed "$STEP4_ELAPSED"
 
 log "=== Stats Pipeline complete: $(date) ==="
 
