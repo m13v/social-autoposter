@@ -697,73 +697,67 @@ def read_conversation(chat_url, max_messages=20):
                 page.goto(chat_url, wait_until="domcontentloaded")
                 page.wait_for_timeout(5000)
 
-                result = page.evaluate("""(maxMessages) => {
+                # Reddit Chat uses accessible names on message elements:
+                # "USERNAME said TIME_AGO, MESSAGE_TEXT, N replies, N reactions"
+                # Extract via aria labels on generic elements
+                result = page.evaluate("""(params) => {
+                    const maxMessages = params.maxMessages;
+                    const ourUsername = params.ourUsername;
                     let partnerName = '';
                     const messages = [];
 
-                    // Try to find the partner name from the chat header
-                    const headers = document.querySelectorAll(
-                        'h1, h2, h3, [class*="Header"] span, [class*="header"] span'
+                    // Get chat room name from the header
+                    const headerEls = document.querySelectorAll(
+                        '[aria-label*="Current chat"]'
                     );
-                    for (const h of headers) {
-                        const t = h.textContent.trim();
-                        if (t.length > 1 && t.length < 40 && !t.includes('Chat')
-                            && !t.includes('Reddit') && !t.includes('Message')) {
-                            partnerName = t;
-                            break;
-                        }
+                    for (const h of headerEls) {
+                        const label = h.getAttribute('aria-label') || '';
+                        const m = label.match(/Current chat,\\s*(.+)/);
+                        if (m) { partnerName = m[1]; break; }
                     }
-
-                    // Extract messages from the chat area
-                    // Reddit chat messages are typically in a scrollable container
-                    const msgEls = document.querySelectorAll(
-                        '[class*="Message"], [class*="message-body"], ' +
-                        '[class*="chat-message"], [role="listitem"]'
-                    );
-
-                    for (const el of msgEls) {
-                        const text = el.textContent || '';
-                        if (text.length < 2) continue;
-
-                        let sender = '';
-                        let content = '';
-                        let time = '';
-
-                        // Look for username in the message
-                        const userEl = el.querySelector(
-                            'a[href*="/user/"], a[href*="/u/"], ' +
-                            '[class*="author"], [class*="username"]'
-                        );
-                        if (userEl) {
-                            sender = userEl.textContent.trim();
-                        }
-
-                        // Message content - look for the text portion
-                        const contentEls = el.querySelectorAll('p, span, div');
-                        for (const ce of contentEls) {
-                            const t = ce.textContent.trim();
-                            if (t.length > 2 && t !== sender
-                                && !t.match(/^\\d{1,2}:\\d{2}/)
-                                && ce.children.length <= 1) {
-                                content = t;
+                    // Fallback: look for header text
+                    if (!partnerName) {
+                        const headers = document.querySelectorAll('h1, h2, h3');
+                        for (const h of headers) {
+                            const t = h.textContent.trim();
+                            if (t.length > 1 && t.length < 60 && !t.includes('Chat')
+                                && !t.includes('Reddit')) {
+                                partnerName = t;
                                 break;
                             }
                         }
+                    }
 
-                        // Time
-                        const timeEl = el.querySelector('time, [class*="time"]');
-                        if (timeEl) {
-                            time = timeEl.textContent.trim();
+                    // Find message elements by their accessible name pattern:
+                    // "USERNAME said TIME, TEXT, N replies, N reactions"
+                    const allEls = document.querySelectorAll('[aria-label]');
+                    for (const el of allEls) {
+                        const label = el.getAttribute('aria-label') || '';
+                        // Match: "Username said time_ago, message text, N replies"
+                        const m = label.match(
+                            /^(\\S+) said (.+?),\\s*(.+?),\\s*\\d+ repl/
+                        );
+                        if (!m) continue;
+
+                        const sender = m[1];
+                        const time = m[2];
+                        let content = m[3];
+
+                        // Clean up content (remove trailing ", 0 reactions" etc)
+                        content = content.replace(/,\\s*\\d+ reactions?$/, '').trim();
+
+                        const isFromUs = sender.toLowerCase()
+                            === ourUsername.toLowerCase();
+                        if (!isFromUs && sender) {
+                            partnerName = partnerName || sender;
                         }
 
-                        if (content && content.length > 1) {
-                            messages.push({
-                                sender: sender || 'unknown',
-                                content: content.substring(0, 2000),
-                                time: time,
-                                is_from_us: false,  // Will be determined below
-                            });
-                        }
+                        messages.push({
+                            sender: sender,
+                            content: content.substring(0, 2000),
+                            time: time,
+                            is_from_us: isFromUs,
+                        });
                     }
 
                     const recent = messages.slice(-maxMessages);
@@ -772,12 +766,7 @@ def read_conversation(chat_url, max_messages=20):
                         messages: recent,
                         total_found: messages.length,
                     };
-                }""", max_messages)
-
-                # Mark messages from us
-                for msg in result.get("messages", []):
-                    if msg.get("sender", "").lower() == OUR_USERNAME.lower():
-                        msg["is_from_us"] = True
+                }""", {"maxMessages": max_messages, "ourUsername": OUR_USERNAME})
 
                 return result
 
