@@ -287,7 +287,7 @@ def main():
             print("=== END DRY RUN ===")
             break
 
-        # Run Claude session for this one reply
+        # Run Claude session for this one reply (Claude decides + drafts, we post)
         reply_start = time.time()
         print(f"[engage_reddit] Processing #{reply['id']} ({reply['platform']}) "
               f"from {reply['their_author']}: {(reply['their_content'] or '')[:60]}...")
@@ -299,15 +299,87 @@ def main():
         for k in total_usage:
             total_usage[k] += usage[k]
 
-        if ok:
-            succeeded += 1
-            print(f"[engage_reddit] #{reply['id']} done ({reply_elapsed:.0f}s) "
-                  f"[in={usage['input_tokens']} out={usage['output_tokens']} "
-                  f"cache_r={usage['cache_read']} cache_w={usage['cache_create']} "
-                  f"${usage['cost_usd']:.4f}]")
-        else:
+        if not ok:
             failed += 1
-            print(f"[engage_reddit] #{reply['id']} FAILED ({reply_elapsed:.0f}s): {output[:200]}")
+            print(f"[engage_reddit] #{reply['id']} CLAUDE FAILED ({reply_elapsed:.0f}s): {output[:200]}")
+        else:
+            # Parse Claude's JSON decision
+            decision = None
+            try:
+                # Extract JSON from output (may have surrounding text)
+                import re as _re
+                json_match = _re.search(r'\{[^{}]*"action"\s*:\s*"[^"]+?"[^{}]*\}', output)
+                if json_match:
+                    decision = json.loads(json_match.group())
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+            if not decision:
+                # Fallback: check if output looks like a skip/reply
+                failed += 1
+                print(f"[engage_reddit] #{reply['id']} BAD OUTPUT ({reply_elapsed:.0f}s): {output[:200]}")
+            elif decision.get("action") == "skip":
+                reason = decision.get("reason", "unknown")
+                subprocess.run(["python3", REPLY_DB, "skipped", str(reply["id"]), reason])
+                skipped += 1
+                print(f"[engage_reddit] #{reply['id']} skipped: {reason} ({reply_elapsed:.0f}s) "
+                      f"[${usage['cost_usd']:.4f}]")
+            elif decision.get("action") == "reply":
+                reply_text = decision.get("text", "")
+                project = decision.get("project")
+                if not reply_text:
+                    failed += 1
+                    print(f"[engage_reddit] #{reply['id']} empty reply text")
+                else:
+                    # Mark as processing
+                    subprocess.run(["python3", REPLY_DB, "processing", str(reply["id"])])
+
+                    # Post via CDP
+                    post_result = None
+                    for attempt in range(3):
+                        try:
+                            cdp_out = subprocess.check_output(
+                                ["python3", os.path.join(REPO_DIR, "scripts", "reddit_browser.py"),
+                                 "reply", reply["their_comment_url"], reply_text],
+                                text=True, timeout=60, stderr=subprocess.DEVNULL,
+                            )
+                            post_result = json.loads(cdp_out)
+                            if post_result.get("ok"):
+                                break
+                        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, json.JSONDecodeError) as e:
+                            print(f"[engage_reddit] #{reply['id']} CDP attempt {attempt+1} failed: {e}")
+                            if attempt < 2:
+                                time.sleep(10)
+
+                    if post_result and post_result.get("ok"):
+                        # Mark as replied in DB
+                        cmd_args = ["python3", REPLY_DB, "replied", str(reply["id"]), reply_text]
+                        subprocess.run(cmd_args)
+                        # Update project if recommended
+                        if project:
+                            dbmod.load_env()
+                            db_url = os.environ.get("DATABASE_URL", "")
+                            if db_url:
+                                subprocess.run(
+                                    ["psql", db_url, "-c",
+                                     f"UPDATE replies SET project_name='{project}' WHERE id={reply['id']};"],
+                                    capture_output=True,
+                                )
+                        succeeded += 1
+                        print(f"[engage_reddit] #{reply['id']} POSTED ({reply_elapsed:.0f}s) "
+                              f"[${usage['cost_usd']:.4f}]")
+                    else:
+                        err = post_result.get("error", "unknown") if post_result else "no_response"
+                        subprocess.run(["python3", REPLY_DB, "skipped", str(reply["id"]), f"CDP_ERROR: {err}"])
+                        failed += 1
+                        print(f"[engage_reddit] #{reply['id']} CDP FAILED: {err} ({reply_elapsed:.0f}s)")
+            else:
+                failed += 1
+                print(f"[engage_reddit] #{reply['id']} unknown action: {decision}")
+
+            print(f"[engage_reddit] #{reply['id']} tokens: in={usage['input_tokens']} out={usage['output_tokens']} "
+                  f"cache_r={usage['cache_read']} cache_w={usage['cache_create']} "
+                  f"${usage['cost_usd']:.4f}")
 
         processed += 1
 
