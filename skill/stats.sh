@@ -56,75 +56,26 @@ if [ -n "$REDDIT_USERNAME" ]; then
     cat > "$STEP2_PROMPT" <<'STEP2_EOF'
 Scrape Reddit view counts from 4 profile pages. Do these steps in order, no deviations:
 
-The JavaScript below scrapes view counts from a Reddit profile page. You will run it on 4 different URLs.
-
-SCRAPE_JS:
-async (page) => {
-  await page.waitForTimeout(3000);
-  const allResults = new Map();
-  function extractCurrent() {
-    return page.evaluate(() => {
-      const results = [];
-      document.querySelectorAll('article').forEach(article => {
-        const links = article.querySelectorAll('a[href*="/comments/"]');
-        let url = null;
-        for (const link of links) {
-          const href = link.getAttribute('href');
-          if (href && href.includes('/comments/')) {
-            if (!url || href.includes('/comment/')) url = href;
-          }
-        }
-        let views = null;
-        for (const el of article.querySelectorAll('*')) {
-          const text = el.textContent.trim();
-          const match = text.match(/^([\d,.]+)\s*([KkMm])?\s+views?$/);
-          if (match) {
-            let v = parseFloat(match[1].replace(/,/g, ''));
-            if (match[2] && match[2].toLowerCase() === 'k') v *= 1000;
-            if (match[2] && match[2].toLowerCase() === 'm') v *= 1000000;
-            views = Math.round(v);
-            break;
-          }
-        }
-        if (url) {
-          results.push({ url: url.startsWith('http') ? url : 'https://www.reddit.com' + url, views });
-        }
-      });
-      return results;
-    });
-  }
-  let items = await extractCurrent();
-  for (const item of items) allResults.set(item.url, item.views);
-  let previousHeight = 0, sameHeightCount = 0, scrollCount = 0;
-  while (sameHeightCount < 4 && scrollCount < 300) {
-    const currentHeight = await page.evaluate(() => document.body.scrollHeight);
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await page.waitForTimeout(2000);
-    items = await extractCurrent();
-    for (const item of items) allResults.set(item.url, item.views);
-    if (currentHeight === previousHeight) sameHeightCount++;
-    else sameHeightCount = 0;
-    previousHeight = currentHeight;
-    scrollCount++;
-  }
-  const resultsArray = Array.from(allResults.entries()).map(([url, views]) => ({ url, views }));
-  return JSON.stringify({ total: resultsArray.length, scrolls: scrollCount, results: resultsArray });
-}
-
 CRITICAL: Use the reddit-agent browser (mcp__reddit-agent__* tools) for ALL steps below. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
 If a tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
 
-Step 1: mcp__reddit-agent__browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/comments/?sort=top
-Then mcp__reddit-agent__browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_1.json
+For each of the 4 URLs below, do these 3 sub-steps:
+  a) mcp__reddit-agent__browser_run_code code: async (page) => { await page.evaluate(() => { window.__params = {}; }); }
+  b) mcp__reddit-agent__browser_navigate to the URL
+  c) mcp__reddit-agent__browser_run_code filename: ~/social-autoposter/scripts/scrape_reddit_views.js
+  Save the "results" array from the response to the corresponding /tmp/reddit_views_N.json file.
 
-Step 2: mcp__reddit-agent__browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/comments/?sort=new
-Then mcp__reddit-agent__browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_2.json
+Step 1: URL = https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/comments/?sort=top
+Save results to /tmp/reddit_views_1.json
 
-Step 3: mcp__reddit-agent__browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/submitted/?sort=top&t=all
-Then mcp__reddit-agent__browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_3.json
+Step 2: URL = https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/comments/?sort=new
+Save results to /tmp/reddit_views_2.json
 
-Step 4: mcp__reddit-agent__browser_navigate to https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/submitted/?sort=new
-Then mcp__reddit-agent__browser_run_code with the SCRAPE_JS above. Save the "results" array to /tmp/reddit_views_4.json
+Step 3: URL = https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/submitted/?sort=top&t=all
+Save results to /tmp/reddit_views_3.json
+
+Step 4: URL = https://www.reddit.com/user/REDDIT_USERNAME_PLACEHOLDER/submitted/?sort=new
+Save results to /tmp/reddit_views_4.json
 
 Step 5: Merge all 4 JSON files into one, deduplicating by URL (keep the entry with non-null views if both exist). Save to /tmp/reddit_views.json
 
