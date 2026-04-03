@@ -140,33 +140,15 @@ Read ~/social-autoposter/config.json for project details and content_angle.
    Read the output to understand the full conversation context, who said what, and the overall tone.
 
 2. Using the thread context from step 1 AND the reply data above, decide: reply or skip?
-   If skip (troll, spam, not directed at us, light acknowledgment, conversation already resolved), run:
-   python3 {REPLY_DB} skipped {reply['id']} "REASON"
-   Then output DONE. (No browser needed for skips!)
+   If skip (troll, spam, not directed at us, light acknowledgment, conversation already resolved), output ONLY this JSON:
+   {{"action": "skip", "reason": "SHORT_REASON"}}
 
-3. If replying, draft 1-3 sentences following the rules above.
+3. If replying, draft 1-3 sentences following the rules above. Output ONLY this JSON:
+   {{"action": "reply", "text": "YOUR_REPLY_TEXT", "project": null}}
+   If you recommended a project, set "project" to the project name.
 
-4. Mark as processing:
-   python3 {REPLY_DB} processing {reply['id']}
-
-5. Post the reply using the Python CDP script (NO browser MCP needed):
-   python3 ~/social-autoposter/scripts/reddit_browser.py reply "{reply['their_comment_url']}" "YOUR_DRAFTED_REPLY_TEXT"
-   This returns JSON: {{"ok": true, "verified": true}} on success, or {{"ok": false, "error": "..."}} on failure.
-   The script connects to the reddit-agent browser via CDP, clicks reply, fills the text, and submits.
-   IMPORTANT: You MUST run this command. Do NOT skip posting. The script handles dedup internally.
-
-6. After posting:
-   - If ok=true: python3 {REPLY_DB} replied {reply['id']} "YOUR_TEXT"
-   - If ok=false with error "reply_link_not_found" or "thread_locked": python3 {REPLY_DB} skipped {reply['id']} "REASON"
-   - If ok=false with other error: python3 {REPLY_DB} skipped {reply['id']} "CDP_ERROR: error_message"
-
-8. If you recommended a project (Tier 2/3), also run:
-   source ~/social-autoposter/.env
-   psql "$DATABASE_URL" -c "UPDATE replies SET project_name='PROJECT_NAME' WHERE id={reply['id']};"
-
-9. Output DONE when finished.
-
-CRITICAL: If the CDP script fails, wait 30s and retry up to 2 times. If still failing, skip the reply.
+CRITICAL: Your ENTIRE output must be ONLY the JSON object above. No other text, no explanations, no markdown.
+The orchestrator script will handle posting via CDP and database updates automatically.
 """
 
 
