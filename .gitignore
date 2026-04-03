@@ -13,3 +13,11 @@ scripts/phase_*.py
 
 # Date-named error/log output files
 2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]
+
+# Claude agent runtime files
+.claude/
+
+# Agent-generated browser snapshots and data dumps
+*.yml
+*-notifications.json
+*-search-result
