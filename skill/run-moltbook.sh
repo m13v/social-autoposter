@@ -17,6 +17,7 @@ LOG_DIR="$REPO_DIR/skill/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/run-moltbook-$(date +%Y-%m-%d_%H%M%S).log"
 
+RUN_START=$(date +%s)
 echo "=== MoltBook Post Run: $(date) ===" | tee "$LOG_FILE"
 
 # Pick project based on weight distribution
@@ -72,4 +73,12 @@ CRITICAL: Use full URLs for our_url, never bare fragments like '#abc123'.
 CRITICAL: No browser needed - MoltBook is API-only." 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
+
+# Log run to persistent monitor
+RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+POSTED=$(grep -c "INSERT INTO posts" "$LOG_FILE" 2>/dev/null || echo 0)
+SKIPPED=$(grep -ci "skipped" "$LOG_FILE" 2>/dev/null || echo 0)
+FAILED=$(grep -ci "error\|failed\|FAILED" "$LOG_FILE" 2>/dev/null || echo 0)
+python3 "$REPO_DIR/scripts/log_run.py" --script "post_moltbook" --posted "$POSTED" --skipped "$SKIPPED" --failed "$FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
+
 find "$LOG_DIR" -name "run-moltbook-*.log" -mtime +7 -delete 2>/dev/null || true
