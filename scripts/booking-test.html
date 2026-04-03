@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Book a Call - Test Page</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; background: #f5f7fa; color: #1a1a1a; }
+
+    .header {
+      background: #fff;
+      padding: 16px 32px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header h2 { font-size: 1.2rem; color: #00568a; }
+    .header .cta {
+      background: #e11010;
+      color: #fff;
+      padding: 10px 24px;
+      border-radius: 4px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+    .header .cta:hover { background: #ae0c0c; }
+
+    .hero {
+      text-align: center;
+      padding: 48px 24px 32px;
+    }
+    .hero h1 { font-size: 2.2rem; margin-bottom: 8px; }
+    .hero p { font-size: 1.1rem; color: #555; }
+
+    .main {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: flex;
+      gap: 32px;
+      padding: 0 24px 48px;
+    }
+
+    .testimonials {
+      flex: 0 0 340px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .testimonial {
+      background: #fff;
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      border-left: 4px solid #00568a;
+    }
+    .testimonial blockquote {
+      font-style: italic;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      margin-bottom: 8px;
+    }
+    .testimonial .author {
+      font-size: 0.85rem;
+      color: #666;
+      font-weight: 600;
+    }
+
+    .calendar-section {
+      flex: 1;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      padding: 24px;
+      min-height: 700px;
+    }
+    .calendar-section h2 {
+      font-size: 1.3rem;
+      margin-bottom: 16px;
+      text-align: center;
+    }
+
+    /* Event log panel */
+    .event-log {
+      max-width: 1100px;
+      margin: 0 auto 48px;
+      padding: 0 24px;
+    }
+    .event-log h3 {
+      font-size: 1.1rem;
+      margin-bottom: 12px;
+      color: #00568a;
+    }
+    .event-log .log-container {
+      background: #1a1a2e;
+      color: #0f0;
+      font-family: 'Courier New', monospace;
+      font-size: 0.85rem;
+      padding: 16px;
+      border-radius: 8px;
+      min-height: 120px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .event-log .log-entry {
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .event-log .log-entry.scheduled { color: #0ff; font-weight: bold; }
+    .event-log .log-entry.selected { color: #ff0; }
+    .event-log .log-entry.info { color: #aaa; }
+
+    .stats-bar {
+      max-width: 1100px;
+      margin: 0 auto 24px;
+      padding: 0 24px;
+      display: flex;
+      gap: 16px;
+    }
+    .stat-card {
+      flex: 1;
+      background: #fff;
+      border-radius: 8px;
+      padding: 16px 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      text-align: center;
+    }
+    .stat-card .number { font-size: 2rem; font-weight: 700; color: #00568a; }
+    .stat-card .label { font-size: 0.85rem; color: #666; margin-top: 4px; }
+
+    @media (max-width: 768px) {
+      .main { flex-direction: column; }
+      .testimonials { flex: none; }
+      .stats-bar { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h2>Book a Call</h2>
+    <a href="#calendar" class="cta">Book a Call</a>
+  </div>
+
+  <div class="hero">
+    <h1>Book a Call with Michael DeLon</h1>
+    <p>Watch the video, then select a time below</p>
+  </div>
+
+  <!-- Live stats -->
+  <div class="stats-bar">
+    <div class="stat-card">
+      <div class="number" id="stat-views">0</div>
+      <div class="label">Page Views</div>
+    </div>
+    <div class="stat-card">
+      <div class="number" id="stat-selected">0</div>
+      <div class="label">Date/Time Selected</div>
+    </div>
+    <div class="stat-card">
+      <div class="number" id="stat-booked">0</div>
+      <div class="label">Bookings Completed</div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="testimonials">
+      <div class="testimonial">
+        <blockquote>"The book has probably paid for itself 25 times over or more in the last year."</blockquote>
+        <div class="author">David Lukas, Financial Advisor</div>
+      </div>
+      <div class="testimonial">
+        <blockquote>"I wrote the book to help my marketing and build my business. The book has accomplished exactly what I wanted it to do."</blockquote>
+        <div class="author">Lee Welfel, Mortgage Loan Originator</div>
+      </div>
+      <div class="testimonial">
+        <blockquote>"Publishing my own book was the best decision I ever made."</blockquote>
+        <div class="author">Tony Smith, K-9 Dog Trainer</div>
+      </div>
+      <div class="testimonial">
+        <blockquote>"It's been a game-changer in my business. I would highly recommend anyone going through the process."</blockquote>
+        <div class="author">Dr. Jason Dyken, Financial Advisor</div>
+      </div>
+      <div class="testimonial">
+        <blockquote>"When I tell people I have written a book, they are very impressed and immediately identify that I must be an expert in my field."</blockquote>
+        <div class="author">Russell McCloud, Auto Shop Owner</div>
+      </div>
+    </div>
+
+    <div class="calendar-section" id="calendar">
+      <h2>After You Watch the Video, Select a Time Below!</h2>
+      <!-- Calendly inline embed -->
+      <div class="calendly-inline-widget" data-url="https://calendly.com/michaeldelon/credibility-conversation?hide_event_type_details=1&primary_color=00568a" style="min-width:320px;height:600px;"></div>
+    </div>
+  </div>
+
+  <!-- Event log -->
+  <div class="event-log">
+    <h3>Tracking Event Log (visible for testing only)</h3>
+    <div class="log-container" id="log-container">
+      <div class="log-entry info">Waiting for Calendly events...</div>
+    </div>
+  </div>
+
+  <!-- Calendly widget.js (enables postMessage events) -->
+  <script src="https://assets.calendly.com/assets/external/widget.js" async></script>
+
+  <script>
+    // --- State ---
+    const stats = { views: 1, selected: 0, booked: 0 };
+    const events = [];
+
+    // Update stat display
+    function updateStats() {
+      document.getElementById('stat-views').textContent = stats.views;
+      document.getElementById('stat-selected').textContent = stats.selected;
+      document.getElementById('stat-booked').textContent = stats.booked;
+    }
+
+    // Add log entry
+    function addLog(message, type) {
+      const container = document.getElementById('log-container');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry ' + (type || '');
+      const now = new Date().toLocaleTimeString();
+      entry.textContent = '[' + now + '] ' + message;
+      container.appendChild(entry);
+      container.scrollTop = container.scrollHeight;
+
+      // Store event
+      events.push({ time: new Date().toISOString(), message, type });
+      console.log('[TRACKING]', message, type);
+    }
+
+    // --- Page view ---
+    updateStats();
+    addLog('Page viewed', 'info');
+
+    // --- Calendly postMessage listener ---
+    window.addEventListener('message', function(e) {
+      if (!e.data || !e.data.event) return;
+
+      // Only process Calendly events
+      if (!e.data.event.startsWith('calendly.')) return;
+
+      switch (e.data.event) {
+        case 'calendly.date_and_time_selected':
+          stats.selected++;
+          updateStats();
+          addLog('DATE & TIME SELECTED by visitor', 'selected');
+          if (e.data.payload) {
+            addLog('  Payload: ' + JSON.stringify(e.data.payload), 'info');
+          }
+          break;
+
+        case 'calendly.event_scheduled':
+          stats.booked++;
+          updateStats();
+          addLog('BOOKING COMPLETED!', 'scheduled');
+          if (e.data.payload) {
+            addLog('  Event URI: ' + JSON.stringify(e.data.payload), 'scheduled');
+          }
+          break;
+
+        case 'calendly.page_height':
+          // Resize event, less interesting but log it
+          addLog('Calendar widget resized (height: ' + (e.data.payload && e.data.payload.height) + ')', 'info');
+          break;
+
+        default:
+          addLog('Calendly event: ' + e.data.event, 'info');
+          if (e.data.payload) {
+            addLog('  Payload: ' + JSON.stringify(e.data.payload), 'info');
+          }
+      }
+    });
+
+    // --- Track scroll depth ---
+    let maxScroll = 0;
+    window.addEventListener('scroll', function() {
+      const scrollPct = Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100);
+      if (scrollPct > maxScroll + 24) {
+        maxScroll = scrollPct;
+        addLog('Scroll depth: ' + scrollPct + '%', 'info');
+      }
+    });
+
+    // --- Track time on page ---
+    let timeOnPage = 0;
+    setInterval(function() {
+      timeOnPage += 30;
+      addLog('Time on page: ' + timeOnPage + 's', 'info');
+    }, 30000);
+  </script>
+
+</body>
+</html>
