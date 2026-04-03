@@ -29,6 +29,7 @@ LOG_FILE="$LOG_DIR/engage-dm-replies-$(date +%Y-%m-%d_%H%M%S).log"
 
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 
+RUN_START=$(date +%s)
 log "=== DM Reply Engagement Run: $(date) ==="
 
 # Load config
@@ -470,6 +471,14 @@ DM_SUMMARY=$(psql "$DATABASE_URL" -t -A -c "
     );" 2>/dev/null || echo "{}")
 
 log "DM pipeline summary: $DM_SUMMARY"
+
+# Log run to persistent monitor per platform
+RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+DM_OUTBOUND=$(echo "$DM_SUMMARY" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('outbound',0))" 2>/dev/null || echo 0)
+DM_STALE_CT=$(echo "$DM_SUMMARY" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('stale',0))" 2>/dev/null || echo 0)
+python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_reddit" --posted "$DM_OUTBOUND" --skipped "$DM_STALE_CT" --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
+python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_linkedin" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed 0
+python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_twitter" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed 0
 
 # Report flagged conversations needing human attention (emails already sent per-DM during flagging)
 FLAGGED_COUNT=$(psql "$DATABASE_URL" -t -A -c "
