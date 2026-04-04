@@ -186,27 +186,52 @@ def get_api_key():
 
 
 def run_claude(prompt, timeout=300):
-    """Run claude -p with the given prompt. Returns (success, output, usage_dict)."""
+    """Run claude -p with the given prompt. Returns (success, output, usage_dict).
+
+    Streams output in real time to stderr for log visibility.
+    """
+    import time as _time
+    import select
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
     cmd = ["claude", "-p", "--output-format", "json"]
-    # Use bare mode for minimal overhead (skips hooks, CLAUDE.md, skills, plugins)
     cmd.append("--bare")
-    # No MCP needed: CDP scripts handle browser automation directly
     cmd += ["--tools", "Bash,Read"]
-    # Set API key for bare mode (which skips OAuth)
     env = os.environ.copy()
     api_key = get_api_key()
     if api_key:
         env["ANTHROPIC_API_KEY"] = api_key
     try:
-        # Pass prompt via stdin (too long for CLI arg)
-        result = subprocess.run(
-            cmd, env=env, input=prompt,
-            capture_output=True, text=True, timeout=timeout,
+        proc = subprocess.Popen(
+            cmd, env=env, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
-        # Parse JSON output for usage stats
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+        collected = []
+        deadline = _time.time() + timeout
+        while True:
+            remaining = deadline - _time.time()
+            if remaining <= 0:
+                proc.kill()
+                return False, "TIMEOUT", usage
+            ready, _, _ = select.select([proc.stdout], [], [], min(remaining, 30))
+            if ready:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                collected.append(line)
+                print(f"[engage_reddit] {line.rstrip()}", file=sys.stderr, flush=True)
+            elif proc.poll() is not None:
+                rest = proc.stdout.read()
+                if rest:
+                    collected.append(rest)
+                break
+            else:
+                print(f"[engage_reddit] ... still running ({int(_time.time() - (deadline - timeout))}s)", file=sys.stderr, flush=True)
+        proc.wait()
+        full_output = "".join(collected)
         try:
-            data = json.loads(result.stdout)
+            data = json.loads(full_output)
             usage["cost_usd"] = data.get("total_cost_usd", 0.0)
             u = data.get("usage", {})
             usage["input_tokens"] = u.get("input_tokens", 0)
@@ -215,10 +240,9 @@ def run_claude(prompt, timeout=300):
             usage["cache_create"] = u.get("cache_creation_input_tokens", 0)
             text_output = data.get("result", "")
         except (json.JSONDecodeError, TypeError):
-            text_output = result.stdout
-        return result.returncode == 0, text_output + result.stderr, usage
-    except subprocess.TimeoutExpired:
-        return False, "TIMEOUT", usage
+            text_output = full_output
+        stderr_out = proc.stderr.read() if proc.stderr else ""
+        return proc.returncode == 0, text_output + stderr_out, usage
     except Exception as e:
         return False, str(e), usage
 
