@@ -130,10 +130,12 @@ or GitHub repos. Product mentions happen ONLY later in the reply pipeline when p
 - Check dedup: python3 {REDDIT_TOOLS} already-posted "THREAD_URL"
 
 ## CRITICAL Bash rules
-- NEVER use run_in_background=true. All bash commands must run foreground and return quickly (under 10s each).
+- NEVER use run_in_background=true. All bash commands must run foreground and return quickly (under 20s each).
 - NEVER use `sleep` commands. NEVER run `sleep N && cat ...` to wait for background tasks.
 - NEVER pipe multiple searches with `&` or `&&`. Run ONE search command at a time, wait for output, then decide next step.
-- If a search returns no relevant results after 3 tries, stop searching and use what you have.
+- If you see `{{"error": "rate_limited", ...}}` in the output, DO NOT retry that command. Skip it and move on.
+  Rate limits are global. Waiting won't help this session. Use whatever search results you already have.
+- If you can't find enough threads after 5 search attempts total, draft fewer posts (even 1-2 is fine) rather than searching more.
 
 ## Steps
 1. Search 2 topics from: {json.dumps(topics_list)}. Skip already_posted=true threads.
