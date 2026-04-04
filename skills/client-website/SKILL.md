@@ -160,22 +160,43 @@ html {
 
 Use `next/font/google` with CSS variable mode. The body font goes on `--font-sans`, the heading font on `--font-heading`. Apply both variables to the `<html>` tag.
 
+**IMPORTANT: Route group architecture.** The root layout must NOT include Header/Footer directly. Instead, use a `(main)` route group with its own layout for pages that need the site Header/Footer. SEO guide pages under `/t/` also go inside `(main)` so they share the same Header/Footer as the rest of the site.
+
+**Root layout (`src/app/layout.tsx`):** fonts, metadata, Organization JSON-LD, and `{children}` only.
+
 ```tsx
 import { Inter, Oswald } from "next/font/google";
 
 const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
 const oswald = Oswald({ variable: "--font-oswald", subsets: ["latin"] });
 
-// In <html>:
+// Root layout: NO Header/Footer here
 <html lang="en" className={`${inter.variable} ${oswald.variable} h-full antialiased`}>
   <body className="min-h-full flex flex-col font-sans">
-    <Header />
-    <main className="flex-1">{children}</main>
-    <Footer />
+    {children}
     {/* Organization JSON-LD here */}
   </body>
 </html>
 ```
+
+**Main layout (`src/app/(main)/layout.tsx`):** wraps all pages with Header/Footer.
+
+```tsx
+import { Header } from "@/components/Header";
+import { Footer } from "@/components/Footer";
+
+export default function MainLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <>
+      <Header />
+      <main className="flex-1">{children}</main>
+      <Footer />
+    </>
+  );
+}
+```
+
+All page routes (homepage, about, wins, faq, precall, AND `/t/` guide pages) go inside `src/app/(main)/`. The `(main)` directory is a Next.js route group: it does not affect URLs.
 
 **Font pairing guide:**
 - Professional services: Inter + Oswald (clean, authoritative)
