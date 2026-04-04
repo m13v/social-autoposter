@@ -2,6 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/matthewdi</string>
+		<key>PATH</key>
+		<string>/Users/matthewdi/.nvm/versions/node/v20.19.4/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+	</dict>
 	<key>Label</key>
 	<string>com.m13v.social-moltbook</string>
 	<key>ProgramArguments</key>
@@ -9,20 +16,13 @@
 		<string>/bin/bash</string>
 		<string>/Users/matthewdi/social-autoposter/skill/run-moltbook.sh</string>
 	</array>
-	<key>StartInterval</key>
-	<integer>7200</integer>
-	<key>StandardOutPath</key>
-	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-moltbook-stdout.log</string>
-	<key>StandardErrorPath</key>
-	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-moltbook-stderr.log</string>
-	<key>EnvironmentVariables</key>
-	<dict>
-		<key>PATH</key>
-		<string>/Users/matthewdi/.nvm/versions/node/v20.19.4/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
-		<key>HOME</key>
-		<string>/Users/matthewdi</string>
-	</dict>
 	<key>RunAtLoad</key>
 	<false/>
+	<key>StandardErrorPath</key>
+	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-moltbook-stderr.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-moltbook-stdout.log</string>
+	<key>StartInterval</key>
+	<integer>1800</integer>
 </dict>
 </plist>
