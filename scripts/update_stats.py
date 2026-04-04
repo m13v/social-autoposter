@@ -699,7 +699,6 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
         # Commit every 50 tweets to save progress
         if total % 50 == 0:
             db.commit()
-            print(f"[stats] Twitter: {total}/{num_posts} checked, {updated} updated, {errors} errors", flush=True)
 
     print(f"[stats] Twitter: done. {total}/{num_posts} checked, {updated} updated, {deleted} deleted, {errors} errors", flush=True)
     db.commit()
