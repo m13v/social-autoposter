@@ -37,7 +37,7 @@ fi
 
 # Run Claude with the social-autoposter skill to engage
 echo "Starting Claude engagement..." | tee -a "$LOG_FILE"
-echo "$CANDIDATES" | claude -p "You are running the social-autoposter Octolens engagement workflow.
+echo "$CANDIDATES" | claude --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/all-agents-mcp.json" -p "You are running the social-autoposter Octolens engagement workflow.
 
 Here are the Octolens mention candidates (JSON):
 $(echo "$CANDIDATES")
@@ -58,7 +58,7 @@ Pick the BEST 5-10 candidates to engage with. Prioritize:
 For each picked candidate, follow the standard social-autoposter posting flow:
 - Read the full thread/post via browser to understand context
 - Draft a natural comment following content_angle from config.json
-- Post via browser automation (reddit-agent for Reddit, twitter-agent for Twitter, etc.)
+- Post via browser automation: use ONLY mcp__reddit-agent__* for Reddit, mcp__twitter-agent__* for Twitter, mcp__linkedin-agent__* for LinkedIn. NEVER use mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
 - Determine project_name by matching thread topic to config.json projects[].topics
 - Log to the posts table with source_summary = 'octolens: [keyword]' (MUST include project_name)
 
