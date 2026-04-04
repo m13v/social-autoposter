@@ -119,28 +119,33 @@ def find_reddit_cdp_port():
 
 
 def get_browser_and_page(playwright):
-    """Connect to the reddit-agent MCP browser via CDP and open a NEW tab.
+    """Connect to the reddit-agent MCP browser via CDP with a fresh logged-in context.
 
-    Opens a new tab in the existing browser (shares cookies/session) instead of
-    reusing an existing tab, which avoids conflicts with other processes
-    (engage, DMs) that may be navigating the same tab simultaneously.
+    Creates a NEW browser context with storageState cookies (the logged-in session)
+    rather than reusing contexts[0] (the default context, which is NOT logged in).
+    The MCP's isolated context is invisible to CDP connections, so we must create
+    our own context with the same storageState.
 
-    Returns (browser, page, is_cdp). When is_cdp=True, `page` is a new tab
-    in the CDP browser. When is_cdp=False, it's a new headless page.
+    Returns (browser, page, is_cdp). When is_cdp=True, `page` is in a new context
+    on the CDP browser. When is_cdp=False, it's a new headless page.
     """
     cdp_port = find_reddit_cdp_port()
+
+    storage_state = STORAGE_STATE if os.path.exists(STORAGE_STATE) else None
 
     if cdp_port:
         try:
             browser = playwright.chromium.connect_over_cdp(
                 f"http://localhost:{cdp_port}"
             )
-            contexts = browser.contexts
-            if contexts:
-                context = contexts[0]
-                # Open a NEW tab (shares session/cookies, avoids tab conflicts)
-                page = context.new_page()
-                return browser, page, True
+            # Create a NEW context with storageState (logged-in cookies).
+            # Do NOT use contexts[0] as it's the default context without login cookies.
+            context = browser.new_context(
+                storage_state=storage_state,
+                viewport=VIEWPORT,
+            )
+            page = context.new_page()
+            return browser, page, True
         except Exception:
             pass
 
@@ -150,7 +155,7 @@ def get_browser_and_page(playwright):
         args=["--disable-blink-features=AutomationControlled"],
     )
     context = browser.new_context(
-        storage_state=STORAGE_STATE if os.path.exists(STORAGE_STATE) else None,
+        storage_state=storage_state,
         viewport=VIEWPORT,
         user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     )
