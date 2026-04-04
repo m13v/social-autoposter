@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # engage.sh — Reply engagement loop
-# Phase A: Python script scans for new replies (runs in background)
 # Phase B: Claude drafts and posts replies via Playwright/API (batched, 50 at a time)
 # Phase C: Cleanup
 # Phase D: Edit high-performing posts (>2 upvotes, 6h+ old) with a project link
+# Phase E: DM outreach
 # Called by launchd every 2 hours (7200s interval).
+# NOTE: Reply scanning (formerly Phase A) now runs on its own hourly launchd job:
+# com.m13v.social-scan-replies (skill/run-scan-replies.sh)
 
 set -euo pipefail
 
@@ -33,12 +35,8 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 log "=== Engagement Loop Run: $(date) ==="
 
 # ═══════════════════════════════════════════════════════
-# PHASE A: Scan for replies (runs in BACKGROUND)
+# (Phase A moved to its own launchd job: com.m13v.social-scan-replies)
 # ═══════════════════════════════════════════════════════
-log "Phase A: Scanning for replies (background)..."
-PHASE_A_START=$(date +%s)
-(PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_replies.py" 2>&1 || true) | tee -a "$LOG_FILE" &
-SCAN_PID=$!
 
 # ═══════════════════════════════════════════════════════
 # PHASE D: Edit high-performing posts with project link
@@ -147,9 +145,6 @@ else
     python3 "$REPO_DIR/scripts/log_run.py" --script "engage_link_edit" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed 0
 fi
 
-# Give the scanner a head start to find new replies
-sleep 15
-
 # ═══════════════════════════════════════════════════════
 # PHASE B: Reddit/Moltbook reply engagement
 # Processes one reply at a time to avoid context accumulation
@@ -172,15 +167,6 @@ if [ "$PENDING_COUNT" -gt 0 ]; then
 else
     log "Phase B: No pending replies. Skipping."
 fi
-
-# Wait for scanner to finish if still running
-if kill -0 "$SCAN_PID" 2>/dev/null; then
-    log "Waiting for Phase A scanner to finish..."
-    wait "$SCAN_PID" || true
-fi
-PHASE_A_ELAPSED=$(( $(date +%s) - PHASE_A_START ))
-SCAN_FOUND=$(grep -ci "new repl" "$LOG_FILE" 2>/dev/null) || true
-python3 "$REPO_DIR/scripts/log_run.py" --script "engage_scan_reddit" --posted "$SCAN_FOUND" --skipped 0 --failed 0 --cost 0 --elapsed "$PHASE_A_ELAPSED"
 
 # ═══════════════════════════════════════════════════════
 # PHASE E: Reddit DM engagement (continue conversations via Chat)
