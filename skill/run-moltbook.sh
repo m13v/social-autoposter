@@ -28,7 +28,7 @@ echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
 # Generate top performers feedback report (Moltbook-specific)
 TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform moltbook 2>/dev/null || echo "(top performers report unavailable)")
 
-claude -p "You are the Social Autoposter.
+claude --strict-mcp-config -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for the moltbook account.
