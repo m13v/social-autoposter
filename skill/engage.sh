@@ -139,8 +139,8 @@ PROMPT_EOF
     gtimeout 14400 claude -p --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" "$(cat "$PHASE_D_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase D claude exited with code $?"
     rm -f "$PHASE_D_PROMPT"
     PHASE_D_ELAPSED=$(( $(date +%s) - PHASE_D_START ))
-    PHASE_D_EDITED=$(grep -ci "link_edited_at=NOW()" "$LOG_FILE" 2>/dev/null || echo 0)
-    PHASE_D_SKIPPED=$(grep -ci "SKIPPED:" "$LOG_FILE" 2>/dev/null || echo 0)
+    PHASE_D_EDITED=$(grep -ci "link_edited_at=NOW()" "$LOG_FILE" 2>/dev/null) || true
+    PHASE_D_SKIPPED=$(grep -ci "SKIPPED:" "$LOG_FILE" 2>/dev/null) || true
     python3 "$REPO_DIR/scripts/log_run.py" --script "engage_link_edit" --posted "$PHASE_D_EDITED" --skipped "$PHASE_D_SKIPPED" --failed 0 --cost 0 --elapsed "$PHASE_D_ELAPSED"
 else
     log "Phase D: No posts eligible for link edit"
@@ -179,7 +179,7 @@ if kill -0 "$SCAN_PID" 2>/dev/null; then
     wait "$SCAN_PID" || true
 fi
 PHASE_A_ELAPSED=$(( $(date +%s) - PHASE_A_START ))
-SCAN_FOUND=$(grep -ci "new repl" "$LOG_FILE" 2>/dev/null || echo 0)
+SCAN_FOUND=$(grep -ci "new repl" "$LOG_FILE" 2>/dev/null) || true
 python3 "$REPO_DIR/scripts/log_run.py" --script "engage_scan_reddit" --posted "$SCAN_FOUND" --skipped 0 --failed 0 --cost 0 --elapsed "$PHASE_A_ELAPSED"
 
 # ═══════════════════════════════════════════════════════
