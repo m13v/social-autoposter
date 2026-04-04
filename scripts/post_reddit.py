@@ -244,21 +244,24 @@ def post_via_cdp(thread_url, reply_to_url, text):
     """Post a comment or reply via CDP. Returns parsed JSON result."""
     for attempt in range(3):
         try:
-            if reply_to_url:
-                cdp_out = subprocess.check_output(
-                    ["python3", REDDIT_BROWSER, "reply", reply_to_url, text],
-                    text=True, timeout=60, stderr=subprocess.DEVNULL,
-                )
-            else:
-                cdp_out = subprocess.check_output(
-                    ["python3", REDDIT_BROWSER, "post-comment", thread_url, text],
-                    text=True, timeout=60, stderr=subprocess.DEVNULL,
-                )
+            target = reply_to_url or thread_url
+            cmd = ["python3", REDDIT_BROWSER, "reply" if reply_to_url else "post-comment", target, text]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            cdp_out = proc.stdout.strip()
+            if not cdp_out:
+                print(f"[post_reddit] CDP attempt {attempt + 1}: no stdout. stderr: {proc.stderr[:200]}")
+                if attempt < 2:
+                    time.sleep(10)
+                continue
             result = json.loads(cdp_out)
             if result.get("ok"):
                 return result
+            err = result.get("error", "unknown")
+            print(f"[post_reddit] CDP attempt {attempt + 1}: {err}")
+            if err in ("thread_not_found", "thread_locked", "already_replied"):
+                return result  # Don't retry these
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError, json.JSONDecodeError) as e:
-            print(f"[post_reddit] CDP attempt {attempt + 1} failed: {e}")
+            print(f"[post_reddit] CDP attempt {attempt + 1} exception: {e}")
             if attempt < 2:
                 time.sleep(10)
     return {"ok": False, "error": "all_attempts_failed"}
