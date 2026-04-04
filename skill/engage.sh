@@ -88,7 +88,7 @@ Process ALL of them. For each post:
       - \`<Metadata>\` export with title, description, openGraph, twitter tags
       - \`<GuideNavbar theme={THEME} />\` as sticky top nav with CTA button
       - Hero section: badge, h1, subtitle paragraph
-      - \`<ProofBanner theme={THEME} quote="..." source="..." metric="..." />\` right after the hero, using a proof_point from config.json (e.g. "20 incidents caught in the first month" or "projecting $500/day additional revenue per location")
+      - \`<ProofBanner theme={THEME} quote="..." source="..." metric="..." />\` right after the hero, using a proof_point from config.json (e.g. "20 incidents caught in the first month" or "projecting \$500/day additional revenue per location")
       - \`<VideoEmbed videoUrl="..." title="..." />\` if the project has a demo_video in config.json (embed it after the proof banner)
       - Table of contents nav
       - Sections 1-2 of article content
