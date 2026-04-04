@@ -116,77 +116,35 @@ Your last {len(recent_comments)} comments (don't repeat talking points):
 {chr(10).join(lines)}
 """
 
-    return f"""You are the Social Autoposter. Find {limit} relevant Reddit thread(s) and draft comment(s) for this project.
+    return f"""Find {limit} Reddit threads and draft comments for {project.get('name', 'general')}.
 
-## Project: {project.get('name', 'general')}
-{project_json}
-
-## Content angle
-{content_angle}
+Project: {project_json}
+Content angle: {content_angle}
 {recent_ctx}{top_ctx}
+## Tools (via Bash)
+- Search: python3 {REDDIT_TOOLS} search "QUERY" --limit 15
+- Fetch thread: python3 {REDDIT_TOOLS} fetch "THREAD_URL"
+- Check dedup: python3 {REDDIT_TOOLS} already-posted "THREAD_URL"
 
-## Your tools (call via Bash)
-
-1. **Search**: Find threads by topic
-   python3 {REDDIT_TOOLS} search "QUERY" --limit 15
-   Returns JSON array with subreddit, title, score, selftext preview, already_posted flag.
-
-2. **Fetch thread**: Get full thread + top comments
-   python3 {REDDIT_TOOLS} fetch "THREAD_URL"
-   Returns thread info + top 15 comments with their thing IDs and body text.
-
-3. **Check dedup**: Check if we already posted in a thread
-   python3 {REDDIT_TOOLS} already-posted "THREAD_URL"
-
-## Workflow
-
-1. Search for 2-3 of these topics (pick the most specific ones): {json.dumps(topics_list)}
-   Review the results. Skip threads marked already_posted=true.
-
-2. From the search results, pick the most relevant threads where you can add genuine value.
-   Consider: subreddit relevance, thread topic, engagement level, whether our content angle fits.
-   SKIP threads from fiction/gaming/meme subreddits that happen to match keywords.
-
-3. For each promising thread, fetch it to read the full discussion and comments.
-   Decide: post a top-level comment, or reply to a high-upvote comment for visibility.
-
-4. Draft your comment (2-4 sentences), then output a JSON object.
-
-5. Stop after {limit} JSON object(s).
+## Steps
+1. Search 2 topics from: {json.dumps(topics_list)}. Skip already_posted=true threads.
+2. Pick {limit} best threads. Fetch each one.
+3. Draft a comment (2-4 sentences) for each.
+4. Output each as a JSON object, then DONE.
 
 ## Content rules
-- Write like texting a coworker. Lowercase OK, fragments OK.
-- First person, specific details from content angle.
-- NO em dashes. Use commas, periods, or regular dashes (-).
-- No markdown on Reddit (no ##, **, numbered lists).
-- Imperfections: contractions, casual asides, occasional lowercase.
-- Vary openings. 2-4 short sentences max.
-- Reply to high-upvote comments for visibility, not just OP.
+- Casual tone, lowercase OK, fragments OK. 2-4 short sentences.
+- NO em dashes. No markdown. No product links.
+- Never say "I built" or "we built". Frame as recommendations.
+- Never start with "exactly", "yeah totally", "100%", "that's smart".
 
-## Anti-patterns
-- NEVER start with "exactly", "yeah totally", "100%", "that's smart".
-- NEVER say "I built" / "we built" / "I'm working on". Frame as recommendations.
-- No product links in top-level comments. Earn attention first.
+## CRITICAL OUTPUT FORMAT
+You MUST output each draft as a raw JSON object on its own line. No commentary before or after. Example:
 
-## Guardrails
-- NEVER suggest calls, meetings, demos.
-- NEVER promise to share links/files not in project config.
-- NEVER offer to DM. NEVER make time-bound promises.
+{{"action": "post", "thread_url": "https://old.reddit.com/r/sub/comments/abc/title/", "reply_to_url": null, "text": "your comment here", "thread_author": "username", "thread_title": "thread title"}}
 
-## Output format
-
-For EACH post, output EXACTLY one JSON object on its own line, with no other text around it:
-
-{{"action": "post", "thread_url": "THREAD_URL", "reply_to_url": "COMMENT_PERMALINK_OR_NULL", "text": "YOUR_COMMENT_TEXT", "thread_author": "AUTHOR", "thread_title": "TITLE"}}
-
-- thread_url: the thread URL (e.g. https://old.reddit.com/r/sub/comments/abc/title/)
-- reply_to_url: if replying to a specific comment, its permalink URL. If posting a top-level comment, set to null.
-- text: your drafted comment text
-- thread_author: the thread OP's username
-- thread_title: the thread title
-
-Output {limit} JSON object(s), then output DONE on its own line.
-Do NOT post anything yourself. The orchestrator will handle posting.
+After all {limit} JSON objects, output DONE on its own line.
+Do NOT describe what you are doing. Do NOT narrate. Just search, draft, output JSON, DONE.
 """
 
 
@@ -318,17 +276,12 @@ def log_post(thread_url, permalink, text, project_name, thread_author, thread_ti
 def parse_post_decisions(output):
     """Extract JSON post decisions from Claude's output."""
     decisions = []
-    for line in output.split("\n"):
-        line = line.strip()
-        if not line or line == "DONE":
-            continue
-        # Try to extract JSON objects with "action": "post"
+    # Find all JSON-like objects with "action": "post" anywhere in output
+    for match in re.finditer(r'\{[^{}]*?"action"\s*:\s*"post"[^{}]*?\}', output):
         try:
-            match = re.search(r'\{[^{}]*"action"\s*:\s*"post"[^{}]*\}', line)
-            if match:
-                decision = json.loads(match.group())
-                if decision.get("text") and decision.get("thread_url"):
-                    decisions.append(decision)
+            decision = json.loads(match.group())
+            if decision.get("text") and decision.get("thread_url"):
+                decisions.append(decision)
         except (json.JSONDecodeError, TypeError):
             continue
     return decisions
