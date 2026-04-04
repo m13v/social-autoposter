@@ -292,7 +292,7 @@ def post_comment(thread_url, text):
             }
 
         finally:
-            page.close()
+            page.context.close()
             if not is_cdp:
                 browser.close()
 
@@ -445,7 +445,7 @@ def reply_to_comment(comment_permalink, text):
             }
 
         finally:
-            page.close()
+            page.context.close()
             if not is_cdp:
                 browser.close()
 
@@ -568,7 +568,7 @@ def edit_comment(comment_permalink, new_text):
             }
 
         finally:
-            page.close()
+            page.context.close()
             if not is_cdp:
                 browser.close()
 
@@ -747,7 +747,7 @@ def unread_dms():
             return unique
 
         finally:
-            page.close()
+            page.context.close()
             if not is_cdp:
                 browser.close()
 
@@ -905,7 +905,7 @@ def read_conversation(chat_url, max_messages=20):
                 return result
 
         finally:
-            page.close()
+            page.context.close()
             if not is_cdp:
                 browser.close()
 
@@ -1031,7 +1031,7 @@ def send_dm(chat_url, message):
                 }
 
         finally:
-            page.close()
+            page.context.close()
             if not is_cdp:
                 browser.close()
 
@@ -1313,7 +1313,7 @@ def compose_dm(recipient, subject, body):
                 return {"ok": True, "thread_url": page.url}
 
         finally:
-            page.close()
+            page.context.close()
             if not is_cdp:
                 browser.close()
 
@@ -1422,7 +1422,7 @@ def scrape_views(username, max_scrolls=300):
         except Exception as e:
             return {"ok": False, "error": str(e)}
         finally:
-            page.close()
+            page.context.close()
             if not is_cdp:
                 browser.close()
 
