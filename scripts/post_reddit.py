@@ -225,8 +225,22 @@ def run_claude(prompt, timeout=600):
                 if not line:
                     break
                 collected.append(line)
-                # Stream to stderr so tee/log captures it in real time
-                print(f"[post_reddit] {line.rstrip()}", file=sys.stderr, flush=True)
+                # Stream meaningful events to stderr so tee/log captures them
+                try:
+                    evt = json.loads(line.strip())
+                    etype = evt.get("type", "")
+                    if etype == "assistant":
+                        msg = evt.get("message", {})
+                        for block in msg.get("content", []):
+                            if block.get("type") == "tool_use":
+                                print(f"[post_reddit] tool: {block.get('name','')} | {str(block.get('input',{}).get('command',''))[:120]}", file=sys.stderr, flush=True)
+                            elif block.get("type") == "text" and block.get("text","").strip():
+                                txt = block["text"].strip()[:200]
+                                print(f"[post_reddit] {txt}", file=sys.stderr, flush=True)
+                    elif etype == "result":
+                        print(f"[post_reddit] done: cost=${evt.get('total_cost_usd',0):.4f}", file=sys.stderr, flush=True)
+                except (json.JSONDecodeError, TypeError):
+                    print(f"[post_reddit] {line.rstrip()[:200]}", file=sys.stderr, flush=True)
             elif proc.poll() is not None:
                 # Process ended, read remaining
                 rest = proc.stdout.read()
