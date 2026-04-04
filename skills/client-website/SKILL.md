@@ -1086,49 +1086,22 @@ Create `src/app/robots.ts` with sitemap reference.
 
 ### 4a. Create Shared Guide Components
 
-In the client website repo, create these components in `src/components/`:
+Guide pages reuse the site Header/Footer from the `(main)` layout. They do NOT need their own navbar or footer. Create only these in-page components in `src/components/`:
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| GuideTheme | `guide-theme.ts` | Brand colors, logo, booking URL, CTA label |
-| GuideNavbar | `guide-navbar.tsx` | Sticky nav for guide pages with CTA (tracks `cta_click` in PostHog) |
-| GuideFooter | `guide-footer.tsx` | Footer for guide pages |
 | GuideCTASection | `guide-cta-section.tsx` | Bottom CTA block with heading, body, subtext |
 | InlineCTA | `inline-cta.tsx` | Mid-article CTA break |
-| StickyBottomCTA | `sticky-bottom-cta.tsx` | Fixed bottom bar CTA |
+| StickyBottomCTA | `sticky-bottom-cta.tsx` | Fixed bottom bar CTA (appears on scroll) |
 | ProofBanner | `proof-banner.tsx` | Social proof quote with metric badge |
-| VideoEmbed | `video-embed.tsx` | YouTube/Vimeo embed wrapper |
-| CTAButton | `cta-button.tsx` | Styled button with PostHog click tracking |
-| guide.ts | `guide.ts` | Re-exports all guide components |
-
-**GuideTheme interface:**
-
-```ts
-export interface GuideTheme {
-  brand: string;
-  logo: string;
-  bookingUrl: string;
-  bookingLabel?: string;
-  colors: {
-    primary: string;
-    primaryHover: string;
-    primaryLight: string;
-    primaryText: string;
-    gradientFrom: string;
-    gradientTo: string;
-    accent50: string;
-    borderLight: string;
-  };
-}
-```
 
 ### 4b. Create SEO Guide Pages
 
-Create guide pages at `src/app/t/{slug}/page.tsx`. Each guide:
+Create guide pages at `src/app/(main)/t/{slug}/page.tsx`. They live inside the `(main)` route group so they automatically get the site Header/Footer. Each guide:
 
 **Structure:**
 ```
-GuideNavbar
+[Header from (main)/layout.tsx]
   article (max-w-3xl)
     header (h1 + intro paragraph)
     ProofBanner (real client metric)
@@ -1140,8 +1113,10 @@ GuideNavbar
     section#topic-4
     GuideCTASection
   StickyBottomCTA
-GuideFooter
+[Footer from (main)/layout.tsx]
 ```
+
+**Do NOT import GuideNavbar or GuideFooter in guide pages.** The site Header/Footer handle navigation. Only import ProofBanner, InlineCTA, GuideCTASection, and StickyBottomCTA.
 
 **Content requirements:**
 - 2,000+ words of genuinely useful, expert-level content
@@ -1162,12 +1137,12 @@ GuideFooter
 
 Create a transform script at `~/social-autoposter/scripts/transform_{client}_pages.mjs` that:
 
-1. Iterates through all `/t/[slug]/` directories
-2. Injects GuideNavbar, GuideFooter, StickyBottomCTA
+1. Iterates through all `(main)/t/[slug]/` directories
+2. Injects StickyBottomCTA import and component
 3. Adds ProofBanner after `</header>` with real client metrics
 4. Adds InlineCTA after the 2nd `</section>`
 5. Replaces inline CTA sections with GuideCTASection
-6. Skips pages already transformed (checks for `@/components/guide`)
+6. Skips pages already transformed (checks for `@/components/`)
 
 **Template:**
 
@@ -1301,33 +1276,29 @@ clientname: {
   src/
     app/
       globals.css            # Tailwind 4 theme with brand colors
-      layout.tsx             # Root layout + Organization JSON-LD
-      page.tsx               # Homepage
+      layout.tsx             # Root layout: fonts, metadata, JSON-LD ONLY (no Header/Footer)
       sitemap.ts             # All pages with priorities
       robots.ts              # Crawl directives
-      about/page.tsx
-      wins/page.tsx           # or client-results/
-      how-it-works/page.tsx
-      precall/page.tsx        # or book-a-call/ or contact/
-      faq/page.tsx
-      blog/page.tsx
-      testimonials/page.tsx
-      privacy-policy/page.tsx
-      t/
-        [slug]/page.tsx       # Dynamic template (optional)
-        guide-topic-1/page.tsx
-        guide-topic-2/page.tsx
+      (main)/                # Route group: all pages with site Header/Footer
+        layout.tsx           # Adds Header + Footer around children
+        page.tsx             # Homepage
+        about/page.tsx
+        wins/page.tsx
+        how-it-works/page.tsx
+        precall/page.tsx
+        faq/page.tsx
+        blog/page.tsx
+        testimonials/page.tsx
+        privacy-policy/page.tsx
+        t/                   # SEO guide pages (inside (main), so they get Header/Footer)
+          guide-topic-1/page.tsx
+          guide-topic-2/page.tsx
     components/
       Header.tsx
       Footer.tsx
       FAQItem.tsx             # Accordion client component
-      guide-theme.ts
-      guide-navbar.tsx
-      guide-footer.tsx
-      guide-cta-section.tsx
-      inline-cta.tsx
-      sticky-bottom-cta.tsx
-      proof-banner.tsx
-      cta-button.tsx
-      guide.ts                # Re-exports
+      guide-cta-section.tsx   # Bottom CTA block for guide pages
+      inline-cta.tsx          # Mid-article CTA break
+      sticky-bottom-cta.tsx   # Fixed bottom bar CTA
+      proof-banner.tsx        # Social proof quote with metric badge
 ```
