@@ -176,7 +176,7 @@ For LinkedIn replies - use the LinkedIn API (NOT browser) to post replies:
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
 
-    gtimeout 5400 claude -p --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B claude exited with code $?"
+    gtimeout 5400 claude --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B claude exited with code $?"
     rm -f "$PHASE_B_PROMPT"
 fi
 
