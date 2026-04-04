@@ -280,7 +280,7 @@ class ReplyScanner:
                 self.db.execute("UPDATE posts SET scan_no_change_count = COALESCE(scan_no_change_count, 0) + 1 WHERE id = %s", (post_id,))
             self.db.commit()
 
-            time.sleep(3)
+            time.sleep(6)  # Reddit rate limit: 100 req / 600s
 
         if skipped:
             print(f"  Skipped {skipped} stable posts (2+ scans with no new replies, older than 3 days)")
@@ -321,7 +321,7 @@ class ReplyScanner:
                 reply_children, row["post_id"],
                 parent_reply_id=row["id"], depth=row["depth"] + 1,
             )
-            time.sleep(3)
+            time.sleep(6)  # Reddit rate limit: 100 req / 600s
 
     def scan_github_issues(self):
         """Scan GitHub issues for new comments after ours."""
