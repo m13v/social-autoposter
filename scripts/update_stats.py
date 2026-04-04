@@ -322,6 +322,8 @@ def update_moltbook(db, api_key, quiet=False):
 
     for post in posts:
         total += 1
+        if total % 25 == 0:
+            print(f"[stats] Moltbook: {total}/{num_posts} checked, {updated} updated, {errors} errors", flush=True)
         post_id, our_url, thread_url = post[0], post[1], post[2]
 
         # Extract post UUID and optional comment UUID from our_url
@@ -543,9 +545,6 @@ def update_moltbook(db, api_key, quiet=False):
             results.append({"id": post_id, "upvotes": upvotes, "score": score,
                             "comments": comment_count})
 
-        if total % 25 == 0:
-            print(f"[stats] Moltbook: {total}/{num_posts} checked, {updated} updated, {errors} errors", flush=True)
-
     print(f"[stats] Moltbook: done. {total}/{num_posts} checked, {updated} updated, {deleted} deleted, {errors} errors", flush=True)
     db.commit()
     return {"total": total, "updated": updated, "deleted": deleted, "errors": errors, "results": results}
@@ -586,6 +585,8 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
 
     for post in posts:
         total += 1
+        if total % 50 == 0:
+            print(f"[stats] Twitter: {total}/{num_posts} checked, {updated} updated, {skipped} skipped, {errors} errors", flush=True)
         post_id, our_url = post[0], post[1]
         no_change = post[2]
         posted_at = post[3]
