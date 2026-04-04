@@ -193,7 +193,7 @@ def run_claude(prompt, timeout=300):
     import time as _time
     import select
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
-    cmd = ["claude", "-p", "--output-format", "json"]
+    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
     cmd.append("--bare")
     cmd += ["--tools", "Bash,Read"]
     env = os.environ.copy()
@@ -220,7 +220,21 @@ def run_claude(prompt, timeout=300):
                 if not line:
                     break
                 collected.append(line)
-                print(f"[engage_reddit] {line.rstrip()}", file=sys.stderr, flush=True)
+                try:
+                    evt = json.loads(line.strip())
+                    etype = evt.get("type", "")
+                    if etype == "assistant":
+                        msg = evt.get("message", {})
+                        for block in msg.get("content", []):
+                            if block.get("type") == "tool_use":
+                                print(f"[engage_reddit] tool: {block.get('name','')} | {str(block.get('input',{}).get('command',''))[:120]}", file=sys.stderr, flush=True)
+                            elif block.get("type") == "text" and block.get("text","").strip():
+                                txt = block["text"].strip()[:200]
+                                print(f"[engage_reddit] {txt}", file=sys.stderr, flush=True)
+                    elif etype == "result":
+                        print(f"[engage_reddit] done: cost=${evt.get('total_cost_usd',0):.4f}", file=sys.stderr, flush=True)
+                except (json.JSONDecodeError, TypeError):
+                    print(f"[engage_reddit] {line.rstrip()[:200]}", file=sys.stderr, flush=True)
             elif proc.poll() is not None:
                 rest = proc.stdout.read()
                 if rest:
@@ -229,18 +243,25 @@ def run_claude(prompt, timeout=300):
             else:
                 print(f"[engage_reddit] ... still running ({int(_time.time() - (deadline - timeout))}s)", file=sys.stderr, flush=True)
         proc.wait()
-        full_output = "".join(collected)
-        try:
-            data = json.loads(full_output)
-            usage["cost_usd"] = data.get("total_cost_usd", 0.0)
-            u = data.get("usage", {})
-            usage["input_tokens"] = u.get("input_tokens", 0)
-            usage["output_tokens"] = u.get("output_tokens", 0)
-            usage["cache_read"] = u.get("cache_read_input_tokens", 0)
-            usage["cache_create"] = u.get("cache_creation_input_tokens", 0)
-            text_output = data.get("result", "")
-        except (json.JSONDecodeError, TypeError):
-            text_output = full_output
+        text_output = ""
+        for line_str in collected:
+            line_str = line_str.strip()
+            if not line_str:
+                continue
+            try:
+                event = json.loads(line_str)
+                if event.get("type") == "result":
+                    text_output = event.get("result", "")
+                    usage["cost_usd"] = event.get("total_cost_usd", 0.0)
+                    u = event.get("usage", {})
+                    usage["input_tokens"] = u.get("input_tokens", 0)
+                    usage["output_tokens"] = u.get("output_tokens", 0)
+                    usage["cache_read"] = u.get("cache_read_input_tokens", 0)
+                    usage["cache_create"] = u.get("cache_creation_input_tokens", 0)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if not text_output:
+            text_output = "".join(collected)
         stderr_out = proc.stderr.read() if proc.stderr else ""
         return proc.returncode == 0, text_output + stderr_out, usage
     except Exception as e:
