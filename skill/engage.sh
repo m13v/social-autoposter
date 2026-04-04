@@ -73,16 +73,38 @@ Process ALL of them. For each post:
 1. Read ~/social-autoposter/config.json to get the projects list.
 2. Pick the project whose topics are the CLOSEST match to thread_title + our_content. Check the project_name column first — if set, use that project directly. Otherwise match by topics. Be generous - if the thread is about agents, automation, desktop, memory, or anything related to the project descriptions, it's a match. If truly nothing fits, mark it skipped (see step 10) and move on. Frame it as recommending a cool tool you've come across, NOT as something you built.
 3. **If the matched project has a landing_pages config** (with repo, base_url):
-   a. Think about what SEO-optimized guide page would fit this specific thread naturally. Consider the thread's audience, their pain points, industry jargon, and what they'd actually find useful. The page should NOT feel like a landing page — it should feel like a genuine 1000-2000 word guide or resource.
+   a. Think about what SEO-optimized guide page would fit this specific thread naturally. Consider the thread's audience, their pain points, industry jargon, and what they'd actually find useful. The page should NOT feel like a landing page; it should feel like a genuine 1000-2000 word guide or resource.
    b. cd into the project repo (landing_pages.repo)
-   c. Look at existing pages under src/app/t/ to understand the site's style, layout components (Navbar, Footer), and theme
-   d. Create a NEW standalone page as src/app/t/{seo-friendly-slug}/page.tsx — this is a real Next.js page with its own Metadata export, not a JSON entry. Include:
-      - Proper <Metadata> with title, description, openGraph, twitter tags
-      - Reuse the site's Navbar and Footer components (import or inline them)
-      - Use the CTAButton component from @/components/cta-button for ALL call-to-action buttons (it tracks clicks in PostHog automatically). Import: import { CTAButton } from "@/components/cta-button";
-      - A full article-style page: hero headline, table of contents, 5-7 content sections, comparison tables with real numbers, bullet lists with specific data points, and a CTA section at the bottom
-      - The content must be 1000-2000 words. Pull real context from the project's config (pricing, features, proof_points, competitive_positioning) and from web research to make it concrete and authoritative
-      - Naturally mention the product as ONE solution among the options discussed — don't make the whole page a sales pitch
+   c. Read src/components/guide-theme.ts to get the project's theme constant (e.g. CYRANO_THEME, PIELINE_THEME). This has the brand name, logo, booking URL, and color config.
+   d. Create a NEW standalone page as src/app/t/{seo-friendly-slug}/page.tsx using the **reusable guide components**. Import them from @/components/guide:
+
+      \`\`\`tsx
+      import { GuideNavbar, GuideFooter, GuideCTASection, InlineCTA, StickyBottomCTA, ProofBanner, VideoEmbed } from "@/components/guide";
+      import { PROJECT_THEME } from "@/components/guide-theme"; // use the actual constant name
+      import { CTAButton } from "@/components/cta-button";
+      \`\`\`
+
+      **Required page structure (in this order):**
+      - \`<Metadata>\` export with title, description, openGraph, twitter tags
+      - \`<GuideNavbar theme={THEME} />\` as sticky top nav with CTA button
+      - Hero section: badge, h1, subtitle paragraph
+      - \`<ProofBanner theme={THEME} quote="..." source="..." metric="..." />\` right after the hero, using a proof_point from config.json (e.g. "20 incidents caught in the first month" or "projecting $500/day additional revenue per location")
+      - \`<VideoEmbed videoUrl="..." title="..." />\` if the project has a demo_video in config.json (embed it after the proof banner)
+      - Table of contents nav
+      - Sections 1-2 of article content
+      - \`<InlineCTA theme={THEME} heading="..." body="..." />\` after section 2 (mid-article CTA, before the reader drops off)
+      - Sections 3-5+ of article content (comparison tables, bullet lists with real numbers)
+      - \`<GuideCTASection theme={THEME} heading="..." body="..." subtext="..." />\` as the final CTA block
+      - \`<StickyBottomCTA theme={THEME} text="..." />\` for a floating bottom bar that appears after scrolling
+      - \`<GuideFooter theme={THEME} />\`
+
+      **Content rules:**
+      - 1000-2000 words of article content
+      - Pull real context from the project's config (pricing, features, proof_points, competitive_positioning) and from web research to make it concrete and authoritative
+      - Naturally mention the product as ONE solution among the options discussed; do not make the whole page a sales pitch
+      - The InlineCTA heading should relate to the pain point discussed in sections 1-2, not generic "learn more"
+      - The ProofBanner should use the strongest, most specific proof point from config.json
+
    e. git add the new page && git commit -m "Add guide: SHORT_DESCRIPTION" && git push
    f. Wait ~35s for Vercel deploy, then curl -sI {base_url}/t/{slug} to verify HTTP 200
    g. Use THAT page URL in the link edit. If deploy fails, fall back to the project's website URL.
