@@ -32,7 +32,7 @@ TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter --
 CANDIDATES=$(python3 "$REPO_DIR/scripts/find_tweets.py" --project "$PROJECT" --max 20 --json-output 2>/dev/null || echo "[]")
 echo "Candidates found: $(echo "$CANDIDATES" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)" | tee -a "$LOG_FILE"
 
-claude -p "You are the Social Autoposter.
+claude -p --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for account handle.
