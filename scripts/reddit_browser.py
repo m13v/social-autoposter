@@ -1160,93 +1160,110 @@ def compose_dm(recipient, subject, body):
 
             else:
                 # New reddit compose form (www.reddit.com/message/compose)
-                # Has "Send to", "Title", and "Message" textbox fields
-                # Use multiple selector strategies for robustness
+                # Uses JS-based form filling for reliability in CDP new tabs
 
                 page.wait_for_timeout(2000)
 
-                # Find all visible textboxes on the page
-                textboxes = page.locator('input[type="text"], textarea').all()
-                if len(textboxes) < 3:
-                    # Try role-based approach as fallback
-                    textboxes = page.get_by_role("textbox").all()
+                # Use JavaScript to find and fill form fields
+                # The new reddit compose form has labeled textboxes
+                fill_result = page.evaluate("""(args) => {
+                    const {recipient, subject, body} = args;
+                    // Find all input/textarea elements
+                    const inputs = document.querySelectorAll('input, textarea');
+                    let sendTo = null, title = null, message = null;
 
-                if len(textboxes) < 3:
-                    return {"ok": False, "error": f"new_reddit_form_not_found_fields_{len(textboxes)}"}
+                    for (const el of inputs) {
+                        // Check aria-label or associated label
+                        const label = el.getAttribute('aria-label') || '';
+                        const id = el.id || '';
 
-                # The compose form has 3 textboxes in order:
-                # Send to, Title, Message
-                # But the search bar may also be a textbox, so filter
-                form_fields = []
-                for tb in textboxes:
-                    try:
-                        placeholder = tb.get_attribute("placeholder") or ""
-                        name = tb.get_attribute("name") or ""
-                        aria = tb.get_attribute("aria-label") or ""
-                        # Skip search/nav textboxes
-                        if "search" in placeholder.lower() or "find" in placeholder.lower():
-                            continue
-                        if tb.is_visible():
-                            form_fields.append(tb)
-                    except Exception:
-                        continue
+                        // Also check parent/sibling label text
+                        let labelText = '';
+                        const parent = el.closest('[class]');
+                        if (parent) {
+                            const labelEl = parent.querySelector('label, [class*="label"]');
+                            if (labelEl) labelText = labelEl.textContent || '';
+                        }
+                        // Check previous sibling div for label
+                        const prevDiv = el.parentElement ?
+                            el.parentElement.previousElementSibling : null;
+                        if (prevDiv) {
+                            labelText = labelText || prevDiv.textContent || '';
+                        }
 
-                if len(form_fields) < 3:
-                    # Fallback: get by label text
-                    try:
-                        send_to = page.get_by_label("Send to")
-                        title_input = page.get_by_label("Title")
-                        msg_input = page.get_by_label("Message")
-                        form_fields = [send_to, title_input, msg_input]
-                    except Exception:
-                        return {"ok": False, "error": f"new_reddit_form_fields_insufficient_{len(form_fields)}"}
+                        const combined = (label + ' ' + labelText + ' ' + id).toLowerCase();
 
-                send_to = form_fields[0]
-                title_input = form_fields[1]
-                msg_input = form_fields[2]
+                        if (combined.includes('send to') || combined.includes('sendto')) {
+                            sendTo = el;
+                        } else if (combined.includes('title') && !combined.includes('message')) {
+                            title = el;
+                        } else if (combined.includes('message') || el.tagName === 'TEXTAREA') {
+                            message = el;
+                        }
+                    }
 
-                # Fill "Send to" if empty
-                try:
-                    current_to = send_to.input_value()
-                    if not current_to or current_to.strip() != recipient:
-                        send_to.fill(recipient)
-                except Exception:
-                    send_to.fill(recipient)
+                    if (!sendTo || !title || !message) {
+                        return {ok: false, error: 'fields_not_found',
+                                found: {sendTo: !!sendTo, title: !!title, message: !!message}};
+                    }
 
-                page.wait_for_timeout(500)
+                    // Fill fields using native input setter to trigger React state updates
+                    function setNativeValue(el, value) {
+                        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                            window.HTMLInputElement.prototype, 'value'
+                        ).set || Object.getOwnPropertyDescriptor(
+                            window.HTMLTextAreaElement.prototype, 'value'
+                        ).set;
+                        nativeInputValueSetter.call(el, value);
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
 
-                # Fill Title
-                try:
-                    title_input.fill(subject)
-                except Exception:
-                    return {"ok": False, "error": "title_field_fill_failed"}
+                    // Only fill sendTo if empty or different
+                    if (!sendTo.value || sendTo.value.trim() !== recipient) {
+                        setNativeValue(sendTo, recipient);
+                    }
+                    setNativeValue(title, subject);
+                    setNativeValue(message, body);
 
-                # Fill Message
-                try:
-                    msg_input.fill(body)
-                except Exception:
-                    return {"ok": False, "error": "message_field_fill_failed"}
+                    return {ok: true};
+                }""", {"recipient": recipient, "subject": subject, "body": body})
 
-                page.wait_for_timeout(1000)
+                if not fill_result.get("ok"):
+                    return {"ok": False, "error": fill_result.get("error", "js_fill_failed")}
 
-                # Click Send button
-                try:
-                    send_btn = page.get_by_role("button", name="Send")
-                    send_btn.wait_for(state="visible", timeout=3000)
-                    send_btn.click()
-                except Exception:
-                    try:
-                        send_btn = page.locator('button:has-text("Send")').last
-                        send_btn.click()
-                    except Exception:
-                        return {"ok": False, "error": "send_button_not_found"}
+                page.wait_for_timeout(1500)
+
+                # Click Send button using JS
+                send_clicked = page.evaluate("""() => {
+                    const buttons = document.querySelectorAll('button');
+                    for (const btn of buttons) {
+                        const text = (btn.textContent || '').trim().toLowerCase();
+                        if (text === 'send' && !btn.disabled) {
+                            btn.click();
+                            return {ok: true};
+                        }
+                    }
+                    // Try clicking even if disabled (form may enable it on click)
+                    for (const btn of buttons) {
+                        const text = (btn.textContent || '').trim().toLowerCase();
+                        if (text === 'send') {
+                            btn.click();
+                            return {ok: true, was_disabled: true};
+                        }
+                    }
+                    return {ok: false, error: 'send_button_not_found'};
+                }""")
+
+                if not send_clicked.get("ok"):
+                    return {"ok": False, "error": "send_button_not_found"}
 
                 page.wait_for_timeout(4000)
 
                 # Check for "Message sent" confirmation
                 try:
-                    sent_msg = page.locator("text=Message sent")
-                    if sent_msg.is_visible():
+                    page_text = page.text_content("body") or ""
+                    if "Message sent" in page_text:
                         return {"ok": True, "thread_url": page.url}
                 except Exception:
                     pass
