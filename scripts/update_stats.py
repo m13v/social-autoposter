@@ -41,15 +41,21 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0"):
     if headers:
         hdrs.update(headers)
     req = urllib.request.Request(url, headers=hdrs)
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            raise HttpNotFoundError(url)
-        return None
-    except Exception as e:
-        return None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise HttpNotFoundError(url)
+            if e.code == 429 and attempt < 2:
+                wait = 30 * (attempt + 1)
+                print(f"  429 rate-limited, waiting {wait}s... ({url})", flush=True)
+                time.sleep(wait)
+                continue
+            return None
+        except Exception:
+            return None
 
 
 def update_reddit(db, user_agent, config=None, quiet=False):
