@@ -98,8 +98,8 @@ def update_reddit(db, user_agent, config=None, quiet=False):
             errors += 1
             continue
         if not response or not isinstance(response, list) or len(response) < 2:
-            # Retry once
-            time.sleep(5)
+            # Retry once (6s = Reddit rate limit: 100 req / 600s)
+            time.sleep(6)
             try:
                 response = fetch_json(json_url, user_agent=user_agent)
             except HttpNotFoundError:
@@ -291,7 +291,7 @@ def update_reddit(db, user_agent, config=None, quiet=False):
         if total % 25 == 0:
             print(f"[stats] Reddit: {total}/{num_posts} checked, {updated} updated, {errors} errors", flush=True)
 
-        time.sleep(5)
+        time.sleep(6)  # Reddit rate limit: 100 req / 600s
 
     print(f"[stats] Reddit: done. {total}/{num_posts} checked, {updated} updated, {deleted} deleted, {removed} removed, {errors} errors", flush=True)
     db.commit()
