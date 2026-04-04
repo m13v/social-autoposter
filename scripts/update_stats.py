@@ -74,6 +74,8 @@ def update_reddit(db, user_agent, config=None, quiet=False):
 
     for post in posts:
         total += 1
+        if total % 25 == 0:
+            print(f"[stats] Reddit: {total}/{num_posts} checked, {updated} updated, {skipped} skipped, {errors} errors", flush=True)
         post_id, our_url, thread_url = post[0], post[1], post[2]
         prev_upvotes, prev_comments = post[3], post[4]
         no_change = post[5]
@@ -293,9 +295,6 @@ def update_reddit(db, user_agent, config=None, quiet=False):
                 db.execute("UPDATE posts SET scan_no_change_count = COALESCE(scan_no_change_count, 0) + 1 WHERE id = %s", [post_id])
             else:
                 db.execute("UPDATE posts SET scan_no_change_count = 0 WHERE id = %s", [post_id])
-
-        if total % 25 == 0:
-            print(f"[stats] Reddit: {total}/{num_posts} checked, {updated} updated, {errors} errors", flush=True)
 
         time.sleep(6)  # Reddit rate limit: 100 req / 600s
 
