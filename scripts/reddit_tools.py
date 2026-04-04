@@ -40,16 +40,34 @@ def _write_ratelimit(remaining, reset_seconds):
         json.dump({"remaining": remaining, "reset_at": reset_at}, f)
 
 
+class RateLimitedError(Exception):
+    """Raised when Reddit API returns 429. Contains reset seconds."""
+    def __init__(self, reset_seconds):
+        self.reset_seconds = reset_seconds
+        super().__init__(f"rate_limited_wait_{int(reset_seconds)}s")
+
+
+# Maximum time a single tool invocation is allowed to wait for rate limit to clear.
+# Longer waits are returned as errors so Claude can skip and try something else.
+MAX_INLINE_WAIT_SECONDS = 15
+
+
 def _wait_if_needed():
     rl = _read_ratelimit()
     if rl["remaining"] <= 2 and rl["reset_at"] > time.time():
         wait = int(rl["reset_at"] - time.time()) + 2
+        if wait > MAX_INLINE_WAIT_SECONDS:
+            raise RateLimitedError(wait)
         print(f"Rate limit near zero, waiting {wait}s...", file=sys.stderr)
         time.sleep(wait)
 
 
 def _do_request(url):
-    """Make a Reddit API request with rate limit handling."""
+    """Make a Reddit API request with rate limit handling.
+
+    On 429: raises RateLimitedError immediately if the reset would require
+    a long wait (>15s). Short waits are absorbed inline.
+    """
     _wait_if_needed()
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
@@ -62,6 +80,8 @@ def _do_request(url):
         if e.code == 429:
             reset = float(e.headers.get("X-Ratelimit-Reset", 60))
             _write_ratelimit(0, reset)
+            if reset > MAX_INLINE_WAIT_SECONDS:
+                raise RateLimitedError(reset)
             print(f"Rate limited. Waiting {int(reset)+2}s...", file=sys.stderr)
             time.sleep(int(reset) + 2)
             # Retry once
@@ -231,16 +251,25 @@ def main():
     p_log.add_argument("--account", default="Deep_Ad1959")
 
     args = parser.parse_args()
-    if args.command == "search":
-        cmd_search(args)
-    elif args.command == "fetch":
-        cmd_fetch(args)
-    elif args.command == "already-posted":
-        cmd_already_posted(args)
-    elif args.command == "log-post":
-        cmd_log_post(args)
-    else:
-        parser.print_help()
+    try:
+        if args.command == "search":
+            cmd_search(args)
+        elif args.command == "fetch":
+            cmd_fetch(args)
+        elif args.command == "already-posted":
+            cmd_already_posted(args)
+        elif args.command == "log-post":
+            cmd_log_post(args)
+        else:
+            parser.print_help()
+    except RateLimitedError as e:
+        # Return a clean JSON error so Claude can skip and try another action
+        print(json.dumps({
+            "error": "rate_limited",
+            "wait_seconds": int(e.reset_seconds),
+            "message": f"Reddit API rate limit hit. Skip this query and try a different topic or command.",
+        }))
+        sys.exit(2)
 
 
 if __name__ == "__main__":
