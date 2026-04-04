@@ -28,7 +28,7 @@ echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
 # Generate top performers feedback report (LinkedIn-specific)
 TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform linkedin 2>/dev/null || echo "(top performers report unavailable)")
 
-claude -p --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" "You are the Social Autoposter.
+claude --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for account name.
