@@ -63,6 +63,8 @@ def update_reddit(db, user_agent, config=None, quiet=False):
 
     total = updated = deleted = removed = errors = skipped = 0
     results = []
+    num_posts = len(posts)
+    print(f"[stats] Reddit: checking {num_posts} posts...", flush=True)
 
     for post in posts:
         total += 1
@@ -286,8 +288,12 @@ def update_reddit(db, user_agent, config=None, quiet=False):
             else:
                 db.execute("UPDATE posts SET scan_no_change_count = 0 WHERE id = %s", [post_id])
 
+        if total % 25 == 0:
+            print(f"[stats] Reddit: {total}/{num_posts} checked, {updated} updated, {errors} errors", flush=True)
+
         time.sleep(5)
 
+    print(f"[stats] Reddit: done. {total}/{num_posts} checked, {updated} updated, {deleted} deleted, {removed} removed, {errors} errors", flush=True)
     db.commit()
     if skipped and not quiet:
         print(f"  Skipped {skipped} stable posts (2+ scans unchanged, older than 3 days)")
@@ -306,6 +312,8 @@ def update_moltbook(db, api_key, quiet=False):
     total = updated = deleted = errors = 0
     results = []
     headers = {"Authorization": f"Bearer {api_key}"}
+    num_posts = len(posts)
+    print(f"[stats] Moltbook: checking {num_posts} posts...", flush=True)
 
     for post in posts:
         total += 1
@@ -530,6 +538,10 @@ def update_moltbook(db, api_key, quiet=False):
             results.append({"id": post_id, "upvotes": upvotes, "score": score,
                             "comments": comment_count})
 
+        if total % 25 == 0:
+            print(f"[stats] Moltbook: {total}/{num_posts} checked, {updated} updated, {errors} errors", flush=True)
+
+    print(f"[stats] Moltbook: done. {total}/{num_posts} checked, {updated} updated, {deleted} deleted, {errors} errors", flush=True)
     db.commit()
     return {"total": total, "updated": updated, "deleted": deleted, "errors": errors, "results": results}
 
@@ -564,6 +576,8 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
 
     total = updated = deleted = suspended = errors = skipped = 0
     results = []
+    num_posts = len(posts)
+    print(f"[stats] Twitter: checking {num_posts} posts{'  (audit mode)' if audit_mode else ''}...", flush=True)
 
     for post in posts:
         total += 1
@@ -679,7 +693,9 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
         # Commit every 50 tweets to save progress
         if total % 50 == 0:
             db.commit()
+            print(f"[stats] Twitter: {total}/{num_posts} checked, {updated} updated, {errors} errors", flush=True)
 
+    print(f"[stats] Twitter: done. {total}/{num_posts} checked, {updated} updated, {deleted} deleted, {errors} errors", flush=True)
     db.commit()
     if skipped and not quiet:
         print(f"  Skipped {skipped} stable tweets (3+ scans unchanged, older than 5 days)")
