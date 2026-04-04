@@ -1053,9 +1053,6 @@ def compose_dm(recipient, subject, body):
             page.goto(compose_url, wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
 
-            import sys as _sys
-            print(f"DEBUG: page.url = {page.url}", file=_sys.stderr, flush=True)
-
             # Check if we got redirected to new reddit chat
             if "chat" in page.url and "message/compose" not in page.url:
                 # We're on new reddit chat - type and send
