@@ -210,9 +210,12 @@ def post_comment(thread_url, text):
             if page.locator(".locked-tagline").count() > 0:
                 return {"ok": False, "error": "thread_locked"}
 
+            # Check if we're actually logged in (login redirect or no user element)
+            if "login" in page.url.lower():
+                return {"ok": False, "error": "not_logged_in"}
+
             # Find the top-level comment form.
-            # On old.reddit.com, the main comment box is a textarea inside
-            # form.usertext > div.usertext-edit (not inside .comment elements).
+            # Try multiple selectors: direct child first, then broader fallback.
             comment_form = page.locator(
                 ".commentarea > form.usertext textarea, "
                 ".commentarea > .usertext-edit textarea, "
@@ -222,10 +225,9 @@ def post_comment(thread_url, text):
             try:
                 comment_form.wait_for(state="visible", timeout=5000)
             except Exception:
-                # Try clicking "add a comment" or similar link
+                # Broader fallback: any textarea in the comment area that's
+                # NOT inside a .comment (those are reply forms)
                 try:
-                    page.locator("a.access-required, a[href*='login']").first.click()
-                    page.wait_for_timeout(2000)
                     comment_form = page.locator(
                         ".commentarea textarea"
                     ).first
