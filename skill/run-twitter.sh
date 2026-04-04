@@ -30,7 +30,7 @@ TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter --
 
 # Step 1: Find candidate tweets via API (no browser needed)
 CANDIDATES=$(python3 "$REPO_DIR/scripts/find_tweets.py" --project "$PROJECT" --max 20 --json-output 2>/dev/null || echo "[]")
-echo "Candidates found: $(echo "$CANDIDATES" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)" | tee -a "$LOG_FILE"
+echo "Candidates found: $(echo "$CANDIDATES" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))' 2>/dev/null) || true" | tee -a "$LOG_FILE"
 
 claude -p --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" "You are the Social Autoposter.
 
@@ -80,9 +80,9 @@ echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 
 # Log run to persistent monitor
 RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
-POSTED=$(grep -c "INSERT INTO posts" "$LOG_FILE" 2>/dev/null || echo 0)
-SKIPPED=$(grep -ci "skipped" "$LOG_FILE" 2>/dev/null || echo 0)
-FAILED=$(grep -ci "error\|failed\|FAILED" "$LOG_FILE" 2>/dev/null || echo 0)
+POSTED=$(grep -c "INSERT INTO posts" "$LOG_FILE" 2>/dev/null) || true
+SKIPPED=$(grep -ci "skipped" "$LOG_FILE" 2>/dev/null) || true
+FAILED=$(grep -ci "error\|failed\|FAILED" "$LOG_FILE" 2>/dev/null) || true
 python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted "$POSTED" --skipped "$SKIPPED" --failed "$FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
 
 find "$LOG_DIR" -name "run-twitter-*.log" -mtime +7 -delete 2>/dev/null || true
