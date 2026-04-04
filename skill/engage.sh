@@ -136,7 +136,7 @@ Process ALL of them. For each post:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='SKIPPED: REASON' WHERE id=POST_ID"
 PROMPT_EOF
 
-    gtimeout 14400 claude -p "$(cat "$PHASE_D_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase D claude exited with code $?"
+    gtimeout 14400 claude -p --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" "$(cat "$PHASE_D_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase D claude exited with code $?"
     rm -f "$PHASE_D_PROMPT"
     PHASE_D_ELAPSED=$(( $(date +%s) - PHASE_D_START ))
     PHASE_D_EDITED=$(grep -ci "link_edited_at=NOW()" "$LOG_FILE" 2>/dev/null || echo 0)
@@ -290,7 +290,7 @@ NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp
 If a script or tool call fails, wait 30 seconds and retry (up to 3 times).
 PROMPT_EOF
 
-    gtimeout 3600 claude -p "$(cat "$DM_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase E claude exited with code $?"
+    gtimeout 3600 claude -p --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/all-agents-mcp.json" "$(cat "$DM_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase E claude exited with code $?"
     rm -f "$DM_PROMPT"
     PHASE_E_ELAPSED=$(( $(date +%s) - PHASE_E_START ))
     python3 "$REPO_DIR/scripts/log_run.py" --script "engage_dm_outreach" --posted "$DM_PENDING" --skipped 0 --failed 0 --cost 0 --elapsed "$PHASE_E_ELAPSED"
