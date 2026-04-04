@@ -1035,7 +1035,8 @@ def compose_dm(recipient, subject, body):
     """Compose and send a new Reddit DM/chat to a user.
 
     Navigates to reddit.com/message/compose/?to=recipient and fills in
-    the subject and body fields.
+    the subject and body fields. Supports both old reddit and new reddit
+    compose forms.
 
     Returns: {"ok": true} or {"ok": false, "error": "..."}
     """
@@ -1045,15 +1046,15 @@ def compose_dm(recipient, subject, body):
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
-            # Try the compose page on old.reddit.com
+            # Use new reddit compose page directly (old reddit often redirects)
             compose_url = (
-                f"https://old.reddit.com/message/compose/?to={recipient}"
+                f"https://www.reddit.com/message/compose/?to={recipient}"
             )
             page.goto(compose_url, wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
 
             # Check if we got redirected to new reddit chat
-            if "chat" in page.url and "old.reddit.com" not in page.url:
+            if "chat" in page.url and "message/compose" not in page.url:
                 # We're on new reddit chat - type and send
                 page.wait_for_timeout(3000)
 
@@ -1103,7 +1104,7 @@ def compose_dm(recipient, subject, body):
                 page.wait_for_timeout(3000)
                 return {"ok": True, "thread_url": page.url}
 
-            else:
+            elif "old.reddit.com" in page.url:
                 # Old reddit compose form
                 _ensure_old_reddit(page)
 
@@ -1154,6 +1155,77 @@ def compose_dm(recipient, subject, body):
                         }
                 except Exception:
                     pass
+
+                return {"ok": True, "thread_url": page.url}
+
+            else:
+                # New reddit compose form (www.reddit.com/message/compose)
+                # Has "Send to", "Title", and "Message" textbox fields
+
+                # Check if "Send to" is pre-filled from URL param
+                send_to = page.get_by_role("textbox", name="Send to")
+                try:
+                    send_to.wait_for(state="visible", timeout=5000)
+                except Exception:
+                    return {"ok": False, "error": "new_reddit_form_not_found"}
+
+                # Fill "Send to" if empty
+                current_to = send_to.input_value()
+                if not current_to or current_to.strip() != recipient:
+                    send_to.fill(recipient)
+
+                page.wait_for_timeout(500)
+
+                # Fill Title
+                title_input = page.get_by_role("textbox", name="Title")
+                try:
+                    title_input.wait_for(state="visible", timeout=3000)
+                    title_input.fill(subject)
+                except Exception:
+                    return {"ok": False, "error": "title_field_not_found"}
+
+                # Fill Message
+                msg_input = page.get_by_role("textbox", name="Message")
+                try:
+                    msg_input.wait_for(state="visible", timeout=3000)
+                    msg_input.fill(body)
+                except Exception:
+                    return {"ok": False, "error": "message_field_not_found"}
+
+                page.wait_for_timeout(1000)
+
+                # Click Send button
+                send_btn = page.get_by_role("button", name="Send")
+                try:
+                    send_btn.wait_for(state="visible", timeout=3000)
+                    send_btn.click()
+                except Exception:
+                    return {"ok": False, "error": "send_button_not_found"}
+
+                page.wait_for_timeout(4000)
+
+                # Check for "Message sent" confirmation
+                try:
+                    sent_msg = page.locator("text=Message sent")
+                    if sent_msg.is_visible():
+                        return {"ok": True, "thread_url": page.url}
+                except Exception:
+                    pass
+
+                # Check for error messages
+                try:
+                    error_el = page.locator('[role="alert"]').first
+                    if error_el.is_visible():
+                        return {
+                            "ok": False,
+                            "error": (error_el.text_content() or "")[:200],
+                        }
+                except Exception:
+                    pass
+
+                # If we're still on compose page, assume success
+                if "message" in page.url:
+                    return {"ok": True, "thread_url": page.url}
 
                 return {"ok": True, "thread_url": page.url}
 
