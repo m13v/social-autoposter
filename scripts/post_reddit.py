@@ -94,8 +94,7 @@ def build_prompt(project, config, limit, top_report, recent_comments):
     content_angle = project.get("content_angle", config.get("content_angle", ""))
 
     project_json = json.dumps({k: project.get(k) for k in
-        ["name", "description", "website", "github", "topics", "features",
-         "demo_video", "booking_link", "pricing"]
+        ["name", "description", "topics"]
         if project.get(k)}, indent=2)
 
     topics_list = project.get("topics", [])
@@ -116,10 +115,14 @@ Your last {len(recent_comments)} comments (don't repeat talking points):
 {chr(10).join(lines)}
 """
 
-    return f"""Find {limit} Reddit threads and draft comments for {project.get('name', 'general')}.
+    return f"""Find {limit} Reddit threads where you can add genuine value as someone with expertise in {project.get('name', 'general')}.
 
-Project: {project_json}
+Topic area: {project_json}
 Content angle: {content_angle}
+
+Your role: You are a practitioner sharing real experience. Your comments should be indistinguishable
+from any other knowledgeable person in the conversation. NEVER mention product names, links, websites,
+or GitHub repos. Product mentions happen ONLY later in the reply pipeline when people respond to you.
 {recent_ctx}{top_ctx}
 ## Tools (via Bash)
 - Search: python3 {REDDIT_TOOLS} search "QUERY" --limit 15
@@ -128,14 +131,14 @@ Content angle: {content_angle}
 
 ## Steps
 1. Search 2 topics from: {json.dumps(topics_list)}. Skip already_posted=true threads.
-2. Pick {limit} best threads. Fetch each one.
-3. Draft a comment (2-4 sentences) for each.
+2. Pick {limit} best threads where you have genuine expertise to contribute. Fetch each one.
+3. Draft a comment (2-4 sentences) that adds value: share experience, ask questions, add nuance, or respectfully disagree.
 4. Output each as a JSON object, then DONE.
 
 ## Content rules
 - Casual tone, lowercase OK, fragments OK. 2-4 short sentences.
-- NO em dashes. No markdown. No product links.
-- Never say "I built" or "we built". Frame as recommendations.
+- NO em dashes. No markdown. No product links. No product names. No tool recommendations.
+- Never say "I built" or "we built". Never mention any project by name.
 - Never start with "exactly", "yeah totally", "100%", "that's smart".
 
 ## CRITICAL OUTPUT FORMAT
