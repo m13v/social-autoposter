@@ -119,11 +119,14 @@ def find_reddit_cdp_port():
 
 
 def get_browser_and_page(playwright):
-    """Connect to the reddit-agent MCP browser via CDP, or launch a new one.
+    """Connect to the reddit-agent MCP browser via CDP and open a NEW tab.
 
-    Returns (browser, page, is_cdp). When is_cdp=True, `page` is a reused
-    existing Reddit tab (navigate it, don't close it). When is_cdp=False,
-    it's a new headless page.
+    Opens a new tab in the existing browser (shares cookies/session) instead of
+    reusing an existing tab, which avoids conflicts with other processes
+    (engage, DMs) that may be navigating the same tab simultaneously.
+
+    Returns (browser, page, is_cdp). When is_cdp=True, `page` is a new tab
+    in the CDP browser. When is_cdp=False, it's a new headless page.
     """
     cdp_port = find_reddit_cdp_port()
 
@@ -135,12 +138,9 @@ def get_browser_and_page(playwright):
             contexts = browser.contexts
             if contexts:
                 context = contexts[0]
-                # Reuse an existing Reddit tab
-                for pg in context.pages:
-                    if "reddit.com" in pg.url and "login" not in pg.url:
-                        return browser, pg, True
-                if context.pages:
-                    return browser, context.pages[0], True
+                # Open a NEW tab (shares session/cookies, avoids tab conflicts)
+                page = context.new_page()
+                return browser, page, True
         except Exception:
             pass
 
@@ -287,8 +287,8 @@ def post_comment(thread_url, text):
             }
 
         finally:
+            page.close()
             if not is_cdp:
-                page.close()
                 browser.close()
 
 
@@ -440,8 +440,8 @@ def reply_to_comment(comment_permalink, text):
             }
 
         finally:
+            page.close()
             if not is_cdp:
-                page.close()
                 browser.close()
 
 
@@ -563,8 +563,8 @@ def edit_comment(comment_permalink, new_text):
             }
 
         finally:
+            page.close()
             if not is_cdp:
-                page.close()
                 browser.close()
 
 
@@ -742,8 +742,8 @@ def unread_dms():
             return unique
 
         finally:
+            page.close()
             if not is_cdp:
-                page.close()
                 browser.close()
 
 
@@ -900,8 +900,8 @@ def read_conversation(chat_url, max_messages=20):
                 return result
 
         finally:
+            page.close()
             if not is_cdp:
-                page.close()
                 browser.close()
 
 
@@ -1026,8 +1026,8 @@ def send_dm(chat_url, message):
                 }
 
         finally:
+            page.close()
             if not is_cdp:
-                page.close()
                 browser.close()
 
 
@@ -1230,8 +1230,8 @@ def compose_dm(recipient, subject, body):
                 return {"ok": True, "thread_url": page.url}
 
         finally:
+            page.close()
             if not is_cdp:
-                page.close()
                 browser.close()
 
 
@@ -1339,8 +1339,8 @@ def scrape_views(username, max_scrolls=300):
         except Exception as e:
             return {"ok": False, "error": str(e)}
         finally:
+            page.close()
             if not is_cdp:
-                page.close()
                 browser.close()
 
 
