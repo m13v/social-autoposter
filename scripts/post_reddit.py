@@ -279,14 +279,16 @@ def log_post(thread_url, permalink, text, project_name, thread_author, thread_ti
 
 
 def parse_post_decisions(output):
-    """Extract JSON post decisions from Claude's output."""
+    """Extract JSON post decisions from Claude's output, deduplicated by thread_url."""
     decisions = []
-    # Find all JSON-like objects with "action": "post" anywhere in output
+    seen_urls = set()
     for match in re.finditer(r'\{[^{}]*?"action"\s*:\s*"post"[^{}]*?\}', output):
         try:
             decision = json.loads(match.group())
-            if decision.get("text") and decision.get("thread_url"):
+            url = decision.get("thread_url", "")
+            if decision.get("text") and url and url not in seen_urls:
                 decisions.append(decision)
+                seen_urls.add(url)
         except (json.JSONDecodeError, TypeError):
             continue
     return decisions
