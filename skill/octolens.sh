@@ -68,9 +68,9 @@ echo "=== Done: $(date) ===" | tee -a "$LOG_FILE"
 
 # Log run to persistent monitor
 RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
-POSTED=$(grep -c "INSERT INTO posts" "$LOG_FILE" 2>/dev/null || echo 0)
-SKIPPED=$(grep -ci "skipped\|skip" "$LOG_FILE" 2>/dev/null || echo 0)
-FAILED=$(grep -ci "error\|failed\|FAILED" "$LOG_FILE" 2>/dev/null || echo 0)
+POSTED=$(grep -c "INSERT INTO posts" "$LOG_FILE" 2>/dev/null) || true
+SKIPPED=$(grep -ci "skipped\|skip" "$LOG_FILE" 2>/dev/null) || true
+FAILED=$(grep -ci "error\|failed\|FAILED" "$LOG_FILE" 2>/dev/null) || true
 python3 "$REPO_DIR/scripts/log_run.py" --script "octolens" --posted "$POSTED" --skipped "$SKIPPED" --failed "$FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
 
 # Clean up old logs (keep last 7 days)
