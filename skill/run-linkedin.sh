@@ -76,7 +76,7 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
 4. Draft the comment using the project's voice/angle (follow Content Rules - NEVER use em dashes, professional but casual tone)
 5. **POST VIA API** (NOT browser) — Use the LinkedIn API to post the comment:
    \`\`\`bash
-   python3 $REPO_DIR/scripts/linkedin_api.py comment ACTIVITY_ID "YOUR COMMENT TEXT"
+   python3 $REPO_DIR/scripts/linkedin_api.py comment ACTIVITY_ID 'YOUR COMMENT TEXT'
    \`\`\`
    This returns JSON with {ok, comment_urn, our_url, activity_id}. Use our_url for the database INSERT.
    If the API call fails, fall back to browser posting as before.
