@@ -208,17 +208,23 @@ def run_claude(prompt, timeout=600):
             else:
                 print(f"[post_reddit] ... still running ({int(_time.time() - (deadline - timeout))}s)", file=sys.stderr, flush=True)
         proc.wait()
-        # Parse stream-json: each line is a JSON event
-        # The "result" event has usage and the final text output
-        text_output = ""
+        # Parse stream-json: collect ALL text blocks (not just the final result)
+        # JSON post decisions can appear in any assistant message, not just the last one
+        all_text_parts = []
         for line_str in collected:
             line_str = line_str.strip()
             if not line_str:
                 continue
             try:
                 event = json.loads(line_str)
-                if event.get("type") == "result":
-                    text_output = event.get("result", "")
+                etype = event.get("type", "")
+                if etype == "assistant":
+                    for block in event.get("message", {}).get("content", []):
+                        if block.get("type") == "text":
+                            all_text_parts.append(block["text"])
+                elif etype == "result":
+                    if event.get("result"):
+                        all_text_parts.append(event["result"])
                     usage["cost_usd"] = event.get("total_cost_usd", 0.0)
                     u = event.get("usage", {})
                     usage["input_tokens"] = u.get("input_tokens", 0)
@@ -227,8 +233,7 @@ def run_claude(prompt, timeout=600):
                     usage["cache_create"] = u.get("cache_creation_input_tokens", 0)
             except (json.JSONDecodeError, TypeError):
                 pass
-        if not text_output:
-            text_output = "".join(collected)
+        text_output = "\n".join(all_text_parts) if all_text_parts else "".join(collected)
         stderr_out = proc.stderr.read() if proc.stderr else ""
         return proc.returncode == 0, text_output + stderr_out, usage
     except Exception as e:
