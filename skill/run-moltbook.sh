@@ -76,9 +76,9 @@ echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 
 # Log run to persistent monitor
 RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
-POSTED=$(grep -c "INSERT INTO posts" "$LOG_FILE" 2>/dev/null || echo 0)
-SKIPPED=$(grep -ci "skipped" "$LOG_FILE" 2>/dev/null || echo 0)
-FAILED=$(grep -ci "error\|failed\|FAILED" "$LOG_FILE" 2>/dev/null || echo 0)
+POSTED=$(grep -c "INSERT INTO posts" "$LOG_FILE" 2>/dev/null) || true
+SKIPPED=$(grep -ci "skipped" "$LOG_FILE" 2>/dev/null) || true
+FAILED=$(grep -ci "error\|failed\|FAILED" "$LOG_FILE" 2>/dev/null) || true
 python3 "$REPO_DIR/scripts/log_run.py" --script "post_moltbook" --posted "$POSTED" --skipped "$SKIPPED" --failed "$FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
 
 find "$LOG_DIR" -name "run-moltbook-*.log" -mtime +7 -delete 2>/dev/null || true
