@@ -18,8 +18,17 @@ LOG_FILE="$LOG_DIR/run-reddit-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Reddit Post Run: $(date) ===" | tee "$LOG_FILE"
 
-# Run the posting orchestrator (bare mode, one thread at a time)
-python3 "$REPO_DIR/scripts/post_reddit.py" --limit 100 --timeout 3300 2>&1 | tee -a "$LOG_FILE"
+# Run the posting orchestrator in batches of 5 (small batches = reliable output parsing)
+for BATCH in 1 2 3 4 5 6 7 8 9 10; do
+    echo "[run-reddit] Batch $BATCH/10" | tee -a "$LOG_FILE"
+    python3 "$REPO_DIR/scripts/post_reddit.py" --limit 5 --timeout 300 2>&1 | tee -a "$LOG_FILE"
+    BATCH_POSTED=$(tail -20 "$LOG_FILE" | grep -o 'posted=[0-9]*' | tail -1 | grep -o '[0-9]*')
+    if [ "${BATCH_POSTED:-0}" = "0" ]; then
+        echo "[run-reddit] Batch $BATCH posted 0, stopping" | tee -a "$LOG_FILE"
+        break
+    fi
+    sleep 5
+done
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 find "$LOG_DIR" -name "run-reddit-*.log" -mtime +7 -delete 2>/dev/null || true
