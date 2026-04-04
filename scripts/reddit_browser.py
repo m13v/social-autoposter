@@ -1053,6 +1053,9 @@ def compose_dm(recipient, subject, body):
             page.goto(compose_url, wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
 
+            import sys as _sys
+            print(f"DEBUG: page.url = {page.url}", file=_sys.stderr, flush=True)
+
             # Check if we got redirected to new reddit chat
             if "chat" in page.url and "message/compose" not in page.url:
                 # We're on new reddit chat - type and send
@@ -1160,71 +1163,83 @@ def compose_dm(recipient, subject, body):
 
             else:
                 # New reddit compose form (www.reddit.com/message/compose)
-                # Uses JS-based form filling for reliability in CDP new tabs
+                # Reddit uses faceplate-text-input / faceplate-textarea-input
+                # web components with shadow DOMs containing real inputs.
 
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(4000)
 
-                # Use JavaScript to find and fill form fields
-                # The new reddit compose form has labeled textboxes
+                # Fill form fields via shadow DOM inputs
                 fill_result = page.evaluate("""(args) => {
                     const {recipient, subject, body} = args;
-                    // Find all input/textarea elements
-                    const inputs = document.querySelectorAll('input, textarea');
-                    let sendTo = null, title = null, message = null;
 
-                    for (const el of inputs) {
-                        // Check aria-label or associated label
-                        const label = el.getAttribute('aria-label') || '';
-                        const id = el.id || '';
+                    // Helper: find real input inside shadow root
+                    function findShadowInput(host) {
+                        if (!host || !host.shadowRoot) return null;
+                        return host.shadowRoot.querySelector('input, textarea');
+                    }
 
-                        // Also check parent/sibling label text
-                        let labelText = '';
-                        const parent = el.closest('[class]');
-                        if (parent) {
-                            const labelEl = parent.querySelector('label, [class*="label"]');
-                            if (labelEl) labelText = labelEl.textContent || '';
+                    // Helper: set value with native setter + events
+                    function setVal(el, value) {
+                        const proto = el.tagName === 'TEXTAREA'
+                            ? HTMLTextAreaElement.prototype
+                            : HTMLInputElement.prototype;
+                        const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+                        setter.call(el, value);
+                        el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+                    }
+
+                    // Deep search through shadow roots
+                    function deepQuery(root, selector) {
+                        let result = root.querySelector(selector);
+                        if (result) return result;
+                        const all = root.querySelectorAll('*');
+                        for (const el of all) {
+                            if (el.shadowRoot) {
+                                result = deepQuery(el.shadowRoot, selector);
+                                if (result) return result;
+                            }
                         }
-                        // Check previous sibling div for label
-                        const prevDiv = el.parentElement ?
-                            el.parentElement.previousElementSibling : null;
-                        if (prevDiv) {
-                            labelText = labelText || prevDiv.textContent || '';
-                        }
-
-                        const combined = (label + ' ' + labelText + ' ' + id).toLowerCase();
-
-                        if (combined.includes('send to') || combined.includes('sendto')) {
-                            sendTo = el;
-                        } else if (combined.includes('title') && !combined.includes('message')) {
-                            title = el;
-                        } else if (combined.includes('message') || el.tagName === 'TEXTAREA') {
-                            message = el;
-                        }
+                        return null;
                     }
 
-                    if (!sendTo || !title || !message) {
-                        return {ok: false, error: 'fields_not_found',
-                                found: {sendTo: !!sendTo, title: !!title, message: !!message}};
+                    // Find the faceplate custom elements (may be in shadow DOM)
+                    const recipientHost = deepQuery(document, 'faceplate-text-input[name="message-recipient-input"]');
+                    const titleHost = deepQuery(document, 'faceplate-text-input[name="message-title"]');
+                    const messageHost = deepQuery(document, 'faceplate-textarea-input[name="message-content"]');
+
+                    if (!recipientHost || !titleHost || !messageHost) {
+                        // Debug: check what's on the page
+                        const url = window.location.href;
+                        const title_text = document.title;
+                        const bodyText = (document.body ? document.body.textContent : '').substring(0, 500);
+                        return {ok: false, error: 'faceplate_elements_not_found',
+                                found: {recipient: !!recipientHost, title: !!titleHost, message: !!messageHost},
+                                debug: {url, title_text, bodyText}};
                     }
 
-                    // Fill fields using native input setter to trigger React state updates
-                    function setNativeValue(el, value) {
-                        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                            window.HTMLInputElement.prototype, 'value'
-                        ).set || Object.getOwnPropertyDescriptor(
-                            window.HTMLTextAreaElement.prototype, 'value'
-                        ).set;
-                        nativeInputValueSetter.call(el, value);
-                        el.dispatchEvent(new Event('input', { bubbles: true }));
-                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    const recipientInput = findShadowInput(recipientHost);
+                    const titleInput = findShadowInput(titleHost);
+                    const messageInput = findShadowInput(messageHost);
+
+                    if (!recipientInput || !titleInput || !messageInput) {
+                        return {ok: false, error: 'shadow_inputs_not_found',
+                                found: {recipient: !!recipientInput, title: !!titleInput, message: !!messageInput}};
                     }
 
-                    // Only fill sendTo if empty or different
-                    if (!sendTo.value || sendTo.value.trim() !== recipient) {
-                        setNativeValue(sendTo, recipient);
+                    // Fill recipient if needed
+                    if (!recipientInput.value || recipientInput.value.trim() !== recipient) {
+                        setVal(recipientInput, recipient);
+                        recipientHost.setAttribute('value', recipient);
                     }
-                    setNativeValue(title, subject);
-                    setNativeValue(message, body);
+
+                    // Fill title
+                    setVal(titleInput, subject);
+                    titleHost.setAttribute('value', subject);
+
+                    // Fill message
+                    setVal(messageInput, body);
+                    messageHost.setAttribute('value', body);
 
                     return {ok: true};
                 }""", {"recipient": recipient, "subject": subject, "body": body})
@@ -1234,9 +1249,20 @@ def compose_dm(recipient, subject, body):
 
                 page.wait_for_timeout(1500)
 
-                # Click Send button using JS
+                # Click Send button
                 send_clicked = page.evaluate("""() => {
-                    const buttons = document.querySelectorAll('button');
+                    // Search in shadow roots too
+                    function findButtons(root) {
+                        const btns = [];
+                        root.querySelectorAll('button').forEach(b => btns.push(b));
+                        root.querySelectorAll('*').forEach(el => {
+                            if (el.shadowRoot) {
+                                el.shadowRoot.querySelectorAll('button').forEach(b => btns.push(b));
+                            }
+                        });
+                        return btns;
+                    }
+                    const buttons = findButtons(document);
                     for (const btn of buttons) {
                         const text = (btn.textContent || '').trim().toLowerCase();
                         if (text === 'send' && !btn.disabled) {
@@ -1244,7 +1270,6 @@ def compose_dm(recipient, subject, body):
                             return {ok: true};
                         }
                     }
-                    // Try clicking even if disabled (form may enable it on click)
                     for (const btn of buttons) {
                         const text = (btn.textContent || '').trim().toLowerCase();
                         if (text === 'send') {
