@@ -31,7 +31,7 @@ echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
 EXCLUDED_REPOS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('github_repos',[])))" 2>/dev/null || echo "")
 EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('authors',[])))" 2>/dev/null || echo "")
 
-claude -p "You are the Social Autoposter.
+claude --strict-mcp-config -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Also read $REPO_DIR/config.json for accounts, projects, and search_topics.
