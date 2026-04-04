@@ -452,7 +452,7 @@ After processing all conversations, print a summary:
 - How many marked stale
 PROMPT_EOF
 
-gtimeout 5400 claude -p --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/all-agents-mcp.json" "$(cat "$PHASE_A_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: DM reply claude exited with code $?"
+gtimeout 5400 claude --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/all-agents-mcp.json" -p "$(cat "$PHASE_A_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: DM reply claude exited with code $?"
 rm -f "$PHASE_A_PROMPT"
 
 # ═══════════════════════════════════════════════════════
