@@ -9,8 +9,17 @@
 		<string>/bin/bash</string>
 		<string>/Users/matthewdi/social-autoposter/skill/run-reddit.sh</string>
 	</array>
-	<key>StartInterval</key>
-	<integer>1800</integer>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict>
+			<key>Minute</key>
+			<integer>0</integer>
+		</dict>
+		<dict>
+			<key>Minute</key>
+			<integer>30</integer>
+		</dict>
+	</array>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-reddit-stdout.log</string>
 	<key>StandardErrorPath</key>
