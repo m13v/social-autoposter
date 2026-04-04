@@ -1161,46 +1161,85 @@ def compose_dm(recipient, subject, body):
             else:
                 # New reddit compose form (www.reddit.com/message/compose)
                 # Has "Send to", "Title", and "Message" textbox fields
+                # Use multiple selector strategies for robustness
 
-                # Check if "Send to" is pre-filled from URL param
-                send_to = page.get_by_role("textbox", name="Send to")
-                try:
-                    send_to.wait_for(state="visible", timeout=5000)
-                except Exception:
-                    return {"ok": False, "error": "new_reddit_form_not_found"}
+                page.wait_for_timeout(2000)
+
+                # Find all visible textboxes on the page
+                textboxes = page.locator('input[type="text"], textarea').all()
+                if len(textboxes) < 3:
+                    # Try role-based approach as fallback
+                    textboxes = page.get_by_role("textbox").all()
+
+                if len(textboxes) < 3:
+                    return {"ok": False, "error": f"new_reddit_form_not_found_fields_{len(textboxes)}"}
+
+                # The compose form has 3 textboxes in order:
+                # Send to, Title, Message
+                # But the search bar may also be a textbox, so filter
+                form_fields = []
+                for tb in textboxes:
+                    try:
+                        placeholder = tb.get_attribute("placeholder") or ""
+                        name = tb.get_attribute("name") or ""
+                        aria = tb.get_attribute("aria-label") or ""
+                        # Skip search/nav textboxes
+                        if "search" in placeholder.lower() or "find" in placeholder.lower():
+                            continue
+                        if tb.is_visible():
+                            form_fields.append(tb)
+                    except Exception:
+                        continue
+
+                if len(form_fields) < 3:
+                    # Fallback: get by label text
+                    try:
+                        send_to = page.get_by_label("Send to")
+                        title_input = page.get_by_label("Title")
+                        msg_input = page.get_by_label("Message")
+                        form_fields = [send_to, title_input, msg_input]
+                    except Exception:
+                        return {"ok": False, "error": f"new_reddit_form_fields_insufficient_{len(form_fields)}"}
+
+                send_to = form_fields[0]
+                title_input = form_fields[1]
+                msg_input = form_fields[2]
 
                 # Fill "Send to" if empty
-                current_to = send_to.input_value()
-                if not current_to or current_to.strip() != recipient:
+                try:
+                    current_to = send_to.input_value()
+                    if not current_to or current_to.strip() != recipient:
+                        send_to.fill(recipient)
+                except Exception:
                     send_to.fill(recipient)
 
                 page.wait_for_timeout(500)
 
                 # Fill Title
-                title_input = page.get_by_role("textbox", name="Title")
                 try:
-                    title_input.wait_for(state="visible", timeout=3000)
                     title_input.fill(subject)
                 except Exception:
-                    return {"ok": False, "error": "title_field_not_found"}
+                    return {"ok": False, "error": "title_field_fill_failed"}
 
                 # Fill Message
-                msg_input = page.get_by_role("textbox", name="Message")
                 try:
-                    msg_input.wait_for(state="visible", timeout=3000)
                     msg_input.fill(body)
                 except Exception:
-                    return {"ok": False, "error": "message_field_not_found"}
+                    return {"ok": False, "error": "message_field_fill_failed"}
 
                 page.wait_for_timeout(1000)
 
                 # Click Send button
-                send_btn = page.get_by_role("button", name="Send")
                 try:
+                    send_btn = page.get_by_role("button", name="Send")
                     send_btn.wait_for(state="visible", timeout=3000)
                     send_btn.click()
                 except Exception:
-                    return {"ok": False, "error": "send_button_not_found"}
+                    try:
+                        send_btn = page.locator('button:has-text("Send")').last
+                        send_btn.click()
+                    except Exception:
+                        return {"ok": False, "error": "send_button_not_found"}
 
                 page.wait_for_timeout(4000)
 
