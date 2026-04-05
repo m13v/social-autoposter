@@ -215,7 +215,7 @@ class ReplyScanner:
         posts = self.db.execute(
             "SELECT id, our_url, thread_url, thread_title, thread_author, "
             "posted_at, COALESCE(scan_no_change_count, 0) as scan_no_change_count, "
-            "COALESCE(comments_count, 0) as comments_count FROM posts "
+            "thread_engagement FROM posts "
             "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL AND our_url != '' AND our_url LIKE 'http%%'"
         ).fetchall()
 
@@ -265,10 +265,18 @@ class ReplyScanner:
                 is_original = self.is_our_post(post)
                 if info:
                     current_comments = info.get("num_comments", -1)
-                    stored_comments = post["comments_count"]
                     # Always fetch original posts (we need top-level comments)
                     # For comments: only fetch if thread comment count changed
-                    if not is_original and current_comments == stored_comments and current_comments >= 0:
+                    # Extract stored thread comment count from thread_engagement JSON
+                te = post.get("thread_engagement")
+                stored_thread_comments = -1
+                if te:
+                    try:
+                        stored_thread_comments = (json.loads(te) if isinstance(te, str) else te).get("thread_comments", -1)
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+
+                if not is_original and current_comments == stored_thread_comments and stored_thread_comments >= 0:
                         # No new comments on this thread, skip the expensive individual fetch
                         self.db.execute(
                             "UPDATE posts SET scan_no_change_count = COALESCE(scan_no_change_count, 0) + 1 WHERE id = %s",
