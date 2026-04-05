@@ -58,8 +58,17 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0"):
             return None
 
 
+def _extract_thread_id(url):
+    """Extract the Reddit thread ID (e.g. '1rzr0y8') from a URL."""
+    m = re.search(r"reddit\.com/r/[^/]+/comments/([a-z0-9]+)", url)
+    return m.group(1) if m else None
+
+
 def update_reddit(db, user_agent, config=None, quiet=False):
     config = config or {}
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from reddit_tools import batch_fetch_info
+
     posts = db.execute(
         "SELECT id, our_url, thread_url, upvotes, comments_count, "
         "COALESCE(scan_no_change_count, 0) as scan_no_change_count, posted_at "
@@ -72,16 +81,14 @@ def update_reddit(db, user_agent, config=None, quiet=False):
     num_posts = len(posts)
     print(f"[stats] Reddit: checking {num_posts} posts...", flush=True)
 
+    # Phase 1: Apply staleness skip filter and collect candidates
+    candidates = []
     for post in posts:
         total += 1
-        if total % 25 == 0:
-            print(f"[stats] Reddit: {total}/{num_posts} checked, {updated} updated, {skipped} skipped, {errors} errors", flush=True)
-        post_id, our_url, thread_url = post[0], post[1], post[2]
-        prev_upvotes, prev_comments = post[3], post[4]
+        post_id, our_url = post[0], post[1]
         no_change = post[5]
         posted_at = post[6]
 
-        # Skip stable posts: 2+ scans with no change AND older than 3 days
         if no_change >= 2 and posted_at:
             age = datetime.now(timezone.utc) - (posted_at.replace(tzinfo=timezone.utc) if posted_at.tzinfo is None else posted_at)
             if age > timedelta(days=3):
@@ -92,7 +99,107 @@ def update_reddit(db, user_agent, config=None, quiet=False):
             errors += 1
             continue
 
-        # Detect if our_url points to a specific comment or just the thread
+        candidates.append(post)
+
+    # Phase 2: Batch-fetch thread metadata via /api/info
+    thread_ids_set = set()
+    for post in candidates:
+        tid = _extract_thread_id(post[1]) or _extract_thread_id(post[2] or "")
+        if tid:
+            thread_ids_set.add(tid)
+
+    thing_ids = [f"t3_{tid}" for tid in thread_ids_set]
+    print(f"[stats] Batch-checking {len(thing_ids)} threads via /api/info ({(len(thing_ids) + 99) // 100} API calls)...", flush=True)
+
+    try:
+        batch_data = batch_fetch_info(thing_ids, user_agent=user_agent)
+    except Exception as e:
+        print(f"[stats] WARNING: batch_fetch_info failed ({e}), falling back to individual fetches", flush=True)
+        batch_data = {}
+
+    # Phase 3: Use batch data where possible, individual fetch only when needed
+    batch_updated = 0
+    needs_individual = []
+
+    for post in candidates:
+        post_id, our_url, thread_url = post[0], post[1], post[2]
+        prev_upvotes, prev_comments = post[3], post[4]
+        tid = _extract_thread_id(our_url) or _extract_thread_id(thread_url or "")
+        info = batch_data.get(f"t3_{tid}") if tid else None
+
+        has_comment_id = bool(
+            re.search(r"/comment/[a-z0-9]+", our_url) or
+            re.search(r"/comments/[a-z0-9]+/[^/]+/[a-z0-9]+", our_url)
+        )
+
+        if info and has_comment_id:
+            thread_score = info.get("score", 0)
+            thread_comments = info.get("num_comments", 0)
+            thread_removed = info.get("removed_by_category")
+
+            # If thread was removed, we need individual fetch for deletion detection
+            if thread_removed:
+                needs_individual.append(post)
+                continue
+
+            # If thread comment count hasn't changed, our comment stats haven't changed either
+            if thread_comments == prev_comments and prev_upvotes is not None:
+                engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
+                db.execute(
+                    "UPDATE posts SET thread_engagement=%s, status_checked_at=NOW(), "
+                    "scan_no_change_count = COALESCE(scan_no_change_count, 0) + 1 WHERE id=%s",
+                    [engagement, post_id],
+                )
+                batch_updated += 1
+                continue
+
+            # Comment count changed or first scan, need individual fetch for comment-level data
+            needs_individual.append(post)
+
+        elif info and not has_comment_id:
+            # Thread-level post (we are OP or no comment permalink)
+            thread_score = info.get("score", 0)
+            thread_comments = info.get("num_comments", 0)
+            thread_author = info.get("author", "")
+            our_username = config.get("accounts", {}).get("reddit", {}).get("username", "")
+            is_our_post = thread_author.lower() == our_username.lower() if our_username else False
+
+            if info.get("removed_by_category"):
+                needs_individual.append(post)
+                continue
+
+            if is_our_post:
+                # We can update directly from batch data
+                engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
+                db.execute(
+                    "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
+                    "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
+                    [thread_score, thread_comments, engagement, post_id],
+                )
+                updated += 1
+                batch_updated += 1
+                if thread_score == prev_upvotes:
+                    db.execute("UPDATE posts SET scan_no_change_count = COALESCE(scan_no_change_count, 0) + 1 WHERE id = %s", [post_id])
+                else:
+                    db.execute("UPDATE posts SET scan_no_change_count = 0 WHERE id = %s", [post_id])
+                results.append({"id": post_id, "score": thread_score, "thread_score": thread_score,
+                                "thread_comments": thread_comments})
+                continue
+
+            # Not OP and no comment permalink, need individual fetch to find our comment
+            needs_individual.append(post)
+        else:
+            # No batch data available, fall back
+            needs_individual.append(post)
+
+    db.commit()
+    print(f"[stats] Batch resolved {batch_updated} posts, {len(needs_individual)} need individual fetch", flush=True)
+
+    # Phase 4: Individual fetches for posts that need comment-level data
+    for post in needs_individual:
+        post_id, our_url, thread_url = post[0], post[1], post[2]
+        prev_upvotes, prev_comments = post[3], post[4]
+
         has_comment_id = bool(
             re.search(r"/comment/[a-z0-9]+", our_url) or
             re.search(r"/comments/[a-z0-9]+/[^/]+/[a-z0-9]+", our_url)
@@ -106,7 +213,6 @@ def update_reddit(db, user_agent, config=None, quiet=False):
             errors += 1
             continue
         if not response or not isinstance(response, list) or len(response) < 2:
-            # Retry once (6s = Reddit rate limit: 100 req / 600s)
             time.sleep(6)
             try:
                 response = fetch_json(json_url, user_agent=user_agent)
