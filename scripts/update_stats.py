@@ -71,7 +71,8 @@ def update_reddit(db, user_agent, config=None, quiet=False):
 
     posts = db.execute(
         "SELECT id, our_url, thread_url, upvotes, comments_count, "
-        "COALESCE(scan_no_change_count, 0) as scan_no_change_count, posted_at "
+        "COALESCE(scan_no_change_count, 0) as scan_no_change_count, posted_at, "
+        "thread_engagement "
         "FROM posts "
         "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL ORDER BY id"
     ).fetchall()
@@ -142,8 +143,20 @@ def update_reddit(db, user_agent, config=None, quiet=False):
                 needs_individual.append(post)
                 continue
 
-            # If thread comment count hasn't changed, our comment stats haven't changed either
-            if thread_comments == prev_comments and prev_upvotes is not None:
+            # Extract stored thread comment count from thread_engagement JSON
+            te = post[7]  # thread_engagement column
+            stored_thread_comments = -1
+            stored_thread_score = -1
+            if te:
+                try:
+                    parsed = json.loads(te) if isinstance(te, str) else te
+                    stored_thread_comments = parsed.get("thread_comments", -1)
+                    stored_thread_score = parsed.get("thread_score", -1)
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+
+            # If thread comment count AND score haven't changed, our comment stats haven't changed either
+            if thread_comments == stored_thread_comments and thread_score == stored_thread_score and stored_thread_comments >= 0:
                 engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
                 db.execute(
                     "UPDATE posts SET thread_engagement=%s, status_checked_at=NOW(), "
