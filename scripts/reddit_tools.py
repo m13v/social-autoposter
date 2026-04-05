@@ -216,7 +216,7 @@ def cmd_fetch(args):
         comment = {
             "id": c.get("name", ""),  # full thing ID like t1_abc123
             "author": c.get("author", ""),
-            "body": c.get("body", "")[:500],
+            "body": c.get("body", "")[:1500],
             "score": c.get("score", 0),
             "permalink": f"https://old.reddit.com{c.get('permalink', '')}",
         }
