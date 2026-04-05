@@ -93,6 +93,54 @@ def _do_request(url):
         raise
 
 
+def batch_fetch_info(thing_ids, user_agent=USER_AGENT):
+    """Fetch metadata for up to 100 Reddit thing IDs in a single API call.
+
+    Args:
+        thing_ids: list of full thing IDs like ["t3_abc123", "t3_def456", "t1_xyz"]
+        user_agent: User-Agent header
+
+    Returns:
+        dict mapping thing_id -> post/comment data dict
+    """
+    results = {}
+    # Process in chunks of 100 (Reddit's max per request)
+    for i in range(0, len(thing_ids), 100):
+        chunk = thing_ids[i:i + 100]
+        ids_str = ",".join(chunk)
+        url = f"https://old.reddit.com/api/info.json?id={ids_str}"
+        _wait_if_needed()
+        req = urllib.request.Request(url, headers={"User-Agent": user_agent})
+        try:
+            resp = urllib.request.urlopen(req, timeout=30)
+            remaining = float(resp.headers.get("X-Ratelimit-Remaining", 100))
+            reset = float(resp.headers.get("X-Ratelimit-Reset", 0))
+            _write_ratelimit(remaining, reset)
+            data = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                reset = float(e.headers.get("X-Ratelimit-Reset", 60))
+                _write_ratelimit(0, reset)
+                if reset > MAX_INLINE_WAIT_SECONDS:
+                    raise RateLimitedError(reset)
+                print(f"Rate limited. Waiting {int(reset)+2}s...", file=sys.stderr)
+                time.sleep(int(reset) + 2)
+                resp = urllib.request.urlopen(req, timeout=30)
+                remaining = float(resp.headers.get("X-Ratelimit-Remaining", 100))
+                reset2 = float(resp.headers.get("X-Ratelimit-Reset", 0))
+                _write_ratelimit(remaining, reset2)
+                data = json.loads(resp.read())
+            else:
+                raise
+
+        for child in data.get("data", {}).get("children", []):
+            d = child.get("data", {})
+            name = d.get("name", "")
+            results[name] = d
+
+    return results
+
+
 def cmd_search(args):
     """Search Reddit and return threads as JSON."""
     query = args.query
