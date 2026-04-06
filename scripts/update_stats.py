@@ -753,10 +753,10 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
                 errors += 1
                 continue
 
-        code = data.get("code", 0)
-        tweet = data.get("tweet")
+        code = data.get("code", 0) if data else 0
+        tweet = data.get("tweet") if data else None
 
-        if code == 404 or tweet is None:
+        if http_404 or code == 404 or tweet is None:
             # Tweet not found - could be deleted or suspended
             if audit_mode:
                 row = db.execute(
