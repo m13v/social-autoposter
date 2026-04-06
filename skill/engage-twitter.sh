@@ -151,6 +151,13 @@ PROMPT_EOF
     rm -f "$PHASE_B_PROMPT"
 fi
 
+# Reset any items left in 'processing' after subprocess exit
+POST_RESET=$(psql "$DATABASE_URL" -t -A -c "
+    UPDATE replies SET status='pending'
+    WHERE platform='x' AND status='processing'
+    RETURNING id;" | wc -l | tr -d ' ')
+[ "$POST_RESET" -gt 0 ] && log "Post-run: Reset $POST_RESET 'processing' Twitter items back to pending"
+
 # ═══════════════════════════════════════════════════════
 # Cleanup
 # ═══════════════════════════════════════════════════════
