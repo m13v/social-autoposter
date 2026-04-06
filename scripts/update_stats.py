@@ -195,8 +195,9 @@ def update_reddit(db, user_agent, config=None, quiet=False):
                     db.execute("UPDATE posts SET scan_no_change_count = COALESCE(scan_no_change_count, 0) + 1 WHERE id = %s", [post_id])
                 else:
                     db.execute("UPDATE posts SET scan_no_change_count = 0 WHERE id = %s", [post_id])
+                thread_title = info.get("title", "")[:60]
                 results.append({"id": post_id, "score": thread_score, "thread_score": thread_score,
-                                "thread_comments": thread_comments})
+                                "thread_comments": thread_comments, "title": thread_title})
                 continue
 
             # Not OP and no comment permalink, need individual fetch to find our comment
@@ -733,13 +734,22 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
         username = username.group(1) if username else 'i'
 
         url = f"https://api.fxtwitter.com/{username}/status/{tweet_id}"
-        data = fetch_json(url)
-
-        if not data:
-            # Retry once
-            time.sleep(2)
+        http_404 = False
+        try:
             data = fetch_json(url)
-            if not data:
+        except HttpNotFoundError:
+            data = None
+            http_404 = True
+
+        if not data and not http_404:
+            # Retry once (only for non-404 failures)
+            time.sleep(2)
+            try:
+                data = fetch_json(url)
+            except HttpNotFoundError:
+                data = None
+                http_404 = True
+            if not data and not http_404:
                 errors += 1
                 continue
 
