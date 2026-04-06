@@ -89,9 +89,36 @@ def get_recent_comments(limit=5):
     return results
 
 
+def build_content_angle(project, config):
+    """Prefer project-specific positioning over the global config angle."""
+    if project.get("content_angle"):
+        return project["content_angle"]
+
+    parts = []
+    for key in ("description", "differentiator", "icp", "setup"):
+        value = project.get(key)
+        if value:
+            parts.append(value)
+
+    messaging = project.get("messaging", {})
+    for key in ("lead_with_pain", "solution", "proof"):
+        value = messaging.get(key)
+        if value:
+            parts.append(value)
+
+    voice = project.get("voice", {})
+    if voice.get("tone"):
+        parts.append(f"Voice: {voice['tone']}")
+
+    if parts:
+        return " ".join(parts)
+
+    return config.get("content_angle", "")
+
+
 def build_prompt(project, config, limit, top_report, recent_comments):
     """Build prompt for Claude to search, evaluate, and draft replies (no posting)."""
-    content_angle = project.get("content_angle", config.get("content_angle", ""))
+    content_angle = build_content_angle(project, config)
 
     project_json = json.dumps({k: project.get(k) for k in
         ["name", "description", "topics"]
