@@ -1097,6 +1097,8 @@ Guide pages reuse the site Header/Footer from the `(main)` layout. They do NOT n
 
 ### 4b. Create SEO Guide Pages
 
+**MANDATORY:** Follow the `seo-page-ui` skill (`~/social-autoposter/.claude/skills/seo-page-ui/SKILL.md`) for the page structure. It defines the exact 11-section order, animated SVG patterns, comparison tables, FAQ accordions, JSON-LD blocks, and color palette. Adapt its patterns to the client's theme colors and branding.
+
 Create guide pages at `src/app/(main)/t/{slug}/page.tsx`. They live inside the `(main)` route group so they automatically get the site Header/Footer. Each guide:
 
 **Structure:**
