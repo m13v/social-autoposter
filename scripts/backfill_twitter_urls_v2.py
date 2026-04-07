@@ -178,6 +178,19 @@ def main():
                     continue
                 consecutive_timeouts = 0
 
+                def apply_update(post_id, url):
+                    """Commit a single update immediately."""
+                    if args.apply:
+                        conn.execute(
+                            "UPDATE posts SET our_url = %s, "
+                            "upvotes = NULL, comments_count = NULL, views = NULL, "
+                            "engagement_updated_at = NULL, scan_no_change_count = 0 "
+                            "WHERE id = %s",
+                            [url, post_id],
+                        )
+                        conn.commit()
+                    updates.append((post_id, url))
+
                 # If only one reply found, use it directly
                 if len(reply_urls) == 1:
                     reply_url = reply_urls[0]
@@ -186,14 +199,13 @@ def main():
                     if ok:
                         found += 1
                         verified_ok += 1
-                        updates.append((db_id, reply_url))
+                        apply_update(db_id, reply_url)
                         print(f"  [{i+1}/{len(rows)}] Post {db_id}: VERIFIED -> {reply_url}", flush=True)
                     else:
                         # Single reply but wrong parent; might be replying to a reply in the thread
-                        # Accept it if the author is correct
                         found += 1
                         verified_fail += 1
-                        updates.append((db_id, reply_url))
+                        apply_update(db_id, reply_url)
                         print(f"  [{i+1}/{len(rows)}] Post {db_id}: ACCEPTED (single reply, {verify_err}) -> {reply_url}", flush=True)
                 else:
                     # Multiple replies from us in this thread. Check each via fxtwitter.
@@ -208,10 +220,9 @@ def main():
                     if matched_url:
                         found += 1
                         verified_ok += 1
-                        updates.append((db_id, matched_url))
+                        apply_update(db_id, matched_url)
                         print(f"  [{i+1}/{len(rows)}] Post {db_id}: VERIFIED (1 of {len(reply_urls)}) -> {matched_url}", flush=True)
                     else:
-                        # None matched the exact parent. Pick by content similarity as last resort.
                         not_found += 1
                         print(f"  [{i+1}/{len(rows)}] Post {db_id}: NO_MATCH ({len(reply_urls)} candidates, none matched parent {parent_id})", flush=True)
 
