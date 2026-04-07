@@ -63,13 +63,12 @@ def fetch_new_replies(pages=2):
     for page in range(1, pages + 1):
         data = eb_get("replies", {
             "folder": "inbox",
-            "read": "false",
             "per_page": 15,
             "page": page,
         })
         replies = data.get("data", [])
-        # Filter out automated replies
-        replies = [r for r in replies if not r.get("automated_reply")]
+        # Filter out automated replies and already-read replies
+        replies = [r for r in replies if not r.get("automated_reply") and not r.get("read")]
         all_replies.extend(replies)
         meta = data.get("meta", {})
         if page >= meta.get("last_page", 1):
@@ -203,7 +202,7 @@ Draft the reply now. Return ONLY the reply body text."""
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-opus-4-20250514",
         max_tokens=1024,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
