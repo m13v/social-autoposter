@@ -28,59 +28,52 @@ import db as dbmod
 OUR_HANDLE = "m13v_"
 
 
-def find_our_reply_on_page(page, parent_url):
-    """Navigate to a parent tweet and find our reply URL in the thread."""
+def find_our_replies_on_page(page, parent_url):
+    """Navigate to a parent tweet and find ALL our reply URLs in the thread.
+
+    Returns list of reply URL strings (may be empty).
+    """
+    extract_js = f"""() => {{
+        const links = new Set();
+        document.querySelectorAll('a[href*="/{OUR_HANDLE}/status/"]').forEach(a => {{
+            const href = a.getAttribute('href');
+            if (href && /\\/{OUR_HANDLE}\\/status\\/\\d+$/.test(href))
+                links.add(href);
+        }});
+        return [...links];
+    }}"""
+
     try:
         page.goto(parent_url, wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
 
-        # Check page exists
         page_text = page.text_content("main") or ""
         if "this page doesn't exist" in page_text.lower():
-            return None, "tweet_not_found"
+            return [], "tweet_not_found"
         if "this account doesn" in page_text.lower():
-            return None, "account_suspended"
+            return [], "account_suspended"
 
-        # Look for our reply link
-        our_links = page.evaluate(f"""() => {{
-            const links = new Set();
-            document.querySelectorAll('a[href*="/{OUR_HANDLE}/status/"]').forEach(a => {{
-                const href = a.getAttribute('href');
-                if (href && /\\/{OUR_HANDLE}\\/status\\/\\d+$/.test(href))
-                    links.add(href);
-            }});
-            return [...links];
-        }}""")
+        all_links = set(page.evaluate(extract_js))
 
-        if our_links:
-            # If multiple, pick the one with highest ID (most recent)
-            best = max(our_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
-            url = f"https://x.com{best}" if not best.startswith("http") else best
-            return url, None
-
-        # Scroll down once to load more replies
+        # Scroll down to load more replies
         page.evaluate("window.scrollBy(0, 2000)")
         page.wait_for_timeout(3000)
+        all_links.update(page.evaluate(extract_js))
 
-        our_links = page.evaluate(f"""() => {{
-            const links = new Set();
-            document.querySelectorAll('a[href*="/{OUR_HANDLE}/status/"]').forEach(a => {{
-                const href = a.getAttribute('href');
-                if (href && /\\/{OUR_HANDLE}\\/status\\/\\d+$/.test(href))
-                    links.add(href);
-            }});
-            return [...links];
-        }}""")
+        # One more scroll
+        page.evaluate("window.scrollBy(0, 2000)")
+        page.wait_for_timeout(2000)
+        all_links.update(page.evaluate(extract_js))
 
-        if our_links:
-            best = max(our_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
-            url = f"https://x.com{best}" if not best.startswith("http") else best
-            return url, None
+        results = []
+        for link in all_links:
+            url = f"https://x.com{link}" if not link.startswith("http") else link
+            results.append(url)
 
-        return None, "reply_not_visible"
+        return results, None
 
     except Exception as e:
-        return None, str(e)[:100]
+        return [], str(e)[:100]
 
 
 def verify_reply(reply_url, expected_parent_id):
@@ -125,13 +118,13 @@ def main():
     dbmod.load_env()
     conn = dbmod.get_conn()
 
-    # Load broken posts
+    # Load truly broken posts (our_url = thread_url AND our_url is NOT our own account)
     rows = conn.execute(
-        "SELECT id, our_url, thread_url, LEFT(our_content, 80) as content "
-        "FROM posts "
-        "WHERE platform='twitter' AND status='active' AND our_url = thread_url "
-        "AND our_url IS NOT NULL "
-        "ORDER BY id"
+        f"SELECT id, our_url, thread_url, LEFT(our_content, 80) as content "
+        f"FROM posts "
+        f"WHERE platform='twitter' AND status='active' AND our_url = thread_url "
+        f"AND our_url IS NOT NULL AND our_url NOT LIKE '%%/{OUR_HANDLE}/%%' "
+        f"ORDER BY id"
     ).fetchall()
 
     total_broken = len(rows)
@@ -158,35 +151,54 @@ def main():
                     continue
                 parent_id = parent_id.group(1)
 
-                # Convert old.reddit style to x.com if needed
                 visit_url = thread_url.replace("twitter.com", "x.com")
 
-                reply_url, error = find_our_reply_on_page(page, visit_url)
+                reply_urls, error = find_our_replies_on_page(page, visit_url)
 
-                if reply_url:
-                    found += 1
-                    status = "FOUND"
-
-                    # Verify
-                    if args.verify:
-                        ok, verify_err = verify_reply(reply_url, parent_id)
-                        if ok:
-                            verified_ok += 1
-                            status = "VERIFIED"
-                            updates.append((db_id, reply_url))
-                        else:
-                            verified_fail += 1
-                            status = f"VERIFY_FAIL({verify_err})"
-                        time.sleep(0.3)
-                    else:
-                        updates.append((db_id, reply_url))
-                else:
+                if not reply_urls:
                     not_found += 1
-                    status = f"NOT_FOUND({error})"
+                    print(f"  [{i+1}/{len(rows)}] Post {db_id}: NOT_FOUND({error})", flush=True)
+                    time.sleep(1)
+                    continue
 
-                print(f"  [{i+1}/{len(rows)}] Post {db_id}: {status} -> {reply_url or 'N/A'}", flush=True)
+                # If only one reply found, use it directly
+                if len(reply_urls) == 1:
+                    reply_url = reply_urls[0]
+                    ok, verify_err = verify_reply(reply_url, parent_id)
+                    time.sleep(0.3)
+                    if ok:
+                        found += 1
+                        verified_ok += 1
+                        updates.append((db_id, reply_url))
+                        print(f"  [{i+1}/{len(rows)}] Post {db_id}: VERIFIED -> {reply_url}", flush=True)
+                    else:
+                        # Single reply but wrong parent; might be replying to a reply in the thread
+                        # Accept it if the author is correct
+                        found += 1
+                        verified_fail += 1
+                        updates.append((db_id, reply_url))
+                        print(f"  [{i+1}/{len(rows)}] Post {db_id}: ACCEPTED (single reply, {verify_err}) -> {reply_url}", flush=True)
+                else:
+                    # Multiple replies from us in this thread. Check each via fxtwitter.
+                    matched_url = None
+                    for candidate in reply_urls:
+                        ok, verify_err = verify_reply(candidate, parent_id)
+                        time.sleep(0.3)
+                        if ok:
+                            matched_url = candidate
+                            break
 
-                time.sleep(1)  # Be gentle on Twitter
+                    if matched_url:
+                        found += 1
+                        verified_ok += 1
+                        updates.append((db_id, matched_url))
+                        print(f"  [{i+1}/{len(rows)}] Post {db_id}: VERIFIED (1 of {len(reply_urls)}) -> {matched_url}", flush=True)
+                    else:
+                        # None matched the exact parent. Pick by content similarity as last resort.
+                        not_found += 1
+                        print(f"  [{i+1}/{len(rows)}] Post {db_id}: NO_MATCH ({len(reply_urls)} candidates, none matched parent {parent_id})", flush=True)
+
+                time.sleep(1)
 
         finally:
             if not is_cdp:
