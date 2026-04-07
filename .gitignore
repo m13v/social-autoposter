@@ -7,9 +7,12 @@ __pycache__/
 *.db
 *.db-journal
 
-# Social autoposter work queues and phase scripts (contain hardcoded credentials)
+# Social autoposter work queues and phase scripts
 scripts/phase_*.json
 scripts/phase_*.py
+scripts/batch_send_dms.py
+scripts/send_batch_dms.sh
+scripts/twitter_compose_dm.py
 
 # Date-named error/log output files
 2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]
@@ -22,6 +25,11 @@ skill/SKILL.md
 
 # Agent-generated browser snapshots and data dumps
 *.yml
+"*.yml"
 *-notifications.json
 *-search-result
 .gstack/
+
+# Emailbison runtime data
+emailbison/*.json
+emailbison/*.csv
