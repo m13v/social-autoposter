@@ -9,36 +9,25 @@ export async function PATCH(
   const sql = getDb();
   const body = await req.json();
   const { action, edited_body, client_note } = body;
+  const numId = parseInt(id, 10);
 
   if (action === "approve") {
-    const rows = await sql(
-      `UPDATE drafts SET status = 'approved', reviewed_at = NOW() WHERE id = $1 RETURNING *`,
-      [id]
-    );
+    const rows = await sql`UPDATE drafts SET status = 'approved', reviewed_at = NOW() WHERE id = ${numId} RETURNING *`;
     return NextResponse.json(rows[0]);
   }
 
   if (action === "reject") {
-    const rows = await sql(
-      `UPDATE drafts SET status = 'rejected', client_note = $2, reviewed_at = NOW() WHERE id = $1 RETURNING *`,
-      [id, client_note || null]
-    );
+    const rows = await sql`UPDATE drafts SET status = 'rejected', client_note = ${client_note || null}, reviewed_at = NOW() WHERE id = ${numId} RETURNING *`;
     return NextResponse.json(rows[0]);
   }
 
   if (action === "edit") {
-    const rows = await sql(
-      `UPDATE drafts SET status = 'edited', edited_body = $2, client_note = $3, reviewed_at = NOW() WHERE id = $1 RETURNING *`,
-      [id, edited_body, client_note || null]
-    );
+    const rows = await sql`UPDATE drafts SET status = 'edited', edited_body = ${edited_body}, client_note = ${client_note || null}, reviewed_at = NOW() WHERE id = ${numId} RETURNING *`;
     return NextResponse.json(rows[0]);
   }
 
   if (action === "send") {
-    const rows = await sql(
-      `UPDATE drafts SET status = 'sent', sent_at = NOW() WHERE id = $1 RETURNING *`,
-      [id]
-    );
+    const rows = await sql`UPDATE drafts SET status = 'sent', sent_at = NOW() WHERE id = ${numId} RETURNING *`;
     return NextResponse.json(rows[0]);
   }
 
@@ -51,6 +40,7 @@ export async function DELETE(
 ) {
   const { id } = await params;
   const sql = getDb();
-  await sql(`DELETE FROM drafts WHERE id = $1`, [id]);
+  const numId = parseInt(id, 10);
+  await sql`DELETE FROM drafts WHERE id = ${numId}`;
   return NextResponse.json({ ok: true });
 }
