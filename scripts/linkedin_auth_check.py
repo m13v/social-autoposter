@@ -15,6 +15,8 @@ Exit codes:
     2 = session was invalid but successfully healed
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -24,6 +26,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from typing import Optional, Tuple
 
 STORAGE_STATE = os.path.expanduser("~/.claude/browser-sessions.json")
 LINKEDIN_AGENT_CONFIG = os.path.expanduser(
