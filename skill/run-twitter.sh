@@ -76,8 +76,10 @@ Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
 3. Draft the reply as a genuine contribution to the conversation (follow Content Rules, NEVER use em dashes, keep it short 1-2 sentences). Share experience, ask questions, add nuance, or respectfully disagree. Do NOT pitch, recommend tools, or drop links.
 4. Post it using the Python CDP script (no browser MCP needed):
    python3 scripts/twitter_browser.py reply 'TWEET_URL' 'YOUR_REPLY_TEXT'
-   Returns JSON with {ok: true, tweet_url, verified} on success.
+   Returns JSON with {ok: true, tweet_url, reply_url, verified} on success.
 5. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT).
+   CRITICAL: Use reply_url (our reply's URL, e.g. x.com/m13v_/status/...) as our_url in the INSERT.
+   Use tweet_url (the parent tweet URL) as thread_url. Do NOT use tweet_url as our_url.
 
 Up to 50 posts per run. If nothing fits, say '## No good tweet found' and stop.
 
