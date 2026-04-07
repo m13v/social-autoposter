@@ -148,10 +148,11 @@ def main():
                 parent_id = re.search(r'/status/(\d+)', thread_url or "")
                 if not parent_id:
                     not_found += 1
+                    print(f"  [{i+1}/{len(rows)}] Post {db_id}: SKIP (no status ID in URL: {thread_url})", flush=True)
                     continue
                 parent_id = parent_id.group(1)
 
-                visit_url = thread_url.replace("twitter.com", "x.com")
+                visit_url = thread_url.replace("twitter.com", "x.com").replace("http://", "https://")
 
                 reply_urls, error = find_our_replies_on_page(page, visit_url)
 
