@@ -447,7 +447,24 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="LinkedIn auth health check and self-healing")
     parser.add_argument("--check", action="store_true", help="Check only, don't heal")
     parser.add_argument("--force", action="store_true", help="Force re-auth even if valid")
+    parser.add_argument(
+        "--save-cookies",
+        action="store_true",
+        help="Export cookies from running LinkedIn browser to storage file (call at end of pipeline runs)",
+    )
     args = parser.parse_args()
+
+    if args.save_cookies:
+        port = find_linkedin_cdp_port()
+        if port:
+            if export_cookies_cdp(port):
+                return 0
+            else:
+                log("Cookie save failed (browser may have no li_at)")
+                return 1
+        else:
+            log("No running LinkedIn browser found for cookie save")
+            return 1
 
     if args.force:
         log("Forced re-authentication requested")
