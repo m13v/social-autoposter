@@ -14,27 +14,18 @@ export default async function Home({
   const { platform, status } = await searchParams;
   const sql = getDb();
 
-  const conditions: string[] = [];
-  const params: string[] = [];
-
-  if (platform && platform !== "all") {
-    params.push(platform);
-    conditions.push(`platform = $${params.length}`);
+  let drafts: Draft[];
+  if (platform && platform !== "all" && status) {
+    drafts = (await sql`SELECT * FROM drafts WHERE platform = ${platform} AND status = ${status} ORDER BY created_at DESC LIMIT 100`) as Draft[];
+  } else if (platform && platform !== "all") {
+    drafts = (await sql`SELECT * FROM drafts WHERE platform = ${platform} ORDER BY created_at DESC LIMIT 100`) as Draft[];
+  } else if (status) {
+    drafts = (await sql`SELECT * FROM drafts WHERE status = ${status} ORDER BY created_at DESC LIMIT 100`) as Draft[];
+  } else {
+    drafts = (await sql`SELECT * FROM drafts ORDER BY created_at DESC LIMIT 100`) as Draft[];
   }
-  if (status) {
-    params.push(status);
-    conditions.push(`status = $${params.length}`);
-  }
 
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const drafts = (await sql(
-    `SELECT * FROM drafts ${where} ORDER BY created_at DESC LIMIT 100`,
-    params
-  )) as Draft[];
-
-  const countRows = await sql(
-    `SELECT status, COUNT(*)::int as count FROM drafts GROUP BY status`
-  );
+  const countRows = await sql`SELECT status, COUNT(*)::int as count FROM drafts GROUP BY status`;
   const counts: Record<string, number> = {};
   for (const row of countRows) {
     counts[row.status as string] = row.count as number;
