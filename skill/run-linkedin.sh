@@ -20,6 +20,18 @@ LOG_FILE="$LOG_DIR/run-linkedin-$(date +%Y-%m-%d_%H%M%S).log"
 RUN_START=$(date +%s)
 echo "=== LinkedIn Post Run: $(date) ===" | tee "$LOG_FILE"
 
+# Auth health check: verify LinkedIn session is valid, re-auth if needed
+echo "Checking LinkedIn auth..." | tee -a "$LOG_FILE"
+AUTH_EXIT=0
+python3 "$REPO_DIR/scripts/linkedin_auth_check.py" 2>&1 | tee -a "$LOG_FILE" || AUTH_EXIT=$?
+if [ "$AUTH_EXIT" -eq 1 ]; then
+    echo "ERROR: LinkedIn auth check failed and self-healing could not recover. Skipping run." | tee -a "$LOG_FILE"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "post_linkedin" --posted 0 --skipped 0 --failed 1 --cost 0 --elapsed $(( $(date +%s) - RUN_START ))
+    exit 1
+elif [ "$AUTH_EXIT" -eq 2 ]; then
+    echo "LinkedIn session was stale, successfully re-authenticated." | tee -a "$LOG_FILE"
+fi
+
 # Pick project based on weight distribution
 PROJECT=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform linkedin 2>/dev/null || echo "Fazm")
 PROJECT_JSON=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform linkedin --json 2>/dev/null || echo "{}")
