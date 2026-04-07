@@ -80,6 +80,7 @@ Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
 5. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT).
    CRITICAL: Use reply_url (our reply's URL, e.g. x.com/m13v_/status/...) as our_url in the INSERT.
    Use tweet_url (the parent tweet URL) as thread_url. Do NOT use tweet_url as our_url.
+   If reply_url is null, set our_url to NULL in the INSERT (do NOT fall back to tweet_url).
 
 Up to 50 posts per run. If nothing fits, say '## No good tweet found' and stop.
 
