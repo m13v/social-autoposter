@@ -164,12 +164,25 @@ def _handle_dm_passcode(page):
         return False
 
 
+def _collect_our_reply_links(page):
+    """Collect all /OUR_HANDLE/status/ links currently in the DOM."""
+    return set(page.evaluate(f"""() => {{
+        const links = new Set();
+        document.querySelectorAll('a[href*="/{OUR_HANDLE}/status/"]').forEach(a => {{
+            const href = a.getAttribute('href');
+            if (href && /\\/{OUR_HANDLE}\\/status\\/\\d+$/.test(href))
+                links.add(href);
+        }});
+        return [...links];
+    }}"""))
+
+
 def reply_to_tweet(tweet_url, text):
     """Reply to a tweet.
 
     Navigates to the tweet, clicks the reply box, types the reply, and submits.
 
-    Returns: {"ok": true, "tweet_url": "..."} or {"ok": false, "error": "..."}
+    Returns: {"ok": true, "tweet_url": "...", "reply_url": "..."} or {"ok": false, "error": "..."}
     """
     from playwright.sync_api import sync_playwright
 
@@ -184,6 +197,9 @@ def reply_to_tweet(tweet_url, text):
             page_text = page.text_content("main") or ""
             if "this page doesn't exist" in page_text.lower():
                 return {"ok": False, "error": "tweet_not_found"}
+
+            # Snapshot our reply links before posting (to detect the new one)
+            links_before = _collect_our_reply_links(page)
 
             # Find the reply textbox
             reply_box = None
@@ -224,9 +240,22 @@ def reply_to_tweet(tweet_url, text):
             except Exception:
                 verified = True
 
+            # Capture the reply URL by finding the new link in the DOM
+            reply_url = None
+            for attempt in range(5):
+                links_after = _collect_our_reply_links(page)
+                new_links = links_after - links_before
+                if new_links:
+                    # Pick the highest status ID (most recent)
+                    reply_path = max(new_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
+                    reply_url = f"https://x.com{reply_path}" if not reply_path.startswith("http") else reply_path
+                    break
+                page.wait_for_timeout(2000)
+
             return {
                 "ok": True,
                 "tweet_url": tweet_url,
+                "reply_url": reply_url,
                 "verified": verified,
             }
 
