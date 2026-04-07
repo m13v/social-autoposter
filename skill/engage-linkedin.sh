@@ -32,6 +32,18 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 RUN_START=$(date +%s)
 log "=== LinkedIn Engagement Run: $(date) ==="
 
+# Auth health check: verify LinkedIn session is valid, re-auth if needed
+log "Checking LinkedIn auth..."
+AUTH_EXIT=0
+python3 "$REPO_DIR/scripts/linkedin_auth_check.py" 2>&1 | tee -a "$LOG_FILE" || AUTH_EXIT=$?
+if [ "$AUTH_EXIT" -eq 1 ]; then
+    log "ERROR: LinkedIn auth check failed and self-healing could not recover. Skipping run."
+    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_linkedin" --posted 0 --skipped 0 --failed 1 --cost 0 --elapsed $(( $(date +%s) - RUN_START ))
+    exit 1
+elif [ "$AUTH_EXIT" -eq 2 ]; then
+    log "LinkedIn session was stale, successfully re-authenticated."
+fi
+
 # Load exclusions from config
 EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('authors',[])))" 2>/dev/null || echo "")
 EXCLUDED_LINKEDIN=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('linkedin_profiles',[])))" 2>/dev/null || echo "")
