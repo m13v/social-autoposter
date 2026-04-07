@@ -110,6 +110,7 @@ def main():
     parser.add_argument("--limit", type=int, default=0, help="Limit posts to process (0=all)")
     parser.add_argument("--apply", action="store_true", help="Apply DB updates")
     parser.add_argument("--verify", action="store_true", default=True, help="Verify each URL via fxtwitter")
+    parser.add_argument("--start-from", type=int, default=0, help="Resume from this post ID")
     args = parser.parse_args()
 
     from playwright.sync_api import sync_playwright
@@ -119,11 +120,13 @@ def main():
     conn = dbmod.get_conn()
 
     # Load truly broken posts (our_url = thread_url AND our_url is NOT our own account)
+    start_clause = f"AND id >= {args.start_from}" if args.start_from else ""
     rows = conn.execute(
         f"SELECT id, our_url, thread_url, LEFT(our_content, 80) as content "
         f"FROM posts "
         f"WHERE platform='twitter' AND status='active' AND our_url = thread_url "
         f"AND our_url IS NOT NULL AND our_url NOT LIKE '%%/{OUR_HANDLE}/%%' "
+        f"{start_clause} "
         f"ORDER BY id"
     ).fetchall()
 
@@ -141,6 +144,7 @@ def main():
         verified_ok = 0
         verified_fail = 0
         updates = []
+        consecutive_timeouts = 0
 
         try:
             for i, row in enumerate(rows):
@@ -158,9 +162,21 @@ def main():
 
                 if not reply_urls:
                     not_found += 1
-                    print(f"  [{i+1}/{len(rows)}] Post {db_id}: NOT_FOUND({error})", flush=True)
+                    is_timeout = error and "Timeout" in str(error)
+                    if is_timeout:
+                        consecutive_timeouts += 1
+                        if consecutive_timeouts >= 5:
+                            print(f"  [{i+1}/{len(rows)}] Post {db_id}: NOT_FOUND(timeout) -- 5 consecutive timeouts, waiting 60s", flush=True)
+                            time.sleep(60)
+                            consecutive_timeouts = 0
+                        else:
+                            print(f"  [{i+1}/{len(rows)}] Post {db_id}: NOT_FOUND(timeout)", flush=True)
+                    else:
+                        consecutive_timeouts = 0
+                        print(f"  [{i+1}/{len(rows)}] Post {db_id}: NOT_FOUND({error})", flush=True)
                     time.sleep(1)
                     continue
+                consecutive_timeouts = 0
 
                 # If only one reply found, use it directly
                 if len(reply_urls) == 1:
@@ -216,24 +232,12 @@ def main():
 
     if not updates:
         print("No updates to apply.")
-        return
-
-    if not args.apply:
+    elif not args.apply:
         print(f"\nDry run. Use --apply to update {len(updates)} rows.")
-        return
+    else:
+        print(f"\nAll {len(updates)} updates were committed incrementally.", flush=True)
 
-    print(f"\nApplying {len(updates)} updates ...", flush=True)
-    for db_id, reply_url in updates:
-        conn.execute(
-            "UPDATE posts SET our_url = %s, "
-            "upvotes = NULL, comments_count = NULL, views = NULL, "
-            "engagement_updated_at = NULL, scan_no_change_count = 0 "
-            "WHERE id = %s",
-            [reply_url, db_id],
-        )
-    conn.commit()
     conn.close()
-    print(f"  Done. Updated {len(updates)} posts.", flush=True)
 
 
 if __name__ == "__main__":
