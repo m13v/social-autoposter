@@ -252,6 +252,18 @@ def reply_to_tweet(tweet_url, text):
                     break
                 page.wait_for_timeout(2000)
 
+            # Fallback: check profile page for the latest reply
+            if not reply_url:
+                try:
+                    page.goto(f"https://x.com/{OUR_HANDLE}/with_replies", wait_until="domcontentloaded")
+                    page.wait_for_timeout(4000)
+                    profile_links = _collect_our_reply_links(page)
+                    if profile_links:
+                        reply_path = max(profile_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
+                        reply_url = f"https://x.com{reply_path}" if not reply_path.startswith("http") else reply_path
+                except Exception:
+                    pass
+
             return {
                 "ok": True,
                 "tweet_url": tweet_url,
