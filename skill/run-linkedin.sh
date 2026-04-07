@@ -113,6 +113,11 @@ CRITICAL: If a browser tool call is blocked or times out, wait 30 seconds and re
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 
+# Save fresh cookies from the running browser back to storage state
+# LinkedIn rotates li_at during sessions; saving prevents next run from using stale tokens
+echo "Saving LinkedIn session cookies..." | tee -a "$LOG_FILE"
+python3 "$REPO_DIR/scripts/linkedin_auth_check.py" --save-cookies 2>&1 | tee -a "$LOG_FILE" || true
+
 # Log run to persistent monitor
 RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
 POSTED=$(grep -c "INSERT INTO posts" "$LOG_FILE" 2>/dev/null) || true
