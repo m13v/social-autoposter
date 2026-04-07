@@ -1,18 +1,45 @@
 #!/usr/bin/env bash
-# engage.sh — Reply engagement loop
+# engage.sh — Reply engagement loop (platform-filtered)
 # Phase B: Claude drafts and posts replies via Playwright/API (batched, 50 at a time)
 # Phase C: Cleanup
 # Phase D: Edit high-performing posts (>2 upvotes, 6h+ old) with a project link
 # Phase E: DM outreach
-# Called by launchd every 2 hours (7200s interval).
+#
+# Usage:
+#   engage.sh                    # Run all platforms (legacy behavior)
+#   engage.sh --platform reddit  # Run only reddit
+#   engage.sh --platform linkedin
+#   engage.sh --platform twitter
+#   engage.sh --platform moltbook
+#
 # NOTE: Reply scanning (formerly Phase A) now runs on its own hourly launchd job:
 # com.m13v.social-scan-replies (skill/run-scan-replies.sh)
 
 set -euo pipefail
 
+# Parse --platform flag
+PLATFORM=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --platform) PLATFORM="$2"; shift 2 ;;
+        *) echo "Unknown arg: $1"; exit 1 ;;
+    esac
+done
+
+# Validate platform if specified
+if [ -n "$PLATFORM" ]; then
+    case "$PLATFORM" in
+        reddit|linkedin|twitter|x|moltbook) ;;
+        *) echo "ERROR: Unknown platform '$PLATFORM'. Use: reddit, linkedin, twitter, moltbook"; exit 1 ;;
+    esac
+fi
+
+LOCK_NAME="engage"
+[ -n "$PLATFORM" ] && LOCK_NAME="engage-$PLATFORM"
+
 # Engage lock: wait up to 60min for previous engage run to finish, then skip
 source "$(dirname "$0")/lock.sh"
-acquire_lock "engage" 3600
+acquire_lock "$LOCK_NAME" 3600
 
 # Load secrets
 # shellcheck source=/dev/null
@@ -28,11 +55,37 @@ if [ -z "${DATABASE_URL:-}" ]; then
 fi
 
 mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/engage-$(date +%Y-%m-%d_%H%M%S).log"
+LOG_SUFFIX=""
+[ -n "$PLATFORM" ] && LOG_SUFFIX="-$PLATFORM"
+LOG_FILE="$LOG_DIR/engage${LOG_SUFFIX}-$(date +%Y-%m-%d_%H%M%S).log"
 
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 
-log "=== Engagement Loop Run: $(date) ==="
+log "=== Engagement Loop Run: $(date) (platform: ${PLATFORM:-all}) ==="
+
+# Helper: build SQL platform filter
+platform_in_sql() {
+    local col="${1:-platform}"
+    if [ -n "$PLATFORM" ]; then
+        # Normalize x -> twitter for DB queries where platform might be stored as either
+        local p="$PLATFORM"
+        [ "$p" = "x" ] && p="twitter"
+        echo "$col = '$p'"
+    else
+        echo "1=1"
+    fi
+}
+
+# Helper: pick MCP config based on platform
+mcp_config_for_platform() {
+    local p="${1:-all}"
+    case "$p" in
+        reddit)   echo "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" ;;
+        linkedin) echo "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" ;;
+        twitter|x) echo "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" ;;
+        *)        echo "$HOME/.claude/browser-agent-configs/all-agents-mcp.json" ;;
+    esac
+}
 
 # ═══════════════════════════════════════════════════════
 # (Phase A moved to its own launchd job: com.m13v.social-scan-replies)
@@ -43,6 +96,21 @@ log "=== Engagement Loop Run: $(date) ==="
 # Runs FIRST — processes ALL eligible posts (no limit)
 # ═══════════════════════════════════════════════════════
 PHASE_D_START=$(date +%s)
+
+# Build platform filter for Phase D
+PHASE_D_PLATFORM_FILTER="platform IN ('reddit', 'moltbook', 'linkedin')"
+if [ -n "$PLATFORM" ]; then
+    case "$PLATFORM" in
+        reddit|moltbook|linkedin)
+            PHASE_D_PLATFORM_FILTER="platform = '$PLATFORM'"
+            ;;
+        twitter|x)
+            # Phase D doesn't apply to twitter
+            PHASE_D_PLATFORM_FILTER="1=0"
+            ;;
+    esac
+fi
+
 EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT id, platform, our_url, our_content, thread_title, upvotes, project_name
@@ -52,7 +120,7 @@ EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
           AND link_edited_at IS NULL
           AND our_url IS NOT NULL
           AND (upvotes > 2 OR platform = 'linkedin')
-          AND platform IN ('reddit', 'moltbook', 'linkedin')
+          AND $PHASE_D_PLATFORM_FILTER
         ORDER BY upvotes DESC NULLS LAST
     ) q;" 2>/dev/null || echo "")
 
@@ -134,15 +202,16 @@ Process ALL of them. For each post:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='SKIPPED: REASON' WHERE id=POST_ID"
 PROMPT_EOF
 
-    gtimeout 14400 claude --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "$(cat "$PHASE_D_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase D claude exited with code $?"
+    MCP_CFG=$(mcp_config_for_platform "${PLATFORM:-linkedin}")
+    gtimeout 14400 claude --strict-mcp-config --mcp-config "$MCP_CFG" -p "$(cat "$PHASE_D_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase D claude exited with code $?"
     rm -f "$PHASE_D_PROMPT"
     PHASE_D_ELAPSED=$(( $(date +%s) - PHASE_D_START ))
     PHASE_D_EDITED=$(grep -ci "link_edited_at=NOW()" "$LOG_FILE" 2>/dev/null) || true
     PHASE_D_SKIPPED=$(grep -ci "SKIPPED:" "$LOG_FILE" 2>/dev/null) || true
-    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_link_edit" --posted "$PHASE_D_EDITED" --skipped "$PHASE_D_SKIPPED" --failed 0 --cost 0 --elapsed "$PHASE_D_ELAPSED"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_link_edit${LOG_SUFFIX}" --posted "$PHASE_D_EDITED" --skipped "$PHASE_D_SKIPPED" --failed 0 --cost 0 --elapsed "$PHASE_D_ELAPSED"
 else
     log "Phase D: No posts eligible for link edit"
-    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_link_edit" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed 0
+    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_link_edit${LOG_SUFFIX}" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed 0
 fi
 
 # ═══════════════════════════════════════════════════════
@@ -150,36 +219,46 @@ fi
 # Processes one reply at a time to avoid context accumulation
 # ═══════════════════════════════════════════════════════
 
-# Reset any 'processing' items older than 2 hours back to 'pending'
-# These are items the agent physically posted but crashed before marking 'replied'.
-# The in-browser already-replied check (below) prevents re-posting duplicates.
-RESET_COUNT=$(psql "$DATABASE_URL" -t -A -c "
-    UPDATE replies SET status='pending'
-    WHERE status='processing' AND processing_at < NOW() - INTERVAL '2 hours'
-    RETURNING id;" | wc -l | tr -d ' ')
-[ "$RESET_COUNT" -gt 0 ] && log "Phase B: Reset $RESET_COUNT stuck 'processing' items back to pending"
+# Only run Phase B for reddit/moltbook (or all platforms)
+if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ] || [ "$PLATFORM" = "moltbook" ]; then
+    # Reset any 'processing' items older than 2 hours back to 'pending'
+    PHASE_B_PLATFORM_FILTER=$(platform_in_sql "platform")
+    RESET_COUNT=$(psql "$DATABASE_URL" -t -A -c "
+        UPDATE replies SET status='pending'
+        WHERE status='processing' AND processing_at < NOW() - INTERVAL '2 hours'
+          AND platform NOT IN ('linkedin', 'x')
+          AND $PHASE_B_PLATFORM_FILTER
+        RETURNING id;" | wc -l | tr -d ' ')
+    [ "$RESET_COUNT" -gt 0 ] && log "Phase B: Reset $RESET_COUNT stuck 'processing' items back to pending"
 
-PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND platform NOT IN ('linkedin', 'x');")
-log "Phase B: $PENDING_COUNT pending Reddit/Moltbook replies"
+    PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND platform NOT IN ('linkedin', 'x') AND $PHASE_B_PLATFORM_FILTER;")
+    log "Phase B: $PENDING_COUNT pending Reddit/Moltbook replies"
 
-if [ "$PENDING_COUNT" -gt 0 ]; then
-    python3 "$REPO_DIR/scripts/engage_reddit.py" --timeout 5400 2>&1 | tee -a "$LOG_FILE" || log "WARNING: engage_reddit.py exited with code $?"
-else
-    log "Phase B: No pending replies. Skipping."
+    if [ "$PENDING_COUNT" -gt 0 ]; then
+        python3 "$REPO_DIR/scripts/engage_reddit.py" --timeout 5400 2>&1 | tee -a "$LOG_FILE" || log "WARNING: engage_reddit.py exited with code $?"
+    else
+        log "Phase B: No pending replies. Skipping."
+    fi
 fi
 
 # ═══════════════════════════════════════════════════════
-# PHASE E: Reddit DM engagement (continue conversations via Chat)
+# PHASE E: DM engagement (continue conversations via Chat)
 # Finds users who engaged on our posts and DMs them to continue the discussion
 # ═══════════════════════════════════════════════════════
 PHASE_E_START=$(date +%s)
-log "Phase E: Scanning for DM candidates (all platforms)..."
-(PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_dm_candidates.py" 2>&1 || true) | tee -a "$LOG_FILE"
+PHASE_E_PLATFORM_FILTER=$(platform_in_sql "d.platform")
 
-DM_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='pending';" 2>/dev/null || echo "0")
+log "Phase E: Scanning for DM candidates (platform: ${PLATFORM:-all})..."
+if [ -z "$PLATFORM" ]; then
+    (PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_dm_candidates.py" 2>&1 || true) | tee -a "$LOG_FILE"
+else
+    (PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_dm_candidates.py" --platform "$PLATFORM" 2>&1 || true) | tee -a "$LOG_FILE"
+fi
+
+DM_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='pending' AND $PHASE_E_PLATFORM_FILTER;" 2>/dev/null || echo "0")
 
 if [ "$DM_PENDING" -gt 0 ]; then
-    log "Phase E: $DM_PENDING DMs to send across all platforms"
+    log "Phase E: $DM_PENDING DMs to send (platform: ${PLATFORM:-all})"
 
     DM_DATA=$(psql "$DATABASE_URL" -t -A -c "
         SELECT json_agg(q) FROM (
@@ -190,7 +269,7 @@ if [ "$DM_PENDING" -gt 0 ]; then
             FROM dms d
             JOIN replies r ON d.reply_id = r.id
             JOIN posts p ON d.post_id = p.id
-            WHERE d.status='pending'
+            WHERE d.status='pending' AND $PHASE_E_PLATFORM_FILTER
             ORDER BY d.discovered_at ASC
         ) q;")
 
@@ -276,14 +355,15 @@ NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp
 If a script or tool call fails, wait 30 seconds and retry (up to 3 times).
 PROMPT_EOF
 
-    gtimeout 3600 claude --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/all-agents-mcp.json" -p "$(cat "$DM_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase E claude exited with code $?"
+    MCP_CFG=$(mcp_config_for_platform "${PLATFORM:-all}")
+    gtimeout 3600 claude --strict-mcp-config --mcp-config "$MCP_CFG" -p "$(cat "$DM_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase E claude exited with code $?"
     rm -f "$DM_PROMPT"
     PHASE_E_ELAPSED=$(( $(date +%s) - PHASE_E_START ))
-    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_dm_outreach" --posted "$DM_PENDING" --skipped 0 --failed 0 --cost 0 --elapsed "$PHASE_E_ELAPSED"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_dm_outreach${LOG_SUFFIX}" --posted "$DM_PENDING" --skipped 0 --failed 0 --cost 0 --elapsed "$PHASE_E_ELAPSED"
 else
     log "Phase E: No pending DMs"
     PHASE_E_ELAPSED=$(( $(date +%s) - PHASE_E_START ))
-    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_dm_outreach" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed "$PHASE_E_ELAPSED"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_dm_outreach${LOG_SUFFIX}" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed "$PHASE_E_ELAPSED"
 fi
 
 # ═══════════════════════════════════════════════════════
@@ -291,20 +371,23 @@ fi
 # ═══════════════════════════════════════════════════════
 log "Phase C: Cleanup"
 
-TOTAL_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending';")
-TOTAL_REPLIED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='replied';")
-TOTAL_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='skipped';")
-TOTAL_ERRORS=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='error';")
+PHASE_C_FILTER=$(platform_in_sql "platform")
 
-DM_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='pending';" 2>/dev/null || echo "0")
-DM_SENT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='sent';" 2>/dev/null || echo "0")
-DM_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='skipped';" 2>/dev/null || echo "0")
-DM_ERRORS=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='error';" 2>/dev/null || echo "0")
+TOTAL_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND $PHASE_C_FILTER;")
+TOTAL_REPLIED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='replied' AND $PHASE_C_FILTER;")
+TOTAL_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='skipped' AND $PHASE_C_FILTER;")
+TOTAL_ERRORS=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='error' AND $PHASE_C_FILTER;")
+
+DM_PENDING_FINAL=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='pending' AND $PHASE_C_FILTER;" 2>/dev/null || echo "0")
+DM_SENT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='sent' AND $PHASE_C_FILTER;" 2>/dev/null || echo "0")
+DM_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='skipped' AND $PHASE_C_FILTER;" 2>/dev/null || echo "0")
+DM_ERRORS=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='error' AND $PHASE_C_FILTER;" 2>/dev/null || echo "0")
 
 log "Replies summary: pending=$TOTAL_PENDING replied=$TOTAL_REPLIED skipped=$TOTAL_SKIPPED errors=$TOTAL_ERRORS"
-log "DMs summary: pending=$DM_PENDING sent=$DM_SENT skipped=$DM_SKIPPED errors=$DM_ERRORS"
+log "DMs summary: pending=$DM_PENDING_FINAL sent=$DM_SENT skipped=$DM_SKIPPED errors=$DM_ERRORS"
 
 # Delete old logs
 find "$LOG_DIR" -name "engage-*.log" -mtime +7 -delete 2>/dev/null || true
+find "$LOG_DIR" -name "engage-*-*.log" -mtime +7 -delete 2>/dev/null || true
 
 log "=== Engagement loop complete: $(date) ==="
