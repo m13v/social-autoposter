@@ -194,7 +194,7 @@ def run_claude(prompt, timeout=600):
     """
     import time as _time
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
-    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--bare"]
+    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
     cmd += ["--tools", "Bash,Read"]
     env = os.environ.copy()
     env.pop("ANTHROPIC_API_KEY", None)  # ensure claude uses OAuth, not API key
