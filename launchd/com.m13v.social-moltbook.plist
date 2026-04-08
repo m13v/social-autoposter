@@ -22,7 +22,10 @@
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-moltbook-stderr.log</string>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-moltbook-stdout.log</string>
-	<key>StartInterval</key>
-	<integer>1800</integer>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict><key>Minute</key><integer>20</integer></dict>
+		<dict><key>Minute</key><integer>50</integer></dict>
+	</array>
 </dict>
 </plist>
