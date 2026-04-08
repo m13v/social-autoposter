@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -28,7 +29,10 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 API_KEY = os.environ["EMAILBISON_API_KEY"]
 BASE_URL = os.environ["EMAILBISON_BASE_URL"]
-ANTHROPIC_KEY = os.environ["ANTHROPIC_API_KEY"]
+ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY") or subprocess.run(
+    ["security", "find-generic-password", "-s", "Anthropic API Key Fazm", "-w"],
+    capture_output=True, text=True, timeout=5,
+).stdout.strip()
 
 HEADERS = {
     "Authorization": f"Bearer {API_KEY}",
