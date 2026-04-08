@@ -2,6 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/matthewdi</string>
+		<key>PATH</key>
+		<string>/Users/matthewdi/.nvm/versions/node/v20.19.4/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+	</dict>
 	<key>Label</key>
 	<string>com.m13v.social-github-engage</string>
 	<key>ProgramArguments</key>
@@ -9,20 +16,26 @@
 		<string>/bin/bash</string>
 		<string>/Users/matthewdi/social-autoposter/skill/github-engage.sh</string>
 	</array>
-	<key>StartInterval</key>
-	<integer>7200</integer>
-	<key>StandardOutPath</key>
-	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-github-engage-stdout.log</string>
-	<key>StandardErrorPath</key>
-	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-github-engage-stderr.log</string>
-	<key>EnvironmentVariables</key>
-	<dict>
-		<key>PATH</key>
-		<string>/Users/matthewdi/.nvm/versions/node/v20.19.4/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
-		<key>HOME</key>
-		<string>/Users/matthewdi</string>
-	</dict>
 	<key>RunAtLoad</key>
 	<false/>
+	<key>StandardErrorPath</key>
+	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-github-engage-stderr.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-github-engage-stdout.log</string>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict><key>Hour</key><integer>1</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Hour</key><integer>5</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Hour</key><integer>23</integer><key>Minute</key><integer>10</integer></dict>
+	</array>
 </dict>
 </plist>
