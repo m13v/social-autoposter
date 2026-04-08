@@ -22,7 +22,10 @@
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-linkedin-stderr.log</string>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-linkedin-stdout.log</string>
-	<key>StartInterval</key>
-	<integer>1800</integer>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Minute</key><integer>40</integer></dict>
+	</array>
 </dict>
 </plist>
