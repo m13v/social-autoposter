@@ -197,9 +197,7 @@ def run_claude(prompt, timeout=300):
     cmd.append("--bare")
     cmd += ["--tools", "Bash,Read"]
     env = os.environ.copy()
-    api_key = get_api_key()
-    if api_key:
-        env["ANTHROPIC_API_KEY"] = api_key
+    env.pop("ANTHROPIC_API_KEY", None)  # ensure claude uses OAuth, not API key
     try:
         proc = subprocess.Popen(
             cmd, env=env, stdin=subprocess.PIPE,
