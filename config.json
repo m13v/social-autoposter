@@ -1,0 +1,866 @@
+{
+  "prompt_db": "~/claude-prompt-db/prompts.db",
+  "stats_script": "~/.claude/skills/social-autoposter/stats.sh",
+  "accounts": {
+    "reddit": {
+      "username": "Deep_Ad1959",
+      "login_method": "browser"
+    },
+    "twitter": {
+      "handle": "@m13v_",
+      "login_method": "browser",
+      "dm_passcode_env": "TWITTER_DM_PASSCODE"
+    },
+    "linkedin": {
+      "name": "Matthew Diakonov",
+      "login_method": "browser"
+    },
+    "moltbook": {
+      "username": "matthew-autoposter",
+      "api_key_env": "MOLTBOOK_API_KEY",
+      "env_file": "~/social-autoposter/.env"
+    },
+    "github": {
+      "username": "m13v",
+      "login_method": "gh_cli",
+      "search_topics": [
+        "macOS automation", "MCP server", "ScreenCaptureKit", "accessibility API",
+        "AI agent", "parallel agents", "desktop automation", "Claude Code", "computer use",
+        "AXUIElement", "CGEvent", "voice transcription", "WhisperKit", "on-device LLM",
+        "screen OCR", "UI automation testing", "Swift macOS app", "agent orchestration",
+        "git worktree", "context window management", "CLAUDE.md", "launchd automation",
+        "Playwright native app", "social media automation", "tmux agent", "CoreML inference",
+        "Rust Swift interop", "SCContentFilter", "agent memory", "tool use LLM",
+        "open source AI agent", "local first AI", "screen recording SDK",
+        "label:help-wanted", "label:good-first-issue"
+      ]
+    }
+  },
+  "subreddits": ["ClaudeCode", "ChatGPTCoding", "AI_Agents", "artificial", "LLMDevs", "selfhosted", "webdev", "cursor", "modelcontextprotocol", "ollama", "SideProject", "SaaS", "singularity", "OpenAI", "ArtificialInteligence", "n8n", "opensource", "coolgithubprojects", "commandline", "SwiftUI", "MachineLearning", "entrepreneur", "indiehackers", "learnprogramming", "neovim", "iOSProgramming", "coding", "AlphaAndBetaUsers", "Automate", "homelab", "swift", "mac", "Futurology", "InternetIsBeautiful", "buildinpublic", "ArtificialIntelligence", "LocalLLM", "apple", "github", "vibecoding", "Flipping", "Ebay", "apps", "socialmedia", "programming", "technology", "nocode", "macos", "ProductHunt", "cscareerquestions", "aipromptprogramming", "softwareengineering", "makers", "workflows", "propertymanagement", "CommercialRealEstate", "securitycameras", "homesecurity", "Multifamily", "realestateinvesting", "landlords", "Construction", "securityguards", "CCTV", "landlord", "HOA", "RentalInvesting", "apartmentliving", "homedefense", "videosurveillance", "accesscontrol", "lossprevention", "talesfromsecurity", "facilitymanagement", "smallbusiness", "realestate", "HVAC", "condoassociation", "constructionmanagers", "civilengineering", "Renovations", "projectmanagement", "physec", "lowvoltage", "smarthome", "Plumbing", "Electricians", "HomeImprovement", "restaurateur", "restaurant", "RestaurantOwners", "pizzaowners", "KitchenConfidential", "foodtrucks", "FastFood", "franchise", "QSR", "pizzabusiness", "sweatystartup", "BarOwners", "POS", "Bookkeeping", "taxpros", "Accounting", "consulting", "growmybusiness", "EntrepreneurRideAlong", "Entrepreneurs", "Business_Ideas", "ecommerce", "EtsySellers", "shopify", "FulfillmentByAmazon", "AmazonSeller", "freelance", "VirtualAssistant", "Upwork", "sidehustle", "AutoDetailing", "lawncare", "landscaping", "pressurewashing", "handyman", "LawFirm", "Dentistry", "optometry", "PrivatePractice", "realtors", "RealEstateTechnology", "msp", "personaltraining", "MassageTherapists", "hairstylist"],
+  "banned_subreddits": {
+    "botbouncer_2026-03-17": ["ClaudeAI", "macapps", "ChatGPT", "productivity", "LocalLLaMA", "ExperiencedDevs", "rpa", "devops", "startups"],
+    "manual_earlier": ["firefox", "mcp", "GeekSquad", "InsuranceProfessional", "InsuranceAgent", "softwaretesting"],
+    "banned_vipassana_2026-03-21": ["vipassana", "Meditation"]
+  },
+  "twitter_topics": [
+    "AI agent macOS",
+    "desktop automation AI",
+    "voice control computer AI",
+    "AI assistant productivity",
+    "browser automation agent",
+    "AI computer use",
+    "local AI agent",
+    "Claude computer use",
+    "AI form filling",
+    "macOS productivity AI",
+    "property management security cameras",
+    "multifamily security CCTV",
+    "apartment complex security",
+    "AI security camera monitoring"
+  ],
+  "linkedin_topics": [
+    "AI agent desktop automation workflow tool",
+    "AI productivity assistant developer",
+    "voice controlled AI agent computer",
+    "AI workflow automation startup",
+    "open source AI agent github launch",
+    "macOS AI automation native app",
+    "vibe coding cursor claude building apps",
+    "Claude Code hooks MCP server developer",
+    "no code low code AI building app founder",
+    "Anthropic Claude Opus Sonnet agent building",
+    "solopreneur technical founder AI shipping product",
+    "ScreenCaptureKit Vision framework macOS native",
+    "AI startup small team lean building revenue",
+    "prompt engineering AI workflow developer productivity",
+    "accessibility API UI testing automation native",
+    "Claude agent SDK Anthropic tool use building",
+    "computer use browser agent AI comparison",
+    "two person team AI startup shipping fast",
+    "AI developer tools open source community",
+    "desktop automation RPA intelligent agent",
+    "API cost optimization AI agent token usage",
+    "indie hacker AI product launch growth",
+    "Swift macOS developer AI integration native",
+    "parallel agents orchestration multi-agent system",
+    "AI coding assistant IDE productivity workflow",
+    "founder building in public AI product journey",
+    "screen recording OCR AI desktop understanding",
+    "MCP model context protocol tool integration",
+    "AI agent reliability production deployment scaling",
+    "startup culture remote work AI tools leverage",
+    "property management security cameras multifamily",
+    "CCTV AI monitoring apartment complex security",
+    "security guard alternative property management tech",
+    "construction site security cameras monitoring"
+  ],
+  "vipassana_subreddits": ["vipassana", "meditation", "streamentry", "TheMindIlluminated", "Mindfulness", "Buddhism", "theravada", "secularbuddhism", "awakened", "ZenHabits"],
+  "content_angle": "Building fazm.ai (macOS desktop AI agent) and mk0r.com (AI app maker that generates mobile apps from a sentence). Experience with Swift, ScreenCaptureKit, MCP tools, Claude API integration, streaming HTML generation, and building AI-powered apps.",
+  "projects": [
+    {
+      "name": "Fazm",
+      "weight": 7,
+      "description": "AI computer agent for macOS - controls browser, writes code, handles documents, operates Google Apps, learns your workflow. Voice-first, fully open source, fully local.",
+      "website": "https://fazm.ai",
+      "llms_txt": "~/fazm-website/public/llms.txt",
+      "github": "https://github.com/m13v/fazm",
+      "platform": "macOS only (14.0+)",
+      "setup": "Download the app from fazm.ai or build from source. Native Swift/SwiftUI macOS app. No terminal required for end users.",
+      "links": {
+        "twitter": "https://fazm.ai/x",
+        "reddit": "https://fazm.ai/r",
+        "instagram": "https://fazm.ai/ig",
+        "youtube": "https://fazm.ai/yt",
+        "github": "https://fazm.ai/gh",
+        "linkedin": "https://fazm.ai/li",
+        "moltbook": "https://fazm.ai/mb"
+      },
+      "features": [
+        "Voice-first control - talk to your computer naturally",
+        "Browser automation - controls your actual browser, not a headless instance",
+        "Code writing and file management",
+        "Google Apps automation (Docs, Sheets, Calendar)",
+        "CRM management and data entry",
+        "Visual understanding - reads screen context to complete complex workflows",
+        "Uses accessibility APIs (not screenshots) for reliable, fast interaction",
+        "Free to start, fully open source, runs locally"
+      ],
+      "differentiator": "Uses real accessibility APIs and screen context instead of screenshot-based approaches. Works with any app on your Mac, not just the browser. Consumer-friendly app, not a developer framework.",
+      "icp": "Small business owners who want to automate their business end-to-end (invoicing, CRM, email, scheduling, data entry). AI excels at these repetitive computer tasks.",
+      "topics": ["desktop AI agent", "browser automation", "voice control", "computer agent", "macOS AI", "accessibility APIs", "local AI", "open source AI agent", "small business automation", "business process automation"],
+      "twitter_topics": [
+        "AI agent macOS",
+        "desktop automation AI",
+        "voice control computer AI",
+        "AI assistant productivity",
+        "browser automation agent",
+        "AI computer use",
+        "local AI agent",
+        "macOS productivity AI"
+      ],
+      "linkedin_topics": [
+        "AI agent desktop automation workflow tool",
+        "AI productivity assistant developer",
+        "voice controlled AI agent computer",
+        "AI workflow automation startup",
+        "open source AI agent github launch",
+        "macOS AI automation native app",
+        "desktop automation RPA intelligent agent",
+        "AI startup small team lean building revenue"
+      ],
+      "github_search_topics": [
+        "macOS automation", "AI agent", "desktop automation", "computer use",
+        "voice transcription", "WhisperKit", "on-device LLM", "CoreML inference",
+        "open source AI agent", "local first AI"
+      ],
+      "local_repo": "~/fazm",
+      "landing_pages": {
+        "repo": "~/fazm-website",
+        "github_repo": "m13v/fazm-website",
+        "base_url": "https://fazm.ai"
+      },
+      "posthog": {
+        "project_id": "331630",
+        "api_key_env": "FAZM_POSTHOG_API_KEY"
+      },
+      "booking_link": "https://cal.com/matt364/fazm-enterprise-demo"
+    },
+    {
+      "name": "Terminator",
+      "weight": 6,
+      "description": "Desktop automation framework - like Playwright but for your entire OS. Uses accessibility APIs. Cross-platform (Windows + macOS). Developer tool, not consumer app.",
+      "website": "https://t8r.tech",
+      "llms_txt": "~/terminator/llms.txt",
+      "github": "https://github.com/mediar-ai/terminator",
+      "platform": "Windows (native download) and macOS. Primary focus is Windows.",
+      "setup": "One-liner MCP install: claude mcp add terminator 'npx -y terminator-mcp-agent@latest'. Also works with Cursor, VS Code, Windsurf via MCP config. For direct use: Rust crate (terminator-rs) or Python bindings.",
+      "features": [
+        "MCP server that gives AI assistants (Claude, Cursor, VS Code) desktop control",
+        "Controls any application via accessibility APIs - not just browsers",
+        "Workflow recording and replay",
+        "Works as an MCP tool for Claude Code, Cursor, VS Code, Windsurf",
+        "Rust core with Python bindings",
+        "Published on crates.io (terminator-rs) and npm (terminator-mcp-agent)"
+      ],
+      "differentiator": "Developer framework for building desktop automation, not a consumer app. Gives existing AI coding assistants the ability to control your entire OS, not just write code. Like Playwright but for every app on your desktop.",
+      "topics": ["desktop automation", "Playwright for OS", "accessibility APIs", "UI automation", "MCP server", "computer use", "Windows automation"],
+      "twitter_topics": [
+        "desktop automation framework",
+        "Playwright for desktop apps",
+        "UI automation accessibility APIs",
+        "MCP server desktop control",
+        "Windows automation AI"
+      ],
+      "linkedin_topics": [
+        "desktop automation framework Playwright OS",
+        "accessibility API UI automation developer tool",
+        "MCP server desktop control agent",
+        "Windows macOS cross platform automation",
+        "Rust desktop automation framework"
+      ],
+      "github_search_topics": [
+        "desktop automation", "Playwright for OS", "accessibility APIs",
+        "UI automation", "MCP server", "computer use", "AXUIElement"
+      ],
+      "local_repo": "~/terminator"
+    },
+    {
+      "name": "macOS MCP",
+      "weight": 6,
+      "description": "MCP server for macOS automation. Powers Fazm's screen control. Standalone MCP tool for Claude Code and other AI assistants.",
+      "website": "",
+      "llms_txt": "~/mcp-server-macos-use/llms.txt",
+      "github": "https://github.com/mediar-ai/mcp-server-macos-use",
+      "platform": "macOS only",
+      "setup": "Install via MCP config for Claude Code, Cursor, or VS Code.",
+      "differentiator": "macOS-specific MCP server using native accessibility APIs. Complements Terminator (which focuses on Windows).",
+      "topics": ["macOS automation", "MCP server", "accessibility APIs", "screen control"],
+      "twitter_topics": [
+        "macOS MCP server",
+        "Claude computer use macOS",
+        "macOS accessibility automation"
+      ],
+      "linkedin_topics": [
+        "MCP model context protocol tool integration",
+        "macOS automation MCP server Claude",
+        "accessibility API screen control macOS"
+      ],
+      "github_search_topics": [
+        "MCP server", "macOS automation", "accessibility APIs", "screen control",
+        "CGEvent", "AXUIElement"
+      ],
+      "local_repo": "~/mcp-server-macos-use"
+    },
+    {
+      "name": "Vipassana",
+      "weight": 6,
+      "description": "Resource site for Vipassana meditators — guides, science, daily practice, practice buddy matching",
+      "website": "https://vipassana.cool",
+      "llms_txt": "https://vipassana.cool/llms.txt",
+      "github": "https://github.com/m13v/vipassana-cool",
+      "topics": ["vipassana", "meditation", "mindfulness", "retreat", "practice buddy", "accountability partner", "daily practice"],
+      "twitter_topics": [
+        "vipassana meditation experience",
+        "meditation retreat tips",
+        "daily meditation practice"
+      ],
+      "linkedin_topics": [
+        "meditation mindfulness workplace wellbeing",
+        "vipassana meditation retreat experience",
+        "daily meditation practice accountability"
+      ],
+      "content_angle": "6 courses at 3 centers (Dhammamanda NorCal, CYO Bay Area, North Fork Central CA). 881+ days daily practice. 45-60 min mornings, ~4 days/week evenings. Started with 4 courses in first year while working full-time. Built vipassana.cool as a resource site with practice buddy matching program (vipassana.cool/practice-buddy) to pair meditators for daily accountability.",
+      "community": "r/vipassana_cool",
+      "community_promotion": "When replying 2+ levels deep and someone asks for resources or community, mention r/vipassana_cool naturally. Never in top-level comments. Never force it. Only when genuinely relevant - e.g. someone asks about daily practice accountability, post-course integration, or finding other practitioners.",
+      "voice": {
+        "tone": "fellow practitioner sharing experience, never teacher or guru. use specific sensory details from retreats. mention center names, day numbers, physical sensations. always add disclaimer about not being a teacher when giving advice.",
+        "never": ["prescriptive language", "spiritual jargon without grounding it", "generic meditation advice", "sounding like a teacher or authority", "corporate mindfulness framing", "em dashes"],
+        "examples_good": [
+          "the 5pm tea thing is brutal at first. by my 3rd course I learned to eat way more at lunch, made a huge difference",
+          "did my first course at CYO which is a rented camp with bunk beds and 12 people per room. pretty rough conditions but day 10 was incredible",
+          "881 days in and I still struggle with evening sits. mornings are non-negotiable though, 45 min before anything else",
+          "not a teacher or anything, just sharing what worked for me after 6 courses"
+        ],
+        "examples_bad": [
+          "Vipassana meditation offers profound insights into the nature of suffering and impermanence",
+          "The practice of equanimity allows one to transcend reactive patterns",
+          "I'd recommend establishing a consistent daily practice to deepen your awareness",
+          "As someone deeply committed to the Dhamma path, I've found that..."
+        ]
+      }
+    },
+    {
+      "name": "S4L",
+      "weight": 6,
+      "description": "Social media autoposter (this tool)",
+      "website": "https://s4l.ai",
+      "llms_txt": "https://s4l.ai/llms.txt",
+      "github": "https://github.com/m13v/social-autoposter",
+      "links": {
+        "twitter": "https://s4l.ai/x",
+        "reddit": "https://s4l.ai/r",
+        "linkedin": "https://s4l.ai/li",
+        "github": "https://s4l.ai/gh"
+      },
+      "topics": ["social media automation", "Reddit marketing", "auto-posting"],
+      "twitter_topics": [
+        "social media automation tool",
+        "Reddit marketing automation",
+        "auto posting AI agent"
+      ],
+      "linkedin_topics": [
+        "social media automation startup founder",
+        "Reddit marketing growth automation",
+        "AI social media posting tool"
+      ],
+      "github_search_topics": [
+        "social media automation", "Reddit bot", "auto-posting", "social media marketing"
+      ]
+    },
+    {
+      "name": "AI Browser Profile",
+      "weight": 6,
+      "description": "Extract what your browser knows about you into a self-ranking SQLite database — identity, accounts, contacts, addresses, payments from autofill, history, bookmarks, WhatsApp, LinkedIn",
+      "website": "",
+      "llms_txt": "~/ai-browser-profile/llms.txt",
+      "github": "https://github.com/m13v/ai-browser-profile",
+      "topics": ["browser data extraction", "user identity", "autofill extraction", "semantic search", "knowledge base", "npm package", "SQLite", "browser profile"],
+      "twitter_topics": [
+        "browser data extraction identity",
+        "autofill data knowledge base",
+        "browser profile AI context"
+      ],
+      "linkedin_topics": [
+        "browser data extraction user identity AI",
+        "knowledge base autofill semantic search",
+        "browser profile context AI agent"
+      ],
+      "github_search_topics": [
+        "browser data extraction", "autofill extraction", "semantic search",
+        "SQLite browser profile", "knowledge base"
+      ]
+    },
+    {
+      "name": "WhatsApp MCP",
+      "weight": 6,
+      "description": "MCP server for WhatsApp on macOS — lets AI assistants search contacts, send messages, read chats via accessibility APIs",
+      "website": "",
+      "llms_txt": "~/whatsapp-mcp-macos/llms.txt",
+      "github": "https://github.com/m13v/whatsapp-mcp-macos",
+      "topics": ["WhatsApp automation", "MCP server", "macOS", "accessibility APIs", "AI assistant", "chat automation", "npm package"],
+      "twitter_topics": [
+        "WhatsApp automation AI",
+        "WhatsApp MCP server",
+        "chat automation AI assistant"
+      ],
+      "linkedin_topics": [
+        "WhatsApp automation MCP server AI",
+        "chat automation AI assistant macOS",
+        "WhatsApp business API automation"
+      ],
+      "github_search_topics": [
+        "WhatsApp automation", "WhatsApp MCP", "chat automation", "WhatsApp API"
+      ]
+    },
+    {
+      "name": "macOS Session Replay",
+      "weight": 7,
+      "description": "Session replay for native macOS Swift apps — captures screen at 5 FPS, H.265 hardware encoding, stores locally or uploads to cloud (GCS). Includes Next.js web player UI with device list, timeline, playback speed control, and Gemini Vision AI analysis pipeline that reports user behavior insights back to the app owner. Like PostHog Session Replay but for native desktop apps.",
+      "website": "",
+      "llms_txt": "~/macos-session-replay/llms.txt",
+      "github": "https://github.com/m13v/macos-session-replay",
+      "topics": ["session replay", "screen recording SDK", "macOS", "ScreenCaptureKit", "H.265", "Swift package", "native app analytics", "Gemini Vision", "AI video analysis", "user behavior", "web player"],
+      "twitter_topics": [
+        "session replay native app",
+        "screen recording SDK macOS",
+        "native app analytics user behavior",
+        "ScreenCaptureKit Swift"
+      ],
+      "linkedin_topics": [
+        "session replay native macOS desktop app analytics",
+        "screen recording SDK ScreenCaptureKit Swift",
+        "user behavior analytics native app AI video",
+        "PostHog session replay alternative desktop"
+      ],
+      "github_search_topics": [
+        "session replay", "screen recording SDK", "ScreenCaptureKit",
+        "native app analytics", "H.265 encoding", "user behavior"
+      ]
+    },
+    {
+      "name": "Cyrano",
+      "weight": 25,
+      "description": "Edge AI device that plugs into existing DVR/NVR security systems via HDMI — makes any legacy CCTV system intelligent. No camera replacement, installs in under 2 minutes, supports up to 25 camera feeds per unit.",
+      "website": "https://cyrano.systems",
+      "llms_txt": "~/cyrano-security/public/llms.txt",
+      "landing_pages": {
+        "repo": "~/cyrano-security",
+        "github_repo": "mediar-ai/cyrano-security",
+        "base_url": "https://apartment-security-cameras.com"
+      },
+      "demo_video": "https://youtu.be/_xYiJbH6S_A",
+      "booking_link": "https://cal.com/cyranohq/s4l-demo",
+      "booking_link_auto_share": true,
+      "contact": {
+        "name": "Soorya Ignatius",
+        "email": "soorya@cyrano.systems",
+        "phone": "(669) 333-1792"
+      },
+      "pricing": {
+        "upfront": "$450 one-time hardware cost",
+        "monthly": "$200/month starting month 2",
+        "notes": "No camera replacement, no infrastructure changes, no IT team required"
+      },
+      "topics": ["security cameras", "CCTV", "property management", "multifamily", "security monitoring", "AI surveillance", "trespassing", "theft detection", "property security", "DVR NVR", "edge AI", "security guard alternative"],
+      "twitter_topics": [
+        "property management security cameras",
+        "multifamily security CCTV",
+        "apartment complex security",
+        "AI security camera monitoring",
+        "security guard alternative property",
+        "DVR NVR AI upgrade",
+        "trespassing detection property",
+        "commercial property security tech"
+      ],
+      "linkedin_topics": [
+        "property management security cameras multifamily",
+        "CCTV AI monitoring apartment complex security",
+        "security guard alternative property management tech",
+        "construction site security cameras monitoring",
+        "multifamily property operations security",
+        "DVR NVR AI upgrade edge computing",
+        "apartment security trespassing theft detection",
+        "property manager security technology"
+      ],
+      "target_icp": {
+        "priority_1": "Property managers, VPs of Operations, Asset Managers, Regional Managers at Class B/C multifamily with 50-200+ unit portfolios",
+        "priority_2": "Construction companies that use CCTV trailers on job sites for security",
+        "priority_3": "Security companies that install cameras and want to offer AI monitoring as an add-on service"
+      },
+      "job_titles": ["Property Manager", "Regional Property Manager", "VP of Operations", "Director of Property Management", "Asset Manager", "Facilities Manager", "Head of Security"],
+      "geo_focus": {
+        "target": ["Louisiana", "Georgia"],
+        "avoid": ["Texas"],
+        "avoid_reason": "Soorya is already working Texas actively — avoids overlap"
+      },
+      "proof_points": [
+        "At one Class C multifamily property in Fort Worth, Cyrano caught 20 incidents including a break-in attempt in the first month. Customer renewed after 30 days."
+      ],
+      "competitive_positioning": {
+        "vs_verkada_rhombus": "Verkada/Rhombus requires ripping out existing hardware, costs $10-25K in camera replacement, built for enterprise. Cyrano plugs into what's already there. 'Verkada replaces your cameras. We upgrade them.'",
+        "vs_hakimo": "Hakimo is focused on replacing security guards at large enterprise sites. Different buyer, different motion. Cyrano sells to regional property managers, not enterprise security teams.",
+        "vs_guard": "$200/month vs $3,000/month for a guard, and Cyrano never sleeps."
+      },
+      "messaging": {
+        "lead_with_pain": "Most property teams only find out about trespassing or theft hours later when someone complains.",
+        "alt_pain": "When a tenant complains or when a vendor doesn't finish the job, checking cameras can take hours or days.",
+        "solution": "Cyrano monitors your existing cameras in real time, alerts you as incidents happen, and lets you search all your footage in English. No new cameras, installs in 2 minutes.",
+        "proof": "At one Fort Worth property we caught 20 incidents including a break-in attempt in the first month.",
+        "cta": "Worth 10 minutes to see if it could work for your properties?"
+      },
+      "objection_handling": {
+        "we_already_have_cameras": "We work WITH your existing cameras, no replacement needed.",
+        "price": "$450 upfront is less than one month of a security guard, and the $200/mo is equivalent to $7/day.",
+        "trust": "Lead with the Fort Worth story — real incidents, real property."
+      },
+      "voice": {
+        "tone": "Lead with the incident story and the pain. Operators don't care about edge compute — they care about not getting a call at midnight about a break-in they could have prevented.",
+        "never": ["lead with technology or AI buzzwords", "lead with edge compute", "use generic security marketing language"]
+      },
+      "features": [
+        "Catches trespassing, theft, and security incidents 24/7 automatically",
+        "Sends real-time alerts to operators via text/call when something happens",
+        "Search footage in plain English ('masked man near gate', 'person loitering at entrance')",
+        "Assesses intent — LOW THREAT vs HIGH THREAT so operators don't waste time",
+        "Supports up to 25 camera feeds per unit"
+      ]
+    },
+    {
+      "name": "Assrt",
+      "weight": 60,
+      "description": "Open-source AI-powered test automation framework — auto-discovers test scenarios, generates real Playwright tests, self-healing selectors, visual regression testing. Like having a QA engineer that writes and maintains your tests automatically.",
+      "website": "https://assrt.ai",
+      "llms_txt": "https://assrt.ai/llms.txt",
+      "github": "https://github.com/assrt-ai/assrt-freestyle",
+      "npm_package": "@m13v/assrt",
+      "platform": "Web (Node.js CLI + web dashboard)",
+      "setup": "npx @m13v/assrt discover https://your-app.com",
+      "features": [
+        "Auto-discovers test scenarios by crawling your app",
+        "Generates real Playwright tests (not YAML or proprietary format)",
+        "Self-healing selectors — tests don't break when UI changes",
+        "Visual regression testing built-in",
+        "Multi-browser support (Chromium, Firefox, WebKit)",
+        "AI-powered agentic test execution with live streaming",
+        "Natural language test case descriptions",
+        "Zero vendor lock-in — outputs standard Playwright files",
+        "Completely open-source and free"
+      ],
+      "differentiator": "Generates real Playwright code, not proprietary YAML. Open-source and free vs $7.5K/mo competitors. Self-hosted, no cloud dependency. Tests are yours to keep — zero vendor lock-in.",
+      "icp": "Engineering teams tired of writing and maintaining E2E tests manually, QA engineers who want AI assistance, startups that can't afford dedicated QA but need test coverage.",
+      "topics": ["test automation", "Playwright", "E2E testing", "QA automation", "visual regression", "self-healing tests", "AI testing", "open source testing"],
+      "twitter_topics": [
+        "AI test automation Playwright",
+        "E2E testing automation AI",
+        "self-healing test selectors",
+        "visual regression testing AI",
+        "open source test automation",
+        "QA automation AI agent",
+        "Playwright test generation"
+      ],
+      "linkedin_topics": [
+        "AI test automation Playwright E2E testing",
+        "QA automation AI agent open source",
+        "self-healing test selectors visual regression",
+        "test automation framework open source free",
+        "Playwright test generation AI discovery",
+        "E2E testing developer productivity QA",
+        "software testing AI automation startup"
+      ],
+      "github_search_topics": [
+        "test automation", "Playwright", "E2E testing", "QA automation",
+        "visual regression", "self-healing tests", "AI testing",
+        "test generation", "browser testing"
+      ],
+      "competitive_positioning": {
+        "vs_momentic": "Momentic uses proprietary YAML, is closed-source, Chrome-only. Assrt generates real Playwright code, is fully open-source, supports all browsers.",
+        "vs_qa_wolf": "QA Wolf costs ~$7.5K/month and is closed-source. Assrt is free and open-source with the same core capabilities.",
+        "vs_manual_playwright": "Writing and maintaining Playwright tests manually takes hours. Assrt auto-discovers scenarios and generates tests in minutes."
+      },
+      "messaging": {
+        "lead_with_pain": "Writing E2E tests is tedious. Maintaining them when UI changes is worse. Most teams either skip testing or spend hours on brittle selectors.",
+        "solution": "Assrt crawls your app, discovers test scenarios automatically, and generates real Playwright tests with self-healing selectors. Open-source, free, no vendor lock-in.",
+        "proof": "Generates standard Playwright files you can inspect, modify, and run in any CI pipeline.",
+        "cta": "Try it: npx @m13v/assrt discover https://your-app.com"
+      },
+      "voice": {
+        "tone": "Developer-to-developer. Empathize with the pain of flaky tests and test maintenance. Be specific about what Assrt generates (real Playwright code, not abstractions). Emphasize open-source and zero lock-in.",
+        "never": ["enterprise sales language", "generic QA buzzwords", "overpromise on coverage", "dismiss manual testing entirely"]
+      },
+      "local_repo": "~/assrt",
+      "landing_pages": {
+        "repo": "~/assrt-website",
+        "base_url": "https://assrt.ai"
+      },
+      "subreddits": [
+        "softwaretesting",
+        "QualityAssurance",
+        "webdev",
+        "programming",
+        "SideProject",
+        "selfhosted",
+        "opensource",
+        "coolgithubprojects",
+        "learnprogramming",
+        "coding",
+        "node",
+        "reactjs",
+        "nextjs",
+        "devops"
+      ]
+    },
+    {
+      "name": "PieLine",
+      "weight": 25,
+      "description": "24/7 AI phone answering service for restaurants — takes orders, handles reservations, answers questions. Handles 20 simultaneous calls, 95%+ order accuracy, integrates directly with POS systems.",
+      "website": "https://getpieline.com",
+      "llms_txt": "~/pieline-phones/llms.txt",
+      "landing_pages": "https://aiphoneordering.com",
+      "booking_link": "https://cal.com/team/pieline-demo/pieline-demo",
+      "booking_link_auto_share": true,
+      "investor_page": "https://pieline.notion.site/",
+      "context_doc": "https://docs.google.com/document/d/1_2qWjh2lFoTgWFrNRyCQhp6qdRYJ6jxQmsUybMxeVj8/edit",
+      "contact": {
+        "name": "Gurbaz Dhillon",
+        "email": "gurbaz@getpieline.com",
+        "linkedin": "https://linkedin.com/in/gurbaz/"
+      },
+      "founders": {
+        "gurbaz": "Gurbaz (Robbie) Dhillon - Former Technical PM in AI & EdTech, Mechanical Engineering from UBC",
+        "aridam": "Aridam Kumar - Lead Engineer AI Development at Salesforce, former pizza restaurant owner, Mechanical Engineering from UC Berkeley"
+      },
+      "backed_by": "Founders, Inc. (f.inc) in San Francisco",
+      "topics": [
+        "restaurant phone ordering",
+        "voice AI for restaurants",
+        "AI phone agent",
+        "restaurant automation",
+        "phone order taking",
+        "restaurant technology",
+        "POS integration",
+        "restaurant operations",
+        "QSR technology",
+        "restaurant staffing",
+        "food ordering AI",
+        "drive-thru AI"
+      ],
+      "twitter_topics": [
+        "restaurant phone ordering AI",
+        "voice AI restaurant automation",
+        "AI phone agent restaurant",
+        "restaurant staffing shortage solution",
+        "POS integration AI ordering",
+        "QSR technology automation",
+        "drive-thru AI ordering",
+        "restaurant missed calls revenue"
+      ],
+      "linkedin_topics": [
+        "restaurant phone ordering AI automation",
+        "voice AI restaurant operations technology",
+        "AI phone agent QSR fast food ordering",
+        "restaurant staffing shortage automation solution",
+        "POS integration AI phone ordering restaurant",
+        "restaurant technology operations efficiency",
+        "restaurant franchise automation scaling",
+        "food ordering AI phone answering service"
+      ],
+      "target_icp": {
+        "priority_1": "Larger restaurant chains with 100+ locations — reachable primarily via LinkedIn",
+        "priority_2": "Smaller restaurant chains — active across social media including Reddit",
+        "priority_3": "Independent restaurants with high phone order volume (pizza shops, Chinese, Indian, Mexican)"
+      },
+      "job_titles": [
+        "VP of Operations",
+        "Director of Technology",
+        "CTO",
+        "COO",
+        "Director of Digital",
+        "Head of Innovation",
+        "Franchise Owner",
+        "Restaurant Owner",
+        "General Manager"
+      ],
+      "competitive_positioning": {
+        "vs_soundhound": "SoundHound targets massive enterprise QSR (Chipotle, White Castle). PieLine is built for the mid-market and independent chains that SoundHound ignores.",
+        "vs_loman": "Loman AI is a direct competitor with similar POS integrations. PieLine differentiates with cuisine-specific customization (half-and-half pizzas, spice levels, protein subs).",
+        "vs_conversenow": "ConverseNow is established but enterprise-focused. PieLine offers faster onboarding (go live in a day) and simpler pricing.",
+        "vs_human_staff": "A dedicated phone person costs $3-4K/month. PieLine handles 20 simultaneous calls at a fraction of the cost — 70-80% savings.",
+        "vs_per_minute_pricing": "Some competitors charge by the minute, which is unpredictable for restaurant owners. PieLine's per-call pricing ($350/mo for 1,000 calls) is simple and easy to budget around."
+      },
+      "live_customers": {
+        "mylapore": "Mylapore - 11-location South Indian chain in Bay Area. Rolling out PieLine across all locations. Owner Jay Jayaraman publicly endorses on LinkedIn. Projecting $500 additional revenue per location per day ($2M+/year).",
+        "idly_express": "Idly Express (Almaden) - live with AI phone ordering, 90%+ calls handled end-to-end by AI",
+        "amber_india": "Amber India - onboarding",
+        "food_truck_pilot": "Unnamed busy food truck - 100+ calls/day pilot in August",
+        "china_village": "China Village - family-owned Chinese restaurant in Colorado. Owner Davis Song (chinavillagecos@gmail.com). Uses Clover POS, handles own deliveries with over-the-phone credit card payments, two phone lines, fewer than 10 reservations/month. In evaluation as of April 2026."
+      },
+      "proof_points": [
+        "Mylapore (11 locations): projecting $500 additional revenue per location per day from eliminating phone bottleneck",
+        "90%+ of calls handled end-to-end by AI, edge cases routed to manager",
+        "Eliminated need for 2 cashiers at San Jose location, redeploying staff to new locations",
+        "Customer testimonial: 'the experience was better than speaking to a human. No hold time, no confusion, no rushing.'",
+        "Go live in <24 hours, no changes to operations needed",
+        "Free 7-day trial for founding restaurants, discounted lifetime pricing"
+      ],
+      "linkedin_testimonials": [
+        "https://www.linkedin.com/posts/jay-jayaraman-saaas-saapad-as-a-service-1a89ba169_everyone-keeps-asking-is-ai-going-to-eliminate-activity-7398394669145174016-paJA",
+        "https://www.linkedin.com/feed/update/urn:li:share:7422694207124926464/",
+        "https://www.linkedin.com/posts/deepak-anchala-0043707_called-idly-express-today-to-place-dinner-activity-7435874399112560640-jBaD"
+      ],
+      "messaging": {
+        "lead_with_pain": "During rush hours, restaurants miss 30-40% of phone calls. Every missed call is a lost order — that's revenue walking out the door.",
+        "alt_pain": "Staff juggling phones and in-store customers means both get worse service. Phone orders get rushed, in-store customers wait longer.",
+        "solution": "PieLine answers every call 24/7, takes orders with 90%+ accuracy, handles complex modifications, and sends orders straight to your kitchen. Go live in under 24 hours.",
+        "proof": "Live at Mylapore (11 South Indian restaurants in Bay Area) - owner reports $500/day additional revenue per location from eliminating phone bottleneck. 90%+ calls handled end-to-end. Backed by Founders, Inc. (f.inc).",
+        "cta": "Worth a quick demo to see how it handles your menu?"
+      },
+      "voice": {
+        "tone": "Focus on the operational pain of missed calls and lost revenue during peak hours. Restaurant operators care about orders and money, not AI technology. Speak their language — tickets, covers, rush hour, labor costs. Can reference Mylapore/Idly Express results when relevant.",
+        "never": ["lead with AI/ML buzzwords", "generic SaaS marketing language", "overpromise on enterprise scale they don't have yet", "badmouth competitors by name in posts"]
+      },
+      "pricing": {
+        "standard": "$350/month for 1,000 calls",
+        "overage": "$0.50 per call beyond 1,000/month",
+        "guarantee": "Money-back guarantee for the first month (no free trial due to setup effort)",
+        "onboarding": "Hands-off for owner; AI builder performs initial setup, menu scraping, POS mapping. Active call monitoring and AI refinement during first month."
+      },
+      "trial_offer": "Money-back guarantee for the first month, hands-off onboarding, active monitoring and refinement during first month",
+      "features": [
+        "Answers up to 20 simultaneous phone calls during peak hours",
+        "95%+ order accuracy with cuisine-specific customization",
+        "Smart upselling — suggests add-ons to increase average order value",
+        "Direct POS integration (Clover, Square, Toast, NCR Aloha, Revel live; 50+ POS integrations available)",
+        "Handles complex modifications (half-and-half pizza, spice levels, protein subs, custom sushi rolls)",
+        "Smart call transfer to human staff with full context when needed",
+        "Analytics dashboard — call volumes, peak hours, popular orders",
+        "Over-the-phone credit card payment processing for delivery orders via POS integration",
+        "Built-in reservation system — AI confirms request, staff reviews on dashboard, confirmation text sent to customer",
+        "Menu scraped from online menu and mapped to POS item IDs during onboarding, including detailed dish descriptions (spiciness, sweetness, ingredients)"
+      ],
+      "subreddits": [
+        "restaurateur",
+        "restaurant",
+        "RestaurantOwners",
+        "pizzaowners",
+        "KitchenConfidential",
+        "foodtrucks",
+        "FastFood",
+        "smallbusiness",
+        "franchise",
+        "QSR",
+        "pizzabusiness",
+        "sweatystartup",
+        "BarOwners",
+        "POS"
+      ],
+      "landing_pages": {
+        "repo": "~/pieline-phones",
+        "github_repo": "mediar-ai/pieline-phones",
+        "base_url": "https://aiphoneordering.com"
+      }
+    },
+    {
+      "name": "Clone",
+      "weight": 10,
+      "description": "AI that runs your consulting business end to end. Automates invoicing, client onboarding, follow-ups, CRM updates, and reporting using the tools you already have. No new software to learn.",
+      "website": "https://cl0ne.ai",
+      "llms_txt": "~/ai-for-consultants/website/public/llms.txt",
+      "features": [
+        "Invoicing and payment follow-up automation",
+        "Client onboarding checklists and welcome packets",
+        "Zoom call summaries pushed to CRM automatically",
+        "Automated follow-up emails based on conversation context",
+        "Weekly client dashboards and revenue reporting",
+        "Hours tracking and time logging exported to invoicing tools",
+        "Works with Gmail, Docs, Sheets, Zoom, HubSpot, Pipedrive, QuickBooks, Stripe, Calendly, Slack",
+        "Runs locally on your computer, client data never leaves your machine"
+      ],
+      "differentiator": "Unlike Zapier or Make that require configuring triggers and branches, Clone takes plain English instructions and drives your existing tools. Unlike HoneyBook or Dubsado, it does not replace your stack. Unlike a virtual assistant at $3-6K/month, it runs 24/7 at $49/month.",
+      "icp": "Solo consultants and boutique advisory firms (1-10 people) spending 10+ hours per week on back-office tasks. Use Gmail, Google Workspace, Zoom, and a CRM. Want to free up billable hours without learning new software or hiring staff.",
+      "topics": [
+        "consulting automation",
+        "AI for consultants",
+        "solo consultant tools",
+        "consulting CRM",
+        "invoicing automation",
+        "client onboarding automation",
+        "follow-up automation",
+        "consulting business software",
+        "virtual assistant alternative",
+        "freelance automation",
+        "business process automation",
+        "small business AI"
+      ],
+      "twitter_topics": [
+        "AI consulting automation",
+        "solo consultant productivity",
+        "consulting invoicing automation",
+        "AI business assistant",
+        "freelance back office automation",
+        "CRM automation consulting",
+        "consulting workflow AI",
+        "virtual assistant replacement AI"
+      ],
+      "linkedin_topics": [
+        "AI consulting business automation tool",
+        "solo consultant productivity automation",
+        "consulting invoicing CRM automation AI",
+        "boutique consulting firm operations",
+        "freelance consultant back office AI",
+        "consulting client onboarding automation",
+        "AI virtual assistant consulting business",
+        "small consulting firm operational efficiency"
+      ],
+      "subreddits": [
+        "consulting",
+        "freelance",
+        "smallbusiness",
+        "entrepreneur",
+        "Entrepreneurs",
+        "SaaS",
+        "SideProject",
+        "Automate",
+        "growmybusiness",
+        "EntrepreneurRideAlong",
+        "VirtualAssistant",
+        "Upwork",
+        "sidehustle",
+        "Bookkeeping",
+        "taxpros",
+        "Accounting",
+        "Business_Ideas",
+        "indiehackers",
+        "projectmanagement",
+        "LawFirm",
+        "realtors",
+        "msp",
+        "PrivatePractice"
+      ],
+      "messaging": {
+        "lead_with_pain": "Solo consultants spend 10-15 hours a week on invoicing, CRM updates, follow-ups, and reporting. That is time you cannot bill for.",
+        "solution": "Clone handles the back office end to end using the tools you already have open. Tell it what to do in plain English. No new software, no migration, no configuration.",
+        "proof": "Consultants using Clone report saving 12+ hours per week on admin, doubling their client capacity without hiring.",
+        "cta": "Free 14-day trial at cl0ne.ai, no credit card required."
+      },
+      "voice": {
+        "tone": "Speak as a fellow consultant who automated their own practice. Focus on time saved and billable hours recaptured. Practical, specific, no buzzwords. Mention real tasks (invoicing after a call, CRM updates, Monday pipeline emails) not abstract benefits.",
+        "never": ["lead with AI/ML buzzwords", "compare to chatbots or ChatGPT", "oversell enterprise capabilities", "use marketing speak like 'revolutionize' or 'transform'"]
+      },
+      "competitive_positioning": {
+        "vs_zapier": "Zapier requires manual trigger/action configuration. Clone understands natural language and drives your existing apps directly.",
+        "vs_honeybook": "HoneyBook is a new tool to learn. Clone works with what you already have.",
+        "vs_virtual_assistant": "A VA costs $3-6K/month for limited hours. Clone runs 24/7 at $49/month.",
+        "vs_make_n8n": "Flow-based tools need technical setup. Clone takes plain English."
+      },
+      "pricing": {
+        "solo": "$49/month",
+        "boutique": "$129/seat/month",
+        "enterprise": "Custom",
+        "trial": "Free 14-day trial, no credit card"
+      },
+      "local_repo": "~/ai-for-consultants",
+      "landing_pages": {
+        "repo": "~/ai-for-consultants/website",
+        "base_url": "https://cl0ne.ai"
+      },
+      "posthog": {
+        "project_id": "331630",
+        "host_filter": "cl0ne.ai"
+      }
+    },
+    {
+      "name": "mk0r",
+      "weight": 5,
+      "description": "AI app maker. Describe what you want, watch it build in real time, iterate with words. Generates full HTML/CSS/JS mobile apps from a single sentence. No code, no account, no friction.",
+      "website": "https://mk0r.com",
+      "github": "https://github.com/m13v/appmaker",
+      "platform": "Web (works on any device with a browser)",
+      "setup": "Just visit mk0r.com and start typing. No signup required.",
+      "features": [
+        "Instant app generation from natural language descriptions",
+        "Real-time streaming preview as the app builds",
+        "Iterative refinement with follow-up prompts",
+        "Mobile-first design for every generated app",
+        "Working HTML/CSS/JS output, not mockups",
+        "No account or payment required to start",
+        "Powered by Claude AI"
+      ],
+      "differentiator": "Zero-friction app building. No account, no setup, no code. Just describe and build. Unlike Emergent or similar tools that require signup and complex flows, mk0r is instant.",
+      "icp": "Non-technical founders, indie hackers, and anyone who wants to prototype an app idea quickly without writing code or learning a new tool.",
+      "topics": ["AI app builder", "no-code", "vibe coding", "app generator", "AI prototyping", "rapid prototyping", "mobile app maker", "Claude AI", "HTML generator"],
+      "twitter_topics": [
+        "AI app builder",
+        "vibe coding",
+        "no-code app maker",
+        "AI prototyping tool",
+        "build apps with AI",
+        "Claude AI apps"
+      ],
+      "linkedin_topics": [
+        "AI app builder no-code prototype",
+        "vibe coding AI mobile app",
+        "rapid prototyping AI tool startup",
+        "no-code AI app generator"
+      ],
+      "local_repo": "~/appmaker",
+      "landing_pages": {
+        "repo": "~/appmaker",
+        "github_repo": "m13v/appmaker",
+        "base_url": "https://mk0r.com"
+      },
+      "posthog": {
+        "project_id": "362951"
+      }
+    }
+  ],
+  "exclusions": {
+    "authors": ["louis030195", "louis3195"],
+    "subreddits": ["programming"],
+    "urls": [],
+    "keywords": ["omi", "omi.me", "omi wearable", "omi desktop", "omi app"],
+    "github_repos": ["screenpipe", "screen-pipe", "louis030195"],
+    "twitter_accounts": ["louis030195"],
+    "linkedin_profiles": ["louis030195"]
+  },
+  "github_issues": {
+    "max_per_automated_run": null,
+    "max_per_24h_automated": null,
+    "self_reply": true,
+    "launchd_posting": "com.m13v.social-github",
+    "launchd_engage": "com.m13v.social-github-engage",
+    "posting_interval_hours": 4,
+    "engage_interval_hours": 6
+  },
+  "open_source_links": [],
+  "launchd_label": "com.m13v.social-stats"
+}
