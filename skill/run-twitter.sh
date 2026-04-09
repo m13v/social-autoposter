@@ -28,6 +28,28 @@ echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
 # Generate top performers feedback report (Twitter + project-specific)
 TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter --project "$PROJECT" 2>/dev/null || echo "(top performers report unavailable)")
 
+# Fetch llms.txt for the selected project (product context for diverse replies)
+LLMS_TXT_SRC=$(python3 -c "
+import json, os
+c = json.load(open('$REPO_DIR/config.json'))
+p = next((p for p in c.get('projects',[]) if p['name']=='$PROJECT'), {})
+src = p.get('llms_txt', '')
+if src:
+    print(os.path.expanduser(src))
+" 2>/dev/null || echo "")
+PRODUCT_CONTEXT=""
+if [ -n "$LLMS_TXT_SRC" ]; then
+    if [[ "$LLMS_TXT_SRC" == http* ]]; then
+        PRODUCT_CONTEXT=$(curl -sfL --max-time 10 "$LLMS_TXT_SRC" | head -150 || echo "")
+    elif [ -f "$LLMS_TXT_SRC" ]; then
+        PRODUCT_CONTEXT=$(head -150 "$LLMS_TXT_SRC")
+    fi
+fi
+if [ -z "$PRODUCT_CONTEXT" ]; then
+    PRODUCT_CONTEXT="(no llms.txt available, use config.json description for product context)"
+fi
+echo "Product context: $(echo "$PRODUCT_CONTEXT" | wc -c | tr -d ' ') bytes" | tee -a "$LOG_FILE"
+
 # Step 1: Find candidate tweets via API (no browser needed)
 CANDIDATES=$(python3 "$REPO_DIR/scripts/find_tweets.py" --project "$PROJECT" --max 20 --json-output 2>/dev/null || echo "[]")
 echo "Candidates found: $(echo "$CANDIDATES" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)" | tee -a "$LOG_FILE"
@@ -58,6 +80,12 @@ NEVER mention product names, links, websites, or GitHub repos in your comments. 
 happen ONLY in the reply engagement pipeline when people respond to your comments, never in
 initial comments. Even if someone asks for a tool, keep the initial comment clean and let
 the reply pipeline handle recommendations.
+
+## PRODUCT CONTEXT (from llms.txt, use this to understand the product deeply):
+$PRODUCT_CONTEXT
+
+Use this context to find DIVERSE angles when replying. The product has many features and use cases.
+Do not fixate on one aspect (e.g. only talking about testing). Vary your angles across replies.
 
 ## FEEDBACK FROM PAST PERFORMANCE (use this to write better replies):
 $TOP_REPORT
