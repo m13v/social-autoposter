@@ -222,29 +222,6 @@ def reply_to_tweet(tweet_url, text):
             page.keyboard.type(text, delay=10)
             page.wait_for_timeout(1000)
 
-            # Set up route interceptor to capture CreateTweet response
-            created_tweet_id = []
-
-            def _intercept_create_tweet(route):
-                resp = route.fetch()
-                if "CreateTweet" in route.request.url:
-                    try:
-                        body = resp.json()
-                        rest_id = (
-                            body.get("data", {})
-                            .get("create_tweet", {})
-                            .get("tweet_results", {})
-                            .get("result", {})
-                            .get("rest_id")
-                        )
-                        if rest_id:
-                            created_tweet_id.append(rest_id)
-                    except Exception:
-                        pass
-                route.fulfill(response=resp)
-
-            page.route("**/CreateTweet*", _intercept_create_tweet)
-
             # Click the Reply button
             try:
                 reply_btn = page.get_by_role("button", name="Reply").last
@@ -253,8 +230,7 @@ def reply_to_tweet(tweet_url, text):
             except Exception:
                 page.keyboard.press("Control+Enter")
 
-            page.wait_for_timeout(3000)
-            page.unroute("**/CreateTweet*")
+            page.wait_for_timeout(4000)
 
             # Verify: check if the reply box is empty (cleared after posting)
             try:
@@ -263,22 +239,37 @@ def reply_to_tweet(tweet_url, text):
             except Exception:
                 verified = True
 
-            # Get reply URL from intercepted response
+            # Capture reply URL: reload the tweet page and find our reply in the thread
             reply_url = None
-            if created_tweet_id:
-                reply_url = f"https://x.com/{OUR_HANDLE}/status/{created_tweet_id[0]}"
-                print(f"[reply_url] captured via route: {reply_url}", file=sys.stderr)
 
-            # Fallback: DOM diff on current page
+            # Method 1: DOM diff (check if new reply links appeared)
+            for attempt in range(3):
+                links_after = _collect_our_reply_links(page)
+                new_links = links_after - links_before
+                if new_links:
+                    reply_path = max(new_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
+                    reply_url = f"https://x.com{reply_path}" if not reply_path.startswith("http") else reply_path
+                    break
+                page.wait_for_timeout(2000)
+
+            # Method 2: Reload the tweet page and scan for our reply
             if not reply_url:
-                for attempt in range(3):
-                    links_after = _collect_our_reply_links(page)
-                    new_links = links_after - links_before
+                try:
+                    page.goto(tweet_url, wait_until="domcontentloaded")
+                    page.wait_for_timeout(5000)
+                    # Scroll down to load replies
+                    page.evaluate("window.scrollBy(0, 800)")
+                    page.wait_for_timeout(3000)
+                    all_links = _collect_our_reply_links(page)
+                    new_links = all_links - links_before
                     if new_links:
                         reply_path = max(new_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
                         reply_url = f"https://x.com{reply_path}" if not reply_path.startswith("http") else reply_path
-                        break
-                    page.wait_for_timeout(2000)
+                except Exception:
+                    pass
+
+            if reply_url:
+                print(f"[reply_url] found: {reply_url}", file=sys.stderr)
 
             return {
                 "ok": True,
