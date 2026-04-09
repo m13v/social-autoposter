@@ -51,14 +51,9 @@ for p in config.get('projects', []):
     repo_path = os.path.expanduser(repo)
     if not os.path.isdir(repo_path):
         continue
-    # Check for SEO skill
-    skill_found = False
-    for candidate in ['seo-guide-page', 'seo-page']:
-        skill_path = os.path.join(repo_path, '.claude', 'skills', candidate, 'SKILL.md')
-        if os.path.exists(skill_path):
-            skill_found = True
-            break
-    if skill_found:
+    # Check for page generation template in social-autoposter
+    template_path = os.path.join('$SCRIPT_DIR', 'templates', p['name'].lower() + '.md')
+    if os.path.exists(template_path):
         eligible.append((p['name'], p.get('weight', 1)))
 
 if not eligible:
