@@ -165,37 +165,39 @@ def _handle_dm_passcode(page):
 def _get_reply_url_via_api(tweet_url):
     """Use Twitter API to find our reply to a given tweet.
 
-    Fetches our most recent tweets and finds the one that is a reply
-    to the target tweet's conversation. Returns the reply URL or None.
+    Fetches our most recent tweets and matches the one that is
+    in_reply_to the target tweet. Returns the reply URL or None.
     """
+    import time
     import twitter_api
 
-    # Extract the conversation tweet ID from the URL
-    tweet_id = tweet_url.rstrip("/").split("/")[-1]
+    # Extract the target tweet's status ID from the URL
+    target_id = tweet_url.rstrip("/").split("/")[-1]
 
-    # Fetch our recent tweets (includes replies)
+    # Small delay to let the API index our reply
+    time.sleep(2)
+
     client = twitter_api.get_read_client()
     me = twitter_api.get_me()
     resp = client.get_users_tweets(
         me.id,
-        max_results=5,
-        tweet_fields=["id", "conversation_id", "in_reply_to_user_id"],
+        max_results=10,
+        tweet_fields=["id", "conversation_id", "referenced_tweets"],
         exclude=["retweets"],
     )
     if not resp.data:
         return None
 
+    # Find the tweet that is a reply to our target
     for t in resp.data:
-        # Match by conversation_id or by the tweet being a direct reply in that thread
-        if str(t.conversation_id) == tweet_id or str(t.id) != tweet_id:
-            # Our most recent tweet is likely the reply we just posted
-            # Verify it's actually a reply (has in_reply_to_user_id)
-            if t.in_reply_to_user_id:
-                return f"https://x.com/{OUR_HANDLE}/status/{t.id}"
+        if t.referenced_tweets:
+            for ref in t.referenced_tweets:
+                if ref.type == "replied_to" and str(ref.id) == target_id:
+                    return f"https://x.com/{OUR_HANDLE}/status/{t.id}"
 
-    # If conversation_id matching didn't work, just return our most recent reply
+    # Fallback: match by conversation_id (handles replies to replies in a thread)
     for t in resp.data:
-        if t.in_reply_to_user_id:
+        if str(t.conversation_id) == target_id and t.referenced_tweets:
             return f"https://x.com/{OUR_HANDLE}/status/{t.id}"
 
     return None
