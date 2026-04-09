@@ -14,6 +14,7 @@ Exit codes:
     0 = session is valid (or was healed)
     1 = session is invalid and could not be healed
     2 = session was invalid but successfully healed
+    3 = rate limited (429) or account restricted; cooldown file written
 """
 
 from __future__ import annotations
@@ -67,18 +68,26 @@ def get_li_at_from_cdp(port: int) -> str | None:
     return None
 
 
-def check_session_valid() -> bool:
+def check_session_valid() -> bool | str:
     """Check if the LinkedIn session is valid.
 
     First tries to get li_at from a running browser via CDP.
     Falls back to launching a headless persistent context and navigating.
+
+    Returns:
+        True = session valid
+        False = session invalid
+        "rate_limited" = 429 detected, cooldown written
     """
     # Try CDP first (fast, non-destructive)
     cdp_port = find_linkedin_cdp_port()
     if cdp_port:
         li_at = get_li_at_from_cdp(cdp_port)
         if li_at:
-            return check_cookie_value(li_at)
+            result = check_cookie_value(li_at)
+            if result == "rate_limited":
+                return "rate_limited"
+            return result
 
     # Fallback: launch persistent profile and check navigation
     try:
@@ -141,7 +150,17 @@ def check_cookie_value(li_at: str) -> bool:
         if e.code in (401, 403):
             log(f"LinkedIn returned {e.code}, session invalid")
             return False
-        if e.code >= 500 or e.code == 429:
+        if e.code == 429:
+            log(f"LinkedIn returned 429, account is rate limited")
+            # Write cooldown so cron runs skip for 2 hours
+            try:
+                from linkedin_cooldown import set_cooldown
+                from datetime import datetime, timedelta, timezone
+                set_cooldown("429 rate limit during auth check", datetime.now(timezone.utc) + timedelta(hours=2))
+            except Exception:
+                pass
+            return "rate_limited"
+        if e.code >= 500:
             log(f"LinkedIn returned {e.code}, assuming session is OK (server issue)")
             return True
         log(f"LinkedIn HTTP error: {e.code}")
@@ -314,6 +333,17 @@ def re_authenticate() -> bool:
 
             if "checkpoint" in current_url or "challenge" in current_url:
                 log(f"LinkedIn requires verification at: {current_url}")
+                # Write 6-hour cooldown so cron runs stop hammering login
+                try:
+                    from linkedin_cooldown import set_cooldown
+                    from datetime import datetime, timedelta, timezone
+                    set_cooldown(
+                        "checkpoint/verification challenge detected",
+                        datetime.now(timezone.utc) + timedelta(hours=6),
+                    )
+                    log("Cooldown set for 6 hours to prevent repeated login attempts")
+                except Exception:
+                    pass
                 return False
 
             if "login" in current_url or "uas/" in current_url:
@@ -351,12 +381,26 @@ def main() -> int:
 
     is_valid = check_session_valid()
 
+    if is_valid == "rate_limited":
+        log("Rate limited (429). Cooldown written, skipping run.")
+        return 3
+
     if is_valid:
         return 0
 
     if args.check:
         log("Session invalid (check-only mode, not healing)")
         return 1
+
+    # Check cooldown before attempting re-auth (avoid hammering after checkpoint)
+    try:
+        from linkedin_cooldown import read_cooldown
+        cd = read_cooldown()
+        if cd:
+            log(f"Skipping re-auth: in cooldown ({cd['reason']}, until {cd['resume_after']})")
+            return 1
+    except Exception:
+        pass
 
     log("Session invalid, attempting self-healing...")
     if re_authenticate():
