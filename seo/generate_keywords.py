@@ -32,6 +32,15 @@ ENV_PATH = ROOT_DIR / ".env"
 MIN_VOLUME = 20
 MAX_COMPETITION = {"LOW", "MEDIUM", None, "N/A"}
 
+# Keywords containing these terms are likely irrelevant (e.g. theater playwrights)
+NOISE_PATTERNS = {
+    "oscar wilde", "sam shepard", "arthur miller", "wallace shawn",
+    "mamet", "tennessee williams", "eugene o'neill", "beckett",
+    "chekhov", "ibsen", "moliere", "shakespeare", "broadway",
+    "theater", "theatre", "dramatis", "stage play",
+    "miller playwright", "playwright playwright",
+}
+
 
 def load_env():
     """Load .env file into os.environ."""
@@ -191,10 +200,16 @@ def generate_keywords_dataforseo(project):
             print(f"    -> {len(kws)} keywords (vol >= {MIN_VOLUME})")
             all_keywords.extend(kws)
 
-    # Deduplicate by keyword, keep highest volume
+    # Deduplicate by keyword, keep highest volume, filter noise
     seen = {}
     for kw in all_keywords:
         key = kw["keyword"].lower()
+        # Filter out noise (e.g. theater playwrights for "playwright" topic)
+        if any(noise in key for noise in NOISE_PATTERNS):
+            continue
+        # Skip single-word keywords (too broad to rank for)
+        if len(key.split()) < 2:
+            continue
         if key not in seen or kw["volume"] > seen[key]["volume"]:
             seen[key] = kw
     unique = sorted(seen.values(), key=lambda x: x["volume"], reverse=True)
