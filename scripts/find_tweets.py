@@ -95,8 +95,8 @@ def main():
             # Skip excluded authors
             if t["author_username"].lower() in excluded_accounts:
                 continue
-            # Skip low engagement
-            if t["likes"] < 3:
+            # Skip low engagement (minimum 10 likes for meaningful reach)
+            if t["likes"] < 10:
                 continue
 
             candidates.append({
@@ -105,15 +105,23 @@ def main():
                 "tweet_id": t["id"],
                 "title": t["text"][:120],
                 "author": t["author_username"],
+                "author_followers": t.get("author_followers", 0),
                 "likes": t["likes"],
                 "retweets": t["retweets"],
                 "replies": t["replies"],
+                "impressions": t.get("impressions", 0),
                 "search_topic": topic,
                 "discovery_method": "api_search",
             })
 
-    # Sort by engagement (likes + retweets)
-    candidates.sort(key=lambda c: c["likes"] + c["retweets"], reverse=True)
+    # Sort by reach score: likes + retweets + follower bonus
+    # Follower count is log-scaled so a 100K account doesn't completely
+    # dominate, but still ranks higher than a 100-follower account.
+    import math
+    def reach_score(c):
+        follower_bonus = math.log10(max(c.get("author_followers", 0), 1))
+        return c["likes"] + c["retweets"] + follower_bonus * 5
+    candidates.sort(key=reach_score, reverse=True)
 
     if args.json_output:
         print(json.dumps(candidates, indent=2))
