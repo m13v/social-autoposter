@@ -64,16 +64,19 @@ def search_recent_tweets(query, max_results=25):
         max_results=max(10, min(max_results, 100)),
         tweet_fields=["id", "text", "author_id", "created_at", "public_metrics", "conversation_id"],
         expansions=["author_id"],
-        user_fields=["username", "name"],
+        user_fields=["username", "name", "public_metrics"],
     )
     if not resp.data:
         return []
 
-    # Build author lookup
+    # Build author lookup (username + followers)
     users = {}
+    user_followers = {}
     if resp.includes and "users" in resp.includes:
         for u in resp.includes["users"]:
             users[u.id] = u.username
+            if u.public_metrics:
+                user_followers[u.id] = u.public_metrics.get("followers_count", 0)
 
     results = []
     for tweet in resp.data:
@@ -82,10 +85,12 @@ def search_recent_tweets(query, max_results=25):
             "text": tweet.text,
             "author_id": str(tweet.author_id),
             "author_username": users.get(tweet.author_id, ""),
+            "author_followers": user_followers.get(tweet.author_id, 0),
             "created_at": str(tweet.created_at) if tweet.created_at else "",
             "likes": tweet.public_metrics.get("like_count", 0) if tweet.public_metrics else 0,
             "retweets": tweet.public_metrics.get("retweet_count", 0) if tweet.public_metrics else 0,
             "replies": tweet.public_metrics.get("reply_count", 0) if tweet.public_metrics else 0,
+            "impressions": tweet.public_metrics.get("impression_count", 0) if tweet.public_metrics else 0,
             "conversation_id": str(tweet.conversation_id) if tweet.conversation_id else "",
             "url": f"https://x.com/{users.get(tweet.author_id, 'i')}/status/{tweet.id}",
         })
