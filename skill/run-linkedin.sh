@@ -20,6 +20,33 @@ LOG_FILE="$LOG_DIR/run-linkedin-$(date +%Y-%m-%d_%H%M%S).log"
 RUN_START=$(date +%s)
 echo "=== LinkedIn Post Run: $(date) ===" | tee "$LOG_FILE"
 
+# Cooldown check: skip immediately if in cooldown (rate limit, checkpoint, restriction)
+COOLDOWN_EXIT=0
+python3 "$REPO_DIR/scripts/linkedin_cooldown.py" check 2>&1 | tee -a "$LOG_FILE" || COOLDOWN_EXIT=$?
+if [ "$COOLDOWN_EXIT" -ne 0 ]; then
+    echo "SKIPPED: LinkedIn is in cooldown. See above for details." | tee -a "$LOG_FILE"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "post_linkedin" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed $(( $(date +%s) - RUN_START ))
+    exit 0
+fi
+
+# Daily cap check: query DB for today's LinkedIn comment count
+DAILY_CAP=70
+DAILY_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE platform='linkedin' AND posted_at >= NOW() - INTERVAL '24 hours'" 2>/dev/null || echo "0")
+DAILY_COUNT=$(echo "$DAILY_COUNT" | tr -d '[:space:]')
+REMAINING=$((DAILY_CAP - DAILY_COUNT))
+if [ "$REMAINING" -le 0 ]; then
+    echo "SKIPPED: Daily LinkedIn cap reached ($DAILY_COUNT/$DAILY_CAP comments in last 24h)." | tee -a "$LOG_FILE"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "post_linkedin" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed $(( $(date +%s) - RUN_START ))
+    exit 0
+fi
+echo "Daily LinkedIn budget: $DAILY_COUNT/$DAILY_CAP used, $REMAINING remaining" | tee -a "$LOG_FILE"
+
+# Cap this run's max posts to whatever remains in daily budget (max 30 per run)
+MAX_THIS_RUN=$REMAINING
+if [ "$MAX_THIS_RUN" -gt 30 ]; then
+    MAX_THIS_RUN=30
+fi
+
 # Auth health check: verify LinkedIn session is valid, re-auth if needed
 echo "Checking LinkedIn auth..." | tee -a "$LOG_FILE"
 AUTH_EXIT=0
@@ -30,6 +57,10 @@ if [ "$AUTH_EXIT" -eq 1 ]; then
     exit 1
 elif [ "$AUTH_EXIT" -eq 2 ]; then
     echo "LinkedIn session was stale, successfully re-authenticated." | tee -a "$LOG_FILE"
+elif [ "$AUTH_EXIT" -eq 3 ]; then
+    echo "SKIPPED: LinkedIn rate limited (429). Cooldown written, will retry later." | tee -a "$LOG_FILE"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "post_linkedin" --posted 0 --skipped 0 --failed 1 --cost 0 --elapsed $(( $(date +%s) - RUN_START ))
+    exit 0
 fi
 
 # Pick project based on weight distribution
