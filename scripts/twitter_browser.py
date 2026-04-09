@@ -30,7 +30,7 @@ import subprocess
 import sys
 
 
-STORAGE_STATE = os.path.expanduser("~/.claude/browser-sessions.json")
+PROFILE_DIR = os.path.expanduser("~/.claude/browser-profiles/twitter")
 VIEWPORT = {"width": 911, "height": 1016}
 OUR_HANDLE = "m13v_"
 
@@ -119,18 +119,16 @@ def get_browser_and_page(playwright):
         except Exception:
             pass
 
-    # Fallback: launch new headless browser
-    browser = playwright.chromium.launch(
+    # Fallback: launch persistent browser with saved profile
+    context = playwright.chromium.launch_persistent_context(
+        PROFILE_DIR,
         headless=True,
         args=["--disable-blink-features=AutomationControlled"],
-    )
-    context = browser.new_context(
-        storage_state=STORAGE_STATE if os.path.exists(STORAGE_STATE) else None,
         viewport=VIEWPORT,
         user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     )
     page = context.new_page()
-    return browser, page, False
+    return context, page, False
 
 
 def _handle_dm_passcode(page):
