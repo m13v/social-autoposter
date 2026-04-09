@@ -190,27 +190,37 @@ def reply_to_tweet(tweet_url, text):
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
-            # Inject fetch interceptor before page loads to capture CreateTweet response
-            page.add_init_script("""
-                window.__createdTweetIds = window.__createdTweetIds || [];
-                if (!window.__fetchPatched) {
-                    window.__fetchPatched = true;
-                    const _origFetch = window.fetch.bind(window);
-                    window.fetch = async function(...args) {
-                        const resp = await _origFetch(...args);
-                        try {
-                            const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
-                            if (url.includes('CreateTweet')) {
-                                const clone = resp.clone();
-                                const body = await clone.json();
-                                const rid = body?.data?.create_tweet?.tweet_results?.result?.rest_id;
-                                if (rid) window.__createdTweetIds.push(rid);
-                            }
-                        } catch(e) {}
-                        return resp;
-                    };
-                }
-            """)
+            # Set up CDP Network interception to capture CreateTweet response
+            _cdp_session = None
+            _created_tweet_ids = []
+            try:
+                _cdp_session = page.context.new_cdp_session(page)
+                _cdp_session.send("Network.enable")
+
+                def _on_cdp_response(params):
+                    try:
+                        url = params.get("response", {}).get("url", "")
+                        if "CreateTweet" in url:
+                            body_resp = _cdp_session.send(
+                                "Network.getResponseBody",
+                                {"requestId": params["requestId"]},
+                            )
+                            data = json.loads(body_resp.get("body", "{}"))
+                            rest_id = (
+                                data.get("data", {})
+                                .get("create_tweet", {})
+                                .get("tweet_results", {})
+                                .get("result", {})
+                                .get("rest_id")
+                            )
+                            if rest_id:
+                                _created_tweet_ids.append(rest_id)
+                    except Exception:
+                        pass
+
+                _cdp_session.on("Network.responseReceived", _on_cdp_response)
+            except Exception:
+                pass
 
             page.goto(tweet_url, wait_until="domcontentloaded")
             page.wait_for_timeout(5000)
@@ -261,17 +271,20 @@ def reply_to_tweet(tweet_url, text):
             except Exception:
                 verified = True
 
+            # Clean up CDP session
+            if _cdp_session:
+                try:
+                    _cdp_session.detach()
+                except Exception:
+                    pass
+
             # Capture reply URL
             reply_url = None
 
-            # Method 1: Read from init_script's fetch interceptor
-            try:
-                ids = page.evaluate("() => window.__createdTweetIds || []")
-                if ids:
-                    reply_url = f"https://x.com/{OUR_HANDLE}/status/{ids[-1]}"
-                    print(f"[reply_url] captured via init_script: {reply_url}", file=sys.stderr)
-            except Exception:
-                pass
+            # Method 1: CDP network interception (most reliable)
+            if _created_tweet_ids:
+                reply_url = f"https://x.com/{OUR_HANDLE}/status/{_created_tweet_ids[-1]}"
+                print(f"[reply_url] captured via CDP: {reply_url}", file=sys.stderr)
 
             # Method 2: DOM diff (check if new reply links appeared)
             if not reply_url:
