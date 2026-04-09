@@ -2,13 +2,38 @@
 # engage-dm-replies.sh — DM conversation reply loop
 # Scans Reddit Chat, LinkedIn Messages, and X/Twitter DMs for new inbound messages,
 # then replies to continue the conversation.
+#
+# Usage:
+#   engage-dm-replies.sh                    # Run all platforms
+#   engage-dm-replies.sh --platform reddit  # Reddit DMs only
+#   engage-dm-replies.sh --platform linkedin # LinkedIn DMs only
+#   engage-dm-replies.sh --platform twitter  # Twitter DMs only
 # Called by launchd every 4 hours.
 
 set -euo pipefail
 
+# Parse --platform flag
+PLATFORM=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --platform) PLATFORM="$2"; shift 2 ;;
+        *) echo "Unknown arg: $1"; exit 1 ;;
+    esac
+done
+
+if [ -n "$PLATFORM" ]; then
+    case "$PLATFORM" in
+        reddit|linkedin|twitter|x) ;;
+        *) echo "ERROR: Unknown platform '$PLATFORM'. Use: reddit, linkedin, twitter"; exit 1 ;;
+    esac
+fi
+
+LOCK_NAME="dm-replies"
+[ -n "$PLATFORM" ] && LOCK_NAME="dm-replies-$PLATFORM"
+
 # DM lock: wait up to 60min for previous DM run to finish, then skip
 source "$(dirname "$0")/lock.sh"
-acquire_lock "dm-replies" 3600
+acquire_lock "$LOCK_NAME" 3600
 
 # Load secrets
 # shellcheck source=/dev/null
@@ -25,12 +50,14 @@ if [ -z "${DATABASE_URL:-}" ]; then
 fi
 
 mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/engage-dm-replies-$(date +%Y-%m-%d_%H%M%S).log"
+LOG_SUFFIX=""
+[ -n "$PLATFORM" ] && LOG_SUFFIX="-$PLATFORM"
+LOG_FILE="$LOG_DIR/engage-dm-replies${LOG_SUFFIX}-$(date +%Y-%m-%d_%H%M%S).log"
 
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 
 RUN_START=$(date +%s)
-log "=== DM Reply Engagement Run: $(date) ==="
+log "=== DM Reply Engagement Run: $(date) (platform: ${PLATFORM:-all}) ==="
 
 # Load config
 REDDIT_USERNAME=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(c.get('accounts',{}).get('reddit',{}).get('username',''))" 2>/dev/null || echo "")
@@ -50,8 +77,16 @@ for p in c.get('projects', []):
 " 2>/dev/null || echo "")
 
 # ═══════════════════════════════════════════════════════
-# Find conversations needing replies across all platforms
+# Find conversations needing replies (platform-filtered)
 # ═══════════════════════════════════════════════════════
+
+# Build platform filter for SQL
+PLATFORM_SQL_FILTER="1=1"
+if [ -n "$PLATFORM" ]; then
+    P="$PLATFORM"
+    [ "$P" = "x" ] && P="twitter"
+    PLATFORM_SQL_FILTER="d.platform = '$P'"
+fi
 
 # Get conversations where the last message is inbound (they replied, we haven't responded)
 PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
@@ -82,6 +117,7 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
         WHERE d.conversation_status IN ('active', 'needs_reply')
           AND d.conversation_status != 'needs_human'
           AND d.status = 'sent'
+          AND $PLATFORM_SQL_FILTER
           AND (last_out.message_at IS NULL OR last_in.message_at > last_out.message_at)
         ORDER BY
             d.tier DESC,
@@ -191,9 +227,9 @@ Read $SKILL_FILE for content rules (tone, anti-AI detection, no em dashes).
 ## Task: Scan for new inbound DM messages and reply to continue conversations
 
 CRITICAL - Tool rules:
-- Reddit Chat: use Python CDP scripts (scripts/reddit_browser.py) for scanning/reading, fall back to mcp__reddit-agent__* for chat SPA operations
-- LinkedIn Messages: use Python CDP scripts (scripts/linkedin_browser.py) ONLY
-- X/Twitter DMs: use Python CDP scripts (scripts/twitter_browser.py) ONLY
+$([ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ] && echo "- Reddit Chat: use Python CDP scripts (scripts/reddit_browser.py) for scanning/reading, fall back to mcp__reddit-agent__* for chat SPA operations")
+$([ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ] && echo "- LinkedIn Messages: use Python CDP scripts (scripts/linkedin_browser.py) ONLY")
+$([ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ] && echo "- X/Twitter DMs: use Python CDP scripts (scripts/twitter_browser.py) ONLY")
 NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
 If a script or tool call fails, wait 30 seconds and retry (up to 3 times).
 
@@ -219,12 +255,13 @@ $(psql "$DATABASE_URL" -t -A -c "
     ORDER BY sent_at DESC
     LIMIT 20;" 2>/dev/null || echo "null")
 
+$(if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ]; then cat <<'PHASE_A_EOF'
 ## PHASE A: Scan Reddit for new messages
 
 1. Scan Reddit inbox for comment replies (notifications about replies to our comments):
-   \`\`\`bash
+   ```bash
    cd ~/social-autoposter && python3 scripts/reddit_browser.py unread-dms
-   \`\`\`
+   ```
    This returns JSON with: author, subject, preview, time, thread_url, type for each unread item.
 
 2. For Reddit Chat conversations (new reddit SPA), use the reddit-agent browser (mcp__reddit-agent__* tools):
@@ -235,60 +272,68 @@ $(psql "$DATABASE_URL" -t -A -c "
 3. For each conversation with new inbound messages:
    a. Identify the sender username
    b. Log inbound messages:
-      \`\`\`bash
+      ```bash
       cd ~/social-autoposter && python3 scripts/dm_conversation.py log-inbound --author "USERNAME" --content "MESSAGE_TEXT"
-      \`\`\`
+      ```
    c. If no existing DM record exists for this user, the script will tell you. Create one:
-      \`\`\`bash
+      ```bash
       source ~/social-autoposter/.env
       psql "\$DATABASE_URL" -c "INSERT INTO dms (platform, their_author, status, conversation_status, tier, project_name) VALUES ('reddit', 'USERNAME', 'sent', 'active', 1, NULL) RETURNING id;"
-      \`\`\`
+      ```
       Then set the chat URL:
-      \`\`\`bash
+      ```bash
       python3 scripts/dm_conversation.py set-url --author "USERNAME" --url "CHAT_URL"
-      \`\`\`
+      ```
+PHASE_A_EOF
+fi)
 
+$(if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ]; then cat <<'PHASE_B_EOF'
 ## PHASE B: Scan LinkedIn Messages for new messages
 
 1. Get unread LinkedIn conversations using the Python CDP script (no browser MCP needed):
-   \`\`\`bash
+   ```bash
    cd ~/social-autoposter && python3 scripts/linkedin_browser.py unread-dms
-   \`\`\`
+   ```
    This returns JSON with: author, preview, time, unread_count, thread_url for each unread conversation.
 
 2. For each unread conversation with a thread_url, read the full messages:
-   \`\`\`bash
+   ```bash
    python3 scripts/linkedin_browser.py read-conversation "THREAD_URL"
-   \`\`\`
+   ```
    This returns JSON with: partner_name, messages (each with sender, content, time), total_found.
 
 3. For each conversation:
    a. Identify the sender from the partner_name
    b. Check if this person is in our DM database:
-      \`\`\`bash
+      ```bash
       cd ~/social-autoposter && python3 scripts/dm_conversation.py find --author "PERSON_NAME"
-      \`\`\`
+      ```
    c. Log inbound messages the same way as Reddit
+PHASE_B_EOF
+fi)
 
+$(if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ]; then cat <<'PHASE_C_EOF'
 ## PHASE C: Scan X/Twitter DMs for new messages
 
 1. Get unread Twitter DM conversations using the Python CDP script (no browser MCP needed):
-   \`\`\`bash
+   ```bash
    python3 scripts/twitter_browser.py unread-dms
-   \`\`\`
+   ```
    This handles the encrypted DM passcode automatically (loaded from .env TWITTER_DM_PASSCODE).
    Returns JSON array with: author, handle, preview, time, thread_url, is_from_us.
 
 2. For each conversation where is_from_us is false (has unread inbound messages), read the full messages:
-   \`\`\`bash
+   ```bash
    python3 scripts/twitter_browser.py read-conversation "THREAD_URL"
-   \`\`\`
+   ```
    Returns JSON with: partner_name, partner_handle, messages (each with sender, content, time, is_from_us), total_found.
 
 3. For each conversation:
    a. Identify the sender from the partner_name/partner_handle
    b. **CRITICAL: Only log messages where is_from_us is false as inbound.** Skip our own messages.
    c. Check if this person is in our DM database and log inbound messages the same way as Reddit.
+PHASE_C_EOF
+fi)
 
 ## PHASE D: Reply to all conversations with pending inbound messages
 
