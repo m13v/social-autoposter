@@ -140,6 +140,9 @@ CRITICAL: If a browser tool call is blocked or times out, wait 30 seconds and re
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 
+# Reconcile missing reply URLs (API lags, so this catches previous runs too)
+python3 "$REPO_DIR/scripts/reconcile_reply_urls.py" --hours 6 2>&1 | tee -a "$LOG_FILE" || true
+
 # Log run to persistent monitor
 RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
 POSTED=$(grep -c "INSERT INTO posts" "$LOG_FILE" 2>/dev/null) || true
