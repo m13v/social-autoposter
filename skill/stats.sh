@@ -1,32 +1,62 @@
 #!/usr/bin/env bash
-# stats.sh — Full stats pipeline:
+# stats.sh — Stats pipeline (platform-filtered):
 #   Step 1: API stats (upvotes, comments, deleted/removed) via Python
-#   Step 2: Reddit view counts via Claude + Playwright (browser required)
-#   Step 3: X/Twitter stats via Claude + Playwright (browser required)
-#   Step 4: LinkedIn stats via Claude + Playwright (browser required)
+#   Step 2: Reddit view counts (CDP, no LLM tokens)
+#   Step 3: X/Twitter stats (API via fxtwitter)
+#   Step 4: LinkedIn stats (CDP, no LLM tokens)
+#
+# Usage:
+#   stats.sh                    # Run all platforms
+#   stats.sh --platform reddit  # Run steps 1+2 only
+#   stats.sh --platform twitter # Run steps 1+3 only
+#   stats.sh --platform linkedin # Run steps 1+4 only
+#   stats.sh --platform moltbook # Run step 1 only
+#   stats.sh --quiet            # Suppress verbose output
 # Called by launchd every 6 hours.
 
 set -uo pipefail
 
+# Parse flags
+PLATFORM=""
+QUIET=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --platform) PLATFORM="$2"; shift 2 ;;
+        --quiet) QUIET="--quiet"; shift ;;
+        *) shift ;;
+    esac
+done
+
+if [ -n "$PLATFORM" ]; then
+    case "$PLATFORM" in
+        reddit|linkedin|twitter|x|moltbook) ;;
+        *) echo "ERROR: Unknown platform '$PLATFORM'. Use: reddit, linkedin, twitter, moltbook"; exit 1 ;;
+    esac
+fi
+
+LOCK_NAME="stats"
+[ -n "$PLATFORM" ] && LOCK_NAME="stats-$PLATFORM"
+
 # Stats lock: wait up to 60min for previous stats run to finish, then skip
 source "$(dirname "$0")/lock.sh"
-acquire_lock "stats" 3600
+acquire_lock "$LOCK_NAME" 3600
 
 REPO_DIR="$HOME/social-autoposter"
 SKILL_FILE="$REPO_DIR/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"
-QUIET="${1:-}"
 
 # Load secrets (MOLTBOOK_API_KEY, DATABASE_URL, etc.)
 # shellcheck source=/dev/null
 [ -f "$REPO_DIR/.env" ] && source "$REPO_DIR/.env"
 
 mkdir -p "$LOG_DIR"
-LOGFILE="$LOG_DIR/stats-$(date +%Y-%m-%d_%H%M%S).log"
+LOG_SUFFIX=""
+[ -n "$PLATFORM" ] && LOG_SUFFIX="-$PLATFORM"
+LOGFILE="$LOG_DIR/stats${LOG_SUFFIX}-$(date +%Y-%m-%d_%H%M%S).log"
 
 log() { echo "[$(date +%H:%M:%S)] $*" >> "$LOGFILE"; echo "[$(date +%H:%M:%S)] $*"; }
 
-log "=== Stats Pipeline Run: $(date) ==="
+log "=== Stats Pipeline Run: $(date) (platform: ${PLATFORM:-all}) ==="
 
 # ═══════════════════════════════════════════════════════
 # STEP 1: API stats (upvotes, comments, deleted/removed)
@@ -41,7 +71,7 @@ fi
 STEP1_EXIT=$?
 STEP1_ELAPSED=$(( $(date +%s) - STEP1_START ))
 if [ "$STEP1_EXIT" -ne 0 ]; then
-    log "Step 1: FAILED (exit $STEP1_EXIT) — continuing to Step 2"
+    log "Step 1: FAILED (exit $STEP1_EXIT) — continuing"
 else
     log "Step 1: Done"
 fi
@@ -49,7 +79,9 @@ python3 "$REPO_DIR/scripts/log_run.py" --script "stats_api" --posted 0 --skipped
 
 # ═══════════════════════════════════════════════════════
 # STEP 2: Reddit view counts (browser required)
+# Skip unless platform is reddit or all
 # ═══════════════════════════════════════════════════════
+if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ]; then
 STEP2_START=$(date +%s)
 log "Step 2: Reddit view counts (Python CDP — no LLM tokens)"
 
@@ -89,10 +121,13 @@ else
 fi
 STEP2_ELAPSED=$(( $(date +%s) - STEP2_START ))
 python3 "$REPO_DIR/scripts/log_run.py" --script "stats_reddit_views" --posted 0 --skipped 0 --failed $((STEP2_EXIT != 0 ? 1 : 0)) --cost 0 --elapsed "$STEP2_ELAPSED"
+fi # end reddit guard
 
 # ═══════════════════════════════════════════════════════
 # STEP 3: X/Twitter stats (API via fxtwitter — no browser needed)
+# Skip unless platform is twitter/x or all
 # ═══════════════════════════════════════════════════════
+if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ]; then
 STEP3_START=$(date +%s)
 log "Step 3: X/Twitter stats (API via fxtwitter)"
 if [ "$QUIET" = "--quiet" ]; then
@@ -108,10 +143,13 @@ else
     log "Step 3: Done"
 fi
 python3 "$REPO_DIR/scripts/log_run.py" --script "stats_twitter" --posted 0 --skipped 0 --failed $((STEP3_EXIT != 0 ? 1 : 0)) --cost 0 --elapsed "$STEP3_ELAPSED"
+fi # end twitter guard
 
 # ═══════════════════════════════════════════════════════
 # STEP 4: LinkedIn stats (browser required)
+# Skip unless platform is linkedin or all
 # ═══════════════════════════════════════════════════════
+if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ]; then
 STEP4_START=$(date +%s)
 log "Step 4: LinkedIn stats (Python CDP — no LLM tokens)"
 
@@ -172,6 +210,7 @@ else
 fi
 STEP4_ELAPSED=$(( $(date +%s) - STEP4_START ))
 python3 "$REPO_DIR/scripts/log_run.py" --script "stats_linkedin" --posted 0 --skipped 0 --failed $((STEP4_EXIT != 0 ? 1 : 0)) --cost 0 --elapsed "$STEP4_ELAPSED"
+fi # end linkedin guard
 
 log "=== Stats Pipeline complete: $(date) ==="
 
