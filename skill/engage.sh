@@ -226,12 +226,12 @@ if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ] || [ "$PLATFORM" = "moltbook
     RESET_COUNT=$(psql "$DATABASE_URL" -t -A -c "
         UPDATE replies SET status='pending'
         WHERE status='processing' AND processing_at < NOW() - INTERVAL '2 hours'
-          AND platform NOT IN ('linkedin', 'x')
+          AND platform IN ('reddit', 'moltbook')
           AND $PHASE_B_PLATFORM_FILTER
         RETURNING id;" | wc -l | tr -d ' ')
     [ "$RESET_COUNT" -gt 0 ] && log "Phase B: Reset $RESET_COUNT stuck 'processing' items back to pending"
 
-    PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND platform NOT IN ('linkedin', 'x') AND $PHASE_B_PLATFORM_FILTER;")
+    PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND platform IN ('reddit', 'moltbook') AND $PHASE_B_PLATFORM_FILTER;")
     log "Phase B: $PENDING_COUNT pending Reddit/Moltbook replies"
 
     if [ "$PENDING_COUNT" -gt 0 ]; then
