@@ -63,6 +63,17 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 
 log "=== Engagement Loop Run: $(date) (platform: ${PLATFORM:-all}) ==="
 
+# LinkedIn cooldown check: skip if rate limited, checkpoint challenged, or restricted
+if [ "$PLATFORM" = "linkedin" ] || [ -z "$PLATFORM" ]; then
+    COOLDOWN_EXIT=0
+    python3 "$REPO_DIR/scripts/linkedin_cooldown.py" check 2>&1 | tee -a "$LOG_FILE" || COOLDOWN_EXIT=$?
+    if [ "$COOLDOWN_EXIT" -ne 0 ] && [ "$PLATFORM" = "linkedin" ]; then
+        log "SKIPPED: LinkedIn is in cooldown. See above for details."
+        log "=== Engagement loop complete: $(date) ==="
+        exit 0
+    fi
+fi
+
 # Helper: build SQL platform filter
 platform_in_sql() {
     local col="${1:-platform}"
@@ -93,7 +104,7 @@ mcp_config_for_platform() {
 
 # ═══════════════════════════════════════════════════════
 # PHASE D: Edit high-performing posts with project link
-# Runs FIRST — processes ALL eligible posts (no limit)
+# LinkedIn: max 10 edits per run, 15s delay between edits
 # ═══════════════════════════════════════════════════════
 PHASE_D_START=$(date +%s)
 
@@ -111,6 +122,12 @@ if [ -n "$PLATFORM" ]; then
     esac
 fi
 
+# LinkedIn: cap Phase D edits at 10 per run to avoid automation detection
+PHASE_D_LIMIT=""
+if [ "$PLATFORM" = "linkedin" ]; then
+    PHASE_D_LIMIT="LIMIT 10"
+fi
+
 EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT id, platform, our_url, our_content, thread_title, upvotes, project_name
@@ -122,6 +139,7 @@ EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
           AND (upvotes > 2 OR platform = 'linkedin')
           AND $PHASE_D_PLATFORM_FILTER
         ORDER BY upvotes DESC NULLS LAST
+        $PHASE_D_LIMIT
     ) q;" 2>/dev/null || echo "")
 
 if [ "$EDITABLE" != "null" ] && [ -n "$EDITABLE" ]; then
@@ -135,7 +153,8 @@ Read $SKILL_FILE for the full workflow. Execute **Phase D only** (Edit high-perf
 Posts eligible for editing:
 $EDITABLE
 
-Process ALL of them. For each post:
+Process ALL of them. For LinkedIn edits: wait 15 seconds between each edit to avoid automation detection.
+For each post:
 1. Read ~/social-autoposter/config.json to get the projects list.
 2. Pick the project whose topics are the CLOSEST match to thread_title + our_content. Check the project_name column first — if set, use that project directly. Otherwise match by topics. Be generous - if the thread is about agents, automation, desktop, memory, or anything related to the project descriptions, it's a match. If truly nothing fits, mark it skipped (see step 10) and move on. Frame it as recommending a cool tool you've come across, NOT as something you built.
 3. **If the matched project has a landing_pages config** (with repo, base_url):
