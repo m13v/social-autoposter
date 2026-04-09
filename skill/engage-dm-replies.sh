@@ -497,7 +497,17 @@ After processing all conversations, print a summary:
 - How many marked stale
 PROMPT_EOF
 
-gtimeout 5400 claude --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/all-agents-mcp.json" -p "$(cat "$PHASE_A_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: DM reply claude exited with code $?"
+# Select MCP config based on platform
+DM_MCP_CONFIG="$HOME/.claude/browser-agent-configs/all-agents-mcp.json"
+if [ -n "$PLATFORM" ]; then
+    case "$PLATFORM" in
+        reddit)   DM_MCP_CONFIG="$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" ;;
+        linkedin) DM_MCP_CONFIG="$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" ;;
+        twitter|x) DM_MCP_CONFIG="$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" ;;
+    esac
+fi
+
+gtimeout 5400 claude --strict-mcp-config --mcp-config "$DM_MCP_CONFIG" -p "$(cat "$PHASE_A_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: DM reply claude exited with code $?"
 rm -f "$PHASE_A_PROMPT"
 
 # ═══════════════════════════════════════════════════════
@@ -521,9 +531,15 @@ log "DM pipeline summary: $DM_SUMMARY"
 RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
 DM_OUTBOUND=$(echo "$DM_SUMMARY" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('outbound',0))" 2>/dev/null || echo 0)
 DM_STALE_CT=$(echo "$DM_SUMMARY" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('stale',0))" 2>/dev/null || echo 0)
-python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_reddit" --posted "$DM_OUTBOUND" --skipped "$DM_STALE_CT" --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
-python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_linkedin" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed 0
-python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_twitter" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed 0
+if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ]; then
+    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_reddit" --posted "$DM_OUTBOUND" --skipped "$DM_STALE_CT" --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
+fi
+if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ]; then
+    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_linkedin" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed 0
+fi
+if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ]; then
+    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_twitter" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed 0
+fi
 
 # Report flagged conversations needing human attention (emails already sent per-DM during flagging)
 FLAGGED_COUNT=$(psql "$DATABASE_URL" -t -A -c "
