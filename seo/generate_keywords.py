@@ -236,7 +236,9 @@ def generate_keywords_dataforseo(project):
         # Skip keywords that are just rearrangements of the same 1-2 words
         words = set(key.split())
         if len(words) <= 2 and kw["volume"] > 50000:
-            # Likely a generic head term with no specific intent
+            continue
+        # Skip overly generic high-volume terms (>20K) that we can't realistically rank for
+        if kw["volume"] > 20000:
             continue
         # Relevance filter: keyword must contain at least one relevant word
         # Build relevance word set from topics, features, competitors, and industry terms
