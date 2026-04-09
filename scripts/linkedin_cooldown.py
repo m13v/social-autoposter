@@ -21,6 +21,8 @@ Usage:
     python3 linkedin_cooldown.py clear
 """
 
+from __future__ import annotations
+
 import json
 import os
 import sys
