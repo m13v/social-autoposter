@@ -34,11 +34,26 @@ MAX_COMPETITION = {"LOW", "MEDIUM", None, "N/A"}
 
 # Keywords containing these terms are likely irrelevant (e.g. theater playwrights)
 NOISE_PATTERNS = {
+    # Theater playwrights and theater terms
     "oscar wilde", "sam shepard", "arthur miller", "wallace shawn",
-    "mamet", "tennessee williams", "eugene o'neill", "beckett",
-    "chekhov", "ibsen", "moliere", "shakespeare", "broadway",
-    "theater", "theatre", "dramatis", "stage play",
-    "miller playwright", "playwright playwright",
+    "mamet", "tennessee williams", "eugene o'neill", "eugene o neill",
+    "beckett", "chekhov", "ibsen", "moliere", "shakespeare", "broadway",
+    "theater", "theatre", "dramatis", "stage play", "noel coward",
+    "maxwell anderson", "august wilson", "bernard shaw", "shaw playwright",
+    "neil simon", "christopher marlowe", "marlowe playwright",
+    "simon playwright", "define playwright", "playwright bar",
+    "playwright nyc", "playwright definition", "famous playwright",
+    "playwright meaning", "what is a playwright", "playwright synonym",
+    "playwright vs screenwriter", "playwright anton", "playwright irish",
+    "playwright english", "playwright american", "playwright british",
+    "playwright french", "playwright russian", "playwright german",
+    "playwright greek", "lorraine hansberry", "edward albee",
+    "tom stoppard", "harold pinter", "david mamet", "tony kushner",
+    "caryl churchill", "suzan-lori parks", "lynn nottage",
+    "playwright simon", "playwright marlowe", "playwright coward",
+    "playwright anderson", "playwright wilson", "playwright shaw",
+    "playwright neil", "playwright christopher", "playwright eugene",
+    "testing: ai",  # malformed keyword
 }
 
 
@@ -182,13 +197,21 @@ def generate_keywords_dataforseo(project):
     all_keywords = []
 
     # 1. Keyword suggestions from topics
+    # Use more specific seed phrases to avoid ambiguity (e.g. "playwright" the person)
     topics = project.get("topics", [])
+    seed_suffixes = ["tool", "framework", "software", "automation"]
     print(f"\n  Fetching suggestions for {len(topics)} topics...")
     for topic in topics:
-        print(f"    Topic: {topic}")
-        kws = fetch_keyword_suggestions(topic, limit=30)
-        print(f"    -> {len(kws)} keywords (vol >= {MIN_VOLUME})")
-        all_keywords.extend(kws)
+        # If the topic is a single ambiguous word, make it more specific
+        if len(topic.split()) == 1 and topic.lower() in {"playwright", "cypress", "selenium"}:
+            seeds = [f"{topic} testing"]
+        else:
+            seeds = [topic]
+        for seed in seeds:
+            print(f"    Topic: {seed}")
+            kws = fetch_keyword_suggestions(seed, limit=30)
+            print(f"    -> {len(kws)} keywords (vol >= {MIN_VOLUME})")
+            all_keywords.extend(kws)
 
     # 2. Competitor keyword stealing
     domains = extract_competitor_domains(project)
