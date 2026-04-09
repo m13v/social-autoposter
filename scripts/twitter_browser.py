@@ -183,6 +183,7 @@ def reply_to_tweet(tweet_url, text):
 
     Returns: {"ok": true, "tweet_url": "...", "reply_url": "..."} or {"ok": false, "error": "..."}
     """
+    print(f"[twitter_browser] reply_to_tweet called: {tweet_url}", file=sys.stderr)
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
