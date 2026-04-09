@@ -107,10 +107,12 @@ made. Find an angle that adds something new to the conversation.
 
 If the API candidates above are weak (off-topic, non-English, low engagement), you may also
 browse Twitter search URLs via mcp__twitter-agent__browser_navigate to find better tweets.
+IMPORTANT: Whether from API or browser, ONLY reply to tweets with 10+ likes. Low-engagement tweets
+(under 10 likes) get no reach and waste our replies. Skip them even if the topic is perfect.
 
 Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
 1. From the candidates above, pick the best tweets where you have genuine expertise to contribute.
-   Skip any that are not a good fit (too promotional, off-topic, etc.).
+   Skip any that are not a good fit (too promotional, off-topic, under 10 likes, etc.).
    If no good candidates, search via browser: mcp__twitter-agent__browser_navigate to a search URL.
 2. DEDUP CHECK (MANDATORY before every post): Before replying to any tweet, check if we already posted on it:
    \`\`\`bash
