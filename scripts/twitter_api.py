@@ -149,6 +149,47 @@ def get_mentions(user_id, since_id=None, max_results=100):
 
 
 
+def get_conversation_replies(conversation_id, max_results=10):
+    """Get top replies in a conversation thread. Returns list of reply dicts.
+
+    Uses conversation_id search to find replies, sorted by engagement.
+    Useful for understanding what others already said before replying.
+    """
+    client = get_read_client()
+    query = f"conversation_id:{conversation_id} -is:retweet"
+    try:
+        resp = client.search_recent_tweets(
+            query=query,
+            max_results=max(10, min(max_results, 100)),
+            tweet_fields=["id", "text", "author_id", "created_at", "public_metrics"],
+            expansions=["author_id"],
+            user_fields=["username"],
+        )
+    except Exception:
+        return []
+
+    if not resp.data:
+        return []
+
+    users = {}
+    if resp.includes and "users" in resp.includes:
+        for u in resp.includes["users"]:
+            users[u.id] = u.username
+
+    replies = []
+    for tweet in resp.data:
+        likes = tweet.public_metrics.get("like_count", 0) if tweet.public_metrics else 0
+        replies.append({
+            "author": users.get(tweet.author_id, ""),
+            "text": tweet.text[:200],
+            "likes": likes,
+        })
+
+    # Sort by likes descending so top replies come first
+    replies.sort(key=lambda r: r["likes"], reverse=True)
+    return replies[:max_results]
+
+
 def get_tweet(tweet_id):
     """Get a single tweet by ID."""
     client = get_read_client()
