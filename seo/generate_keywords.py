@@ -303,64 +303,86 @@ def generate_keyword_templates(project):
     return unique
 
 
-def load_state(product_name):
-    state_path = SCRIPT_DIR / "state" / product_name.lower() / "underserved_keywords.json"
-    if state_path.exists():
-        with open(state_path) as f:
-            return json.load(f)
-    return {
-        "updated_at": None,
-        "product": product_name,
-        "description": f"Tracks underserved keyword candidates for {product_name} SEO pages.",
-        "keywords": [],
-    }
+def get_db_connection():
+    """Get a Postgres connection using DATABASE_URL from .env."""
+    try:
+        import psycopg2
+        return psycopg2.connect(os.environ["DATABASE_URL"])
+    except ImportError:
+        print("ERROR: psycopg2 not installed. Run: pip install psycopg2-binary")
+        sys.exit(1)
+    except KeyError:
+        print("ERROR: DATABASE_URL not set in .env")
+        sys.exit(1)
 
 
-def save_state(product_name, state):
-    state_dir = SCRIPT_DIR / "state" / product_name.lower()
-    state_dir.mkdir(parents=True, exist_ok=True)
-    state_path = state_dir / "underserved_keywords.json"
-    state["updated_at"] = datetime.now(timezone.utc).isoformat()
-    with open(state_path, "w") as f:
-        json.dump(state, f, indent=2)
-    return state_path
-
-
-def merge_keywords(state, new_candidates):
-    """Merge new candidates into state without overwriting existing entries."""
-    existing = {kw["keyword"].lower(): kw for kw in state["keywords"]}
+def merge_keywords_db(product_name, new_candidates):
+    """Merge new candidates into Postgres, skip existing keywords and existing page slugs."""
+    conn = get_db_connection()
+    cur = conn.cursor()
     added = 0
+    updated = 0
+
+    # Get existing keywords and slugs for this product
+    cur.execute("SELECT keyword, slug FROM seo_keywords WHERE product = %s", (product_name,))
+    existing_keywords = set()
+    existing_slugs = set()
+    for row in cur.fetchall():
+        existing_keywords.add(row[0].lower())
+        existing_slugs.add(row[1].lower())
 
     for candidate in new_candidates:
         key = candidate["keyword"].lower()
-        if key not in existing:
-            slug = candidate.get("slug") or candidate["keyword"].lower().replace(" ", "-").replace(".", "-")
-            existing[key] = {
-                "keyword": candidate["keyword"],
-                "slug": slug,
-                "source": candidate.get("source", "dataforseo"),
-                "volume": candidate.get("volume"),
-                "competition": candidate.get("competition"),
-                "score": None,
-                "signal1": None,
-                "signal2": None,
-                "signal3": None,
-                "status": "unscored",
-                "page_url": None,
-                "scored_at": None,
-                "completed_at": None,
-                "notes": "",
-            }
-            added += 1
-        else:
-            # Update volume/competition if we have newer data
-            if candidate.get("volume") and (existing[key].get("volume") is None
-                                            or candidate["volume"] > existing[key].get("volume", 0)):
-                existing[key]["volume"] = candidate["volume"]
-                existing[key]["competition"] = candidate.get("competition")
+        slug = candidate.get("slug") or key.replace(" ", "-").replace(".", "-")
 
-    state["keywords"] = list(existing.values())
-    return added
+        if key in existing_keywords:
+            # Update volume/competition if we have newer data
+            if candidate.get("volume"):
+                cur.execute("""
+                    UPDATE seo_keywords SET volume = GREATEST(volume, %s), competition = %s,
+                           updated_at = NOW()
+                    WHERE product = %s AND LOWER(keyword) = %s AND (volume IS NULL OR volume < %s)
+                """, (candidate["volume"], candidate.get("competition"),
+                      product_name, key, candidate["volume"]))
+                if cur.rowcount > 0:
+                    updated += 1
+            continue
+
+        # Skip if a page with this slug already exists
+        if slug.lower() in existing_slugs:
+            continue
+
+        try:
+            cur.execute("""
+                INSERT INTO seo_keywords (product, keyword, slug, source, volume, competition, status)
+                VALUES (%s, %s, %s, %s, %s, %s, 'unscored')
+                ON CONFLICT (product, keyword) DO NOTHING
+            """, (product_name, candidate["keyword"], slug,
+                  candidate.get("source", "dataforseo"),
+                  candidate.get("volume"), candidate.get("competition")))
+            if cur.rowcount > 0:
+                added += 1
+                existing_keywords.add(key)
+                existing_slugs.add(slug.lower())
+        except Exception as e:
+            conn.rollback()
+            print(f"  Error inserting {candidate['keyword']}: {e}")
+            continue
+
+    conn.commit()
+
+    # Return summary
+    cur.execute("""
+        SELECT status, count(*) FROM seo_keywords WHERE product = %s GROUP BY status
+    """, (product_name,))
+    statuses = dict(cur.fetchall())
+
+    cur.execute("SELECT count(*) FROM seo_keywords WHERE product = %s", (product_name,))
+    total = cur.fetchone()[0]
+
+    cur.close()
+    conn.close()
+    return added, updated, total, statuses
 
 
 def main():
@@ -396,32 +418,28 @@ def main():
 
     print(f"\n  Generated: {len(candidates)} candidates")
 
-    state = load_state(product_name)
-    existing_count = len(state["keywords"])
-    added = merge_keywords(state, candidates)
+    added, updated, total, statuses = merge_keywords_db(project["name"], candidates)
 
-    state_path = save_state(product_name, state)
-    total = len(state["keywords"])
-
-    print(f"  Existing: {existing_count}")
     print(f"  New added: {added}")
-    print(f"  Total: {total}")
-    print(f"  State: {state_path}")
-
-    # Summary by status
-    statuses = {}
-    for kw in state["keywords"]:
-        s = kw.get("status", "unscored")
-        statuses[s] = statuses.get(s, 0) + 1
+    print(f"  Volume updated: {updated}")
+    print(f"  Total in DB: {total}")
     print(f"  Status breakdown: {json.dumps(statuses)}")
 
-    # Show top by volume
-    by_vol = sorted([k for k in state["keywords"] if k.get("volume")],
-                    key=lambda x: x.get("volume", 0), reverse=True)
-    if by_vol:
+    # Show top unscored by volume from DB
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT keyword, volume, status FROM seo_keywords
+        WHERE product = %s AND volume IS NOT NULL
+        ORDER BY volume DESC LIMIT 10
+    """, (project["name"],))
+    rows = cur.fetchall()
+    if rows:
         print(f"\n  Top keywords by volume:")
-        for k in by_vol[:10]:
-            print(f"    {k['volume']:>6} | {k['keyword']:50s} | {k.get('status','?')}")
+        for kw, vol, status in rows:
+            print(f"    {vol:>6} | {kw:50s} | {status}")
+    cur.close()
+    conn.close()
 
 
 if __name__ == "__main__":
