@@ -221,24 +221,28 @@ def reply_to_tweet(tweet_url, text):
             page.keyboard.type(text, delay=10)
             page.wait_for_timeout(1000)
 
-            # Inject fetch interceptor to capture CreateTweet response
-            page.evaluate("""() => {
-                window.__capturedTweetId = null;
-                const origFetch = window.fetch;
-                window.fetch = async function(...args) {
-                    const resp = await origFetch.apply(this, args);
-                    try {
-                        const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-                        if (url.includes('CreateTweet')) {
-                            const clone = resp.clone();
-                            const body = await clone.json();
-                            const restId = body?.data?.create_tweet?.tweet_results?.result?.rest_id;
-                            if (restId) window.__capturedTweetId = restId;
-                        }
-                    } catch(e) {}
-                    return resp;
-                };
-            }""")
+            # Set up route interceptor to capture CreateTweet response
+            created_tweet_id = []
+
+            def _intercept_create_tweet(route):
+                resp = route.fetch()
+                if "CreateTweet" in route.request.url:
+                    try:
+                        body = resp.json()
+                        rest_id = (
+                            body.get("data", {})
+                            .get("create_tweet", {})
+                            .get("tweet_results", {})
+                            .get("result", {})
+                            .get("rest_id")
+                        )
+                        if rest_id:
+                            created_tweet_id.append(rest_id)
+                    except Exception:
+                        pass
+                route.fulfill(response=resp)
+
+            page.route("**/CreateTweet*", _intercept_create_tweet)
 
             # Click the Reply button
             try:
@@ -249,6 +253,7 @@ def reply_to_tweet(tweet_url, text):
                 page.keyboard.press("Control+Enter")
 
             page.wait_for_timeout(3000)
+            page.unroute("**/CreateTweet*")
 
             # Verify: check if the reply box is empty (cleared after posting)
             try:
@@ -257,12 +262,11 @@ def reply_to_tweet(tweet_url, text):
             except Exception:
                 verified = True
 
-            # Read the captured tweet ID from the injected interceptor
+            # Get reply URL from intercepted response
             reply_url = None
-            captured_id = page.evaluate("() => window.__capturedTweetId")
-            if captured_id:
-                reply_url = f"https://x.com/{OUR_HANDLE}/status/{captured_id}"
-                print(f"[reply_url] captured via fetch hook: {reply_url}", file=sys.stderr)
+            if created_tweet_id:
+                reply_url = f"https://x.com/{OUR_HANDLE}/status/{created_tweet_id[0]}"
+                print(f"[reply_url] captured via route: {reply_url}", file=sys.stderr)
 
             # Fallback: DOM diff on current page
             if not reply_url:
