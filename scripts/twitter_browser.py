@@ -190,6 +190,28 @@ def reply_to_tweet(tweet_url, text):
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
+            # Inject fetch interceptor before page loads to capture CreateTweet response
+            page.add_init_script("""
+                window.__createdTweetIds = window.__createdTweetIds || [];
+                if (!window.__fetchPatched) {
+                    window.__fetchPatched = true;
+                    const _origFetch = window.fetch.bind(window);
+                    window.fetch = async function(...args) {
+                        const resp = await _origFetch(...args);
+                        try {
+                            const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+                            if (url.includes('CreateTweet')) {
+                                const clone = resp.clone();
+                                const body = await clone.json();
+                                const rid = body?.data?.create_tweet?.tweet_results?.result?.rest_id;
+                                if (rid) window.__createdTweetIds.push(rid);
+                            }
+                        } catch(e) {}
+                        return resp;
+                    };
+                }
+            """)
+
             page.goto(tweet_url, wait_until="domcontentloaded")
             page.wait_for_timeout(5000)
 
@@ -239,20 +261,30 @@ def reply_to_tweet(tweet_url, text):
             except Exception:
                 verified = True
 
-            # Capture reply URL: reload the tweet page and find our reply in the thread
+            # Capture reply URL
             reply_url = None
 
-            # Method 1: DOM diff (check if new reply links appeared)
-            for attempt in range(3):
-                links_after = _collect_our_reply_links(page)
-                new_links = links_after - links_before
-                if new_links:
-                    reply_path = max(new_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
-                    reply_url = f"https://x.com{reply_path}" if not reply_path.startswith("http") else reply_path
-                    break
-                page.wait_for_timeout(2000)
+            # Method 1: Read from init_script's fetch interceptor
+            try:
+                ids = page.evaluate("() => window.__createdTweetIds || []")
+                if ids:
+                    reply_url = f"https://x.com/{OUR_HANDLE}/status/{ids[-1]}"
+                    print(f"[reply_url] captured via init_script: {reply_url}", file=sys.stderr)
+            except Exception:
+                pass
 
-            # Method 2: Check our profile for the latest reply
+            # Method 2: DOM diff (check if new reply links appeared)
+            if not reply_url:
+                for attempt in range(3):
+                    links_after = _collect_our_reply_links(page)
+                    new_links = links_after - links_before
+                    if new_links:
+                        reply_path = max(new_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
+                        reply_url = f"https://x.com{reply_path}" if not reply_path.startswith("http") else reply_path
+                        break
+                    page.wait_for_timeout(2000)
+
+            # Method 3: Check our profile for the latest reply
             if not reply_url:
                 try:
                     page.goto(f"https://x.com/{OUR_HANDLE}/with_replies", wait_until="domcontentloaded")
@@ -261,7 +293,6 @@ def reply_to_tweet(tweet_url, text):
                     if profile_links:
                         latest_path = max(profile_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
                         latest_id = re.search(r'/status/(\d+)', latest_path).group(1)
-                        # Track last known ID to avoid returning the same URL twice
                         tracker_file = "/tmp/social-autoposter-last-reply-id.txt"
                         last_known = ""
                         try:
