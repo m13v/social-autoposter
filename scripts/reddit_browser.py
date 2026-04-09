@@ -34,7 +34,7 @@ import sys
 import time
 
 
-STORAGE_STATE = os.path.expanduser("~/.claude/browser-sessions.json")
+PROFILE_DIR = os.path.expanduser("~/.claude/browser-profiles/reddit")
 VIEWPORT = {"width": 911, "height": 1016}
 
 # Load Reddit username from config
@@ -131,36 +131,33 @@ def get_browser_and_page(playwright):
     """
     cdp_port = find_reddit_cdp_port()
 
-    storage_state = STORAGE_STATE if os.path.exists(STORAGE_STATE) else None
-
     if cdp_port:
         try:
             browser = playwright.chromium.connect_over_cdp(
                 f"http://localhost:{cdp_port}"
             )
-            # Create a NEW context with storageState (logged-in cookies).
-            # Do NOT use contexts[0] as it's the default context without login cookies.
-            context = browser.new_context(
-                storage_state=storage_state,
-                viewport=VIEWPORT,
-            )
-            page = context.new_page()
-            return browser, page, True
+            # With persistent profiles, the default context has logged-in cookies
+            contexts = browser.contexts
+            if contexts:
+                context = contexts[0]
+                for pg in context.pages:
+                    if "reddit.com" in pg.url and "login" not in pg.url:
+                        return browser, pg, True
+                if context.pages:
+                    return browser, context.pages[0], True
         except Exception:
             pass
 
-    # Fallback: launch new headless browser
-    browser = playwright.chromium.launch(
+    # Fallback: launch persistent browser with saved profile
+    context = playwright.chromium.launch_persistent_context(
+        PROFILE_DIR,
         headless=True,
         args=["--disable-blink-features=AutomationControlled"],
-    )
-    context = browser.new_context(
-        storage_state=storage_state,
         viewport=VIEWPORT,
         user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     )
     page = context.new_page()
-    return browser, page, False
+    return context, page, False
 
 
 def _to_old_reddit(url):
