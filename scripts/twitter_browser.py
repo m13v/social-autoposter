@@ -267,6 +267,7 @@ def reply_to_tweet(tweet_url, text):
             reply_url = None
             if created_tweet_id:
                 reply_url = f"https://x.com/{OUR_HANDLE}/status/{created_tweet_id[0]}"
+                print(f"[reply_url] captured via network interception: {reply_url}", file=sys.stderr)
 
             # Fallback: DOM diff on current page
             if not reply_url:
