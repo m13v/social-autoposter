@@ -30,6 +30,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.parse
 
 import requests
@@ -84,6 +85,52 @@ def v2_headers(token):
         "Content-Type": "application/json",
         "X-Restli-Protocol-Version": "2.0.0",
     }
+
+
+def handle_rate_limit(response):
+    """Check for 429 rate limit. If detected, write cooldown and exit."""
+    if response.status_code == 429:
+        error_text = response.text
+        print(json.dumps({
+            "ok": False,
+            "status": 429,
+            "error": error_text,
+            "rate_limited": True,
+        }))
+        # Write 2-hour cooldown
+        try:
+            sys.path.insert(0, os.path.dirname(__file__))
+            from linkedin_cooldown import set_cooldown
+            from datetime import datetime, timedelta, timezone
+            reason = "429 API rate limit"
+            if "fuse limit" in error_text.lower():
+                reason = "429 CommentCreatePermission fuse limit"
+            set_cooldown(reason, datetime.now(timezone.utc) + timedelta(hours=2))
+        except Exception:
+            pass
+        sys.exit(2)
+
+
+def post_with_retry(method, url, headers, json_data=None, max_retries=2):
+    """Make an API request with retry on 5xx and rate limit detection on 429."""
+    for attempt in range(max_retries + 1):
+        if method == "POST":
+            r = requests.post(url, headers=headers, json=json_data)
+        elif method == "DELETE":
+            r = requests.delete(url, headers=headers)
+        else:
+            r = requests.get(url, headers=headers)
+
+        handle_rate_limit(r)
+
+        if r.status_code >= 500 and attempt < max_retries:
+            wait = 5 * (attempt + 1)
+            print(f"Server error {r.status_code}, retrying in {wait}s...", file=sys.stderr)
+            time.sleep(wait)
+            continue
+
+        return r
+    return r
 
 
 def create_post(token, person_urn, text):
