@@ -103,7 +103,9 @@ def main():
                 "platform": "twitter",
                 "url": t["url"],
                 "tweet_id": t["id"],
+                "conversation_id": t.get("conversation_id", t["id"]),
                 "title": t["text"][:120],
+                "full_text": t["text"],
                 "author": t["author_username"],
                 "author_followers": t.get("author_followers", 0),
                 "likes": t["likes"],
@@ -122,6 +124,19 @@ def main():
         follower_bonus = math.log10(max(c.get("author_followers", 0), 1))
         return c["likes"] + c["retweets"] + follower_bonus * 5
     candidates.sort(key=reach_score, reverse=True)
+
+    # Enrich top candidates with existing replies so Claude knows what
+    # others already said and can add a unique angle instead of repeating.
+    enriched = candidates[:args.max]  # only enrich the ones we'll actually use
+    for c in enriched:
+        conv_id = c.get("conversation_id") or c.get("tweet_id", "")
+        if conv_id:
+            try:
+                top_replies = twitter_api.get_conversation_replies(conv_id, max_results=5)
+                if top_replies:
+                    c["existing_replies"] = top_replies
+            except Exception:
+                pass
 
     if args.json_output:
         print(json.dumps(candidates, indent=2))
