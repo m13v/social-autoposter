@@ -221,40 +221,38 @@ def reply_to_tweet(tweet_url, text):
             page.keyboard.type(text, delay=10)
             page.wait_for_timeout(1000)
 
-            # Set up network interception to capture the CreateTweet response
-            created_tweet_id = []
-
-            def _capture_create_tweet(response):
-                try:
-                    if "CreateTweet" in response.url and response.status == 200:
-                        body = response.json()
-                        tweet_result = (
-                            body.get("data", {})
-                            .get("create_tweet", {})
-                            .get("tweet_results", {})
-                            .get("result", {})
-                        )
-                        rest_id = tweet_result.get("rest_id")
-                        if rest_id:
-                            created_tweet_id.append(rest_id)
-                except Exception:
-                    pass
-
-            page.on("response", _capture_create_tweet)
-
-            # Click the Reply button (it should now be enabled)
+            # Click Reply and capture the CreateTweet response
+            reply_url = None
             try:
-                reply_btn = page.get_by_role("button", name="Reply").last
-                reply_btn.wait_for(timeout=5000)
-                reply_btn.click()
-            except Exception:
-                # Fallback: Ctrl+Enter to submit
-                page.keyboard.press("Control+Enter")
+                with page.expect_response(
+                    lambda r: "CreateTweet" in r.url and r.status == 200,
+                    timeout=15000,
+                ) as response_info:
+                    try:
+                        reply_btn = page.get_by_role("button", name="Reply").last
+                        reply_btn.wait_for(timeout=5000)
+                        reply_btn.click()
+                    except Exception:
+                        page.keyboard.press("Control+Enter")
 
-            page.wait_for_timeout(3000)
+                resp = response_info.value
+                body = resp.json()
+                rest_id = (
+                    body.get("data", {})
+                    .get("create_tweet", {})
+                    .get("tweet_results", {})
+                    .get("result", {})
+                    .get("rest_id")
+                )
+                if rest_id:
+                    reply_url = f"https://x.com/{OUR_HANDLE}/status/{rest_id}"
+                    print(f"[reply_url] captured: {reply_url}", file=sys.stderr)
+            except Exception as e:
+                # expect_response timed out or CreateTweet not found
+                # The reply may still have posted; click might have happened
+                print(f"[reply_url] interception failed: {e}", file=sys.stderr)
 
-            # Remove listener
-            page.remove_listener("response", _capture_create_tweet)
+            page.wait_for_timeout(2000)
 
             # Verify: check if the reply box is empty (cleared after posting)
             try:
@@ -262,12 +260,6 @@ def reply_to_tweet(tweet_url, text):
                 verified = len(box_text.strip()) == 0 or text not in box_text
             except Exception:
                 verified = True
-
-            # Get reply URL from intercepted network response (most reliable)
-            reply_url = None
-            if created_tweet_id:
-                reply_url = f"https://x.com/{OUR_HANDLE}/status/{created_tweet_id[0]}"
-                print(f"[reply_url] captured via network interception: {reply_url}", file=sys.stderr)
 
             # Fallback: DOM diff on current page
             if not reply_url:
