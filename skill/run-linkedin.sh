@@ -132,10 +132,12 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
    python3 $REPO_DIR/scripts/linkedin_api.py comment ACTIVITY_ID 'YOUR COMMENT TEXT'
    \`\`\`
    This returns JSON with {ok, comment_urn, our_url, activity_id}. Use our_url for the database INSERT.
-   If the API call fails, fall back to browser posting as before.
+   If the API returns {ok:false} with status 429 or 'rate_limited':true, STOP the entire run immediately.
+   If the API fails for other reasons (400, 404), try a different post. Do NOT fall back to browser commenting.
 6. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT). Use the our_url from the API response.
 
-Up to 30 posts per run. If nothing fits, say '## No good post found' and stop.
+Up to $MAX_THIS_RUN posts this run ($DAILY_COUNT/$DAILY_CAP daily budget used). If nothing fits, say '## No good post found' and stop.
+If the LinkedIn API returns a 429 error or 'fuse limit' message, STOP IMMEDIATELY. Do not retry, do not fall back to browser posting. Just log the error and stop.
 
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
 CRITICAL: Use ONLY mcp__linkedin-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
