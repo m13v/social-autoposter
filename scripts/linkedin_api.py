@@ -191,10 +191,11 @@ def comment_on_post(token, person_urn, activity_id, text):
         "actor": person_urn,
         "message": {"text": text},
     }
-    r = requests.post(
+    r = post_with_retry(
+        "POST",
         f"https://api.linkedin.com/v2/socialActions/{encoded_urn}/comments",
         headers=v2_headers(token),
-        json=data,
+        json_data=data,
     )
     # If activity URN fails, try alternative URN formats
     if r.status_code == 400 and "actual threadUrn" in r.text:
@@ -203,18 +204,20 @@ def comment_on_post(token, person_urn, activity_id, text):
         if m:
             real_urn = m.group(1)
             encoded_real = urllib.parse.quote(real_urn, safe="")
-            r = requests.post(
+            r = post_with_retry(
+                "POST",
                 f"https://api.linkedin.com/v2/socialActions/{encoded_real}/comments",
                 headers=v2_headers(token),
-                json=data,
+                json_data=data,
             )
     if r.status_code == 404 and not activity_id.startswith("urn:li:"):
         share_urn = f"urn:li:share:{activity_id}"
         encoded_share = urllib.parse.quote(share_urn, safe="")
-        r = requests.post(
+        r = post_with_retry(
+            "POST",
             f"https://api.linkedin.com/v2/socialActions/{encoded_share}/comments",
             headers=v2_headers(token),
-            json=data,
+            json_data=data,
         )
     if r.status_code == 201:
         resp = r.json()
@@ -260,10 +263,11 @@ def reply_to_comment(token, person_urn, activity_id, parent_comment_urn, text):
         "message": {"text": text},
         "parentComment": normalize_comment_urn(parent_comment_urn),
     }
-    r = requests.post(
+    r = post_with_retry(
+        "POST",
         f"https://api.linkedin.com/v2/socialActions/{encoded_urn}/comments",
         headers=v2_headers(token),
-        json=data,
+        json_data=data,
     )
     if r.status_code == 201:
         resp = r.json()
@@ -286,18 +290,20 @@ def like_post(token, person_urn, activity_id):
     post_urn = resolve_post_urn(activity_id)
     encoded_urn = urllib.parse.quote(post_urn, safe="")
     data = {"actor": person_urn}
-    r = requests.post(
+    r = post_with_retry(
+        "POST",
         f"https://api.linkedin.com/v2/socialActions/{encoded_urn}/likes",
         headers=v2_headers(token),
-        json=data,
+        json_data=data,
     )
     if r.status_code == 404 and not activity_id.startswith("urn:li:"):
         share_urn = f"urn:li:share:{activity_id}"
         encoded_share = urllib.parse.quote(share_urn, safe="")
-        r = requests.post(
+        r = post_with_retry(
+            "POST",
             f"https://api.linkedin.com/v2/socialActions/{encoded_share}/likes",
             headers=v2_headers(token),
-            json=data,
+            json_data=data,
         )
     if r.status_code == 201:
         print(json.dumps({"ok": True, "activity_id": activity_id}))
