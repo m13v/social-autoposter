@@ -189,10 +189,23 @@ try:
     start = raw.find('{')
     end = raw.rfind('}') + 1
     if start >= 0 and end > start:
-        result = json.loads(raw[start:end])
+        outer = json.loads(raw[start:end])
     else:
         print('ERROR: Could not parse score output')
         sys.exit(1)
+
+    # --output-format json wraps the score JSON inside a 'result' string field
+    if 'result' in outer and isinstance(outer['result'], str) and 'score' not in outer:
+        inner_raw = outer['result']
+        inner_start = inner_raw.find('{')
+        inner_end = inner_raw.rfind('}') + 1
+        if inner_start >= 0 and inner_end > inner_start:
+            result = json.loads(inner_raw[inner_start:inner_end])
+        else:
+            print('ERROR: Could not parse inner score JSON from envelope')
+            sys.exit(1)
+    else:
+        result = outer
 
     score = result.get('score', 0)
     status = 'pending' if score >= 1.5 else 'skip'
