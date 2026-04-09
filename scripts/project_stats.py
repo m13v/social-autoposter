@@ -202,7 +202,7 @@ def get_project_domains(project):
 
 
 def get_seo_page_count(project):
-    """Count SEO landing pages in the project's website repo (src/app/t/*/page.tsx)."""
+    """Count all pages in the project's website repo (homepage + src/app/t/*/page.tsx)."""
     lp = project.get("landing_pages")
     if not isinstance(lp, dict):
         return 0
@@ -213,7 +213,8 @@ def get_seo_page_count(project):
     t_dir = os.path.join(repo, "src", "app", "t")
     if not os.path.isdir(t_dir):
         return 0
-    return sum(1 for d in os.listdir(t_dir) if os.path.isfile(os.path.join(t_dir, d, "page.tsx")))
+    # +1 for homepage
+    return 1 + sum(1 for d in os.listdir(t_dir) if os.path.isfile(os.path.join(t_dir, d, "page.tsx")))
 
 
 def get_client_slug(project_name):
