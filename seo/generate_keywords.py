@@ -233,6 +233,29 @@ def generate_keywords_dataforseo(project):
         # Skip single-word keywords (too broad to rank for)
         if len(key.split()) < 2:
             continue
+        # Skip keywords that are just rearrangements of the same 1-2 words
+        words = set(key.split())
+        if len(words) <= 2 and kw["volume"] > 50000:
+            # Likely a generic head term with no specific intent
+            continue
+        # Relevance filter: keyword must contain at least one relevant word
+        # Build relevance word set from topics, features, competitors, and industry terms
+        if not hasattr(generate_keywords_dataforseo, '_relevance_words'):
+            rw = set()
+            for t in project.get("topics", []):
+                rw.update(w.lower() for w in t.split() if len(w) > 3)
+            rw.add(project["name"].lower())
+            for f in project.get("features", [])[:10]:
+                rw.update(w.lower() for w in f.split() if len(w) > 4)
+            # Add competitor names
+            for ck in project.get("competitive_positioning", {}):
+                rw.update(w.lower() for w in ck.replace("vs_", "").split("_") if len(w) > 3)
+            # Add ICP terms
+            for icp in project.get("icp", [])[:5]:
+                rw.update(w.lower() for w in icp.split() if len(w) > 4)
+            generate_keywords_dataforseo._relevance_words = rw
+        if not any(tw in key for tw in generate_keywords_dataforseo._relevance_words):
+            continue
         if key not in seen or kw["volume"] > seen[key]["volume"]:
             seen[key] = kw
     unique = sorted(seen.values(), key=lambda x: x["volume"], reverse=True)
