@@ -252,19 +252,24 @@ def reply_to_tweet(tweet_url, text):
                     break
                 page.wait_for_timeout(2000)
 
-            # Method 2: Reload the tweet page and scan for our reply
+            # Method 2: Check our profile for the latest reply
             if not reply_url:
                 try:
-                    page.goto(tweet_url, wait_until="domcontentloaded")
-                    page.wait_for_timeout(5000)
-                    # Scroll down to load replies
-                    page.evaluate("window.scrollBy(0, 800)")
-                    page.wait_for_timeout(3000)
-                    all_links = _collect_our_reply_links(page)
-                    new_links = all_links - links_before
-                    if new_links:
-                        reply_path = max(new_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
-                        reply_url = f"https://x.com{reply_path}" if not reply_path.startswith("http") else reply_path
+                    page.goto(f"https://x.com/{OUR_HANDLE}/with_replies", wait_until="domcontentloaded")
+                    page.wait_for_timeout(4000)
+                    # Get the highest status ID from our profile (most recent tweet)
+                    profile_links = _collect_our_reply_links(page)
+                    if profile_links:
+                        latest_path = max(profile_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
+                        latest_id = re.search(r'/status/(\d+)', latest_path).group(1)
+                        # Only use it if it's newer than anything in links_before
+                        before_ids = set()
+                        for lnk in links_before:
+                            m = re.search(r'/status/(\d+)', lnk)
+                            if m:
+                                before_ids.add(m.group(1))
+                        if latest_id not in before_ids:
+                            reply_url = f"https://x.com{latest_path}" if not latest_path.startswith("http") else latest_path
                 except Exception:
                     pass
 
