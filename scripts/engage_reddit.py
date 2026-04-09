@@ -44,7 +44,7 @@ def get_next_pending(conn):
                CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post
         FROM replies r
         JOIN posts p ON r.post_id = p.id
-        WHERE r.status='pending' AND r.platform NOT IN ('linkedin', 'x')
+        WHERE r.status='pending' AND r.platform IN ('reddit', 'moltbook')
         ORDER BY
             CASE WHEN p.thread_url = p.our_url THEN 0 ELSE 1 END,
             r.discovered_at ASC
