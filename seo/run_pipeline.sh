@@ -124,20 +124,21 @@ else:
     print('NONE')
 ")
 else
-    # Pick next unscored keyword for SERP analysis
+    # Priority: pending (ready to build) first, then unscored (need scoring)
     NEXT=$(python3 -c "
 import json
 with open('$STATE_FILE') as f:
     state = json.load(f)
-unscored = [k for k in state['keywords'] if k.get('status') == 'unscored']
-if unscored:
-    print(json.dumps(unscored[0]))
+# First: build pages for keywords already scored above threshold
+pending = [k for k in state['keywords'] if k.get('status') == 'pending' and k.get('score') is not None and k['score'] >= 1.5]
+pending.sort(key=lambda x: x['score'], reverse=True)
+if pending:
+    print(json.dumps(pending[0]))
 else:
-    # Fall back to pending (already scored, ready to build)
-    pending = [k for k in state['keywords'] if k.get('status') == 'pending' and k.get('score') is not None and k['score'] >= 1.5]
-    pending.sort(key=lambda x: x['score'], reverse=True)
-    if pending:
-        print(json.dumps(pending[0]))
+    # Then: score the next unscored keyword
+    unscored = [k for k in state['keywords'] if k.get('status') == 'unscored']
+    if unscored:
+        print(json.dumps(unscored[0]))
     else:
         print('NONE')
 ")
