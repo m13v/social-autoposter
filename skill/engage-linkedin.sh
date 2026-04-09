@@ -195,11 +195,6 @@ fi
 # ═══════════════════════════════════════════════════════
 # Cleanup
 # ═══════════════════════════════════════════════════════
-# Save fresh cookies from the running browser back to storage state
-# LinkedIn rotates li_at during sessions; saving prevents next run from using stale tokens
-log "Saving LinkedIn session cookies..."
-python3 "$REPO_DIR/scripts/linkedin_auth_check.py" --save-cookies 2>&1 | tee -a "$LOG_FILE" || true
-
 TOTAL_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='linkedin' AND status='pending';")
 TOTAL_REPLIED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='linkedin' AND status='replied';")
 TOTAL_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='linkedin' AND status='skipped';")
