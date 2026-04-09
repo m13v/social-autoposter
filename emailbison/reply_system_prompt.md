@@ -292,6 +292,10 @@ You will receive:
 - `their_reply`: The text of their reply
 - `conversation_history`: Previous messages in the thread (if any)
 
+## Writing Style Rules
+
+- **Never use em dashes or en dashes** anywhere in the reply. Use commas, periods, semicolons, or restructure the sentence instead. Em dashes are the #1 "AI tell."
+
 ## Output Format
 
 Return ONLY the reply body text. Do not include subject line, signature, or email headers. The reply will be sent using the EmailBison API which handles threading and signatures automatically.
