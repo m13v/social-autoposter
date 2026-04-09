@@ -4,9 +4,11 @@
 # Selects a product based on weight distribution, regenerates
 # keywords if stale (>24h), then runs the scoring/generation pipeline.
 #
+# All state is stored in Postgres (seo_keywords table).
+#
 # Products must have:
 #   1. landing_pages.repo in config.json (repo exists on disk)
-#   2. An SEO page skill in .claude/skills/
+#   2. A page template in seo/templates/<product>.md
 #
 # Usage: cron_seo.sh (no args, picks product by weighted random)
 #
@@ -18,8 +20,10 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG="$ROOT_DIR/config.json"
 LOCK_FILE="$SCRIPT_DIR/.locks/cron_seo.lock"
 LOG_FILE="$SCRIPT_DIR/logs/cron_seo.log"
+DB="python3 $SCRIPT_DIR/db_helpers.py"
+REFRESH_DIR="$SCRIPT_DIR/.refresh_timestamps"
 
-mkdir -p "$SCRIPT_DIR/.locks" "$SCRIPT_DIR/logs"
+mkdir -p "$SCRIPT_DIR/.locks" "$SCRIPT_DIR/logs" "$REFRESH_DIR"
 
 # --- Global lock (only one cron instance at a time) ---
 if [ -f "$LOCK_FILE" ]; then
@@ -42,7 +46,7 @@ import json, random, os
 with open('$CONFIG') as f:
     config = json.load(f)
 
-# Filter to products that have repos with SEO skills
+# Filter to products that have repos + templates
 eligible = []
 for p in config.get('projects', []):
     repo = p.get('landing_pages', {}).get('repo', '')
@@ -51,7 +55,6 @@ for p in config.get('projects', []):
     repo_path = os.path.expanduser(repo)
     if not os.path.isdir(repo_path):
         continue
-    # Check for page generation template in social-autoposter
     template_path = os.path.join('$SCRIPT_DIR', 'templates', p['name'].lower() + '.md')
     if os.path.exists(template_path):
         eligible.append((p['name'], p.get('weight', 1)))
@@ -73,32 +76,15 @@ PRODUCT_LOWER=$(echo "$PRODUCT" | tr '[:upper:]' '[:lower:]')
 
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Selected product: $PRODUCT (weighted random)" >> "$LOG_FILE"
 
-# --- Refresh keywords if stale (>24h since last generation) ---
-STATE_FILE="$SCRIPT_DIR/state/$PRODUCT_LOWER/underserved_keywords.json"
+# --- Refresh keywords if stale (>24h since last DataForSEO fetch) ---
+REFRESH_FILE="$REFRESH_DIR/$PRODUCT_LOWER"
 
 NEEDS_REFRESH=false
-if [ ! -f "$STATE_FILE" ]; then
+if [ ! -f "$REFRESH_FILE" ]; then
     NEEDS_REFRESH=true
 else
-    LAST_UPDATE=$(python3 -c "
-import json
-from datetime import datetime, timezone, timedelta
-with open('$STATE_FILE') as f:
-    state = json.load(f)
-updated = state.get('updated_at', '')
-if not updated:
-    print('stale')
-else:
-    try:
-        dt = datetime.fromisoformat(updated)
-        if datetime.now(timezone.utc) - dt > timedelta(hours=24):
-            print('stale')
-        else:
-            print('fresh')
-    except:
-        print('stale')
-")
-    if [ "$LAST_UPDATE" = "stale" ]; then
+    REFRESH_AGE=$(( $(date +%s) - $(stat -f %m "$REFRESH_FILE" 2>/dev/null || stat -c %Y "$REFRESH_FILE" 2>/dev/null) ))
+    if [ "$REFRESH_AGE" -gt 86400 ]; then
         NEEDS_REFRESH=true
     fi
 fi
@@ -106,27 +92,18 @@ fi
 if [ "$NEEDS_REFRESH" = true ]; then
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Refreshing keywords for $PRODUCT via DataForSEO" >> "$LOG_FILE"
     python3 "$SCRIPT_DIR/generate_keywords.py" "$PRODUCT" >> "$LOG_FILE" 2>&1
+    touch "$REFRESH_FILE"
 fi
 
-# --- Check if there's work to do ---
-HAS_WORK=$(python3 -c "
-import json
-with open('$STATE_FILE') as f:
-    state = json.load(f)
-unscored = sum(1 for k in state['keywords'] if k.get('status') == 'unscored')
-pending = sum(1 for k in state['keywords'] if k.get('status') == 'pending' and (k.get('score') or 0) >= 1.5)
-if unscored > 0 or pending > 0:
-    print(f'yes:unscored={unscored},pending={pending}')
-else:
-    print('no')
-")
+# --- Check if there's work to do (from Postgres) ---
+HAS_WORK=$($DB has_work "$PRODUCT")
 
-if [[ "$HAS_WORK" == no ]]; then
+if [ "$HAS_WORK" = "no" ]; then
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) No work for $PRODUCT (all scored/done/skipped)" >> "$LOG_FILE"
     exit 0
 fi
 
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Running pipeline for $PRODUCT ($HAS_WORK)" >> "$LOG_FILE"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Running pipeline for $PRODUCT" >> "$LOG_FILE"
 
 # --- Run the pipeline ---
 "$SCRIPT_DIR/run_pipeline.sh" "$PRODUCT" >> "$LOG_FILE" 2>&1
