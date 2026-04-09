@@ -8,6 +8,9 @@
 # Usage:
 #   ./run_pipeline.sh <product_name> [--score-only] [--generate-only]
 #
+# Page generation uses product-specific prompt templates stored in
+# seo/templates/<product>.md. No per-repo skills needed.
+#
 # Requires: python3, claude CLI
 #
 
@@ -17,6 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG="$ROOT_DIR/config.json"
 LOCK_DIR="$SCRIPT_DIR/.locks"
+TEMPLATES_DIR="$SCRIPT_DIR/templates"
 
 PRODUCT="${1:?Usage: $0 <product_name> [--score-only] [--generate-only]}"
 MODE="${2:-full}"  # full, --score-only, --generate-only
@@ -50,13 +54,13 @@ fi
 
 # --- Read product config ---
 REPO_PATH=$(python3 -c "
-import json
+import json, os
 with open('$CONFIG') as f:
     c = json.load(f)
 for p in c.get('projects', []):
     if p['name'].lower() == '$PRODUCT_LOWER':
         repo = p.get('landing_pages', {}).get('repo', '')
-        print(repo.replace('~', '$HOME'))
+        print(os.path.expanduser(repo))
         break
 ")
 
@@ -85,16 +89,23 @@ if [ -z "$REPO_PATH" ]; then
     exit 1
 fi
 
-REPO_PATH=$(eval echo "$REPO_PATH")
-
 if [ ! -d "$REPO_PATH" ]; then
     echo "Error: repo not found at $REPO_PATH"
+    exit 1
+fi
+
+# --- Ensure template exists ---
+TEMPLATE_FILE="$TEMPLATES_DIR/$PRODUCT_LOWER.md"
+if [ ! -f "$TEMPLATE_FILE" ]; then
+    echo "Error: no page template found at $TEMPLATE_FILE"
+    echo "Create a template for $PRODUCT first."
     exit 1
 fi
 
 echo "=== SEO Pipeline: $PRODUCT ==="
 echo "  Repo: $REPO_PATH"
 echo "  Website: $WEBSITE"
+echo "  Template: $TEMPLATE_FILE"
 echo "  State: $STATE_FILE"
 echo ""
 
@@ -151,7 +162,7 @@ if [ "$STATUS" = "unscored" ] && [ "$MODE" != "--generate-only" ]; then
     echo ""
     echo "--- SERP Scoring ---"
 
-    # Mark as in_progress
+    # Mark as scoring
     python3 -c "
 import json
 from datetime import datetime, timezone
@@ -206,16 +217,12 @@ RESPOND IN EXACTLY THIS JSON FORMAT (nothing else):
 " --output-format json 2>"$LOG_FILE" | tee "$LOG_FILE.score"
 
     # Parse score and update state
-    SCORE_RESULT=$(cat "$LOG_FILE.score" 2>/dev/null || echo "{}")
-
     python3 -c "
 import json, sys
 from datetime import datetime, timezone
 
 try:
-    # Try to parse the score from Claude's output
     raw = open('$LOG_FILE.score').read().strip()
-    # Find JSON in the output
     start = raw.find('{')
     end = raw.rfind('}') + 1
     if start >= 0 and end > start:
@@ -249,7 +256,6 @@ try:
 
 except Exception as e:
     print(f'ERROR parsing score: {e}')
-    # Reset status
     with open('$STATE_FILE') as f:
         state = json.load(f)
     for kw in state['keywords']:
@@ -280,6 +286,7 @@ if [ "$STATUS" = "pending" ] && [ "$MODE" != "--score-only" ]; then
     echo "--- Page Generation ---"
     echo "Keyword: $KEYWORD"
     echo "Repo: $REPO_PATH"
+    echo "Template: $TEMPLATE_FILE"
 
     # Mark as in_progress
     python3 -c "
@@ -296,45 +303,26 @@ with open('$STATE_FILE', 'w') as f:
     json.dump(state, f, indent=2)
 "
 
-    # Detect the SEO page skill in the target repo
-    SKILL_FILE=""
-    for candidate in "$REPO_PATH/.claude/skills/seo-guide-page/SKILL.md" "$REPO_PATH/.claude/skills/seo-page/SKILL.md" "$REPO_PATH/.claude/skills/underserved-keyword-seo-page.md"; do
-        if [ -f "$candidate" ]; then
-            SKILL_FILE="$candidate"
-            break
-        fi
-    done
-
-    if [ -z "$SKILL_FILE" ]; then
-        echo "Error: no SEO page skill found in $REPO_PATH/.claude/skills/"
-        # Reset status
-        python3 -c "
-import json
-from datetime import datetime, timezone
-with open('$STATE_FILE') as f:
-    state = json.load(f)
-for kw in state['keywords']:
-    if kw['keyword'] == '$KEYWORD':
-        kw['status'] = 'pending'
-        break
-state['updated_at'] = datetime.now(timezone.utc).isoformat()
-with open('$STATE_FILE', 'w') as f:
-    json.dump(state, f, indent=2)
-"
-        exit 1
-    fi
-
-    echo "Using skill: $SKILL_FILE"
+    # Read the template and substitute variables
+    TEMPLATE_CONTENT=$(cat "$TEMPLATE_FILE")
 
     # Run Claude in the target repo to generate the page
     cd "$REPO_PATH"
-    claude -p "Use the seo-guide-page skill to create a page for this keyword: \"$KEYWORD\"
+    claude -p "You are an SEO content engineer. Create a guide page for this keyword.
 
-The keyword was scored as underserved in the SERP. Generate the page following the skill's full workflow.
+KEYWORD: \"$KEYWORD\"
+SLUG: \"$SLUG\"
+PRODUCT: $PRODUCT
+WEBSITE: $WEBSITE
+DIFFERENTIATOR: $DIFFERENTIATOR
+
+Follow these instructions exactly:
+
+$TEMPLATE_CONTENT
 
 After the page is created, committed, and deployed, report back with:
 1. The page URL
-2. The page slug
+2. The slug
 3. Whether the build succeeded
 " 2>>"$LOG_FILE" | tee -a "$LOG_FILE"
 
@@ -380,7 +368,6 @@ print(f'  Total keywords: {total}')
 for s, count in sorted(statuses.items()):
     print(f'  {s}: {count}')
 
-# Show top pending
 pending = [k for k in state['keywords'] if k.get('status') == 'pending']
 pending.sort(key=lambda x: x.get('score', 0), reverse=True)
 if pending:
