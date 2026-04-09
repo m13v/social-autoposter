@@ -845,8 +845,8 @@
   ],
   "exclusions": {
     "authors": ["louis030195", "louis3195"],
-    "subreddits": ["programming"],
-    "urls": [],
+    "subreddits": ["programming", "screen_pipe"],
+    "urls": ["r/screen_pipe"],
     "keywords": ["omi", "omi.me", "omi wearable", "omi desktop", "omi app"],
     "github_repos": ["screenpipe", "screen-pipe", "louis030195"],
     "twitter_accounts": ["louis030195"],
