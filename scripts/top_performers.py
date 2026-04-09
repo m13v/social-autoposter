@@ -73,24 +73,40 @@ def get_top_posts(conn, project=None, platform=None, limit=15, min_upvotes=None)
     """Top performing posts with full factual details.
 
     Only returns posts with >= min_upvotes (default MIN_UPVOTES).
+    For Twitter, also considers views as the primary reach metric
+    (a post with 3K views and 0 likes still reached people).
     If project is given and has no posts meeting the threshold,
     returns None so the caller can fall back to general posts.
     """
     if min_upvotes is None:
         min_upvotes = MIN_UPVOTES
-    where_clauses = [
-        "status = 'active'",
-        "upvotes IS NOT NULL",
-        f"upvotes >= {min_upvotes}",
-        "our_content IS NOT NULL",
-        f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
-        "platform NOT IN ('github_issues')",
-    ]
+
+    # For Twitter, use a combined score: views are primary, likes are secondary
+    if platform == "twitter":
+        where_clauses = [
+            "status = 'active'",
+            "our_content IS NOT NULL",
+            f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
+            "platform = 'twitter'",
+            f"(COALESCE(views, 0) >= 200 OR COALESCE(upvotes, 0) >= {min_upvotes})",
+        ]
+        order_by = "COALESCE(views, 0) + COALESCE(upvotes, 0) * 50 DESC"
+    else:
+        where_clauses = [
+            "status = 'active'",
+            "upvotes IS NOT NULL",
+            f"upvotes >= {min_upvotes}",
+            "our_content IS NOT NULL",
+            f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
+            "platform NOT IN ('github_issues')",
+        ]
+        order_by = "upvotes DESC"
+
     params = []
     if project:
         where_clauses.append("project_name = %s")
         params.append(project)
-    if platform:
+    if platform and platform != "twitter":
         where_clauses.append("platform = %s")
         params.append(platform)
 
@@ -100,27 +116,45 @@ def get_top_posts(conn, project=None, platform=None, limit=15, min_upvotes=None)
         f"our_content, thread_title, thread_content, "
         f"project_name, posted_at::date, our_account "
         f"FROM posts WHERE {where} "
-        f"ORDER BY upvotes DESC LIMIT %s",
+        f"ORDER BY {order_by} LIMIT %s",
         params + [limit]
     )
     return cur.fetchall()
 
 
 def get_bottom_posts(conn, project=None, platform=None, limit=10):
-    """Worst performing posts."""
-    where_clauses = [
-        "status = 'active'",
-        "upvotes IS NOT NULL",
-        "upvotes < 1",
-        "our_content IS NOT NULL",
-        f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
-        "platform NOT IN ('github_issues')",
-    ]
+    """Worst performing posts.
+
+    For Twitter, uses views as the failure signal (< 20 views = nobody saw it).
+    For other platforms, uses upvotes < 1.
+    """
+    if platform == "twitter":
+        where_clauses = [
+            "status = 'active'",
+            "platform = 'twitter'",
+            "our_content IS NOT NULL",
+            f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
+            "COALESCE(views, 0) < 20",
+            "COALESCE(upvotes, 0) < 1",
+            "posted_at < NOW() - INTERVAL '3 days'",
+        ]
+        order_by = "COALESCE(views, 0) ASC"
+    else:
+        where_clauses = [
+            "status = 'active'",
+            "upvotes IS NOT NULL",
+            "upvotes < 1",
+            "our_content IS NOT NULL",
+            f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
+            "platform NOT IN ('github_issues')",
+        ]
+        order_by = "upvotes ASC"
+
     params = []
     if project:
         where_clauses.append("project_name = %s")
         params.append(project)
-    if platform:
+    if platform and platform != "twitter":
         where_clauses.append("platform = %s")
         params.append(platform)
 
@@ -130,7 +164,7 @@ def get_bottom_posts(conn, project=None, platform=None, limit=10):
         f"our_content, thread_title, thread_content, "
         f"project_name, posted_at::date, our_account "
         f"FROM posts WHERE {where} "
-        f"ORDER BY upvotes ASC LIMIT %s",
+        f"ORDER BY {order_by} LIMIT %s",
         params + [limit]
     )
     return cur.fetchall()
