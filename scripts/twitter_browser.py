@@ -221,38 +221,34 @@ def reply_to_tweet(tweet_url, text):
             page.keyboard.type(text, delay=10)
             page.wait_for_timeout(1000)
 
-            # Click Reply and capture the CreateTweet response
-            reply_url = None
+            # Inject fetch interceptor to capture CreateTweet response
+            page.evaluate("""() => {
+                window.__capturedTweetId = null;
+                const origFetch = window.fetch;
+                window.fetch = async function(...args) {
+                    const resp = await origFetch.apply(this, args);
+                    try {
+                        const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+                        if (url.includes('CreateTweet')) {
+                            const clone = resp.clone();
+                            const body = await clone.json();
+                            const restId = body?.data?.create_tweet?.tweet_results?.result?.rest_id;
+                            if (restId) window.__capturedTweetId = restId;
+                        }
+                    } catch(e) {}
+                    return resp;
+                };
+            }""")
+
+            # Click the Reply button
             try:
-                with page.expect_response(
-                    lambda r: "CreateTweet" in r.url and r.status == 200,
-                    timeout=15000,
-                ) as response_info:
-                    try:
-                        reply_btn = page.get_by_role("button", name="Reply").last
-                        reply_btn.wait_for(timeout=5000)
-                        reply_btn.click()
-                    except Exception:
-                        page.keyboard.press("Control+Enter")
+                reply_btn = page.get_by_role("button", name="Reply").last
+                reply_btn.wait_for(timeout=5000)
+                reply_btn.click()
+            except Exception:
+                page.keyboard.press("Control+Enter")
 
-                resp = response_info.value
-                body = resp.json()
-                rest_id = (
-                    body.get("data", {})
-                    .get("create_tweet", {})
-                    .get("tweet_results", {})
-                    .get("result", {})
-                    .get("rest_id")
-                )
-                if rest_id:
-                    reply_url = f"https://x.com/{OUR_HANDLE}/status/{rest_id}"
-                    print(f"[reply_url] captured: {reply_url}", file=sys.stderr)
-            except Exception as e:
-                # expect_response timed out or CreateTweet not found
-                # The reply may still have posted; click might have happened
-                print(f"[reply_url] interception failed: {e}", file=sys.stderr)
-
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(3000)
 
             # Verify: check if the reply box is empty (cleared after posting)
             try:
@@ -260,6 +256,13 @@ def reply_to_tweet(tweet_url, text):
                 verified = len(box_text.strip()) == 0 or text not in box_text
             except Exception:
                 verified = True
+
+            # Read the captured tweet ID from the injected interceptor
+            reply_url = None
+            captured_id = page.evaluate("() => window.__capturedTweetId")
+            if captured_id:
+                reply_url = f"https://x.com/{OUR_HANDLE}/status/{captured_id}"
+                print(f"[reply_url] captured via fetch hook: {reply_url}", file=sys.stderr)
 
             # Fallback: DOM diff on current page
             if not reply_url:
