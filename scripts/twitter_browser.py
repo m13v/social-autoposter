@@ -162,6 +162,45 @@ def _handle_dm_passcode(page):
         return False
 
 
+def _get_reply_url_via_api(tweet_url):
+    """Use Twitter API to find our reply to a given tweet.
+
+    Fetches our most recent tweets and finds the one that is a reply
+    to the target tweet's conversation. Returns the reply URL or None.
+    """
+    import twitter_api
+
+    # Extract the conversation tweet ID from the URL
+    tweet_id = tweet_url.rstrip("/").split("/")[-1]
+
+    # Fetch our recent tweets (includes replies)
+    client = twitter_api.get_read_client()
+    me = twitter_api.get_me()
+    resp = client.get_users_tweets(
+        me.id,
+        max_results=5,
+        tweet_fields=["id", "conversation_id", "in_reply_to_user_id"],
+        exclude=["retweets"],
+    )
+    if not resp.data:
+        return None
+
+    for t in resp.data:
+        # Match by conversation_id or by the tweet being a direct reply in that thread
+        if str(t.conversation_id) == tweet_id or str(t.id) != tweet_id:
+            # Our most recent tweet is likely the reply we just posted
+            # Verify it's actually a reply (has in_reply_to_user_id)
+            if t.in_reply_to_user_id:
+                return f"https://x.com/{OUR_HANDLE}/status/{t.id}"
+
+    # If conversation_id matching didn't work, just return our most recent reply
+    for t in resp.data:
+        if t.in_reply_to_user_id:
+            return f"https://x.com/{OUR_HANDLE}/status/{t.id}"
+
+    return None
+
+
 def _collect_our_reply_links(page):
     """Collect all /OUR_HANDLE/status/ links currently in the DOM."""
     return set(page.evaluate(f"""() => {{
@@ -238,29 +277,23 @@ def reply_to_tweet(tweet_url, text):
             except Exception:
                 verified = True
 
-            # Capture the reply URL by finding the new link in the DOM
+            # Capture the reply URL via Twitter API (authoritative, no DOM guessing)
             reply_url = None
-            for attempt in range(5):
-                links_after = _collect_our_reply_links(page)
-                new_links = links_after - links_before
-                if new_links:
-                    # Pick the highest status ID (most recent)
-                    reply_path = max(new_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
-                    reply_url = f"https://x.com{reply_path}" if not reply_path.startswith("http") else reply_path
-                    break
-                page.wait_for_timeout(2000)
+            try:
+                reply_url = _get_reply_url_via_api(tweet_url)
+            except Exception:
+                pass
 
-            # Fallback: check profile page for the latest reply
+            # Fallback: DOM diff on current page
             if not reply_url:
-                try:
-                    page.goto(f"https://x.com/{OUR_HANDLE}/with_replies", wait_until="domcontentloaded")
-                    page.wait_for_timeout(4000)
-                    profile_links = _collect_our_reply_links(page)
-                    if profile_links:
-                        reply_path = max(profile_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
+                for attempt in range(3):
+                    links_after = _collect_our_reply_links(page)
+                    new_links = links_after - links_before
+                    if new_links:
+                        reply_path = max(new_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
                         reply_url = f"https://x.com{reply_path}" if not reply_path.startswith("http") else reply_path
-                except Exception:
-                    pass
+                        break
+                    page.wait_for_timeout(2000)
 
             return {
                 "ok": True,
