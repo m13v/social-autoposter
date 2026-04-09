@@ -73,7 +73,7 @@ Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
    \`\`\`
    Replace TWEET_STATUS_ID with the tweet's numeric status ID (from the URL).
    If any row is returned, SKIP that tweet and pick another one. Log: \"Skipped tweet TWEET_URL (already posted, post_id=ID)\".
-3. Draft the reply as a genuine contribution to the conversation (follow Content Rules, NEVER use em dashes, keep it short 1-2 sentences). Share experience, ask questions, add nuance, or respectfully disagree. Do NOT pitch, recommend tools, or drop links.
+3. Draft the reply as a genuine contribution to the conversation (follow Content Rules, NEVER use em dashes). Match the length to what fits organically: sometimes one punchy sentence is perfect, sometimes 2-3 sentences with a specific anecdote or detail will perform better. Top-performing replies tend to include concrete personal experience (numbers, specific situations, real outcomes). Do NOT pitch, recommend tools, or drop links.
 4. Post it using the Python CDP script (no browser MCP needed):
    python3 scripts/twitter_browser.py reply 'TWEET_URL' 'YOUR_REPLY_TEXT'
    Returns JSON with {ok: true, tweet_url, reply_url, verified} on success.
