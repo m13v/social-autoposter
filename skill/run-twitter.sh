@@ -32,6 +32,12 @@ TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter --
 CANDIDATES=$(python3 "$REPO_DIR/scripts/find_tweets.py" --project "$PROJECT" --max 20 --json-output 2>/dev/null || echo "[]")
 echo "Candidates found: $(echo "$CANDIDATES" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)" | tee -a "$LOG_FILE"
 
+# Fetch our last 20 replies so Claude can avoid repeating the same themes/takes
+RECENT_REPLIES=$(psql "$DATABASE_URL" -t -A -c "
+    SELECT LEFT(our_content, 150)
+    FROM posts WHERE platform='twitter' AND status='active'
+    ORDER BY posted_at DESC LIMIT 20;" 2>/dev/null | paste -sd '|||' - || echo "(unavailable)")
+
 claude --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
@@ -56,8 +62,20 @@ the reply pipeline handle recommendations.
 ## FEEDBACK FROM PAST PERFORMANCE (use this to write better replies):
 $TOP_REPORT
 
+## YOUR RECENT REPLIES (DO NOT repeat these themes, takes, or sentence patterns):
+$RECENT_REPLIES
+
+IMPORTANT: Read the recent replies above carefully. If you have already made a point about a topic
+(e.g. 'tests are the new code review', 'the test suite IS the spec'), do NOT make the same point
+again even if the thread is about a similar topic. Find a DIFFERENT angle, share a different
+experience, or skip the thread entirely if you have nothing fresh to add.
+
 ## CANDIDATE TWEETS (found via API search, already deduped against DB):
 $CANDIDATES
+
+Each candidate may include an 'existing_replies' field showing what others already said in that
+thread. Read these before drafting your reply. Do NOT repeat points that other commenters already
+made. Find an angle that adds something new to the conversation.
 
 If the API candidates above are weak (off-topic, non-English, low engagement), you may also
 browse Twitter search URLs via mcp__twitter-agent__browser_navigate to find better tweets.
