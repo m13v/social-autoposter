@@ -257,19 +257,22 @@ def reply_to_tweet(tweet_url, text):
                 try:
                     page.goto(f"https://x.com/{OUR_HANDLE}/with_replies", wait_until="domcontentloaded")
                     page.wait_for_timeout(4000)
-                    # Get the highest status ID from our profile (most recent tweet)
                     profile_links = _collect_our_reply_links(page)
                     if profile_links:
                         latest_path = max(profile_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
                         latest_id = re.search(r'/status/(\d+)', latest_path).group(1)
-                        # Only use it if it's newer than anything in links_before
-                        before_ids = set()
-                        for lnk in links_before:
-                            m = re.search(r'/status/(\d+)', lnk)
-                            if m:
-                                before_ids.add(m.group(1))
-                        if latest_id not in before_ids:
+                        # Track last known ID to avoid returning the same URL twice
+                        tracker_file = "/tmp/social-autoposter-last-reply-id.txt"
+                        last_known = ""
+                        try:
+                            with open(tracker_file) as f:
+                                last_known = f.read().strip()
+                        except FileNotFoundError:
+                            pass
+                        if latest_id != last_known:
                             reply_url = f"https://x.com{latest_path}" if not latest_path.startswith("http") else latest_path
+                            with open(tracker_file, "w") as f:
+                                f.write(latest_id)
                 except Exception:
                     pass
 
