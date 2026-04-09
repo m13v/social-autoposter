@@ -43,11 +43,17 @@ def pick_next_keyword(product):
         conn.close()
         return {"keyword": row[0], "slug": row[1], "status": row[2], "score": row[3]}
 
-    # Then: unscored keywords
+    # Then: unscored keywords — prioritize long-tail (3+ words, moderate volume)
+    # over broad head terms that waste scoring budget
     cur.execute("""
         SELECT keyword, slug, status FROM seo_keywords
         WHERE product = %s AND status = 'unscored'
-        ORDER BY volume DESC NULLS LAST LIMIT 1
+        ORDER BY
+            CASE WHEN array_length(string_to_array(keyword, ' '), 1) >= 3
+                 AND (volume IS NULL OR volume BETWEEN 20 AND 5000)
+                 THEN 0 ELSE 1 END,
+            volume DESC NULLS LAST
+        LIMIT 1
     """, (product,))
     row = cur.fetchone()
     cur.close()
