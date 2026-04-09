@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/matthewdi</string>
+		<key>PATH</key>
+		<string>/Users/matthewdi/.nvm/versions/node/v20.19.4/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+	</dict>
+	<key>Label</key>
+	<string>com.m13v.social-dm-replies-linkedin</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/matthewdi/social-autoposter/skill/engage-dm-replies-linkedin.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-dm-replies-linkedin-stderr.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-dm-replies-linkedin-stdout.log</string>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict><key>Hour</key><integer>1</integer><key>Minute</key><integer>20</integer></dict>
+		<dict><key>Hour</key><integer>5</integer><key>Minute</key><integer>20</integer></dict>
+		<dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>20</integer></dict>
+		<dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>20</integer></dict>
+		<dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>20</integer></dict>
+		<dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>20</integer></dict>
+	</array>
+</dict>
+</plist>
