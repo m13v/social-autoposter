@@ -5,13 +5,15 @@
 # scores it via SERP analysis, and if it passes the threshold,
 # triggers page generation in the product's website repo.
 #
+# All state is stored in Postgres (seo_keywords table).
+#
 # Usage:
 #   ./run_pipeline.sh <product_name> [--score-only] [--generate-only]
 #
 # Page generation uses product-specific prompt templates stored in
 # seo/templates/<product>.md. No per-repo skills needed.
 #
-# Requires: python3, claude CLI
+# Requires: python3, claude CLI, psycopg2
 #
 
 set -euo pipefail
@@ -21,12 +23,12 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG="$ROOT_DIR/config.json"
 LOCK_DIR="$SCRIPT_DIR/.locks"
 TEMPLATES_DIR="$SCRIPT_DIR/templates"
+DB="python3 $SCRIPT_DIR/db_helpers.py"
 
 PRODUCT="${1:?Usage: $0 <product_name> [--score-only] [--generate-only]}"
 MODE="${2:-full}"  # full, --score-only, --generate-only
 
 PRODUCT_LOWER=$(echo "$PRODUCT" | tr '[:upper:]' '[:lower:]')
-STATE_FILE="$SCRIPT_DIR/state/$PRODUCT_LOWER/underserved_keywords.json"
 LOCK_FILE="$LOCK_DIR/$PRODUCT_LOWER.lock"
 LOG_DIR="$SCRIPT_DIR/logs/$PRODUCT_LOWER"
 
@@ -45,12 +47,6 @@ if [ -f "$LOCK_FILE" ]; then
 fi
 echo "$$" > "$LOCK_FILE"
 trap 'rm -f "$LOCK_FILE"' EXIT
-
-# --- Ensure state file exists ---
-if [ ! -f "$STATE_FILE" ]; then
-    echo "No state file found. Generating keywords first..."
-    python3 "$SCRIPT_DIR/generate_keywords.py" "$PRODUCT"
-fi
 
 # --- Read product config ---
 REPO_PATH=$(python3 -c "
@@ -106,45 +102,12 @@ echo "=== SEO Pipeline: $PRODUCT ==="
 echo "  Repo: $REPO_PATH"
 echo "  Website: $WEBSITE"
 echo "  Template: $TEMPLATE_FILE"
-echo "  State: $STATE_FILE"
 echo ""
 
-# --- Step 1: Pick next keyword ---
-if [ "$MODE" = "--generate-only" ]; then
-    # Pick highest-scored pending keyword
-    NEXT=$(python3 -c "
-import json
-with open('$STATE_FILE') as f:
-    state = json.load(f)
-pending = [k for k in state['keywords'] if k.get('status') == 'pending' and k.get('score') is not None and k['score'] >= 1.5]
-pending.sort(key=lambda x: x['score'], reverse=True)
-if pending:
-    print(json.dumps(pending[0]))
-else:
-    print('NONE')
-")
-else
-    # Priority: pending (ready to build) first, then unscored (need scoring)
-    NEXT=$(python3 -c "
-import json
-with open('$STATE_FILE') as f:
-    state = json.load(f)
-# First: build pages for keywords already scored above threshold
-pending = [k for k in state['keywords'] if k.get('status') == 'pending' and k.get('score') is not None and k['score'] >= 1.5]
-pending.sort(key=lambda x: x['score'], reverse=True)
-if pending:
-    print(json.dumps(pending[0]))
-else:
-    # Then: score the next unscored keyword
-    unscored = [k for k in state['keywords'] if k.get('status') == 'unscored']
-    if unscored:
-        print(json.dumps(unscored[0]))
-    else:
-        print('NONE')
-")
-fi
+# --- Step 1: Pick next keyword from Postgres ---
+NEXT=$($DB pick "$PRODUCT")
 
-if [ "$NEXT" = "NONE" ]; then
+if [ "$NEXT" = "NONE" ] || [ "$NEXT" = "null" ]; then
     echo "No keywords to process. Generate more with: python3 generate_keywords.py $PRODUCT"
     exit 0
 fi
@@ -152,6 +115,12 @@ fi
 KEYWORD=$(echo "$NEXT" | python3 -c "import json,sys; print(json.load(sys.stdin)['keyword'])")
 SLUG=$(echo "$NEXT" | python3 -c "import json,sys; print(json.load(sys.stdin)['slug'])")
 STATUS=$(echo "$NEXT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','unscored'))")
+
+# If --generate-only, skip unscored keywords
+if [ "$MODE" = "--generate-only" ] && [ "$STATUS" = "unscored" ]; then
+    echo "No pending keywords to generate. Score some first."
+    exit 0
+fi
 
 echo "Next keyword: $KEYWORD (slug: $SLUG, status: $STATUS)"
 
@@ -163,20 +132,8 @@ if [ "$STATUS" = "unscored" ] && [ "$MODE" != "--generate-only" ]; then
     echo ""
     echo "--- SERP Scoring ---"
 
-    # Mark as scoring
-    python3 -c "
-import json
-from datetime import datetime, timezone
-with open('$STATE_FILE') as f:
-    state = json.load(f)
-for kw in state['keywords']:
-    if kw['keyword'] == '$KEYWORD':
-        kw['status'] = 'scoring'
-        break
-state['updated_at'] = datetime.now(timezone.utc).isoformat()
-with open('$STATE_FILE', 'w') as f:
-    json.dump(state, f, indent=2)
-"
+    # Mark as scoring in Postgres
+    $DB update "$PRODUCT" "$KEYWORD" scoring
 
     # Run Claude to score the SERP
     claude -p "You are a SERP analyst. Score this keyword for the product '$PRODUCT'.
@@ -217,10 +174,11 @@ RESPOND IN EXACTLY THIS JSON FORMAT (nothing else):
 }
 " --output-format json 2>"$LOG_FILE" | tee "$LOG_FILE.score"
 
-    # Parse score and update state
+    # Parse score and update Postgres
     python3 -c "
-import json, sys
-from datetime import datetime, timezone
+import json, sys, os
+sys.path.insert(0, '$SCRIPT_DIR')
+from db_helpers import update_status
 
 try:
     raw = open('$LOG_FILE.score').read().strip()
@@ -232,52 +190,36 @@ try:
         print('ERROR: Could not parse score output')
         sys.exit(1)
 
-    with open('$STATE_FILE') as f:
-        state = json.load(f)
+    score = result.get('score', 0)
+    status = 'pending' if score >= 1.5 else 'skip'
 
-    for kw in state['keywords']:
-        if kw['keyword'] == '$KEYWORD':
-            kw['signal1'] = result.get('signal1', 0)
-            kw['signal2'] = result.get('signal2', 0)
-            kw['signal3'] = result.get('signal3', 0)
-            kw['score'] = result.get('score', 0)
-            kw['notes'] = result.get('notes', '')
-            kw['scored_at'] = datetime.now(timezone.utc).isoformat()
-            if kw['score'] >= 1.5:
-                kw['status'] = 'pending'
-                print(f'SCORED: {kw[\"score\"]} -> pending (will build)')
-            else:
-                kw['status'] = 'skip'
-                print(f'SCORED: {kw[\"score\"]} -> skip (below threshold)')
-            break
+    update_status('$PRODUCT', '$KEYWORD', status,
+        score=score,
+        signal1=result.get('signal1', 0),
+        signal2=result.get('signal2', 0),
+        signal3=result.get('signal3', 0),
+        notes=result.get('notes', ''))
 
-    state['updated_at'] = datetime.now(timezone.utc).isoformat()
-    with open('$STATE_FILE', 'w') as f:
-        json.dump(state, f, indent=2)
+    print(f'SCORED: {score} -> {status}')
 
 except Exception as e:
     print(f'ERROR parsing score: {e}')
-    with open('$STATE_FILE') as f:
-        state = json.load(f)
-    for kw in state['keywords']:
-        if kw['keyword'] == '$KEYWORD':
-            kw['status'] = 'unscored'
-            break
-    state['updated_at'] = datetime.now(timezone.utc).isoformat()
-    with open('$STATE_FILE', 'w') as f:
-        json.dump(state, f, indent=2)
+    update_status('$PRODUCT', '$KEYWORD', 'unscored')
     sys.exit(1)
 " || exit 1
 
     # Re-read status after scoring
     STATUS=$(python3 -c "
-import json
-with open('$STATE_FILE') as f:
-    state = json.load(f)
-for kw in state['keywords']:
-    if kw['keyword'] == '$KEYWORD':
-        print(kw['status'])
-        break
+import sys, json
+sys.path.insert(0, '$SCRIPT_DIR')
+from db_helpers import get_conn
+conn = get_conn()
+cur = conn.cursor()
+cur.execute(\"SELECT status FROM seo_keywords WHERE product = %s AND keyword = %s\", ('$PRODUCT', '$KEYWORD'))
+row = cur.fetchone()
+print(row[0] if row else 'unknown')
+cur.close()
+conn.close()
 ")
 fi
 
@@ -289,20 +231,16 @@ if [ "$STATUS" = "pending" ] && [ "$MODE" != "--score-only" ]; then
     echo "Repo: $REPO_PATH"
     echo "Template: $TEMPLATE_FILE"
 
-    # Mark as in_progress
-    python3 -c "
-import json
-from datetime import datetime, timezone
-with open('$STATE_FILE') as f:
-    state = json.load(f)
-for kw in state['keywords']:
-    if kw['keyword'] == '$KEYWORD':
-        kw['status'] = 'in_progress'
-        break
-state['updated_at'] = datetime.now(timezone.utc).isoformat()
-with open('$STATE_FILE', 'w') as f:
-    json.dump(state, f, indent=2)
-"
+    # Check if slug already exists as a done page
+    SLUG_CHECK=$($DB check_slug "$PRODUCT" "$SLUG")
+    if [ "$SLUG_CHECK" = "exists" ]; then
+        echo "Slug '$SLUG' already exists as a completed page. Skipping."
+        $DB update "$PRODUCT" "$KEYWORD" done
+        exit 0
+    fi
+
+    # Mark as in_progress in Postgres
+    $DB update "$PRODUCT" "$KEYWORD" in_progress
 
     # Read the template and substitute variables
     TEMPLATE_CONTENT=$(cat "$TEMPLATE_FILE")
@@ -327,22 +265,13 @@ After the page is created, committed, and deployed, report back with:
 3. Whether the build succeeded
 " 2>>"$LOG_FILE" | tee -a "$LOG_FILE"
 
-    # Mark as done
+    # Mark as done in Postgres
     cd "$SCRIPT_DIR"
     python3 -c "
-import json
-from datetime import datetime, timezone
-with open('$STATE_FILE') as f:
-    state = json.load(f)
-for kw in state['keywords']:
-    if kw['keyword'] == '$KEYWORD':
-        kw['status'] = 'done'
-        kw['completed_at'] = datetime.now(timezone.utc).isoformat()
-        kw['page_url'] = '$WEBSITE/t/$SLUG'
-        break
-state['updated_at'] = datetime.now(timezone.utc).isoformat()
-with open('$STATE_FILE', 'w') as f:
-    json.dump(state, f, indent=2)
+import sys
+sys.path.insert(0, '$SCRIPT_DIR')
+from db_helpers import update_status
+update_status('$PRODUCT', '$KEYWORD', 'done', page_url='$WEBSITE/t/$SLUG')
 "
 
     echo ""
@@ -353,26 +282,7 @@ else
     fi
 fi
 
-# --- Report ---
+# --- Report from Postgres ---
 echo ""
 echo "=== Pipeline Report: $PRODUCT ==="
-python3 -c "
-import json
-with open('$STATE_FILE') as f:
-    state = json.load(f)
-statuses = {}
-for kw in state['keywords']:
-    s = kw.get('status', 'unscored')
-    statuses[s] = statuses.get(s, 0) + 1
-total = len(state['keywords'])
-print(f'  Total keywords: {total}')
-for s, count in sorted(statuses.items()):
-    print(f'  {s}: {count}')
-
-pending = [k for k in state['keywords'] if k.get('status') == 'pending']
-pending.sort(key=lambda x: x.get('score', 0), reverse=True)
-if pending:
-    print(f'  Top pending:')
-    for p in pending[:5]:
-        print(f'    {p[\"score\"]:.1f} | {p[\"keyword\"]}')
-"
+$DB report "$PRODUCT"
