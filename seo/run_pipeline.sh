@@ -174,14 +174,18 @@ RESPOND IN EXACTLY THIS JSON FORMAT (nothing else):
 }
 " --output-format json 2>"$LOG_FILE" | tee "$LOG_FILE.score"
 
-    # Parse score and update Postgres
+    # Parse score and update Postgres (use env vars to avoid quoting issues)
+    SEO_SCORE_FILE="$LOG_FILE.score" SEO_PRODUCT="$PRODUCT" SEO_KEYWORD="$KEYWORD" SEO_SCRIPT_DIR="$SCRIPT_DIR" \
     python3 -c "
 import json, sys, os
-sys.path.insert(0, '$SCRIPT_DIR')
+sys.path.insert(0, os.environ['SEO_SCRIPT_DIR'])
 from db_helpers import update_status
 
+product = os.environ['SEO_PRODUCT']
+keyword = os.environ['SEO_KEYWORD']
+
 try:
-    raw = open('$LOG_FILE.score').read().strip()
+    raw = open(os.environ['SEO_SCORE_FILE']).read().strip()
     start = raw.find('{')
     end = raw.rfind('}') + 1
     if start >= 0 and end > start:
@@ -193,7 +197,7 @@ try:
     score = result.get('score', 0)
     status = 'pending' if score >= 1.5 else 'skip'
 
-    update_status('$PRODUCT', '$KEYWORD', status,
+    update_status(product, keyword, status,
         score=score,
         signal1=result.get('signal1', 0),
         signal2=result.get('signal2', 0),
@@ -204,18 +208,20 @@ try:
 
 except Exception as e:
     print(f'ERROR parsing score: {e}')
-    update_status('$PRODUCT', '$KEYWORD', 'unscored')
+    update_status(product, keyword, 'unscored')
     sys.exit(1)
 " || exit 1
 
     # Re-read status after scoring
-    STATUS=$(python3 -c "
-import sys, json
-sys.path.insert(0, '$SCRIPT_DIR')
+    STATUS=$(SEO_PRODUCT="$PRODUCT" SEO_KEYWORD="$KEYWORD" SEO_SCRIPT_DIR="$SCRIPT_DIR" \
+    python3 -c "
+import sys, os
+sys.path.insert(0, os.environ['SEO_SCRIPT_DIR'])
 from db_helpers import get_conn
 conn = get_conn()
 cur = conn.cursor()
-cur.execute(\"SELECT status FROM seo_keywords WHERE product = %s AND keyword = %s\", ('$PRODUCT', '$KEYWORD'))
+cur.execute('SELECT status FROM seo_keywords WHERE product = %s AND keyword = %s',
+            (os.environ['SEO_PRODUCT'], os.environ['SEO_KEYWORD']))
 row = cur.fetchone()
 print(row[0] if row else 'unknown')
 cur.close()
@@ -267,11 +273,13 @@ After the page is created, committed, and deployed, report back with:
 
     # Mark as done in Postgres
     cd "$SCRIPT_DIR"
+    SEO_PRODUCT="$PRODUCT" SEO_KEYWORD="$KEYWORD" SEO_PAGE_URL="$WEBSITE/t/$SLUG" SEO_SCRIPT_DIR="$SCRIPT_DIR" \
     python3 -c "
-import sys
-sys.path.insert(0, '$SCRIPT_DIR')
+import sys, os
+sys.path.insert(0, os.environ['SEO_SCRIPT_DIR'])
 from db_helpers import update_status
-update_status('$PRODUCT', '$KEYWORD', 'done', page_url='$WEBSITE/t/$SLUG')
+update_status(os.environ['SEO_PRODUCT'], os.environ['SEO_KEYWORD'], 'done',
+              page_url=os.environ['SEO_PAGE_URL'])
 "
 
     echo ""
