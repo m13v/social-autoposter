@@ -294,7 +294,7 @@ def post_via_cdp(thread_url, reply_to_url, text):
                 return result
             err = result.get("error", "unknown")
             print(f"[post_reddit] CDP attempt {attempt + 1}: {err}")
-            if err in ("thread_not_found", "thread_locked", "already_replied"):
+            if err in ("thread_not_found", "thread_locked", "thread_archived", "already_replied", "not_logged_in"):
                 return result  # Don't retry these
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError, json.JSONDecodeError) as e:
             print(f"[post_reddit] CDP attempt {attempt + 1} exception: {e}")
