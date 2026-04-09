@@ -145,6 +145,9 @@ def get_browser_and_page(playwright):
                         return browser, pg, True
                 if context.pages:
                     return browser, context.pages[0], True
+                # No pages open in the context; create one instead of falling back to headless
+                page = context.new_page()
+                return browser, page, True
         except Exception:
             pass
 
@@ -202,6 +205,11 @@ def post_comment(thread_url, text):
             page_text = page.text_content("body") or ""
             if "page not found" in page_text.lower() or "there doesn't seem to be anything here" in page_text.lower():
                 return {"ok": False, "error": "thread_not_found"}
+
+            # Check if thread is archived (old reddit shows interstitial with this exact text)
+            page_text_lower = page_text.lower()
+            if "this is an archived post" in page_text_lower:
+                return {"ok": False, "error": "thread_archived"}
 
             # Check if thread is locked
             if page.locator(".locked-tagline").count() > 0:
