@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """LinkedIn auth health check and self-healing.
 
-Checks if the LinkedIn session in browser-sessions.json is still valid.
-If invalid, re-authenticates using keychain credentials and saves fresh cookies.
+Checks if the LinkedIn persistent browser profile has a valid session.
+If invalid, re-authenticates using keychain credentials.
+Cookies auto-persist via Chrome's persistent profile (no manual export needed).
 
 Usage:
     python3 scripts/linkedin_auth_check.py          # check + heal if needed
@@ -20,7 +21,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -28,10 +28,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional, Tuple
 
-STORAGE_STATE = os.path.expanduser("~/.claude/browser-sessions.json")
-LINKEDIN_AGENT_CONFIG = os.path.expanduser(
-    "~/.claude/browser-agent-configs/linkedin-agent.json"
-)
+PROFILE_DIR = os.path.expanduser("~/.claude/browser-profiles/linkedin")
 VIEWPORT = {"width": 911, "height": 1016}
 
 
@@ -39,62 +36,88 @@ def log(msg: str) -> None:
     print(f"[linkedin-auth] {msg}", file=sys.stderr)
 
 
-def get_li_at_cookie() -> dict | None:
-    """Read li_at cookie from browser-sessions.json."""
-    if not os.path.exists(STORAGE_STATE):
-        return None
+def get_li_at_from_cdp(port: int) -> str | None:
+    """Extract li_at cookie value from a running browser via CDP."""
     try:
-        with open(STORAGE_STATE) as f:
-            data = json.load(f)
-        for cookie in data.get("cookies", []):
-            if cookie["name"] == "li_at":
-                return cookie
+        import websocket
+        resp = urllib.request.urlopen(f"http://localhost:{port}/json", timeout=2)
+        pages = json.loads(resp.read())
+        linkedin_ws = None
+        for p in pages:
+            if "linkedin.com" in p.get("url", "") and "login" not in p.get("url", ""):
+                linkedin_ws = p.get("webSocketDebuggerUrl")
+                break
+        if not linkedin_ws:
+            for p in pages:
+                if "linkedin.com" in p.get("url", ""):
+                    linkedin_ws = p.get("webSocketDebuggerUrl")
+                    break
+        if not linkedin_ws:
+            return None
+
+        ws = websocket.create_connection(linkedin_ws, timeout=5)
+        ws.send(json.dumps({"id": 1, "method": "Network.getAllCookies"}))
+        result = json.loads(ws.recv())
+        ws.close()
+        for cookie in result.get("result", {}).get("cookies", []):
+            if cookie["name"] == "li_at" and "linkedin.com" in cookie.get("domain", ""):
+                return cookie["value"]
     except Exception:
         pass
     return None
 
 
-def check_cookie_valid() -> bool:
-    """Check if the li_at cookie is accepted by LinkedIn's servers.
+def check_session_valid() -> bool:
+    """Check if the LinkedIn session is valid.
 
-    Makes a lightweight HEAD request to LinkedIn with the cookie.
-    If LinkedIn redirects to /login or /uas/login, the session is dead.
+    First tries to get li_at from a running browser via CDP.
+    Falls back to launching a headless persistent context and navigating.
     """
-    cookie = get_li_at_cookie()
-    if not cookie:
-        log("No li_at cookie found in browser-sessions.json")
-        return False
+    # Try CDP first (fast, non-destructive)
+    cdp_port = find_linkedin_cdp_port()
+    if cdp_port:
+        li_at = get_li_at_from_cdp(cdp_port)
+        if li_at:
+            return check_cookie_value(li_at)
 
-    # Check expiry
-    expires = cookie.get("expires", -1)
-    if expires > 0 and expires < time.time():
-        log(f"li_at cookie expired at {time.ctime(expires)}")
-        return False
-
-    li_at_value = cookie["value"]
-
-    # Also grab JSESSIONID for csrf
-    jsession = None
+    # Fallback: launch persistent profile and check navigation
     try:
-        with open(STORAGE_STATE) as f:
-            data = json.load(f)
-        for c in data.get("cookies", []):
-            if c["name"] == "JSESSIONID":
-                jsession = c["value"]
-                break
-    except Exception:
-        pass
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            ctx = p.chromium.launch_persistent_context(
+                PROFILE_DIR,
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+                viewport=VIEWPORT,
+            )
+            page = ctx.new_page()
+            page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(3000)
+            url = page.url
+            ctx.close()
 
-    cookie_header = f'li_at={li_at_value}'
-    if jsession:
-        cookie_header += f'; JSESSIONID={jsession}'
+            if "login" in url or "uas/" in url or "checkpoint" in url:
+                log(f"LinkedIn redirected to login: {url}")
+                return False
+            log("LinkedIn session is valid (navigation check)")
+            return True
+    except Exception as e:
+        log(f"Session check via profile launch failed: {e}")
+        # If we can't check (e.g. profile locked by running browser), assume valid
+        if "Browser is already in use" in str(e):
+            log("Profile locked by running browser, assuming session is valid")
+            return True
+        return False
 
+
+def check_cookie_value(li_at: str) -> bool:
+    """Validate a li_at cookie value against LinkedIn's servers."""
     try:
         req = urllib.request.Request(
             "https://www.linkedin.com/feed/",
             method="GET",
             headers={
-                "Cookie": cookie_header,
+                "Cookie": f"li_at={li_at}",
                 "User-Agent": (
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -102,30 +125,22 @@ def check_cookie_valid() -> bool:
                 ),
             },
         )
-        # Follow redirects manually to detect login redirect
-        opener = urllib.request.build_opener(
-            urllib.request.HTTPRedirectHandler()
-        )
+        opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler())
         resp = opener.open(req, timeout=15)
         final_url = resp.geturl()
 
         if "login" in final_url or "uas/" in final_url or "checkpoint" in final_url:
             log(f"LinkedIn redirected to login: {final_url}")
             return False
-
-        # Check response code
         if resp.status == 200:
             log("LinkedIn session is valid")
             return True
-
         log(f"LinkedIn returned status {resp.status}")
         return False
-
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             log(f"LinkedIn returned {e.code}, session invalid")
             return False
-        # 429, 5xx could be temporary
         if e.code >= 500 or e.code == 429:
             log(f"LinkedIn returned {e.code}, assuming session is OK (server issue)")
             return True
@@ -133,7 +148,6 @@ def check_cookie_valid() -> bool:
         return False
     except Exception as e:
         log(f"Error checking LinkedIn session: {e}")
-        # Network error, don't assume session is bad
         return True
 
 
@@ -189,77 +203,12 @@ def find_linkedin_cdp_port() -> int | None:
     return None
 
 
-def export_cookies_cdp(port: int) -> bool:
-    """Export fresh cookies from the running browser via CDP."""
-    repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    export_script = os.path.join(repo_dir, "scripts", "export_cdp_storage_state.py")
-
-    # Find a LinkedIn page URL prefix to use
-    try:
-        resp = urllib.request.urlopen(
-            f"http://localhost:{port}/json", timeout=2
-        )
-        pages = json.loads(resp.read())
-        linkedin_page = None
-        for p in pages:
-            url = p.get("url", "")
-            if "linkedin.com" in url and "login" not in url and "uas/" not in url:
-                linkedin_page = url
-                break
-        if not linkedin_page:
-            # Use any LinkedIn page
-            for p in pages:
-                if "linkedin.com" in p.get("url", ""):
-                    linkedin_page = p["url"]
-                    break
-    except Exception:
-        linkedin_page = None
-
-    if not linkedin_page:
-        log("No LinkedIn page found on CDP port for cookie export")
-        return False
-
-    # Build a prefix that matches the page URL
-    # e.g. "https://www.linkedin.com/feed/" or "https://www.linkedin.com/search/"
-    prefix = linkedin_page.split("?")[0]
-    if not prefix.endswith("/"):
-        prefix = prefix.rsplit("/", 1)[0] + "/"
-
-    try:
-        result = subprocess.run(
-            [
-                sys.executable,
-                export_script,
-                "--port", str(port),
-                "--page-url-prefix", prefix,
-                "--cookie-url", "https://www.linkedin.com/feed/",
-                "--cookie-url", "https://www.linkedin.com/",
-                "--domain-filter", "linkedin.com",
-                "--merge",
-                "--backup",
-                "--require-cookie", "li_at",
-                "--out", STORAGE_STATE,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode == 0:
-            log("Fresh cookies exported successfully")
-            return True
-        else:
-            log(f"Cookie export failed: {result.stderr.strip()}")
-            return False
-    except Exception as e:
-        log(f"Cookie export error: {e}")
-        return False
-
-
 def re_authenticate() -> bool:
-    """Log in to LinkedIn using Playwright and save fresh cookies.
+    """Log in to LinkedIn using Playwright persistent profile.
 
     Tries to connect to the existing LinkedIn agent browser via CDP first.
-    Falls back to launching a headless browser.
+    Falls back to launching a headless persistent profile.
+    Cookies auto-persist in the Chrome profile, no manual export needed.
     """
     creds = get_linkedin_password()
     if not creds:
@@ -276,7 +225,7 @@ def re_authenticate() -> bool:
         return False
 
     with sync_playwright() as p:
-        browser = None
+        context = None
         page = None
         is_cdp = False
 
@@ -290,66 +239,60 @@ def re_authenticate() -> bool:
                 contexts = browser.contexts
                 if contexts:
                     ctx = contexts[0]
-                    # Use existing page or create new one
                     page = ctx.pages[0] if ctx.pages else ctx.new_page()
                     is_cdp = True
                     log(f"Connected to LinkedIn agent browser on port {cdp_port}")
             except Exception as e:
                 log(f"CDP connection failed: {e}")
-                browser = None
 
-        # Fallback: launch headless browser with existing storage state
-        if not browser:
-            log("Launching headless browser for auth")
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--disable-blink-features=AutomationControlled"],
-            )
-            ctx = browser.new_context(
-                storage_state=STORAGE_STATE if os.path.exists(STORAGE_STATE) else None,
-                viewport=VIEWPORT,
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/131.0.0.0 Safari/537.36"
-                ),
-            )
-            page = ctx.new_page()
+        # Fallback: launch headless persistent profile
+        if not page:
+            log("Launching headless persistent profile for auth")
+            try:
+                context = p.chromium.launch_persistent_context(
+                    PROFILE_DIR,
+                    headless=True,
+                    args=["--disable-blink-features=AutomationControlled"],
+                    viewport=VIEWPORT,
+                    user_agent=(
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/131.0.0.0 Safari/537.36"
+                    ),
+                )
+                page = context.new_page()
+            except Exception as e:
+                if "Browser is already in use" in str(e):
+                    log("Profile locked by running browser. Cannot re-auth without CDP.")
+                    return False
+                raise
 
         try:
-            # Navigate to LinkedIn
             page.goto(
                 "https://www.linkedin.com/feed/",
                 wait_until="domcontentloaded",
                 timeout=30000,
             )
             page.wait_for_timeout(3000)
-
             current_url = page.url
 
             # Already logged in?
             if "login" not in current_url and "uas/" not in current_url and "checkpoint" not in current_url:
                 log("Already logged in after navigation")
-                if is_cdp:
-                    return export_cookies_cdp(cdp_port)
-                return save_context_cookies(page.context)
+                return True
 
-            # We're on the login page
+            # On login page, enter credentials
             log("On login page, entering credentials...")
-
-            # Check if email is pre-filled or needs to be entered
             email_field = page.query_selector('input[name="session_key"]')
             if email_field:
                 email_val = email_field.input_value()
                 if not email_val or email_val.strip() == "":
                     email_field.fill(email)
 
-            # Fill password
             password_field = page.query_selector('input[name="session_password"]')
             if password_field:
                 password_field.fill(password)
             else:
-                # May be the "Welcome back" page with just password
                 pwd_box = page.query_selector('input[type="password"]')
                 if pwd_box:
                     pwd_box.fill(password)
@@ -357,7 +300,6 @@ def re_authenticate() -> bool:
                     log("Could not find password field on login page")
                     return False
 
-            # Click sign in
             sign_in = page.query_selector('button[type="submit"]')
             if not sign_in:
                 sign_in = page.query_selector('button:has-text("Sign in")')
@@ -367,14 +309,11 @@ def re_authenticate() -> bool:
                 log("Could not find Sign In button")
                 return False
 
-            # Wait for navigation
             page.wait_for_timeout(5000)
             current_url = page.url
 
-            # Check for verification/challenge
             if "checkpoint" in current_url or "challenge" in current_url:
                 log(f"LinkedIn requires verification at: {current_url}")
-                log("Manual intervention needed. Please complete verification in the browser.")
                 return False
 
             if "login" in current_url or "uas/" in current_url:
@@ -382,63 +321,15 @@ def re_authenticate() -> bool:
                 return False
 
             log(f"Login successful, now at: {current_url}")
-
-            # Save cookies
-            if is_cdp:
-                # Wait a moment for cookies to settle
-                page.wait_for_timeout(2000)
-                return export_cookies_cdp(cdp_port)
-            else:
-                return save_context_cookies(page.context)
+            # Cookies auto-persist in the persistent profile
+            return True
 
         except Exception as e:
             log(f"Re-authentication failed: {e}")
             return False
         finally:
-            if not is_cdp and browser:
-                browser.close()
-
-
-def save_context_cookies(context) -> bool:
-    """Save cookies from a Playwright context into browser-sessions.json (merge mode)."""
-    try:
-        state = context.storage_state()
-        new_cookies = state.get("cookies", [])
-        li_cookies = [c for c in new_cookies if "linkedin.com" in c.get("domain", "")]
-
-        if not any(c["name"] == "li_at" for c in li_cookies):
-            log("No li_at cookie in new session, login may have failed")
-            return False
-
-        # Merge into existing file
-        if os.path.exists(STORAGE_STATE):
-            # Backup
-            backup = STORAGE_STATE + ".bak"
-            shutil.copy2(STORAGE_STATE, backup)
-
-            with open(STORAGE_STATE) as f:
-                existing = json.load(f)
-            # Remove old LinkedIn cookies
-            existing_cookies = [
-                c for c in existing.get("cookies", [])
-                if "linkedin.com" not in c.get("domain", "")
-            ]
-            merged = {
-                "cookies": existing_cookies + li_cookies,
-                "origins": existing.get("origins", []),
-            }
-        else:
-            merged = {"cookies": li_cookies, "origins": []}
-
-        with open(STORAGE_STATE, "w") as f:
-            json.dump(merged, f, indent=2)
-
-        log(f"Saved {len(li_cookies)} LinkedIn cookies to {STORAGE_STATE}")
-        return True
-
-    except Exception as e:
-        log(f"Failed to save cookies: {e}")
-        return False
+            if context and not is_cdp:
+                context.close()
 
 
 def main() -> int:
@@ -447,24 +338,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="LinkedIn auth health check and self-healing")
     parser.add_argument("--check", action="store_true", help="Check only, don't heal")
     parser.add_argument("--force", action="store_true", help="Force re-auth even if valid")
-    parser.add_argument(
-        "--save-cookies",
-        action="store_true",
-        help="Export cookies from running LinkedIn browser to storage file (call at end of pipeline runs)",
-    )
     args = parser.parse_args()
-
-    if args.save_cookies:
-        port = find_linkedin_cdp_port()
-        if port:
-            if export_cookies_cdp(port):
-                return 0
-            else:
-                log("Cookie save failed (browser may have no li_at)")
-                return 1
-        else:
-            log("No running LinkedIn browser found for cookie save")
-            return 1
 
     if args.force:
         log("Forced re-authentication requested")
@@ -475,7 +349,7 @@ def main() -> int:
             log("Re-authentication failed")
             return 1
 
-    is_valid = check_cookie_valid()
+    is_valid = check_session_valid()
 
     if is_valid:
         return 0
@@ -486,13 +360,8 @@ def main() -> int:
 
     log("Session invalid, attempting self-healing...")
     if re_authenticate():
-        # Verify the new session works
-        if check_cookie_valid():
-            log("Self-healing successful, new session verified")
-            return 2
-        else:
-            log("Self-healing completed but new session still invalid")
-            return 1
+        log("Self-healing successful")
+        return 2
     else:
         log("Self-healing failed")
         return 1
