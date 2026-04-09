@@ -162,46 +162,6 @@ def _handle_dm_passcode(page):
         return False
 
 
-def _get_reply_url_via_api(tweet_url):
-    """Use Twitter API to find our reply to a given tweet.
-
-    Fetches our most recent tweets and matches the one that is
-    in_reply_to the target tweet. Returns the reply URL or None.
-    """
-    import time
-    import twitter_api
-
-    # Extract the target tweet's status ID from the URL
-    target_id = tweet_url.rstrip("/").split("/")[-1]
-
-    # Small delay to let the API index our reply
-    time.sleep(2)
-
-    client = twitter_api.get_read_client()
-    me = twitter_api.get_me()
-    resp = client.get_users_tweets(
-        me.id,
-        max_results=10,
-        tweet_fields=["id", "conversation_id", "referenced_tweets"],
-        exclude=["retweets"],
-    )
-    if not resp.data:
-        return None
-
-    # Find the tweet that is a reply to our target
-    for t in resp.data:
-        if t.referenced_tweets:
-            for ref in t.referenced_tweets:
-                if ref.type == "replied_to" and str(ref.id) == target_id:
-                    return f"https://x.com/{OUR_HANDLE}/status/{t.id}"
-
-    # Fallback: match by conversation_id (handles replies to replies in a thread)
-    for t in resp.data:
-        if str(t.conversation_id) == target_id and t.referenced_tweets:
-            return f"https://x.com/{OUR_HANDLE}/status/{t.id}"
-
-    return None
-
 
 def _collect_our_reply_links(page):
     """Collect all /OUR_HANDLE/status/ links currently in the DOM."""
@@ -261,6 +221,27 @@ def reply_to_tweet(tweet_url, text):
             page.keyboard.type(text, delay=10)
             page.wait_for_timeout(1000)
 
+            # Set up network interception to capture the CreateTweet response
+            created_tweet_id = []
+
+            def _capture_create_tweet(response):
+                try:
+                    if "CreateTweet" in response.url and response.status == 200:
+                        body = response.json()
+                        tweet_result = (
+                            body.get("data", {})
+                            .get("create_tweet", {})
+                            .get("tweet_results", {})
+                            .get("result", {})
+                        )
+                        rest_id = tweet_result.get("rest_id")
+                        if rest_id:
+                            created_tweet_id.append(rest_id)
+                except Exception:
+                    pass
+
+            page.on("response", _capture_create_tweet)
+
             # Click the Reply button (it should now be enabled)
             try:
                 reply_btn = page.get_by_role("button", name="Reply").last
@@ -272,6 +253,9 @@ def reply_to_tweet(tweet_url, text):
 
             page.wait_for_timeout(3000)
 
+            # Remove listener
+            page.remove_listener("response", _capture_create_tweet)
+
             # Verify: check if the reply box is empty (cleared after posting)
             try:
                 box_text = reply_box.text_content() or ""
@@ -279,12 +263,10 @@ def reply_to_tweet(tweet_url, text):
             except Exception:
                 verified = True
 
-            # Capture the reply URL via Twitter API (authoritative, no DOM guessing)
+            # Get reply URL from intercepted network response (most reliable)
             reply_url = None
-            try:
-                reply_url = _get_reply_url_via_api(tweet_url)
-            except Exception:
-                pass
+            if created_tweet_id:
+                reply_url = f"https://x.com/{OUR_HANDLE}/status/{created_tweet_id[0]}"
 
             # Fallback: DOM diff on current page
             if not reply_url:
