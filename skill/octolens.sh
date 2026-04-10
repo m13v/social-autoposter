@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Octolens mention engagement - find mentions via Octolens and engage
+
+[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
 
 # Octolens lock: wait up to 60min for previous run to finish, then skip
