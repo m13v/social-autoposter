@@ -145,9 +145,8 @@ def get_browser_and_page(playwright):
                         return browser, pg, True
                 if context.pages:
                     return browser, context.pages[0], True
-                # No pages open in the context; create one instead of falling back to headless
-                page = context.new_page()
-                return browser, page, True
+                # No pages in context; fall through to headless persistent context
+                # (creating a page here would crash the MCP browser on close)
         except Exception:
             pass
 
