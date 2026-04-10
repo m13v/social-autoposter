@@ -175,12 +175,10 @@ def cmd_search(args):
         }
         if already:
             entry["SKIP"] = ">>> ALREADY POSTED IN THIS THREAD - DO NOT POST AGAIN <<<"
-        if age_hours > 4320:  # 6 months = archived on Reddit
-            entry["SKIP"] = ">>> ARCHIVED (>6 months old) - CANNOT COMMENT <<<"
+        if age_hours > 4320 or post.get("archived"):
+            continue  # Drop archived threads entirely (>6 months or API flag)
         if post.get("locked"):
-            entry["SKIP"] = ">>> THREAD LOCKED - CANNOT COMMENT <<<"
-        if post.get("archived"):
-            entry["SKIP"] = ">>> ARCHIVED - CANNOT COMMENT <<<"
+            continue  # Drop locked threads entirely
         threads.append(entry)
 
     print(json.dumps(threads, indent=2))
@@ -212,6 +210,11 @@ def cmd_fetch(args):
         "subreddit": f"r/{thread_data.get('subreddit', '')}",
         "url": args.url,
     }
+
+    if thread_data.get("archived") or thread_data.get("locked"):
+        status = "archived" if thread_data.get("archived") else "locked"
+        print(json.dumps({"error": f"thread_{status}", "thread": thread}))
+        return
 
     # Top comments (flatten one level)
     comments = []
