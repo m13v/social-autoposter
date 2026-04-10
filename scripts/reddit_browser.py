@@ -131,26 +131,9 @@ def get_browser_and_page(playwright):
     """
     cdp_port = find_reddit_cdp_port()
 
-    if cdp_port:
-        try:
-            browser = playwright.chromium.connect_over_cdp(
-                f"http://localhost:{cdp_port}"
-            )
-            # With persistent profiles, the default context has logged-in cookies
-            contexts = browser.contexts
-            if contexts:
-                context = contexts[0]
-                for pg in context.pages:
-                    if "reddit.com" in pg.url and "login" not in pg.url:
-                        return browser, pg, True
-                if context.pages:
-                    return browser, context.pages[0], True
-                # No pages in context; fall through to headless persistent context
-                # (creating a page here would crash the MCP browser on close)
-        except Exception:
-            pass
-
-    # Fallback: launch persistent browser with saved profile
+    # Always use the persistent profile directly. CDP connections to the MCP
+    # browser expose a default context that is NOT logged in (the MCP's logged-in
+    # context is isolated/invisible to CDP), causing auth failures.
     context = playwright.chromium.launch_persistent_context(
         PROFILE_DIR,
         headless=True,
