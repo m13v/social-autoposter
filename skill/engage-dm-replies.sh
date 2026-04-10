@@ -135,13 +135,25 @@ fi
 # ═══════════════════════════════════════════════════════
 # PHASE 0: Send pending human replies from email escalations
 # ═══════════════════════════════════════════════════════
+# Platform filter for Phase 0: when running a specific platform cycle, only
+# process replies targeted at that platform. Empty PLATFORM = all platforms
+# (manual runs). This prevents parallel platform cycles from racing on the
+# same rows and clobbering each other's status updates.
+HR_PLATFORM_FILTER="1=1"
+if [ -n "$PLATFORM" ]; then
+    _HR_P="$PLATFORM"
+    [ "$_HR_P" = "x" ] && _HR_P="twitter"
+    HR_PLATFORM_FILTER="h.platform = '$_HR_P'"
+fi
+
 HUMAN_REPLIES=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT h.id, h.dm_id, h.platform, h.their_author, h.reply_content,
-               d.chat_url, h.project_name
+               d.chat_url, h.project_name, h.attempts
         FROM human_dm_replies h
         JOIN dms d ON d.id = h.dm_id
-        WHERE h.status = 'pending'
+        WHERE (h.status = 'pending' OR (h.status = 'failed' AND h.attempts < 3))
+          AND $HR_PLATFORM_FILTER
         ORDER BY h.created_at ASC
     ) q;" 2>/dev/null || echo "null")
 
@@ -193,10 +205,13 @@ For each reply:
    cd ~/social-autoposter && python3 scripts/dm_conversation.py set-status --dm-id DM_ID --status active
    \`\`\`
 
-If sending fails for a reply, mark it as failed:
+If sending fails for a reply, increment the attempts counter and record the reason. Use a short error string (single line, no quotes):
 \`\`\`bash
-psql "$DATABASE_URL" -c "UPDATE human_dm_replies SET status = 'failed' WHERE id = REPLY_ID"
+psql "$DATABASE_URL" -c "UPDATE human_dm_replies SET status = 'failed', attempts = attempts + 1, last_error = 'ERROR_REASON' WHERE id = REPLY_ID"
 \`\`\`
+Rows with \`status = 'failed'\` AND \`attempts < 3\` will be picked up automatically on the next Phase 0 run for this platform. After 3 attempts they stay failed and stop retrying — notify the human in the run summary so they can handle manually.
+
+Note: each Phase 0 run is scoped to a single platform ($PLATFORM), so you will only see replies for that platform here. Do not worry about replies for other platforms.
 PHASE0_EOF
 
     # The main Claude agent session will process this prompt alongside phases A-D
