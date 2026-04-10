@@ -141,6 +141,21 @@ def batch_fetch_info(thing_ids, user_agent=USER_AGENT):
     return results
 
 
+def _load_blocked_subreddits():
+    """Load subreddits where Deep_Ad1959 cannot post (banned/restricted)."""
+    try:
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
+        with open(config_path) as f:
+            config = json.load(f)
+        blocked = set()
+        for subs in config.get("banned_subreddits", {}).values():
+            blocked.update(s.lower() for s in subs)
+        blocked.update(s.lower() for s in config.get("exclusions", {}).get("subreddits", []))
+        return blocked
+    except Exception:
+        return set()
+
+
 def cmd_search(args):
     """Search Reddit and return threads as JSON."""
     query = args.query
@@ -155,9 +170,14 @@ def cmd_search(args):
     already_posted = {row[0] for row in cur.fetchall()}
     conn.close()
 
+    blocked_subs = _load_blocked_subreddits()
+
     threads = []
     for child in data.get("data", {}).get("children", []):
         post = child.get("data", {})
+        subreddit = post.get("subreddit", "").lower()
+        if subreddit in blocked_subs:
+            continue  # Skip blocked/banned subreddits
         created = post.get("created_utc", 0)
         age_hours = (datetime.now(timezone.utc).timestamp() - created) / 3600 if created else 999
         permalink = f"https://old.reddit.com{post.get('permalink', '')}"
@@ -186,6 +206,15 @@ def cmd_search(args):
 
 def cmd_fetch(args):
     """Fetch a thread's comments via Reddit JSON API."""
+    # Check if subreddit is blocked
+    import re as _re
+    sub_match = _re.search(r'/r/([^/]+)', args.url)
+    if sub_match:
+        blocked = _load_blocked_subreddits()
+        if sub_match.group(1).lower() in blocked:
+            print(json.dumps({"error": "subreddit_blocked", "subreddit": sub_match.group(1)}))
+            return
+
     # Convert URL to .json endpoint
     url = args.url.rstrip("/")
     # Handle old.reddit.com or www.reddit.com
