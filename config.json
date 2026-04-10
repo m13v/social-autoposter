@@ -155,7 +155,9 @@
       "landing_pages": {
         "repo": "~/fazm-website",
         "github_repo": "m13v/fazm-website",
-        "base_url": "https://fazm.ai"
+        "base_url": "https://fazm.ai",
+        "gsc_property": "sc-domain:fazm.ai",
+        "brand_terms": ["fazm", "fazm ai", "fazm.ai", "matthew diakonov", "m13v"]
       },
       "posthog": {
         "project_id": "331630",
