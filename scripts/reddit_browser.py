@@ -264,8 +264,15 @@ def post_comment(thread_url, text):
             if "login" in page.url.lower():
                 return {"ok": False, "error": "not_logged_in"}
 
-            # Find the top-level comment form.
-            # Try multiple selectors: direct child first, then broader fallback.
+            # Check if the top-level comment form exists at all.
+            # On restricted subs, old reddit silently omits the form (no error message).
+            has_comment_form = page.locator(
+                ".commentarea .usertext.cloneable, .commentarea > form.usertext"
+            ).count() > 0
+            if not has_comment_form:
+                return {"ok": False, "error": "subreddit_restricted"}
+
+            # Find the top-level comment form textarea.
             comment_form = page.locator(
                 ".commentarea > form.usertext textarea, "
                 ".commentarea > .usertext-edit textarea, "
