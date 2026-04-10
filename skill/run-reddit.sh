@@ -3,6 +3,8 @@
 # Finds Reddit threads and posts up to 100 comments per run.
 # Called by launchd every 1 hour.
 
+
+[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
 
 # Platform lock: wait up to 60min for previous run to finish, then skip
