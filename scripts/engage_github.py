@@ -368,6 +368,9 @@ def main():
     failed = 0
     total_usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
 
+    consecutive_failures = 0
+    last_failed_id = None
+
     print(f"[engage_github] Starting. limit={args.limit or 'unlimited'}, timeout={args.timeout}s, user={our_username}")
 
     while True:
@@ -376,6 +379,9 @@ def main():
             break
         if args.limit and processed >= args.limit:
             print(f"[engage_github] Limit reached ({args.limit}). Stopping.")
+            break
+        if consecutive_failures >= 3:
+            print(f"[engage_github] 3 consecutive Claude failures (likely rate limit). Stopping.")
             break
 
         reply = get_next_pending(conn)
@@ -442,8 +448,13 @@ def main():
 
         if not ok:
             failed += 1
+            consecutive_failures += 1
+            # Mark as error so the loop advances to the next pending reply
+            conn.execute("UPDATE replies SET status='error' WHERE id=%s", [reply["id"]])
+            conn.commit()
             print(f"[engage_github] #{reply['id']} CLAUDE FAILED ({reply_elapsed:.0f}s): {output[:200]}")
         else:
+            consecutive_failures = 0
             decision = parse_decision(output)
             if not decision:
                 failed += 1
