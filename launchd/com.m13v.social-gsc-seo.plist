@@ -18,7 +18,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/Library/Frameworks/Python.framework/Versions/3.12/bin</string>
+        <string>/Users/matthewdi/.nvm/versions/node/v20.19.4/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/Library/Frameworks/Python.framework/Versions/3.12/bin</string>
         <key>HOME</key>
         <string>/Users/matthewdi</string>
     </dict>
