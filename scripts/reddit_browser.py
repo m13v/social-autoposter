@@ -200,15 +200,22 @@ def post_comment(thread_url, text):
             page.wait_for_timeout(3000)
             _ensure_old_reddit(page)
 
-            # Check if thread exists
-            page_text = page.text_content("body") or ""
-            if "page not found" in page_text.lower() or "there doesn't seem to be anything here" in page_text.lower():
+            # Check if thread exists using visible content only (old reddit hides
+            # template strings like "there doesn't seem to be anything here" in the
+            # page markup on every page, so text_content("body") gives false positives).
+            content_el = page.locator("#siteTable, .sitetable.linklisting").first
+            try:
+                content_el.wait_for(state="attached", timeout=5000)
+            except Exception:
                 return {"ok": False, "error": "thread_not_found"}
 
-            # Check if thread is archived (old reddit shows interstitial with this exact text)
-            page_text_lower = page_text.lower()
-            if "this is an archived post" in page_text_lower:
-                return {"ok": False, "error": "thread_archived"}
+            # A real 404 page shows an interstitial with class "interstitial"
+            if page.locator(".interstitial").count() > 0:
+                interstitial_text = page.locator(".interstitial").first.text_content() or ""
+                if "page not found" in interstitial_text.lower():
+                    return {"ok": False, "error": "thread_not_found"}
+                if "this is an archived post" in interstitial_text.lower():
+                    return {"ok": False, "error": "thread_archived"}
 
             # Check if thread is locked
             if page.locator(".locked-tagline").count() > 0:
