@@ -14,6 +14,8 @@
 #   stats.sh --quiet            # Suppress verbose output
 # Called by launchd every 6 hours.
 
+
+[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -uo pipefail
 
 # Parse flags
