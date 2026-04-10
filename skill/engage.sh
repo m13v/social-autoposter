@@ -15,6 +15,8 @@
 # NOTE: Reply scanning (formerly Phase A) now runs on its own hourly launchd job:
 # com.m13v.social-scan-replies (skill/run-scan-replies.sh)
 
+
+[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
 
 # Parse --platform flag
