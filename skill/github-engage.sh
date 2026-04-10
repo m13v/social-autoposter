@@ -3,6 +3,8 @@
 # Scan our GitHub issue comments for replies, respond to substantive ones.
 # Called by launchd every 6 hours.
 
+
+[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
 
 # GitHub engage lock: wait up to 60min for previous run to finish, then skip
