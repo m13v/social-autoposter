@@ -3,6 +3,8 @@
 # Runs scan_replies.py hourly on its own schedule (previously Phase A of engage.sh).
 # Pulls new replies from Reddit for all active posts and inserts into the replies table.
 
+
+[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
 
 # Platform lock: wait up to 90min for a previous scan to finish, then skip.
