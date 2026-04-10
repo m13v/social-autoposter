@@ -35,6 +35,8 @@ import time
 
 
 PROFILE_DIR = os.path.expanduser("~/.claude/browser-profiles/reddit")
+LOCK_FILE = os.path.expanduser("~/.claude/reddit-agent-lock.json")
+LOCK_EXPIRY = 300  # Must match reddit-agent-lock.sh
 VIEWPORT = {"width": 911, "height": 1016}
 
 # Load Reddit username from config
@@ -118,6 +120,29 @@ def find_reddit_cdp_port():
     return None
 
 
+def _check_browser_lock():
+    """Check if another session holds the Reddit browser lock.
+
+    Raises SystemExit if the lock is held, so we never launch a competing
+    browser instance on the same profile directory.
+    """
+    if not os.path.exists(LOCK_FILE):
+        return
+    try:
+        with open(LOCK_FILE) as f:
+            lock = json.load(f)
+        age = time.time() - lock.get("timestamp", 0)
+        if age < LOCK_EXPIRY:
+            holder = lock.get("session_id", "unknown")
+            print(json.dumps({
+                "success": False,
+                "error": f"Reddit browser is locked by session {holder} ({int(age)}s ago). Skipping."
+            }))
+            sys.exit(1)
+    except (json.JSONDecodeError, OSError):
+        pass
+
+
 def get_browser_and_page(playwright):
     """Connect to the reddit-agent MCP browser via CDP with a fresh logged-in context.
 
@@ -129,6 +154,7 @@ def get_browser_and_page(playwright):
     Returns (browser, page, is_cdp). When is_cdp=True, `page` is in a new context
     on the CDP browser. When is_cdp=False, it's a new headless page.
     """
+    _check_browser_lock()
     cdp_port = find_reddit_cdp_port()
 
     # Always use the persistent profile directly. CDP connections to the MCP
