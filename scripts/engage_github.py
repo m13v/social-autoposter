@@ -183,23 +183,24 @@ Read it carefully before deciding anything.
 
 ## Decision step: reply or skip?
 
-Read the FULL thread above and check: have we already replied? how many times? what did we say? did the maintainer answer? did anyone call our comments spammy? is the conversation even directed at us?
+Read the FULL thread above. There is NO cap on how many times we can reply to a thread. Active back-and-forth is encouraged when the conversation keeps developing and we have something useful to contribute. Do not skip just because we have prior comments in the thread. Skip only when one of the specific conditions below is clearly true.
 
-SKIP (output action=skip with one of these reasons):
-- light_acknowledgment: triggering comment is just thanks, emoji, +1
-- not_directed_at_us: the comment is replying to someone else in the thread, not to us
-- no_value_to_add: the question has already been answered in the thread, or our reply would repeat what we or others already said
-- already_engaged_enough: we've already replied to this thread and the conversation has moved on or doesn't need another reply from us
-- resolved: maintainer answered, issue closed, or a fix was shipped
-- hostile_or_flagged: our prior comments were flagged as spam, someone called us a bot, or we're being accused of shilling. Back off.
-- off_topic_for_us: the discussion is outside our expertise or unrelated to any project in config.json
-- self_promo_risk: any honest reply would inevitably sound like self-promotion
+DEFAULT TO REPLY when you have substance. Lean toward engagement, not silence.
 
-REPLY (output action=reply with text) only if ALL of these are true:
-- The comment asks a direct technical question we can actually answer with unique insight
-- The answer is NOT already somewhere in the thread
-- A peer reading the thread would find our reply useful even if they never heard of our product
-- We are NOT about to be the 3rd+ reply from our account in this thread, unless specifically asked
+SKIP (output action=skip) only when one of these is clearly true:
+- light_acknowledgment: the triggering comment is just thanks, emoji, +1, or other content-free acknowledgment
+- not_directed_at_us: the comment is in a conversation between two other people in the thread and does not ask us anything. Prefer this reason whenever the comment is addressed to someone else by @mention or context, regardless of how many prior comments we've made.
+- no_value_to_add: the specific question or point has already been answered in the thread by someone else, or our reply would just repeat something we or others already said. This is about content, not count.
+- conversation_concluded: the issue has been resolved, a fix has shipped, the maintainer closed it with an answer, and there is nothing substantive left to discuss. This is about thread state, not count.
+- hostile_or_flagged: our prior comments in this thread were flagged as spam, someone called us a bot, or we are being accused of shilling. Back off.
+- off_topic_for_us: the discussion is outside our expertise or unrelated to anything in config.json
+- self_promo_risk: any honest reply would inevitably sound like self-promotion and there is no way to be genuinely helpful without it
+
+REPLY (output action=reply with text) when any of these is true:
+- The comment asks a direct question we can answer with useful insight
+- We have specific technical substance to contribute that is not already in the thread
+- The conversation is still alive and a peer reading it would find our next reply useful
+- It is fine to be the 5th, 10th, or 20th reply from our account. Count does not matter. Substance does.
 
 ## Output format
 Output ONLY ONE JSON object. No markdown, no prose, no explanations, no code fences.
