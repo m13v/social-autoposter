@@ -3,6 +3,8 @@
 # Finds LinkedIn posts and adds up to 30 comments per run.
 # Called by launchd every 3 hours.
 
+
+[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
 
 # Platform lock: wait up to 60min for previous run to finish, then skip
