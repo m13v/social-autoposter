@@ -23,6 +23,7 @@ Connects to the running twitter-agent MCP browser via CDP (Chrome DevTools Proto
 to reuse the existing logged-in session.
 """
 
+import atexit
 import json
 import os
 import re
@@ -97,26 +98,54 @@ def find_twitter_cdp_port():
     return None
 
 
-def _check_browser_lock():
-    """Check if another session holds the Twitter browser lock.
+_LOCK_SESSION_ID = f"python:{os.getpid()}"
 
-    Raises SystemExit if the lock is held, so we never launch a competing
-    browser instance on the same profile directory.
-    """
-    if not os.path.exists(LOCK_FILE):
-        return
+
+def _release_browser_lock():
+    """Release the lock if we hold it."""
     try:
-        with open(LOCK_FILE) as f:
-            lock = json.load(f)
-        age = time.time() - lock.get("timestamp", 0)
-        if age < LOCK_EXPIRY:
-            holder = lock.get("session_id", "unknown")
-            print(json.dumps({
-                "success": False,
-                "error": f"Twitter browser is locked by session {holder} ({int(age)}s ago). Skipping."
-            }))
-            sys.exit(1)
+        if os.path.exists(LOCK_FILE):
+            with open(LOCK_FILE) as f:
+                lock = json.load(f)
+            if lock.get("session_id") == _LOCK_SESSION_ID:
+                os.remove(LOCK_FILE)
     except (json.JSONDecodeError, OSError):
+        pass
+
+
+atexit.register(_release_browser_lock)
+
+
+def _acquire_browser_lock():
+    """Check if another session holds the Twitter browser lock, then acquire it.
+
+    Raises SystemExit if the lock is held by another session.
+    Writes our own lock so MCP agents know the profile is in use.
+    """
+    if os.path.exists(LOCK_FILE):
+        try:
+            with open(LOCK_FILE) as f:
+                lock = json.load(f)
+            age = time.time() - lock.get("timestamp", 0)
+            if age < LOCK_EXPIRY:
+                holder = lock.get("session_id", "unknown")
+                print(json.dumps({
+                    "success": False,
+                    "error": f"Twitter browser is locked by session {holder} ({int(age)}s ago). Skipping."
+                }))
+                sys.exit(1)
+        except (json.JSONDecodeError, OSError):
+            pass
+    with open(LOCK_FILE, "w") as f:
+        json.dump({"session_id": _LOCK_SESSION_ID, "timestamp": int(time.time())}, f)
+
+
+def _refresh_browser_lock():
+    """Refresh the lock timestamp to prevent expiry during long operations."""
+    try:
+        with open(LOCK_FILE, "w") as f:
+            json.dump({"session_id": _LOCK_SESSION_ID, "timestamp": int(time.time())}, f)
+    except OSError:
         pass
 
 
@@ -127,7 +156,7 @@ def get_browser_and_page(playwright):
     existing Twitter tab (navigate it, don't close it). When is_cdp=False,
     it's a new headless page.
     """
-    _check_browser_lock()
+    _acquire_browser_lock()
     cdp_port = find_twitter_cdp_port()
 
     if cdp_port:
