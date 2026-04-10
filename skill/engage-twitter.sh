@@ -4,6 +4,8 @@
 # Phase B: Respond to pending Twitter replies via browser (API can't reply to most tweets)
 # Called by launchd every 3 hours.
 
+
+[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
 
 # Platform lock: wait up to 60min for previous twitter run to finish, then skip
