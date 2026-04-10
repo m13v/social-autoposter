@@ -13,6 +13,7 @@
 # Usage: cron_seo.sh (no args, picks product by weighted random)
 #
 
+[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
