@@ -3,6 +3,8 @@
 # Find relevant open issues across GitHub, post helpful comments, self-reply with specific file links.
 # Called by launchd every 4 hours.
 
+
+[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
 
 # Platform lock: wait up to 60min for previous github run to finish, then skip
