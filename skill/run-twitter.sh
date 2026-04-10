@@ -3,6 +3,8 @@
 # Finds Twitter threads and posts up to 50 replies per run.
 # Called by launchd every 2 hours.
 
+
+[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
 
 # Platform lock: wait up to 60min for previous run to finish, then skip
