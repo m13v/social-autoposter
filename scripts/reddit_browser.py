@@ -252,6 +252,7 @@ def post_comment(thread_url, text):
 
             # Click the save/submit button
             save_btn = page.locator(
+                ".commentarea button.save[type='submit'], "
                 ".commentarea > form.usertext button[type='submit'], "
                 ".commentarea > .usertext button[type='submit'], "
                 ".commentarea > .usertext-edit button[type='submit']"
@@ -261,7 +262,7 @@ def post_comment(thread_url, text):
                 save_btn.wait_for(state="visible", timeout=3000)
                 save_btn.click()
             except Exception:
-                # Fallback: find any button with value "save" near the comment box
+                # Fallback: find any visible save button in the comment area
                 try:
                     save_btn = page.locator(
                         ".commentarea button:has-text('save')"
