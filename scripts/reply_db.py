@@ -91,3 +91,34 @@ elif cmd == "status":
     cur = db.execute("SELECT status, COUNT(*) FROM replies GROUP BY status ORDER BY status")
     for row in cur.fetchall():
         print(f"{row[0]} {row[1]}")
+elif cmd == "skip-reasons":
+    # reply_db.py skip-reasons [platform] [days]
+    # Breakdown of skipped replies by reason. Use this to check whether the
+    # "should we reply?" gate is working: high counts of no_value_to_add /
+    # already_engaged_enough / resolved are healthy; everything going to
+    # replied with no skips means the gate is too permissive.
+    platform = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else None
+    days = int(sys.argv[3]) if len(sys.argv) > 3 else 7
+    where = "WHERE status='skipped' AND discovered_at > NOW() - make_interval(days => %s)"
+    params = [days]
+    if platform:
+        where += " AND platform=%s"
+        params.append(platform)
+    cur = db.execute(f"""
+        SELECT platform, skip_reason, COUNT(*) as cnt
+        FROM replies
+        {where}
+        GROUP BY platform, skip_reason
+        ORDER BY platform, cnt DESC
+    """, params)
+    rows = cur.fetchall()
+    if not rows:
+        print(f"No skipped replies in the last {days} days" + (f" for {platform}" if platform else "") + ".")
+    else:
+        print(f"Skipped replies by reason (last {days} days):")
+        current_platform = None
+        for row in rows:
+            if row[0] != current_platform:
+                current_platform = row[0]
+                print(f"\n  {current_platform}:")
+            print(f"    {row[2]:>4}  {row[1]}")
