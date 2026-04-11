@@ -36,7 +36,6 @@ Usage:
 import argparse
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timezone
 
@@ -102,35 +101,11 @@ def log_outbound(conn, dm_id, content, author=None):
 
 
 def log_inbound(conn, dm_id, author, content, message_at=None):
-    """Log a message we received. Includes dedup guard to prevent echo/duplicate logging."""
+    """Log a message we received."""
     row = conn.execute("SELECT platform, their_author FROM dms WHERE id = %s", (dm_id,)).fetchone()
     if not row:
         print(f"ERROR: DM #{dm_id} not found")
         return False
-
-    # Dedup guard: reject inbound if content matches the last outbound message (echo detection)
-    config = load_config()
-    our_account = get_our_account(config, row["platform"])
-
-    # Block if the author is actually us (our own account)
-    if author and author.lstrip("@").lower() == our_account.lstrip("@").lower():
-        print(f"  DEDUP BLOCKED: Author '{author}' is our own account on {row['platform']}. Skipping inbound log.")
-        return False
-
-    # Block if content exactly matches the last outbound message (echo from reading our own sent msg)
-    last_outbound = conn.execute("""
-        SELECT content FROM dm_messages
-        WHERE dm_id = %s AND direction = 'outbound'
-        ORDER BY message_at DESC LIMIT 1
-    """, (dm_id,)).fetchone()
-
-    if last_outbound and last_outbound["content"] and content:
-        # Normalize whitespace for comparison
-        norm_out = " ".join(last_outbound["content"].split()).strip().lower()
-        norm_in = " ".join(content.split()).strip().lower()
-        if norm_out == norm_in:
-            print(f"  DEDUP BLOCKED: Inbound content matches last outbound message for DM #{dm_id}. Likely echo of our own message. Skipping.")
-            return False
 
     ts = message_at or "NOW()"
     if message_at:
@@ -158,7 +133,7 @@ def show_history(conn, dm_id):
     """Print full conversation history."""
     dm = conn.execute("""
         SELECT d.id, d.platform, d.their_author, d.chat_url, d.conversation_status,
-               d.tier, d.message_count, d.comment_context, d.project_name
+               d.tier, d.message_count, d.comment_context
         FROM dms d WHERE d.id = %s
     """, (dm_id,)).fetchone()
 
@@ -167,8 +142,7 @@ def show_history(conn, dm_id):
         return
 
     print(f"=== DM #{dm['id']} with {dm['their_author']} [{dm['platform']}] ===")
-    project = dm.get('project_name') or 'unset'
-    print(f"Status: {dm['conversation_status']}  Tier: {dm['tier']}  Messages: {dm['message_count']}  Project: {project}")
+    print(f"Status: {dm['conversation_status']}  Tier: {dm['tier']}  Messages: {dm['message_count']}")
     if dm['chat_url']:
         print(f"Chat URL: {dm['chat_url']}")
     if dm['comment_context']:
@@ -191,7 +165,7 @@ def show_pending(conn):
     """Show conversations that have inbound messages we haven't replied to."""
     rows = conn.execute("""
         SELECT d.id, d.platform, d.their_author, d.chat_url, d.tier,
-               d.message_count, d.last_message_at, d.project_name,
+               d.message_count, d.last_message_at,
                (SELECT content FROM dm_messages
                 WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1) as last_msg,
                (SELECT direction FROM dm_messages
@@ -218,8 +192,7 @@ def show_pending(conn):
         tier_label = f"T{r['tier']}" if r['tier'] else "T1"
         ts = r['last_message_at'].strftime("%m/%d %H:%M") if r['last_message_at'] else "?"
         last = (r['last_msg'] or "")[:100]
-        proj = f" [{r['project_name']}]" if r.get('project_name') else ""
-        print(f"  DM #{r['id']} [{r['platform']}] {r['their_author']} ({tier_label}, {r['message_count']} msgs, last: {ts}){proj}")
+        print(f"  DM #{r['id']} [{r['platform']}] {r['their_author']} ({tier_label}, {r['message_count']} msgs, last: {ts})")
         print(f"    Last: {last}")
         if r['chat_url']:
             print(f"    URL: {r['chat_url']}")
@@ -230,7 +203,7 @@ def find_by_author(conn, author_query):
     """Find DM conversations by author name (case-insensitive partial match)."""
     rows = conn.execute("""
         SELECT d.id, d.platform, d.their_author, d.status, d.conversation_status,
-               d.tier, d.message_count, d.chat_url, d.last_message_at, d.project_name
+               d.tier, d.message_count, d.chat_url, d.last_message_at
         FROM dms d
         WHERE LOWER(d.their_author) LIKE LOWER(%s)
         ORDER BY d.last_message_at DESC NULLS LAST
@@ -242,8 +215,7 @@ def find_by_author(conn, author_query):
 
     for r in rows:
         ts = r['last_message_at'].strftime("%m/%d %H:%M") if r['last_message_at'] else "never"
-        proj = f" [{r['project_name']}]" if r.get('project_name') else ""
-        print(f"  DM #{r['id']} [{r['platform']}] {r['their_author']} - {r['status']}/{r['conversation_status']} T{r['tier'] or 1} ({r['message_count']} msgs, last: {ts}){proj}")
+        print(f"  DM #{r['id']} [{r['platform']}] {r['their_author']} - {r['status']}/{r['conversation_status']} T{r['tier'] or 1} ({r['message_count']} msgs, last: {ts})")
         if r['chat_url']:
             print(f"    URL: {r['chat_url']}")
 
@@ -304,89 +276,11 @@ def show_summary(conn):
             print(f"    DM #{r['id']} {r['their_author']} [{r['platform']}] - {r['message_count']} msgs, T{r['tier'] or 1}, {r['conversation_status']} (last: {ts})")
 
 
-def _send_escalation_email(conn, dm_id, platform, their_author, reason):
-    """Send an immediate escalation email with conversation history for a single DM."""
-    api_key = os.environ.get("RESEND_API_KEY")
-    to_email = os.environ.get("NOTIFICATION_EMAIL")
-    if not api_key or not to_email:
-        print(f"  WARNING: RESEND_API_KEY or NOTIFICATION_EMAIL not set — skipping escalation email")
-        return
-
-    # Fetch conversation history
-    dm = conn.execute("""
-        SELECT d.id, d.tier, d.chat_url, d.project_name, d.comment_context
-        FROM dms d WHERE d.id = %s
-    """, (dm_id,)).fetchone()
-
-    messages = conn.execute("""
-        SELECT direction, author, content, message_at
-        FROM dm_messages WHERE dm_id = %s ORDER BY message_at ASC
-    """, (dm_id,)).fetchall()
-
-    # Build conversation history text
-    history_lines = []
-    for msg in messages:
-        arrow = ">>" if msg["direction"] == "outbound" else "<<"
-        ts = msg["message_at"].strftime("%Y-%m-%d %H:%M") if msg["message_at"] else "?"
-        history_lines.append(f"  {arrow} [{ts}] {msg['author']}: {msg['content']}")
-
-    history_text = "\n".join(history_lines) if history_lines else "(no messages logged)"
-
-    project = dm.get("project_name") or "unset"
-    context = dm.get("comment_context") or ""
-    context_section = f"\nOriginal context: {context[:300]}\n" if context else ""
-
-    body = (
-        f"DM #{dm_id} [{platform}] with {their_author} needs your attention.\n\n"
-        f"Reason: {reason}\n"
-        f"Tier: {dm.get('tier') or 1}  Project: {project}\n"
-        f"{'Chat URL: ' + dm['chat_url'] if dm.get('chat_url') else ''}\n"
-        f"{context_section}\n"
-        f"--- Conversation History ---\n{history_text}\n\n"
-        f"---\n"
-        f"Reply to this email to respond. Your reply will be sent as a DM on {platform}.\n"
-    )
-
-    subject = f"[DM #{dm_id}] {their_author} [{platform}] — {reason}"
-
-    payload = json.dumps({
-        "from": "DM Escalation <dm-escalation@s4l.ai>",
-        "to": [to_email],
-        "subject": subject,
-        "text": body,
-        "reply_to": f"dm-{dm_id}@s4l.ai",
-    })
-
-    try:
-        result = subprocess.run(
-            ["curl", "-s", "-X", "POST", "https://api.resend.com/emails",
-             "-H", f"Authorization: Bearer {api_key}",
-             "-H", "Content-Type: application/json",
-             "-d", payload],
-            capture_output=True, text=True, timeout=30,
-        )
-        if '"id"' in result.stdout:
-            print(f"  Escalation email sent for DM #{dm_id} to {to_email}")
-        else:
-            print(f"  WARNING: Resend API error for DM #{dm_id}: {result.stdout}")
-    except Exception as e:
-        print(f"  WARNING: Failed to send escalation email for DM #{dm_id}: {e}")
-
-
 def flag_human(conn, dm_id, reason):
-    """Flag a conversation as needing human attention and send escalation email."""
+    """Flag a conversation as needing human attention."""
     row = conn.execute("SELECT platform, their_author, conversation_status FROM dms WHERE id = %s", (dm_id,)).fetchone()
     if not row:
         print(f"ERROR: DM #{dm_id} not found")
-        return False
-
-    # Skip flagging if we already responded (last message is outbound)
-    last_msg = conn.execute("""
-        SELECT direction FROM dm_messages
-        WHERE dm_id = %s ORDER BY message_at DESC LIMIT 1
-    """, (dm_id,)).fetchone()
-    if last_msg and last_msg["direction"] == "outbound":
-        print(f"  SKIP FLAG DM #{dm_id} ({row['their_author']}): last message is already outbound, no escalation needed")
         return False
 
     conn.execute("""
@@ -395,8 +289,6 @@ def flag_human(conn, dm_id, reason):
     """, (reason, dm_id))
     conn.commit()
     print(f"  FLAGGED DM #{dm_id} ({row['their_author']} [{row['platform']}]) for human attention: {reason}")
-
-    _send_escalation_email(conn, dm_id, row['platform'], row['their_author'], reason)
     return True
 
 
@@ -447,12 +339,6 @@ def set_status(conn, dm_id, status):
     print(f"  Set conversation_status={status} for DM #{dm_id}")
 
 
-def set_project(conn, dm_id, project_name):
-    conn.execute("UPDATE dms SET project_name = %s WHERE id = %s", (project_name, dm_id))
-    conn.commit()
-    print(f"  Set project_name={project_name} for DM #{dm_id}")
-
-
 def main():
     parser = argparse.ArgumentParser(description="DM conversation tracker")
     sub = parser.add_subparsers(dest="command")
@@ -490,10 +376,6 @@ def main():
     p_status.add_argument("--status", required=True,
                           choices=["active", "needs_reply", "stale", "converted", "closed", "needs_human"])
 
-    p_project = sub.add_parser("set-project", help="Set project name for conversation")
-    p_project.add_argument("--dm-id", type=int, required=True)
-    p_project.add_argument("--project", required=True)
-
     p_flag = sub.add_parser("flag-human", help="Flag conversation for human attention")
     p_flag.add_argument("--dm-id", type=int, required=True)
     p_flag.add_argument("--reason", required=True)
@@ -527,8 +409,6 @@ def main():
         set_tier(conn, args.dm_id, args.tier)
     elif args.command == "set-status":
         set_status(conn, args.dm_id, args.status)
-    elif args.command == "set-project":
-        set_project(conn, args.dm_id, args.project)
     elif args.command == "flag-human":
         flag_human(conn, args.dm_id, args.reason)
     elif args.command == "show-flagged":
