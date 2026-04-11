@@ -3,13 +3,7 @@
 # Find relevant open issues across GitHub, post helpful comments, self-reply with specific file links.
 # Called by launchd every 4 hours.
 
-
-[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
-
-# Platform lock: wait up to 60min for previous github run to finish, then skip
-source "$(dirname "$0")/lock.sh"
-acquire_lock "github" 3600
 
 # Load secrets
 # shellcheck source=/dev/null
@@ -21,7 +15,6 @@ LOG_DIR="$REPO_DIR/skill/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/github-$(date +%Y-%m-%d_%H%M%S).log"
 
-RUN_START=$(date +%s)
 echo "=== GitHub Issues Run: $(date) ===" | tee "$LOG_FILE"
 
 # Pick project based on weight distribution
@@ -33,25 +26,16 @@ echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
 EXCLUDED_REPOS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('github_repos',[])))" 2>/dev/null || echo "")
 EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('authors',[])))" 2>/dev/null || echo "")
 
-claude --strict-mcp-config -p "You are the Social Autoposter.
+claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Also read $REPO_DIR/config.json for accounts, projects, and search_topics.
 
-## TOPIC AREA FOR THIS RUN: $PROJECT
-Your expertise area this run is '$PROJECT'. This means you understand this domain deeply and can
-contribute genuinely to conversations about these topics. You are NOT promoting or advertising this project.
-You are a practitioner sharing real experience and adding value to discussions.
-
+## TARGET PROJECT FOR THIS RUN: $PROJECT
+You MUST find GitHub issues relevant to this project and comment about it.
+Project config: $PROJECT_JSON
 Use this project's github_search_topics if available, otherwise use the global search_topics.
-The project_name for database logging MUST be '$PROJECT'.
-
-## YOUR ROLE
-You are someone who works in this space and has deep hands-on experience.
-Your comments should be indistinguishable from any other knowledgeable contributor.
-NEVER mention product names, websites, or pitch anything in the initial comment.
-Share experience, implementation details, and genuine help. Links to specific source files
-are OK in the self-reply step (step 10) since sharing relevant code is standard on GitHub.
+The project_name for all posts this run MUST be '$PROJECT'.
 
 EXCLUSIONS — do NOT interact with these:
 - Excluded repos/orgs: $EXCLUDED_REPOS
@@ -116,13 +100,6 @@ CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular da
 CRITICAL: In self-replies, link to SPECIFIC FILES (blob/main/path/to/file.ext), not just repo homepages." 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
-
-# Log run to persistent monitor
-RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
-POSTED=$(grep -c "gh issue comment" "$LOG_FILE" 2>/dev/null) || true
-SKIPPED=$(grep -ci "skipped" "$LOG_FILE" 2>/dev/null) || true
-FAILED=$(grep -ci "error\|failed\|FAILED" "$LOG_FILE" 2>/dev/null) || true
-python3 "$REPO_DIR/scripts/log_run.py" --script "post_github" --posted "$POSTED" --skipped "$SKIPPED" --failed "$FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
 
 # Clean up old logs (keep last 7 days)
 find "$LOG_DIR" -name "github-*.log" -mtime +7 -delete 2>/dev/null || true
