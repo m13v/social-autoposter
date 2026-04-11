@@ -25,10 +25,14 @@ skill/SKILL.md
 
 # Agent-generated browser snapshots and data dumps
 *.yml
-"*.yml"
 *-notifications.json
 *-search-result
 .gstack/
+
+# Root-level agent dumps (PNG screenshots, linkedin element refs, stray scratch files)
+/*.png
+/linkedin-e*.json
+/pranjal-*
 
 # Emailbison runtime data
 emailbison/*.json
