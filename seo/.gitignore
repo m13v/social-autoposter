@@ -1,0 +1,10 @@
+# GSC pipeline runtime artifacts — never commit
+credentials/
+logs/
+state/fazm/
+state/pieline/
+.locks/
+.refresh_timestamps/
+__pycache__/
+*.pyc
+run_gsc_pipeline.sh
