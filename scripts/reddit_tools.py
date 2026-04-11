@@ -151,6 +151,11 @@ def _load_blocked_subreddits():
         for subs in config.get("banned_subreddits", {}).values():
             blocked.update(s.lower() for s in subs)
         blocked.update(s.lower() for s in config.get("exclusions", {}).get("subreddits", []))
+        # Also load auto-tracked restricted subreddits
+        restricted_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".restricted_subreddits.json")
+        if os.path.exists(restricted_path):
+            with open(restricted_path) as f:
+                blocked.update(json.load(f).keys())
         return blocked
     except Exception:
         return set()
