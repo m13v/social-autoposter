@@ -140,33 +140,6 @@ CREATE TABLE IF NOT EXISTS dm_messages (
 CREATE INDEX IF NOT EXISTS idx_dm_messages_dm_id ON dm_messages(dm_id);
 CREATE INDEX IF NOT EXISTS idx_dm_messages_direction ON dm_messages(direction);
 
--- Add project tracking to replies (posts already has project_name)
-ALTER TABLE replies ADD COLUMN IF NOT EXISTS project_name TEXT;
-
--- Add project tracking and booking link support to DMs
-ALTER TABLE dms ADD COLUMN IF NOT EXISTS project_name TEXT;
-ALTER TABLE dms ADD COLUMN IF NOT EXISTS human_reason TEXT;
-ALTER TABLE dms ADD COLUMN IF NOT EXISTS flagged_at TIMESTAMP;
-
--- Human DM replies: stores email replies to escalated DMs, per project knowledge base
-CREATE TABLE IF NOT EXISTS human_dm_replies (
-    id SERIAL PRIMARY KEY,
-    dm_id INTEGER NOT NULL REFERENCES dms(id),
-    platform TEXT NOT NULL,
-    their_author TEXT NOT NULL,
-    project_name TEXT,
-    reply_content TEXT NOT NULL,
-    email_subject TEXT,
-    resend_email_id TEXT,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    sent_at TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_human_dm_replies_status ON human_dm_replies(status);
-CREATE INDEX IF NOT EXISTS idx_human_dm_replies_dm_id ON human_dm_replies(dm_id);
-CREATE INDEX IF NOT EXISTS idx_human_dm_replies_project ON human_dm_replies(project_name);
-
 CREATE TABLE IF NOT EXISTS thread_comments (
     id SERIAL PRIMARY KEY,
     thread_id INTEGER,
