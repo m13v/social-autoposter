@@ -205,24 +205,21 @@ class ReplyScanner:
             cdata = child.get("data", {})
             self.process_reddit_comment(cdata, post_id, parent_reply_id=parent_reply_id, depth=depth)
 
-    def _extract_thread_id(self, url):
-        """Extract the Reddit thread ID (e.g. '1rzr0y8') from a URL."""
-        m = re.search(r"reddit\.com/r/[^/]+/comments/([a-z0-9]+)", url)
-        return m.group(1) if m else None
-
     def scan_reddit(self):
         print("Scanning Reddit posts for replies...")
         posts = self.db.execute(
             "SELECT id, our_url, thread_url, thread_title, thread_author, "
-            "posted_at, COALESCE(scan_no_change_count, 0) as scan_no_change_count, "
-            "thread_engagement FROM posts "
+            "posted_at, COALESCE(scan_no_change_count, 0) as scan_no_change_count FROM posts "
             "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL AND our_url != '' AND our_url LIKE 'http%%'"
         ).fetchall()
 
-        # Phase 1: Apply the staleness skip filter
         skipped = 0
-        candidates = []
         for post in posts:
+            post_id = post["id"]
+            our_url = post["our_url"]
+            is_original = self.is_our_post(post)
+
+            # Skip posts where the last 2+ scans found no new replies AND post is older than 3 days
             posted_at = post.get("posted_at")
             no_change = post["scan_no_change_count"]
             if no_change >= 2 and posted_at:
@@ -230,72 +227,13 @@ class ReplyScanner:
                 if age > timedelta(days=3):
                     skipped += 1
                     continue
-            candidates.append(post)
-
-        if skipped:
-            print(f"  Skipped {skipped} stable posts (2+ scans with no new replies, older than 3 days)")
-
-        # Phase 2: Batch-fetch thread metadata via /api/info to check num_comments
-        # This uses ~1 API call per 100 posts instead of 1 per post
-        from reddit_tools import batch_fetch_info
-
-        # Build thread_id -> list of posts mapping (multiple comments can be on the same thread)
-        thread_to_posts = {}
-        for post in candidates:
-            tid = self._extract_thread_id(post["our_url"]) or self._extract_thread_id(post.get("thread_url") or "")
-            if tid:
-                thread_to_posts.setdefault(tid, []).append(post)
-
-        thing_ids = [f"t3_{tid}" for tid in thread_to_posts]
-        print(f"  Batch-checking {len(thing_ids)} threads via /api/info ({(len(thing_ids) + 99) // 100} API calls)...")
-
-        try:
-            batch_data = batch_fetch_info(thing_ids, user_agent=self.user_agent)
-        except Exception as e:
-            print(f"  WARNING: batch_fetch_info failed ({e}), falling back to individual fetches")
-            batch_data = {}
-
-        # Determine which posts need a full individual fetch
-        # A post needs fetching if: (a) thread num_comments changed, (b) no batch data available, or (c) it's an original post
-        needs_fetch = []
-        batch_skipped = 0
-        for tid, post_list in thread_to_posts.items():
-            info = batch_data.get(f"t3_{tid}")
-            for post in post_list:
-                is_original = self.is_our_post(post)
-                if info and not is_original:
-                    current_comments = info.get("num_comments", -1)
-                    # Extract stored thread comment count from thread_engagement JSON
-                    te = post.get("thread_engagement")
-                    stored_thread_comments = -1
-                    if te:
-                        try:
-                            stored_thread_comments = (json.loads(te) if isinstance(te, str) else te).get("thread_comments", -1)
-                        except (json.JSONDecodeError, AttributeError):
-                            pass
-
-                    if current_comments == stored_thread_comments and stored_thread_comments >= 0:
-                        # No new comments on this thread, skip the expensive individual fetch
-                        self.db.execute(
-                            "UPDATE posts SET scan_no_change_count = COALESCE(scan_no_change_count, 0) + 1 WHERE id = %s",
-                            (post["id"],),
-                        )
-                        batch_skipped += 1
-                        continue
-                needs_fetch.append(post)
-
-        self.db.commit()
-        print(f"  Batch pre-check: {batch_skipped} unchanged threads skipped, {len(needs_fetch)} need full fetch")
-
-        # Phase 3: Individual fetches only for posts that need them
-        for post in needs_fetch:
-            post_id = post["id"]
-            our_url = post["our_url"]
-            is_original = self.is_our_post(post)
 
             pre_count = self.discovered
 
             if is_original:
+                # Original post: only collect top-level comments (direct replies to our post).
+                # Do NOT recurse into reply trees — those are conversations between other users.
+                # The BFS scan below handles replies to our own replies at any depth.
                 json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
                 try:
                     data = fetch_json(json_url, user_agent=self.user_agent)
@@ -311,6 +249,7 @@ class ReplyScanner:
                     print(f"  Scanning original post [{post_id}]: {(post['thread_title'] or '')[:60]}... ({len(children)} top-level comments)")
                     self.process_reddit_replies(children, post_id, depth=1)
             else:
+                # Comment on someone else's thread: fetch our comment URL and scan replies to it
                 json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
                 try:
                     data = fetch_json(json_url, user_agent=self.user_agent)
@@ -341,7 +280,10 @@ class ReplyScanner:
                 self.db.execute("UPDATE posts SET scan_no_change_count = COALESCE(scan_no_change_count, 0) + 1 WHERE id = %s", (post_id,))
             self.db.commit()
 
-            time.sleep(6)  # Reddit rate limit: 100 req / 600s
+            time.sleep(3)
+
+        if skipped:
+            print(f"  Skipped {skipped} stable posts (2+ scans with no new replies, older than 3 days)")
 
         # Scan replies to our previous replies (infinite depth BFS)
         print("\nScanning replies to our previous replies...")
@@ -379,7 +321,7 @@ class ReplyScanner:
                 reply_children, row["post_id"],
                 parent_reply_id=row["id"], depth=row["depth"] + 1,
             )
-            time.sleep(6)  # Reddit rate limit: 100 req / 600s
+            time.sleep(3)
 
     def scan_github_issues(self):
         """Scan GitHub issues for new comments after ours."""
