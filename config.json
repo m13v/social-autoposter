@@ -121,7 +121,8 @@
         "CRM management and data entry",
         "Visual understanding - reads screen context to complete complex workflows",
         "Uses accessibility APIs (not screenshots) for reliable, fast interaction",
-        "Free to start, fully open source, runs locally"
+        "Free to start, fully open source, runs locally",
+        "Custom API endpoint support - route through corporate proxies, GitHub Copilot, or any Anthropic-compatible gateway"
       ],
       "differentiator": "Uses real accessibility APIs and screen context instead of screenshot-based approaches. Works with any app on your Mac, not just the browser. Consumer-friendly app, not a developer framework.",
       "icp": "Small business owners who want to automate their business end-to-end (invoicing, CRM, email, scheduling, data entry). AI excels at these repetitive computer tasks.",
