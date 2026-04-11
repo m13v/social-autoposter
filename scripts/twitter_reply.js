@@ -120,4 +120,4 @@ async (page) => {
     await page.unroute('**/CreateTweet**').catch(() => {});
     return JSON.stringify({ ok: false, error: err.message, tweet_url: tweetUrl });
   }
-};
+}
