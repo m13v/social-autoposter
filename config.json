@@ -521,7 +521,10 @@
       "local_repo": "~/assrt",
       "landing_pages": {
         "repo": "~/assrt-website",
-        "base_url": "https://assrt.ai"
+        "github_repo": "m13v/assrt-website",
+        "base_url": "https://assrt.ai",
+        "gsc_property": "sc-domain:assrt.ai",
+        "brand_terms": ["assrt", "assrt ai", "assrt.ai"]
       },
       "subreddits": [
         "softwaretesting",
