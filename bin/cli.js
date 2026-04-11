@@ -19,10 +19,23 @@ const COPY_TARGETS = [
   'SKILL.md',
   'skill',
   'setup',
+  'browser-agent-configs',
 ];
 
 // Never overwrite these user files during update
 const USER_FILES = new Set(['config.json', '.env', 'SKILL.md']);
+
+// Browser agent config templates -> install path under ~/.claude/browser-agent-configs/
+const BROWSER_AGENT_CONFIGS = [
+  'twitter-agent-mcp.json',
+  'twitter-agent.json',
+  'reddit-agent-mcp.json',
+  'reddit-agent.json',
+  'linkedin-agent-mcp.json',
+  'linkedin-agent.json',
+];
+
+const BROWSER_PROFILES = ['twitter', 'reddit', 'linkedin'];
 
 function copyDir(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
@@ -40,6 +53,40 @@ function copyDir(src, dest) {
 function linkOrRelink(target, linkPath) {
   try { fs.rmSync(linkPath, { recursive: true, force: true }); } catch {}
   fs.symlinkSync(target, linkPath);
+}
+
+function installBrowserAgentConfigs() {
+  const nodeBin = path.dirname(process.execPath);
+  const srcDir = path.join(PKG_ROOT, 'browser-agent-configs');
+  const destDir = path.join(HOME, '.claude', 'browser-agent-configs');
+  fs.mkdirSync(destDir, { recursive: true });
+
+  let installed = 0;
+  let skipped = 0;
+  for (const name of BROWSER_AGENT_CONFIGS) {
+    const src = path.join(srcDir, name);
+    const dest = path.join(destDir, name);
+    if (!fs.existsSync(src)) continue;
+    if (fs.existsSync(dest)) {
+      skipped++;
+      continue;
+    }
+    const tpl = fs.readFileSync(src, 'utf8');
+    const out = tpl
+      .replace(/__HOME__/g, HOME)
+      .replace(/__NODE_BIN__/g, nodeBin);
+    fs.writeFileSync(dest, out);
+    installed++;
+  }
+  console.log(`  browser agent configs -> ${destDir} (installed ${installed}, skipped ${skipped} existing)`);
+
+  // Create empty persistent profile dirs so Playwright has somewhere to land cookies
+  const profilesDir = path.join(HOME, '.claude', 'browser-profiles');
+  fs.mkdirSync(profilesDir, { recursive: true });
+  for (const p of BROWSER_PROFILES) {
+    fs.mkdirSync(path.join(profilesDir, p), { recursive: true });
+  }
+  console.log(`  browser profile dirs ready -> ${profilesDir}/{${BROWSER_PROFILES.join(',')}}`);
 }
 
 function generatePlists() {
@@ -128,6 +175,9 @@ function init() {
   // Generate launchd plists with user's actual HOME
   generatePlists();
 
+  // Install browser agent MCP configs + profile dirs (skips existing files)
+  installBrowserAgentConfigs();
+
   // config.json — only if it doesn't exist
   const configDest = path.join(DEST, 'config.json');
   if (!fs.existsSync(configDest)) {
@@ -208,6 +258,9 @@ function update() {
 
   // Regenerate launchd plists with correct paths
   generatePlists();
+
+  // Top up browser agent configs (won't overwrite user customizations)
+  installBrowserAgentConfigs();
 
   // Remove stale skill/SKILL.md if it exists (SKILL.md lives at repo root only)
   const skillMd = path.join(DEST, 'skill', 'SKILL.md');
