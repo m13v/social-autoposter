@@ -1,47 +1,12 @@
 #!/usr/bin/env bash
-# engage.sh — Reply engagement loop (platform-filtered)
+# engage.sh — Reply engagement loop
+# Phase A: Python script scans for new replies (runs in background)
 # Phase B: Claude drafts and posts replies via Playwright/API (batched, 50 at a time)
 # Phase C: Cleanup
 # Phase D: Edit high-performing posts (>2 upvotes, 6h+ old) with a project link
-# Phase E: DM outreach
-#
-# Usage:
-#   engage.sh                    # Run all platforms (legacy behavior)
-#   engage.sh --platform reddit  # Run only reddit
-#   engage.sh --platform linkedin
-#   engage.sh --platform twitter
-#   engage.sh --platform moltbook
-#
-# NOTE: Reply scanning (formerly Phase A) now runs on its own hourly launchd job:
-# com.m13v.social-scan-replies (skill/run-scan-replies.sh)
+# Called by launchd every 2 hours (7200s interval).
 
-
-[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
-
-# Parse --platform flag
-PLATFORM=""
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --platform) PLATFORM="$2"; shift 2 ;;
-        *) echo "Unknown arg: $1"; exit 1 ;;
-    esac
-done
-
-# Validate platform if specified
-if [ -n "$PLATFORM" ]; then
-    case "$PLATFORM" in
-        reddit|linkedin|twitter|x|moltbook) ;;
-        *) echo "ERROR: Unknown platform '$PLATFORM'. Use: reddit, linkedin, twitter, moltbook"; exit 1 ;;
-    esac
-fi
-
-LOCK_NAME="engage"
-[ -n "$PLATFORM" ] && LOCK_NAME="engage-$PLATFORM"
-
-# Engage lock: wait up to 60min for previous engage run to finish, then skip
-source "$(dirname "$0")/lock.sh"
-acquire_lock "$LOCK_NAME" 3600
 
 # Load secrets
 # shellcheck source=/dev/null
@@ -50,6 +15,7 @@ acquire_lock "$LOCK_NAME" 3600
 REPO_DIR="$HOME/social-autoposter"
 SKILL_FILE="$REPO_DIR/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"
+BATCH_SIZE=200
 
 if [ -z "${DATABASE_URL:-}" ]; then
     echo "ERROR: DATABASE_URL not set in ~/social-autoposter/.env"
@@ -57,79 +23,23 @@ if [ -z "${DATABASE_URL:-}" ]; then
 fi
 
 mkdir -p "$LOG_DIR"
-LOG_SUFFIX=""
-[ -n "$PLATFORM" ] && LOG_SUFFIX="-$PLATFORM"
-LOG_FILE="$LOG_DIR/engage${LOG_SUFFIX}-$(date +%Y-%m-%d_%H%M%S).log"
+LOG_FILE="$LOG_DIR/engage-$(date +%Y-%m-%d_%H%M%S).log"
 
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 
-log "=== Engagement Loop Run: $(date) (platform: ${PLATFORM:-all}) ==="
-
-# LinkedIn cooldown check: skip if rate limited, checkpoint challenged, or restricted
-if [ "$PLATFORM" = "linkedin" ] || [ -z "$PLATFORM" ]; then
-    COOLDOWN_EXIT=0
-    python3 "$REPO_DIR/scripts/linkedin_cooldown.py" check 2>&1 | tee -a "$LOG_FILE" || COOLDOWN_EXIT=$?
-    if [ "$COOLDOWN_EXIT" -ne 0 ] && [ "$PLATFORM" = "linkedin" ]; then
-        log "SKIPPED: LinkedIn is in cooldown. See above for details."
-        log "=== Engagement loop complete: $(date) ==="
-        exit 0
-    fi
-fi
-
-# Helper: build SQL platform filter
-platform_in_sql() {
-    local col="${1:-platform}"
-    if [ -n "$PLATFORM" ]; then
-        # Normalize x -> twitter for DB queries where platform might be stored as either
-        local p="$PLATFORM"
-        [ "$p" = "x" ] && p="twitter"
-        echo "$col = '$p'"
-    else
-        echo "1=1"
-    fi
-}
-
-# Helper: pick MCP config based on platform
-mcp_config_for_platform() {
-    local p="${1:-all}"
-    case "$p" in
-        reddit)   echo "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" ;;
-        linkedin) echo "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" ;;
-        twitter|x) echo "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" ;;
-        *)        echo "$HOME/.claude/browser-agent-configs/all-agents-mcp.json" ;;
-    esac
-}
+log "=== Engagement Loop Run: $(date) ==="
 
 # ═══════════════════════════════════════════════════════
-# (Phase A moved to its own launchd job: com.m13v.social-scan-replies)
+# PHASE A: Scan for replies (runs in BACKGROUND)
 # ═══════════════════════════════════════════════════════
+log "Phase A: Scanning for replies (background)..."
+(PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_replies.py" 2>&1 || true) | tee -a "$LOG_FILE" &
+SCAN_PID=$!
 
 # ═══════════════════════════════════════════════════════
 # PHASE D: Edit high-performing posts with project link
-# LinkedIn: max 10 edits per run, 15s delay between edits
+# Runs FIRST — processes ALL eligible posts (no limit)
 # ═══════════════════════════════════════════════════════
-PHASE_D_START=$(date +%s)
-
-# Build platform filter for Phase D
-PHASE_D_PLATFORM_FILTER="platform IN ('reddit', 'moltbook', 'linkedin')"
-if [ -n "$PLATFORM" ]; then
-    case "$PLATFORM" in
-        reddit|moltbook|linkedin)
-            PHASE_D_PLATFORM_FILTER="platform = '$PLATFORM'"
-            ;;
-        twitter|x)
-            # Phase D doesn't apply to twitter
-            PHASE_D_PLATFORM_FILTER="1=0"
-            ;;
-    esac
-fi
-
-# LinkedIn: cap Phase D edits at 10 per run to avoid automation detection
-PHASE_D_LIMIT=""
-if [ "$PLATFORM" = "linkedin" ]; then
-    PHASE_D_LIMIT="LIMIT 10"
-fi
-
 EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT id, platform, our_url, our_content, thread_title, upvotes, project_name
@@ -139,9 +49,8 @@ EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
           AND link_edited_at IS NULL
           AND our_url IS NOT NULL
           AND (upvotes > 2 OR platform = 'linkedin')
-          AND $PHASE_D_PLATFORM_FILTER
+          AND platform IN ('reddit', 'moltbook', 'linkedin')
         ORDER BY upvotes DESC NULLS LAST
-        $PHASE_D_LIMIT
     ) q;" 2>/dev/null || echo "")
 
 if [ "$EDITABLE" != "null" ] && [ -n "$EDITABLE" ]; then
@@ -155,43 +64,20 @@ Read $SKILL_FILE for the full workflow. Execute **Phase D only** (Edit high-perf
 Posts eligible for editing:
 $EDITABLE
 
-Process ALL of them. For LinkedIn edits: wait 15 seconds between each edit to avoid automation detection.
-For each post:
+Process ALL of them. For each post:
 1. Read ~/social-autoposter/config.json to get the projects list.
 2. Pick the project whose topics are the CLOSEST match to thread_title + our_content. Check the project_name column first — if set, use that project directly. Otherwise match by topics. Be generous - if the thread is about agents, automation, desktop, memory, or anything related to the project descriptions, it's a match. If truly nothing fits, mark it skipped (see step 10) and move on. Frame it as recommending a cool tool you've come across, NOT as something you built.
 3. **If the matched project has a landing_pages config** (with repo, base_url):
-   a. Think about what SEO-optimized guide page would fit this specific thread naturally. Consider the thread's audience, their pain points, industry jargon, and what they'd actually find useful. The page should NOT feel like a landing page; it should feel like a genuine 1000-2000 word guide or resource.
+   a. Think about what SEO-optimized guide page would fit this specific thread naturally. Consider the thread's audience, their pain points, industry jargon, and what they'd actually find useful. The page should NOT feel like a landing page — it should feel like a genuine 1000-2000 word guide or resource.
    b. cd into the project repo (landing_pages.repo)
-   c. Read src/components/guide-theme.ts to get the project's theme constant (e.g. CYRANO_THEME, PIELINE_THEME). This has the brand name, logo, booking URL, and color config.
-   d. Create a NEW standalone page as src/app/t/{seo-friendly-slug}/page.tsx using the **reusable guide components**. Import them from @/components/guide:
-
-      \`\`\`tsx
-      import { GuideNavbar, GuideFooter, GuideCTASection, InlineCTA, StickyBottomCTA, ProofBanner, VideoEmbed } from "@/components/guide";
-      import { PROJECT_THEME } from "@/components/guide-theme"; // use the actual constant name
-      import { CTAButton } from "@/components/cta-button";
-      \`\`\`
-
-      **Required page structure (in this order):**
-      - \`<Metadata>\` export with title, description, openGraph, twitter tags
-      - \`<GuideNavbar theme={THEME} />\` as sticky top nav with CTA button
-      - Hero section: badge, h1, subtitle paragraph
-      - \`<ProofBanner theme={THEME} quote="..." source="..." metric="..." />\` right after the hero, using a proof_point from config.json (e.g. "20 incidents caught in the first month" or "projecting \$500/day additional revenue per location")
-      - \`<VideoEmbed videoUrl="..." title="..." />\` if the project has a demo_video in config.json (embed it after the proof banner)
-      - Table of contents nav
-      - Sections 1-2 of article content
-      - \`<InlineCTA theme={THEME} heading="..." body="..." />\` after section 2 (mid-article CTA, before the reader drops off)
-      - Sections 3-5+ of article content (comparison tables, bullet lists with real numbers)
-      - \`<GuideCTASection theme={THEME} heading="..." body="..." subtext="..." />\` as the final CTA block
-      - \`<StickyBottomCTA theme={THEME} text="..." />\` for a floating bottom bar that appears after scrolling
-      - \`<GuideFooter theme={THEME} />\`
-
-      **Content rules:**
-      - 1000-2000 words of article content
-      - Pull real context from the project's config (pricing, features, proof_points, competitive_positioning) and from web research to make it concrete and authoritative
-      - Naturally mention the product as ONE solution among the options discussed; do not make the whole page a sales pitch
-      - The InlineCTA heading should relate to the pain point discussed in sections 1-2, not generic "learn more"
-      - The ProofBanner should use the strongest, most specific proof point from config.json
-
+   c. Look at existing pages under src/app/t/ to understand the site's style, layout components (Navbar, Footer), and theme
+   d. Create a NEW standalone page as src/app/t/{seo-friendly-slug}/page.tsx — this is a real Next.js page with its own Metadata export, not a JSON entry. Include:
+      - Proper <Metadata> with title, description, openGraph, twitter tags
+      - Reuse the site's Navbar and Footer components (import or inline them)
+      - Use the CTAButton component from @/components/cta-button for ALL call-to-action buttons (it tracks clicks in PostHog automatically). Import: import { CTAButton } from "@/components/cta-button";
+      - A full article-style page: hero headline, table of contents, 5-7 content sections, comparison tables with real numbers, bullet lists with specific data points, and a CTA section at the bottom
+      - The content must be 1000-2000 words. Pull real context from the project's config (pricing, features, proof_points, competitive_positioning) and from web research to make it concrete and authoritative
+      - Naturally mention the product as ONE solution among the options discussed — don't make the whole page a sales pitch
    e. git add the new page && git commit -m "Add guide: SHORT_DESCRIPTION" && git push
    f. Wait ~35s for Vercel deploy, then curl -sI {base_url}/t/{slug} to verify HTTP 200
    g. Use THAT page URL in the link edit. If deploy fails, fall back to the project's website URL.
@@ -206,16 +92,8 @@ For each post:
      -H "Content-Type: application/json" \\
      -d '{"content": "FULL_CONTENT"}' \\
      "https://www.moltbook.com/api/v1/comments/COMMENT_UUID"
-7. For Reddit: use the Python CDP script (no browser MCP needed):
-   python3 $REPO_DIR/scripts/reddit_browser.py edit "COMMENT_PERMALINK_URL" "FULL_NEW_CONTENT"
-   Note: pass the FULL content (existing + appended link text), not just the appended part.
-   Parse JSON result: {ok:true} = success, {ok:false, error} = handle error.
-8. For LinkedIn: use the edit script via linkedin-agent browser (mcp__linkedin-agent__* tools):
-   a. Set params: mcp__linkedin-agent__browser_run_code with code:
-      async (page) => { await page.evaluate(() => { window.__editParams = { postUrl: "POST_URL", appendText: "\\n\\nLINK_TEXT" }; }); }
-   b. Run the script: mcp__linkedin-agent__browser_run_code with filename=$REPO_DIR/scripts/edit_linkedin_comment.js
-   c. Parse the JSON result: {ok:true, newText} means success, {ok:false, error} means failure.
-   d. If error is 'comment_not_found', mark as skipped. If 'link_already_present', mark as skipped (already edited).
+7. For Reddit: navigate to old.reddit.com comment permalink via the reddit-agent browser (mcp__reddit-agent__* tools), click "edit", append the link text to the existing content, save, verify.
+8. For LinkedIn: navigate to the post URL via the linkedin-agent browser (mcp__linkedin-agent__* tools), find our comment, click the three-dot menu (⋯) on it, click "Edit", append the link text to the existing content, save, verify.
    - For LinkedIn (professional tone): "I've been building something related - URL"
 9. After each successful edit, update the DB:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='LINK_TEXT' WHERE id=POST_ID"
@@ -223,74 +101,235 @@ For each post:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='SKIPPED: REASON' WHERE id=POST_ID"
 PROMPT_EOF
 
-    MCP_CFG=$(mcp_config_for_platform "${PLATFORM:-linkedin}")
-    gtimeout 14400 claude --strict-mcp-config --mcp-config "$MCP_CFG" -p "$(cat "$PHASE_D_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase D claude exited with code $?"
+    gtimeout 14400 claude -p "$(cat "$PHASE_D_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase D claude exited with code $?"
     rm -f "$PHASE_D_PROMPT"
-    PHASE_D_ELAPSED=$(( $(date +%s) - PHASE_D_START ))
-    PHASE_D_EDITED=$(grep -ci "link_edited_at=NOW()" "$LOG_FILE" 2>/dev/null) || true
-    PHASE_D_SKIPPED=$(grep -ci "SKIPPED:" "$LOG_FILE" 2>/dev/null) || true
-    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_link_edit${LOG_SUFFIX}" --posted "$PHASE_D_EDITED" --skipped "$PHASE_D_SKIPPED" --failed 0 --cost 0 --elapsed "$PHASE_D_ELAPSED"
 else
     log "Phase D: No posts eligible for link edit"
-    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_link_edit${LOG_SUFFIX}" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed 0
 fi
 
+# Give the scanner a head start to find new replies
+sleep 15
+
 # ═══════════════════════════════════════════════════════
-# PHASE B: Reddit/Moltbook reply engagement
-# Processes one reply at a time to avoid context accumulation
+# PHASE B: X/Twitter discovery + all reply engagement
+# Process in batches of $BATCH_SIZE to avoid prompt size limits
 # ═══════════════════════════════════════════════════════
 
-# Only run Phase B for reddit/moltbook (or all platforms)
-if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ] || [ "$PLATFORM" = "moltbook" ]; then
-    # Reset any 'processing' items older than 2 hours back to 'pending'
-    PHASE_B_PLATFORM_FILTER=$(platform_in_sql "platform")
-    RESET_COUNT=$(psql "$DATABASE_URL" -t -A -c "
-        UPDATE replies SET status='pending'
-        WHERE status='processing' AND processing_at < NOW() - INTERVAL '2 hours'
-          AND platform IN ('reddit', 'moltbook')
-          AND $PHASE_B_PLATFORM_FILTER
-        RETURNING id;" | wc -l | tr -d ' ')
-    [ "$RESET_COUNT" -gt 0 ] && log "Phase B: Reset $RESET_COUNT stuck 'processing' items back to pending"
+# Reset any 'processing' items older than 2 hours back to 'pending'
+# These are items the agent physically posted but crashed before marking 'replied'.
+# The in-browser already-replied check (below) prevents re-posting duplicates.
+RESET_COUNT=$(psql "$DATABASE_URL" -t -A -c "
+    UPDATE replies SET status='pending'
+    WHERE status='processing' AND processing_at < NOW() - INTERVAL '2 hours'
+    RETURNING id;" | wc -l | tr -d ' ')
+[ "$RESET_COUNT" -gt 0 ] && log "Phase B: Reset $RESET_COUNT stuck 'processing' items back to pending"
 
-    PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND platform IN ('reddit', 'moltbook') AND $PHASE_B_PLATFORM_FILTER;")
-    log "Phase B: $PENDING_COUNT pending Reddit/Moltbook replies"
+# Load exclusions from config for injection into Claude prompts
+EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('authors',[])))" 2>/dev/null || echo "")
+EXCLUDED_TWITTER=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('twitter_accounts',[])))" 2>/dev/null || echo "")
+EXCLUDED_LINKEDIN=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('linkedin_profiles',[])))" 2>/dev/null || echo "")
 
-    if [ "$PENDING_COUNT" -gt 0 ]; then
-        python3 "$REPO_DIR/scripts/engage_reddit.py" --timeout 5400 2>&1 | tee -a "$LOG_FILE" || log "WARNING: engage_reddit.py exited with code $?"
-    else
-        log "Phase B: No pending replies. Skipping."
+BATCH_NUM=0
+
+while true; do
+    PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND platform NOT IN ('linkedin', 'x');")
+
+    if [ "$PENDING_COUNT" -eq 0 ]; then
+        log "Phase B: No pending replies remaining. Done!"
+        break
     fi
+
+    BATCH_NUM=$((BATCH_NUM + 1))
+    BATCH_ACTUAL=$((PENDING_COUNT < BATCH_SIZE ? PENDING_COUNT : BATCH_SIZE))
+    log "Phase B batch $BATCH_NUM: Processing $BATCH_ACTUAL of $PENDING_COUNT pending replies"
+
+    PHASE_B_PROMPT=$(mktemp)
+    PENDING_DATA=$(psql "$DATABASE_URL" -t -A -c "
+        SELECT json_agg(q) FROM (
+            SELECT r.id, r.platform, r.their_author,
+                   LEFT(r.their_content, 300) as their_content,
+                   r.their_comment_url, r.their_comment_id, r.depth,
+                   LEFT(p.thread_title, 100) as thread_title,
+                   p.thread_url, LEFT(p.our_content, 200) as our_content, p.our_url,
+                   CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post
+            FROM replies r
+            JOIN posts p ON r.post_id = p.id
+            WHERE r.status='pending' AND r.platform NOT IN ('linkedin', 'x')
+            ORDER BY
+                CASE WHEN p.thread_url = p.our_url THEN 0 ELSE 1 END,
+                r.discovered_at ASC
+            LIMIT $BATCH_SIZE
+        ) q;")
+
+    # Write the header portion of the prompt
+    cat > "$PHASE_B_PROMPT" <<PROMPT_HEADER
+You are the Social Autoposter engagement bot.
+
+Read $SKILL_FILE for the full workflow, content rules, and platform details.
+
+EXCLUSIONS — do NOT engage with these accounts (skip and mark as 'skipped' with reason 'excluded_author'):
+- Excluded authors: $EXCLUDED_AUTHORS
+- Excluded Twitter accounts: $EXCLUDED_TWITTER
+- Excluded LinkedIn profiles: $EXCLUDED_LINKEDIN
+
+CRITICAL — Browser agent rule: Each platform MUST use its dedicated browser agent. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
+- Reddit: mcp__reddit-agent__* tools (e.g. mcp__reddit-agent__browser_navigate)
+- Twitter: mcp__twitter-agent__* tools (e.g. mcp__twitter-agent__browser_navigate)
+- LinkedIn: mcp__linkedin-agent__* tools (e.g. mcp__linkedin-agent__browser_navigate)
+Each agent has its own browser lock. Using the wrong agent bypasses the lock and causes session conflicts.
+CRITICAL: If a browser agent tool call is blocked or times out, DO NOT fall back to any other browser tool (especially not macos-use). Wait 30 seconds and retry the same agent. Repeat up to 3 times. If still blocked, skip that item and move on.
+
+PROMPT_HEADER
+
+    # NOTE: LinkedIn and Twitter discovery+engagement are handled by separate dedicated scripts:
+    # - engage-linkedin.sh (launchd: com.m13v.social-engage-linkedin, every 3h)
+    # - engage-twitter.sh  (launchd: com.m13v.social-engage-twitter, every 3h)
+    # This Phase B only handles Reddit replies.
+
+    # Append the main reply processing section
+    cat >> "$PHASE_B_PROMPT" <<PROMPT_BODY
+## Respond to pending replies (batch $BATCH_NUM: $BATCH_ACTUAL of $PENDING_COUNT total)
+
+### Priority order:
+1. **Replies on our original posts** (is_our_original_post=1) — highest priority
+2. **Direct questions** ("what tool", "how do you", "can you share")
+3. **Everything else** — general engagement
+
+### Tiered link strategy:
+- **Tier 1 (default):** No link. Genuine engagement, expand topic.
+- **Tier 2 (natural mention):** Conversation touches a topic matching a project in config. Recommend it casually as a tool you've come across.
+- **Tier 3 (direct ask):** They ask for link/tool/source. Give it immediately.
+
+
+### Reply archetypes — MUST rotate, never use the same type twice in a row:
+- **Short affirm** (1 sentence): "love this framing" / "this is underrated" — no product tie-in
+- **Pure question** (1-2 sentences): Ask something genuine. Don't mention any tools at all.
+- **Respectful pushback**: Disagree or add nuance. "I've actually seen the opposite..."
+- **Story/anecdote**: Share a specific experience WITHOUT tying back to any product.
+- **Recommendation reply**: Recommend a relevant project from config as something you've used or come across. Use for MAX 30% of replies.
+
+### Anti-pattern rules:
+- NEVER start with "exactly", "yeah totally", "100%", "that's smart". Vary first words.
+- NEVER say "I built" / "we built" / "I'm working on". Frame products as recommendations, not self-promotion. Most replies should NOT mention any product.
+- Some replies should be 1 sentence. Not everything needs 3-4 sentences.
+
+### Commitment guardrails (applies to ALL comment replies):
+- NEVER suggest, offer, or agree to calls, meetings, demos, or video chats.
+- NEVER promise to share specific links, files, or resources you don't currently have. Only share links from config.json projects.
+- NEVER offer to "DM you" or "send you" something unless you can deliver it right now in the reply.
+- NEVER make time-bound promises ("I'll share it tomorrow", "will post it this week").
+- If someone asks for a call/meeting/demo, just keep the conversation going in the thread. Don't commit to anything outside the comment thread.
+
+Here are the $BATCH_ACTUAL replies to process:
+$PENDING_DATA
+
+CRITICAL: Process EVERY reply in this batch. For each: either post a response and mark as 'replied', OR mark as 'skipped' with a skip_reason (light acknowledgments, trolls, crypto spam, DM requests, not directed at us).
+
+CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql):
+  python3 $REPO_DIR/scripts/reply_db.py processing ID          # BEFORE browser action
+  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url]   # AFTER posting
+  python3 $REPO_DIR/scripts/reply_db.py skipped ID "reason"
+  python3 $REPO_DIR/scripts/reply_db.py skip_batch '{"ids":[1,2,3],"reason":"..."}'
+  python3 $REPO_DIR/scripts/reply_db.py status
+NEVER use psql directly. reply_db.py is faster (persistent connection, no env sourcing).
+
+MANDATORY reply flow for every item:
+  Step 1: python3 reply_db.py processing ID      ← mark BEFORE touching browser
+  Step 2: post reply via browser
+  Step 3: python3 reply_db.py replied ID "text" [url]   ← mark AFTER success
+If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run — safe to retry.
+
+GitHub issues engagement is handled by a separate pipeline (github-engage.sh). Skip any github_issues replies in this batch.
+LinkedIn and Twitter engagement are handled by separate pipelines (engage-linkedin.sh, engage-twitter.sh). This batch contains ONLY Reddit and Moltbook replies.
+
+For **reddit** — use the reddit-agent browser (mcp__reddit-agent__* tools) with this FAST posting method (browser_run_code):
+1. First, pre-compose ALL reply texts before opening the browser. Decide skip/reply and draft text for every item.
+2. For each reply: run python3 reply_db.py processing ID, then call mcp__reddit-agent__browser_navigate to their_comment_url.
+3. Then use a SINGLE browser_run_code call with this exact Playwright pattern:
+\`\`\`javascript
+async (page) => {
+  const OUR_USERNAME = 'Deep_Ad1959';
+  const thing = await page.\$('#thing_t1_COMMENT_ID');
+  if (!thing) return 'ERROR: comment not found';
+
+  // Check if we already replied (handles crash-recovery re-runs)
+  const existingReplies = await thing.\$\$('.child .comment');
+  for (const reply of existingReplies) {
+    const author = await reply.\$eval('.author', el => el.textContent).catch(() => '');
+    if (author === OUR_USERNAME) return 'already_replied';
+  }
+
+  await thing.evaluate(el => {
+    const btn = el.querySelector('.flat-list a[onclick*="reply"]');
+    if (btn) btn.click();
+  });
+  await page.waitForSelector('#thing_t1_COMMENT_ID .usertext-edit textarea', { timeout: 3000 });
+  const textarea = await thing.\$('.usertext-edit textarea');
+  await textarea.fill(REPLY_TEXT_HERE);
+  await thing.evaluate(el => {
+    const btn = el.querySelector('.usertext-edit button.save, .usertext-edit .save');
+    if (btn) btn.click();
+  });
+  await page.waitForTimeout(2000);
+  const newComments = await thing.\$\$('.child .comment .bylink');
+  return newComments.length > 0 ? await newComments[newComments.length - 1].getAttribute('href') : null;
+}
+\`\`\`
+Replace COMMENT_ID with the Reddit comment ID (from their_comment_id, without t1_ prefix).
+Replace REPLY_TEXT_HERE with a JS string literal of the reply text.
+IMPORTANT: Use thing.evaluate() for clicks — do NOT use replyBtn.click() directly as it causes Playwright timeouts.
+If the JS returns 'already_replied': call reply_db.py replied ID "" to clean up without posting again.
+If the JS returns null (no permalink found): call reply_db.py replied ID "text" with no URL — do NOT store the string 'posted' or their_comment_url as the URL.
+4. Update DB using reply_db.py (see CRITICAL section above).
+5. Navigate directly to the next reply — no need to close tabs.
+
+Do NOT use browser_snapshot, browser_click, or browser_type for Reddit replies. browser_run_code is 5x faster.
+Do NOT extract permalinks from snapshots — use the JS return value or skip it.
+Do NOT store 'posted' or their_comment_url as our_reply_url — store null/no URL if the permalink is unavailable.
+CRITICAL: ALL Reddit browser calls MUST use mcp__reddit-agent__* tools (e.g. mcp__reddit-agent__browser_run_code, mcp__reddit-agent__browser_navigate). NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools for Reddit.
+
+After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
+PROMPT_BODY
+
+    gtimeout 5400 claude -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B batch $BATCH_NUM claude exited with code $?"
+    rm -f "$PHASE_B_PROMPT"
+
+    # Check if we actually made progress (avoid infinite loop)
+    NEW_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND platform NOT IN ('linkedin', 'x');")
+    if [ "$NEW_PENDING" -ge "$PENDING_COUNT" ]; then
+        log "WARNING: No progress made in batch $BATCH_NUM ($PENDING_COUNT -> $NEW_PENDING). Stopping to avoid infinite loop."
+        break
+    fi
+    log "Batch $BATCH_NUM complete: $PENDING_COUNT -> $NEW_PENDING pending"
+done
+
+# Wait for scanner to finish if still running
+if kill -0 "$SCAN_PID" 2>/dev/null; then
+    log "Waiting for Phase A scanner to finish..."
+    wait "$SCAN_PID" || true
 fi
 
 # ═══════════════════════════════════════════════════════
-# PHASE E: DM engagement (continue conversations via Chat)
+# PHASE E: Reddit DM engagement (continue conversations via Chat)
 # Finds users who engaged on our posts and DMs them to continue the discussion
 # ═══════════════════════════════════════════════════════
-PHASE_E_START=$(date +%s)
-PHASE_E_PLATFORM_FILTER=$(platform_in_sql "d.platform")
+log "Phase E: Scanning for DM candidates (all platforms)..."
+(PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_dm_candidates.py" 2>&1 || true) | tee -a "$LOG_FILE"
 
-log "Phase E: Scanning for DM candidates (platform: ${PLATFORM:-all})..."
-if [ -z "$PLATFORM" ]; then
-    (PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_dm_candidates.py" 2>&1 || true) | tee -a "$LOG_FILE"
-else
-    (PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_dm_candidates.py" --platform "$PLATFORM" 2>&1 || true) | tee -a "$LOG_FILE"
-fi
-
-DM_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='pending' AND $PHASE_E_PLATFORM_FILTER;" 2>/dev/null || echo "0")
+DM_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='pending';" 2>/dev/null || echo "0")
 
 if [ "$DM_PENDING" -gt 0 ]; then
-    log "Phase E: $DM_PENDING DMs to send (platform: ${PLATFORM:-all})"
+    log "Phase E: $DM_PENDING DMs to send across all platforms"
 
     DM_DATA=$(psql "$DATABASE_URL" -t -A -c "
         SELECT json_agg(q) FROM (
             SELECT d.id, d.platform, d.their_author, d.their_content, d.comment_context,
-                   d.project_name,
                    r.their_comment_url, r.our_reply_content,
                    p.thread_title, p.our_content as our_post_content
             FROM dms d
             JOIN replies r ON d.reply_id = r.id
             JOIN posts p ON d.post_id = p.id
-            WHERE d.status='pending' AND $PHASE_E_PLATFORM_FILTER
+            WHERE d.status='pending'
             ORDER BY d.discovered_at ASC
         ) q;")
 
@@ -335,10 +374,10 @@ $DM_DATA
 
 ## How to send DMs per platform:
 
-### Reddit DMs (use Python CDP script)
-python3 $REPO_DIR/scripts/reddit_browser.py compose-dm "THEIR_AUTHOR" "SUBJECT" "DM_TEXT"
-Parse JSON result: {ok:true} = success, {ok:false, error} = handle error.
-If compose-dm fails (Reddit may redirect to Chat SPA), fall back to mcp__reddit-agent__* browser tools.
+### Reddit DMs (use mcp__reddit-agent__* tools)
+1. Navigate to https://www.reddit.com/message/compose/?to=THEIR_AUTHOR
+2. Reddit uses Chat now. Fill in subject (2-4 casual words) and body.
+3. Submit and verify (form clears or chat appears).
 
 ### LinkedIn DMs (use mcp__linkedin-agent__* tools)
 1. Navigate to https://www.linkedin.com/messaging/
@@ -368,23 +407,17 @@ Failed (rate limit, blocked, error):
 DMs/Chat disabled:
   psql "\$DATABASE_URL" -c "UPDATE dms SET status='skipped', skip_reason='chat_disabled' WHERE id=DM_ID;"
 
-CRITICAL: Prefer Python CDP scripts where available. Fall back to dedicated browser agents when CDP fails.
-- Reddit: python3 scripts/reddit_browser.py (CDP), fall back to mcp__reddit-agent__*
-- Twitter: python3 scripts/twitter_browser.py (CDP), fall back to mcp__twitter-agent__*
-- LinkedIn: python3 scripts/linkedin_browser.py (CDP), fall back to mcp__linkedin-agent__*
-NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
-If a script or tool call fails, wait 30 seconds and retry (up to 3 times).
+CRITICAL: Each platform MUST use its dedicated browser agent. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
+- Reddit: mcp__reddit-agent__*
+- Twitter: mcp__twitter-agent__*
+- LinkedIn: mcp__linkedin-agent__*
+If a browser agent tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
 PROMPT_EOF
 
-    MCP_CFG=$(mcp_config_for_platform "${PLATFORM:-all}")
-    gtimeout 3600 claude --strict-mcp-config --mcp-config "$MCP_CFG" -p "$(cat "$DM_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase E claude exited with code $?"
+    gtimeout 3600 claude -p "$(cat "$DM_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase E claude exited with code $?"
     rm -f "$DM_PROMPT"
-    PHASE_E_ELAPSED=$(( $(date +%s) - PHASE_E_START ))
-    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_dm_outreach${LOG_SUFFIX}" --posted "$DM_PENDING" --skipped 0 --failed 0 --cost 0 --elapsed "$PHASE_E_ELAPSED"
 else
     log "Phase E: No pending DMs"
-    PHASE_E_ELAPSED=$(( $(date +%s) - PHASE_E_START ))
-    python3 "$REPO_DIR/scripts/log_run.py" --script "engage_dm_outreach${LOG_SUFFIX}" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed "$PHASE_E_ELAPSED"
 fi
 
 # ═══════════════════════════════════════════════════════
@@ -392,23 +425,20 @@ fi
 # ═══════════════════════════════════════════════════════
 log "Phase C: Cleanup"
 
-PHASE_C_FILTER=$(platform_in_sql "platform")
+TOTAL_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending';")
+TOTAL_REPLIED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='replied';")
+TOTAL_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='skipped';")
+TOTAL_ERRORS=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='error';")
 
-TOTAL_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='pending' AND $PHASE_C_FILTER;")
-TOTAL_REPLIED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='replied' AND $PHASE_C_FILTER;")
-TOTAL_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='skipped' AND $PHASE_C_FILTER;")
-TOTAL_ERRORS=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE status='error' AND $PHASE_C_FILTER;")
-
-DM_PENDING_FINAL=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='pending' AND $PHASE_C_FILTER;" 2>/dev/null || echo "0")
-DM_SENT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='sent' AND $PHASE_C_FILTER;" 2>/dev/null || echo "0")
-DM_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='skipped' AND $PHASE_C_FILTER;" 2>/dev/null || echo "0")
-DM_ERRORS=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='error' AND $PHASE_C_FILTER;" 2>/dev/null || echo "0")
+DM_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='pending';" 2>/dev/null || echo "0")
+DM_SENT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='sent';" 2>/dev/null || echo "0")
+DM_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='skipped';" 2>/dev/null || echo "0")
+DM_ERRORS=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE status='error';" 2>/dev/null || echo "0")
 
 log "Replies summary: pending=$TOTAL_PENDING replied=$TOTAL_REPLIED skipped=$TOTAL_SKIPPED errors=$TOTAL_ERRORS"
-log "DMs summary: pending=$DM_PENDING_FINAL sent=$DM_SENT skipped=$DM_SKIPPED errors=$DM_ERRORS"
+log "DMs summary: pending=$DM_PENDING sent=$DM_SENT skipped=$DM_SKIPPED errors=$DM_ERRORS"
 
 # Delete old logs
 find "$LOG_DIR" -name "engage-*.log" -mtime +7 -delete 2>/dev/null || true
-find "$LOG_DIR" -name "engage-*-*.log" -mtime +7 -delete 2>/dev/null || true
 
 log "=== Engagement loop complete: $(date) ==="
