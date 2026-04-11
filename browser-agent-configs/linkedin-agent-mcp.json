@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "linkedin-agent": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--config",
+        "__HOME__/.claude/browser-agent-configs/linkedin-agent.json"
+      ],
+      "env": {
+        "PATH": "__NODE_BIN__:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+      }
+    }
+  }
+}
