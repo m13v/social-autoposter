@@ -124,15 +124,15 @@ Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
    Replace TWEET_STATUS_ID with the tweet's numeric status ID (from the URL).
    If any row is returned, SKIP that tweet and pick another one. Log: \"Skipped tweet TWEET_URL (already posted, post_id=ID)\".
 3. Draft the reply as a genuine contribution to the conversation (follow Content Rules, NEVER use em dashes). Match the length to what fits organically: sometimes one punchy sentence is perfect, sometimes 2-3 sentences with a specific anecdote or detail will perform better. Top-performing replies tend to include concrete personal experience (numbers, specific situations, real outcomes). Do NOT pitch, recommend tools, or drop links.
-4. Post reply AND capture reply URL using the twitter-agent MCP browser. Do this in two steps:
-   a. First, set the tweet URL and reply text as global variables:
-      Use mcp__twitter-agent__browser_run_code with code:
-      async (page) => { globalThis.TWEET_URL = 'THE_TWEET_URL'; globalThis.REPLY_TEXT = 'YOUR_REPLY_TEXT'; return 'set'; }
-   b. Then post the reply using the script file:
-      Use mcp__twitter-agent__browser_run_code with filename: $REPO_DIR/scripts/twitter_reply.js
-      This intercepts the CreateTweet API response and returns JSON:
+4. Post reply AND capture reply URL using the twitter-agent MCP browser in two steps:
+   a. Set params via mcp__twitter-agent__browser_run_code with code:
+      async (page) => { await page.evaluate(() => { sessionStorage.setItem('TWEET_URL', 'THE_TWEET_URL'); sessionStorage.setItem('REPLY_TEXT', 'YOUR_REPLY_TEXT'); }); return 'params set'; }
+      Replace THE_TWEET_URL and YOUR_REPLY_TEXT with actual values. Escape single quotes in reply text.
+   b. Run the reply script via mcp__twitter-agent__browser_run_code with filename: $REPO_DIR/scripts/twitter_reply.js
+      This navigates to the tweet, types your reply, clicks Reply, and intercepts the CreateTweet
+      API response to capture the reply URL. Returns JSON:
       {ok: true, tweet_url: '...', reply_url: 'https://x.com/m13v_/status/REPLY_ID', verified: true}
-   c. The reply_url from the script output is YOUR reply's URL. Use it as our_url in the DB INSERT.
+   c. Use the reply_url from the output as our_url in the DB INSERT.
    d. If reply_url is null, set our_url to NULL (do NOT fall back to tweet_url as our_url).
    e. If the script fails, retry once. If it still fails, skip this tweet.
 5. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT).
