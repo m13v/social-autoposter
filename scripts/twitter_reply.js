@@ -1,15 +1,13 @@
-// Twitter Reply Script - posts a reply and captures the reply URL via CreateTweet interception.
+// Twitter Reply Script - posts a reply and captures the reply URL via CreateTweet response.
 // Usage via mcp__twitter-agent__browser_run_code:
-//   Step 1: Navigate to x.com first (any page) so sessionStorage is on x.com origin
-//   Step 2: Set params: async (page) => { await page.evaluate(() => {
+//   Step 1: Set params on x.com: async (page) => { await page.evaluate(() => {
 //     sessionStorage.setItem('TWEET_URL', 'https://x.com/someone/status/123');
 //     sessionStorage.setItem('REPLY_TEXT', 'your reply text');
 //   }); return 'params set'; }
-//   Step 3: Run this file with filename parameter
+//   Step 2: Run this file with filename parameter
 // Returns JSON string: {ok, tweet_url, reply_url, verified, error}
 
 async (page) => {
-  // Read params from sessionStorage (set by a prior browser_run_code call)
   const params = await page.evaluate(() => ({
     tweetUrl: sessionStorage.getItem('TWEET_URL'),
     replyText: sessionStorage.getItem('REPLY_TEXT')
@@ -25,21 +23,6 @@ async (page) => {
     });
   }
 
-  let capturedReplyId = null;
-
-  // Set up route interception for CreateTweet API call
-  await page.route('**/CreateTweet**', async (route) => {
-    const response = await route.fetch();
-    try {
-      const body = JSON.parse(await response.text());
-      const restId = body?.data?.create_tweet?.tweet_results?.result?.rest_id;
-      if (restId) capturedReplyId = restId;
-      await route.fulfill({ response });
-    } catch {
-      await route.fulfill({ response });
-    }
-  });
-
   try {
     // Navigate to the tweet
     await page.goto(tweetUrl, { waitUntil: 'domcontentloaded' });
@@ -48,7 +31,6 @@ async (page) => {
     // Check if page exists
     const mainText = await page.textContent('main').catch(() => '');
     if (mainText.toLowerCase().includes("this page doesn't exist")) {
-      await page.unroute('**/CreateTweet**');
       return JSON.stringify({ ok: false, error: 'tweet_not_found', tweet_url: tweetUrl });
     }
 
@@ -64,7 +46,6 @@ async (page) => {
         replyBox = page.getByRole('textbox', { name: 'Post text' });
         await replyBox.waitFor({ timeout: 5000 });
       } catch {
-        await page.unroute('**/CreateTweet**');
         return JSON.stringify({ ok: false, error: 'reply_box_not_found', tweet_url: tweetUrl });
       }
     }
@@ -75,6 +56,12 @@ async (page) => {
     await page.keyboard.type(replyText, { delay: 10 });
     await page.waitForTimeout(1000);
 
+    // Set up response listener BEFORE clicking Reply
+    const createTweetPromise = page.waitForResponse(
+      resp => resp.url().includes('CreateTweet') && resp.status() === 200,
+      { timeout: 15000 }
+    ).catch(() => null);
+
     // Click Reply button
     try {
       const replyBtn = page.getByRole('button', { name: 'Reply' }).last();
@@ -84,10 +71,23 @@ async (page) => {
       await page.keyboard.press('Control+Enter');
     }
 
-    // Wait for the CreateTweet response to be intercepted
-    await page.waitForTimeout(5000);
+    // Wait for CreateTweet response
+    const createTweetResp = await createTweetPromise;
 
-    // Verify: check if reply box is cleared (means post was submitted)
+    let capturedReplyId = null;
+    if (createTweetResp) {
+      try {
+        const body = await createTweetResp.json();
+        capturedReplyId = body?.data?.create_tweet?.tweet_results?.result?.rest_id || null;
+      } catch {
+        // Response body parsing failed
+      }
+    }
+
+    // Wait a moment for UI to settle
+    await page.waitForTimeout(3000);
+
+    // Verify: check if reply box is cleared
     let verified = false;
     try {
       const boxText = await replyBox.textContent();
@@ -96,14 +96,11 @@ async (page) => {
       verified = true;
     }
 
-    // Clean up route interceptor
-    await page.unroute('**/CreateTweet**');
-
     // Clear sessionStorage params
     await page.evaluate(() => {
       sessionStorage.removeItem('TWEET_URL');
       sessionStorage.removeItem('REPLY_TEXT');
-    });
+    }).catch(() => {});
 
     const replyUrl = capturedReplyId
       ? `https://x.com/m13v_/status/${capturedReplyId}`
@@ -117,7 +114,6 @@ async (page) => {
     });
 
   } catch (err) {
-    await page.unroute('**/CreateTweet**').catch(() => {});
     return JSON.stringify({ ok: false, error: err.message, tweet_url: tweetUrl });
   }
 }
