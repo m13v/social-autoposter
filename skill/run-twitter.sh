@@ -124,31 +124,25 @@ Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
    Replace TWEET_STATUS_ID with the tweet's numeric status ID (from the URL).
    If any row is returned, SKIP that tweet and pick another one. Log: \"Skipped tweet TWEET_URL (already posted, post_id=ID)\".
 3. Draft the reply as a genuine contribution to the conversation (follow Content Rules, NEVER use em dashes). Match the length to what fits organically: sometimes one punchy sentence is perfect, sometimes 2-3 sentences with a specific anecdote or detail will perform better. Top-performing replies tend to include concrete personal experience (numbers, specific situations, real outcomes). Do NOT pitch, recommend tools, or drop links.
-4. Post it using the Python CDP script. Do NOT post via browser MCP tools. You MUST use this bash command:
-   python3 scripts/twitter_browser.py reply 'TWEET_URL' 'YOUR_REPLY_TEXT'
-   This returns JSON with {ok: true, tweet_url, reply_url, verified} on success.
-   If the script fails, retry once. Do NOT fall back to posting via browser MCP.
-5. CAPTURE REPLY URL (MANDATORY after each post): The script's reply_url is often null. You MUST
-   capture it yourself using the twitter-agent MCP browser:
-   a. Navigate to https://x.com/m13v_/with_replies using mcp__twitter-agent__browser_navigate
-   b. Run this JS via mcp__twitter-agent__browser_run_code to get the latest reply URL:
-      async (page) => {
-        await page.waitForTimeout(3000);
-        const links = await page.$$eval('a[href*=\"/m13v_/status/\"]', els =>
-          els.map(e => e.href).filter(h => !h.includes('/analytics'))
-        );
-        return links.length ? links[0] : null;
-      }
-   c. The first result is your newest reply URL. Use it as our_url in the DB INSERT.
-   d. If you get null, set our_url to NULL (do NOT use tweet_url as our_url).
-6. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT).
-   Use the reply URL from step 5 as our_url in the INSERT.
+4. Post reply AND capture reply URL using the twitter-agent MCP browser. Do this in two steps:
+   a. First, set the tweet URL and reply text as global variables:
+      Use mcp__twitter-agent__browser_run_code with code:
+      async (page) => { globalThis.TWEET_URL = 'THE_TWEET_URL'; globalThis.REPLY_TEXT = 'YOUR_REPLY_TEXT'; return 'set'; }
+   b. Then post the reply using the script file:
+      Use mcp__twitter-agent__browser_run_code with filename: $REPO_DIR/scripts/twitter_reply.js
+      This intercepts the CreateTweet API response and returns JSON:
+      {ok: true, tweet_url: '...', reply_url: 'https://x.com/m13v_/status/REPLY_ID', verified: true}
+   c. The reply_url from the script output is YOUR reply's URL. Use it as our_url in the DB INSERT.
+   d. If reply_url is null, set our_url to NULL (do NOT fall back to tweet_url as our_url).
+   e. If the script fails, retry once. If it still fails, skip this tweet.
+5. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT).
+   Use the reply_url from step 4 as our_url in the INSERT.
    Use tweet_url (the parent tweet URL) as thread_url. Do NOT use tweet_url as our_url.
 
 Up to 50 posts per run. If nothing fits, say '## No good tweet found' and stop.
 
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
-CRITICAL: For POSTING replies, use ONLY the python3 scripts/twitter_browser.py command (step 4). Use mcp__twitter-agent__* browser tools ONLY for searching/browsing tweets, NOT for posting. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
+CRITICAL: For POSTING replies, use ONLY the twitter_reply.js script via mcp__twitter-agent__browser_run_code (step 4). NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*. NEVER post via python3 scripts/twitter_browser.py (it cannot capture reply URLs).
 CRITICAL: If a browser tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). If still blocked, skip and move on." 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
