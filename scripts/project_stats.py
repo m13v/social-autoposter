@@ -201,28 +201,12 @@ def get_project_domains(project):
     return domains
 
 
-def get_seo_page_count(project):
-    """Count all pages in the project's website repo (homepage + src/app/t/*/page.tsx)."""
-    lp = project.get("landing_pages")
-    if not isinstance(lp, dict):
-        return 0
-    repo = lp.get("repo", "")
-    if not repo:
-        return 0
-    repo = os.path.expanduser(repo)
-    t_dir = os.path.join(repo, "src", "app", "t")
-    if not os.path.isdir(t_dir):
-        return 0
-    # +1 for homepage
-    return 1 + sum(1 for d in os.listdir(t_dir) if os.path.isfile(os.path.join(t_dir, d, "page.tsx")))
-
-
 def get_client_slug(project_name):
     """Map project name to cal_bookings client_slug."""
     return {"Cyrano": "cyrano", "PieLine": "pieline", "Fazm": "fazm", "S4L": "s4l"}.get(project_name)
 
 
-def print_project_report(name, post_stats, platforms, posthog, bookings, seo_pages=0, quiet=False):
+def print_project_report(name, post_stats, platforms, posthog, bookings, quiet=False):
     """Print formatted report for one project."""
     print(f"\n{'='*60}")
     print(f"  {name}")
@@ -234,9 +218,6 @@ def print_project_report(name, post_stats, platforms, posthog, bookings, seo_pag
     if platforms:
         parts = [f"{p}: {c}" for p, c in platforms.items()]
         print(f"    Platforms: {', '.join(parts)}")
-
-    if seo_pages > 0:
-        print(f"\n  SEO Pages: {seo_pages}")
 
     if posthog and (posthog["pageviews"] > 0 or posthog["cta_clicks"] > 0):
         print(f"\n  Website Analytics (PostHog):")
@@ -318,12 +299,10 @@ def main():
         ph_pid = ph_override.get("project_id", project_id)
         posthog = get_posthog_stats(ph_key, ph_pid, domains, args.days) if domains else None
 
-        seo_pages = get_seo_page_count(proj)
-
         client_slug = get_client_slug(name)
         bookings = get_booking_stats(bookings_db_url, client_slug, args.days) if client_slug else None
 
-        print_project_report(name, post_stats, platforms, posthog, bookings, seo_pages, args.quiet)
+        print_project_report(name, post_stats, platforms, posthog, bookings, args.quiet)
 
     # Overall summary
     cur = conn.execute(
