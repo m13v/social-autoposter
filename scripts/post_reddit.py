@@ -25,9 +25,30 @@ import db as dbmod
 
 REPO_DIR = os.path.expanduser("~/social-autoposter")
 CONFIG_PATH = os.path.join(REPO_DIR, "config.json")
+RESTRICTED_SUBS_PATH = os.path.join(REPO_DIR, "scripts", ".restricted_subreddits.json")
 API_KEY_KEYCHAIN_SERVICE = "Anthropic API Key Fazm"
 REDDIT_BROWSER = os.path.join(REPO_DIR, "scripts", "reddit_browser.py")
 REDDIT_TOOLS = os.path.join(REPO_DIR, "scripts", "reddit_tools.py")
+
+
+def mark_subreddit_restricted(thread_url: str) -> None:
+    """Persist a subreddit as restricted so future searches skip it."""
+    sub_match = re.search(r'/r/([^/]+)/', thread_url)
+    if not sub_match:
+        return
+    sub = sub_match.group(1).lower()
+    try:
+        data = {}
+        if os.path.exists(RESTRICTED_SUBS_PATH):
+            with open(RESTRICTED_SUBS_PATH) as f:
+                data = json.load(f)
+        if sub not in data:
+            data[sub] = True
+            with open(RESTRICTED_SUBS_PATH, "w") as f:
+                json.dump(data, f, indent=2)
+            print(f"[post_reddit] Marked r/{sub} as restricted (won't retry)")
+    except Exception as e:
+        print(f"[post_reddit] WARNING: could not persist restricted sub r/{sub}: {e}")
 
 
 def load_config():
@@ -437,6 +458,8 @@ def main():
             err = result.get("error", "unknown")
             failed += 1
             print(f"[post_reddit] CDP FAILED: {err}")
+            if err == "subreddit_restricted":
+                mark_subreddit_restricted(thread_url)
 
         time.sleep(3)
 
