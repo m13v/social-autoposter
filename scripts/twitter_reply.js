@@ -62,13 +62,13 @@ async (page) => {
       { timeout: 15000 }
     ).catch(() => null);
 
-    // Click Reply button
+    // Click the inline reply submit button (NOT getByRole — that matches the wrong button)
     try {
-      const replyBtn = page.getByRole('button', { name: 'Reply' }).last();
+      const replyBtn = page.locator('[data-testid="tweetButtonInline"]');
       await replyBtn.waitFor({ timeout: 5000 });
       await replyBtn.click();
     } catch {
-      await page.keyboard.press('Control+Enter');
+      await page.keyboard.press('Meta+Enter');
     }
 
     // Wait for CreateTweet response
