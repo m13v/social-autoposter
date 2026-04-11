@@ -78,7 +78,6 @@ def scan_platform(conn, config, platform, max_candidates, dry_run):
                r.our_reply_content, r.our_reply_url,
                p.thread_title, p.our_content as our_post_content,
                p.thread_url, p.our_url,
-               p.project_name,
                r.replied_at
         FROM replies r
         JOIN posts p ON r.post_id = p.id
@@ -142,11 +141,10 @@ def scan_platform(conn, config, platform, max_candidates, dry_run):
 
         conn.execute("""
             INSERT INTO dms (platform, reply_id, post_id, their_author, their_content,
-                             comment_context, status, project_name)
-            VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s)
+                             comment_context, status)
+            VALUES (%s, %s, %s, %s, %s, %s, 'pending')
             ON CONFLICT (platform, their_author, reply_id) DO NOTHING
-        """, (platform, row["reply_id"], row["post_id"], author, content, context,
-              row.get("project_name")))
+        """, (platform, row["reply_id"], row["post_id"], author, content, context))
         conn.commit()
         inserted += 1
         print(f"  [{platform}] NEW DM candidate: {author} (reply #{row['reply_id']}): {content[:80]}...")
