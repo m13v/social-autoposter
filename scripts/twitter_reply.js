@@ -1,19 +1,33 @@
 // Twitter Reply Script - posts a reply and captures the reply URL via CreateTweet interception.
-// Usage: mcp__twitter-agent__browser_run_code with filename parameter
-// Expects global vars TWEET_URL and REPLY_TEXT to be set before calling.
-// Returns JSON: {ok, tweet_url, reply_url, verified, error}
+// Usage via mcp__twitter-agent__browser_run_code:
+//   Step 1: Navigate to x.com first (any page) so sessionStorage is on x.com origin
+//   Step 2: Set params: async (page) => { await page.evaluate(() => {
+//     sessionStorage.setItem('TWEET_URL', 'https://x.com/someone/status/123');
+//     sessionStorage.setItem('REPLY_TEXT', 'your reply text');
+//   }); return 'params set'; }
+//   Step 3: Run this file with filename parameter
+// Returns JSON string: {ok, tweet_url, reply_url, verified, error}
 
 async (page) => {
-  const tweetUrl = globalThis.TWEET_URL;
-  const replyText = globalThis.REPLY_TEXT;
+  // Read params from sessionStorage (set by a prior browser_run_code call)
+  const params = await page.evaluate(() => ({
+    tweetUrl: sessionStorage.getItem('TWEET_URL'),
+    replyText: sessionStorage.getItem('REPLY_TEXT')
+  }));
+
+  const tweetUrl = params.tweetUrl;
+  const replyText = params.replyText;
 
   if (!tweetUrl || !replyText) {
-    return JSON.stringify({ ok: false, error: 'TWEET_URL and REPLY_TEXT must be set via browser_evaluate before calling this script' });
+    return JSON.stringify({
+      ok: false,
+      error: 'Set TWEET_URL and REPLY_TEXT in sessionStorage before calling this script'
+    });
   }
 
   let capturedReplyId = null;
 
-  // Set up route interception for CreateTweet
+  // Set up route interception for CreateTweet API call
   await page.route('**/CreateTweet**', async (route) => {
     const response = await route.fetch();
     try {
@@ -70,10 +84,10 @@ async (page) => {
       await page.keyboard.press('Control+Enter');
     }
 
-    // Wait for the CreateTweet response
+    // Wait for the CreateTweet response to be intercepted
     await page.waitForTimeout(5000);
 
-    // Verify: check if reply box is cleared
+    // Verify: check if reply box is cleared (means post was submitted)
     let verified = false;
     try {
       const boxText = await replyBox.textContent();
@@ -82,8 +96,14 @@ async (page) => {
       verified = true;
     }
 
-    // Clean up route
+    // Clean up route interceptor
     await page.unroute('**/CreateTweet**');
+
+    // Clear sessionStorage params
+    await page.evaluate(() => {
+      sessionStorage.removeItem('TWEET_URL');
+      sessionStorage.removeItem('REPLY_TEXT');
+    });
 
     const replyUrl = capturedReplyId
       ? `https://x.com/m13v_/status/${capturedReplyId}`
