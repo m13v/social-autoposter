@@ -127,12 +127,23 @@ Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
 4. Post it using the Python CDP script. Do NOT post via browser MCP tools. You MUST use this bash command:
    python3 scripts/twitter_browser.py reply 'TWEET_URL' 'YOUR_REPLY_TEXT'
    This returns JSON with {ok: true, tweet_url, reply_url, verified} on success.
-   The reply_url is the URL of YOUR reply (e.g. x.com/m13v_/status/...).
    If the script fails, retry once. Do NOT fall back to posting via browser MCP.
-5. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT).
-   CRITICAL: Use reply_url from the script output as our_url in the INSERT.
+5. CAPTURE REPLY URL (MANDATORY after each post): The script's reply_url is often null. You MUST
+   capture it yourself using the twitter-agent MCP browser:
+   a. Navigate to https://x.com/m13v_/with_replies using mcp__twitter-agent__browser_navigate
+   b. Run this JS via mcp__twitter-agent__browser_run_code to get the latest reply URL:
+      async (page) => {
+        await page.waitForTimeout(3000);
+        const links = await page.$$eval('a[href*=\"/m13v_/status/\"]', els =>
+          els.map(e => e.href).filter(h => !h.includes('/analytics'))
+        );
+        return links.length ? links[0] : null;
+      }
+   c. The first result is your newest reply URL. Use it as our_url in the DB INSERT.
+   d. If you get null, set our_url to NULL (do NOT use tweet_url as our_url).
+6. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT).
+   Use the reply URL from step 5 as our_url in the INSERT.
    Use tweet_url (the parent tweet URL) as thread_url. Do NOT use tweet_url as our_url.
-   If reply_url is null, set our_url to NULL in the INSERT (do NOT fall back to tweet_url).
 
 Up to 50 posts per run. If nothing fits, say '## No good tweet found' and stop.
 
