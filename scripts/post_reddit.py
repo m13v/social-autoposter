@@ -354,16 +354,16 @@ def post_via_cdp(thread_url, reply_to_url, text):
     return {"ok": False, "error": "all_attempts_failed"}
 
 
-def log_post(thread_url, permalink, text, project_name, thread_author, thread_title, reddit_username):
+def log_post(thread_url, permalink, text, project_name, thread_author, thread_title, reddit_username, engagement_style=None):
     """Log a successful post to the database."""
     try:
-        subprocess.run(
-            ["python3", REDDIT_TOOLS, "log-post",
+        cmd = ["python3", REDDIT_TOOLS, "log-post",
              thread_url, permalink or "", text, project_name,
              thread_author, thread_title,
-             "--account", reddit_username],
-            capture_output=True, text=True, timeout=15,
-        )
+             "--account", reddit_username]
+        if engagement_style:
+            cmd.extend(["--engagement-style", engagement_style])
+        subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     except Exception as e:
         print(f"[post_reddit] WARNING: log-post failed: {e}")
 
@@ -467,6 +467,7 @@ def main():
         text = decision["text"]
         thread_author = decision.get("thread_author", "unknown")
         thread_title = decision.get("thread_title", "unknown")
+        engagement_style = decision.get("engagement_style")
 
         target = reply_to_url or thread_url
         print(f"[post_reddit] Posting {i + 1}/{len(decisions)}: "
@@ -481,7 +482,8 @@ def main():
 
             permalink = result.get("permalink", "")
             log_post(thread_url, permalink, text, project_name,
-                     thread_author, thread_title, reddit_username)
+                     thread_author, thread_title, reddit_username,
+                     engagement_style=engagement_style)
             posted += 1
             print(f"[post_reddit] POSTED: {permalink or 'ok'}")
         else:
