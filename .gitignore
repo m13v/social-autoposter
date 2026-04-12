@@ -37,3 +37,11 @@ skill/SKILL.md
 # Emailbison runtime data
 emailbison/*.json
 emailbison/*.csv
+
+# SEO generated content
+seo/
+
+# Temporary secret/credential files
+*_secret_temp*
+ig_secret_temp.txt
+.mcp.json
