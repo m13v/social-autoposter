@@ -79,6 +79,9 @@ else
             LIMIT $BATCH_SIZE
         ) q;")
 
+    # Generate engagement style and content rules from shared module
+    STYLES_BLOCK=$(python3 -c "import sys; sys.path.insert(0,'$REPO_DIR/scripts'); from engagement_styles import get_styles_prompt, get_content_rules, get_anti_patterns; print(get_styles_prompt('twitter', context='replying')); print(); print('## Content rules'); print(get_content_rules('twitter')); print(); print(get_anti_patterns())" 2>/dev/null || echo "(style module unavailable)")
+
     PHASE_B_PROMPT=$(mktemp)
     cat > "$PHASE_B_PROMPT" <<PROMPT_EOF
 You are the Social Autoposter Twitter/X engagement bot.
@@ -104,17 +107,7 @@ CRITICAL: If the CDP script fails, retry up to 3 times with 30 seconds between a
 - **Tier 2 (natural mention):** Conversation touches a topic matching a project in config. Recommend it casually as a tool you've come across.
 - **Tier 3 (direct ask):** They ask for link/tool/source. Give it immediately.
 
-### Reply archetypes — MUST rotate, never use the same type twice in a row:
-- **Short affirm** (1 sentence): "love this framing" / "this is underrated" — no product tie-in
-- **Pure question** (1-2 sentences): Ask something genuine. Don't mention any tools at all.
-- **Respectful pushback**: Disagree or add nuance. "I've actually seen the opposite..."
-- **Story/anecdote**: Share a specific experience WITHOUT tying back to any product.
-- **Recommendation reply**: Recommend a relevant project from config as something you've used or come across. Use for MAX 30% of replies.
-
-### Anti-pattern rules:
-- NEVER start with "exactly", "yeah totally", "100%", "that's smart". Vary first words.
-- NEVER say "I built" / "we built" / "I'm working on". Frame products as recommendations, not self-promotion. Most replies should NOT mention any product.
-- Some replies should be 1 sentence. Not everything needs 3-4 sentences.
+$STYLES_BLOCK
 
 Here are the replies to process:
 $PENDING_DATA
@@ -123,7 +116,7 @@ CRITICAL: Process EVERY reply. For each: either post a response and mark as 'rep
 
 CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql):
   python3 $REPO_DIR/scripts/reply_db.py processing ID          # BEFORE posting
-  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url]   # AFTER posting
+  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url] [engagement_style]   # AFTER posting (include the style name)
   python3 $REPO_DIR/scripts/reply_db.py skipped ID "reason"
   python3 $REPO_DIR/scripts/reply_db.py skip_batch '{"ids":[1,2,3],"reason":"..."}'
   python3 $REPO_DIR/scripts/reply_db.py status
@@ -142,7 +135,7 @@ MANDATORY reply flow for every item:
           Returns JSON with {ok: true, tweet_url, verified} on success.
           Use their_comment_url as TWEET_URL and your generated reply as YOUR_REPLY_TEXT.
           Extract tweet_url from the JSON response for Step 3.
-  Step 3: python3 reply_db.py replied ID "reply text" REPLY_URL   <- mark AFTER success
+  Step 3: python3 reply_db.py replied ID "reply text" REPLY_URL ENGAGEMENT_STYLE   <- mark AFTER success (e.g. critic, snarky_oneliner)
 If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run.
 If the tweet has been deleted or is unavailable, mark as 'skipped' with reason 'tweet_not_found'.
 
