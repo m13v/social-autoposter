@@ -42,8 +42,7 @@ SCAN_PID=$!
 # ═══════════════════════════════════════════════════════
 EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
-        SELECT id, platform, our_url, our_content, thread_title, upvotes, project_name,
-               CASE WHEN thread_url = our_url THEN 1 ELSE 0 END as is_self_post
+        SELECT id, platform, our_url, our_content, thread_title, upvotes, project_name
         FROM posts
         WHERE status='active'
           AND posted_at < NOW() - INTERVAL '6 hours'
@@ -93,76 +92,7 @@ Process ALL of them. For each post:
      -H "Content-Type: application/json" \\
      -d '{"content": "FULL_CONTENT"}' \\
      "https://www.moltbook.com/api/v1/comments/COMMENT_UUID"
-7. For Reddit: navigate to the old.reddit.com URL via the reddit-agent browser (mcp__reddit-agent__* tools). Use browser_run_code with ONE of these two Playwright snippets depending on is_self_post:
-
-   **If is_self_post=1** (we OWN the thread, editing the self-post body). IMPORTANT: Reddit uses \`a.edit-usertext\` for self-post edit buttons, NOT \`.edit-btn\` (which is for comments):
-   \`\`\`javascript
-   async (page) => {
-     const LINK_TEXT = 'LINK_TEXT_HERE';  // replace with 1-sentence + url
-     const URL_MARKER = 'URL_MARKER_HERE'; // just the URL, used to verify save worked
-     await page.waitForSelector('#siteTable .thing', { timeout: 5000 });
-     const post = await page.\$('#siteTable .thing');
-     if (!post) return 'ERROR: post not found';
-     const isSelf = await post.evaluate(el => el.classList.contains('self'));
-     if (!isSelf) return 'ERROR: not a self-post';
-     const author = await post.\$eval('.tagline .author', el => el.textContent).catch(() => '');
-     if (author !== 'Deep_Ad1959') return 'ERROR: not our post (author=' + author + ')';
-     const clicked = await post.evaluate(el => {
-       const a = el.querySelector('.flat-list a.edit-usertext');
-       if (a) { a.click(); return true; }
-       return false;
-     });
-     if (!clicked) return 'ERROR: edit button not found (self-post uses a.edit-usertext)';
-     await page.waitForSelector('#siteTable .thing .usertext-edit textarea', { timeout: 5000 });
-     const textarea = await post.\$('.usertext-edit textarea');
-     if (!textarea) return 'ERROR: textarea not found';
-     const existing = await textarea.inputValue();
-     if (existing.includes(URL_MARKER)) return 'already_has_link';
-     await textarea.fill(existing + '\\n\\n' + LINK_TEXT);
-     const saved = await post.evaluate(el => {
-       const btn = el.querySelector('.usertext-edit button.save, .usertext-edit .save');
-       if (btn) { btn.click(); return true; }
-       return false;
-     });
-     if (!saved) return 'ERROR: save button not found';
-     await page.waitForTimeout(5000);
-     return 'saved';
-   }
-   \`\`\`
-   After this snippet returns 'saved', verify by navigating back to the same URL (mcp__reddit-agent__browser_navigate) and running a second browser_run_code that reads \`.usertext-body .md\` and checks for URL_MARKER. If found, mark success; otherwise mark verification_failed with body length.
-
-   **If is_self_post=0** (editing OUR comment on someone else's thread): extract the comment ID from our_url (the t1_xxx segment, usually the last path segment before the trailing slash), navigate to our_url, then use browser_run_code with:
-   \`\`\`javascript
-   async (page) => {
-     const COMMENT_ID = 'COMMENT_ID_HERE';  // without t1_ prefix
-     const LINK_TEXT = 'LINK_TEXT_HERE';
-     const URL_MARKER = 'URL_MARKER_HERE';
-     const thing = await page.\$('#thing_t1_' + COMMENT_ID);
-     if (!thing) return 'ERROR: comment not found';
-     const author = await thing.\$eval('.tagline .author', el => el.textContent).catch(() => '');
-     if (author !== 'Deep_Ad1959') return 'ERROR: not our comment (author=' + author + ')';
-     const clicked = await thing.evaluate(el => {
-       const a = el.querySelector('.flat-list a.edit-usertext, .flat-list .edit-btn a');
-       if (a) { a.click(); return true; }
-       return false;
-     });
-     if (!clicked) return 'ERROR: edit button not found';
-     await page.waitForSelector('#thing_t1_' + COMMENT_ID + ' .usertext-edit textarea', { timeout: 5000 });
-     const textarea = await thing.\$('.usertext-edit textarea');
-     const existing = await textarea.inputValue();
-     if (existing.includes(URL_MARKER)) return 'already_has_link';
-     await textarea.fill(existing + '\\n\\n' + LINK_TEXT);
-     const saved = await thing.evaluate(el => {
-       const btn = el.querySelector('.usertext-edit button.save, .usertext-edit .save');
-       if (btn) { btn.click(); return true; }
-       return false;
-     });
-     if (!saved) return 'ERROR: save button not found';
-     await page.waitForTimeout(5000);
-     return 'saved';
-   }
-   \`\`\`
-   After 'saved', verify by navigating back to our_url and reading the comment body; check for URL_MARKER. Replace URL_MARKER with the unique URL substring (e.g. 'vipassana.cool/guide/why-20-minutes'). Mark SKIPPED if the JS returns 'already_has_link'. Mark as successfully edited only if the re-fetched body contains URL_MARKER.
+7. For Reddit: navigate to old.reddit.com comment permalink via the reddit-agent browser (mcp__reddit-agent__* tools), click "edit", append the link text to the existing content, save, verify.
 8. For LinkedIn: navigate to the post URL via the linkedin-agent browser (mcp__linkedin-agent__* tools), find our comment, click the three-dot menu (⋯) on it, click "Edit", append the link text to the existing content, save, verify.
    - For LinkedIn (professional tone): "I've been building something related - URL"
 9. After each successful edit, update the DB:
@@ -198,9 +128,6 @@ RESET_COUNT=$(psql "$DATABASE_URL" -t -A -c "
 EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('authors',[])))" 2>/dev/null || echo "")
 EXCLUDED_TWITTER=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('twitter_accounts',[])))" 2>/dev/null || echo "")
 EXCLUDED_LINKEDIN=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('linkedin_profiles',[])))" 2>/dev/null || echo "")
-
-# Generate engagement style and content rules from shared module
-STYLES_BLOCK=$(python3 -c "import sys; sys.path.insert(0,'$REPO_DIR/scripts'); from engagement_styles import get_styles_prompt, get_content_rules, get_anti_patterns; print(get_styles_prompt('reddit', context='replying')); print(); print('## Content rules'); print(get_content_rules('reddit')); print(); print(get_anti_patterns())" 2>/dev/null || echo "(style module unavailable)")
 
 BATCH_NUM=0
 
@@ -274,7 +201,17 @@ PROMPT_HEADER
 - **Tier 3 (direct ask):** They ask for link/tool/source. Give it immediately.
 
 
-$STYLES_BLOCK
+### Reply archetypes — MUST rotate, never use the same type twice in a row:
+- **Short affirm** (1 sentence): "love this framing" / "this is underrated" — no product tie-in
+- **Pure question** (1-2 sentences): Ask something genuine. Don't mention any tools at all.
+- **Respectful pushback**: Disagree or add nuance. "I've actually seen the opposite..."
+- **Story/anecdote**: Share a specific experience WITHOUT tying back to any product.
+- **Recommendation reply**: Recommend a relevant project from config as something you've used or come across. Use for MAX 30% of replies.
+
+### Anti-pattern rules:
+- NEVER start with "exactly", "yeah totally", "100%", "that's smart". Vary first words.
+- NEVER say "I built" / "we built" / "I'm working on". Frame products as recommendations, not self-promotion. Most replies should NOT mention any product.
+- Some replies should be 1 sentence. Not everything needs 3-4 sentences.
 
 ### Commitment guardrails (applies to ALL comment replies):
 - NEVER suggest, offer, or agree to calls, meetings, demos, or video chats.
@@ -290,7 +227,7 @@ CRITICAL: Process EVERY reply in this batch. For each: either post a response an
 
 CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql):
   python3 $REPO_DIR/scripts/reply_db.py processing ID          # BEFORE browser action
-  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url] [engagement_style]   # AFTER posting (include the style name: critic, storyteller, etc.)
+  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url]   # AFTER posting
   python3 $REPO_DIR/scripts/reply_db.py skipped ID "reason"
   python3 $REPO_DIR/scripts/reply_db.py skip_batch '{"ids":[1,2,3],"reason":"..."}'
   python3 $REPO_DIR/scripts/reply_db.py status
@@ -299,7 +236,7 @@ NEVER use psql directly. reply_db.py is faster (persistent connection, no env so
 MANDATORY reply flow for every item:
   Step 1: python3 reply_db.py processing ID      ← mark BEFORE touching browser
   Step 2: post reply via browser
-  Step 3: python3 reply_db.py replied ID "text" [url] [engagement_style]   ← mark AFTER success (e.g. critic, storyteller, pattern_recognizer)
+  Step 3: python3 reply_db.py replied ID "text" [url]   ← mark AFTER success
 If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run — safe to retry.
 
 GitHub issues engagement is handled by a separate pipeline (github-engage.sh). Skip any github_issues replies in this batch.
