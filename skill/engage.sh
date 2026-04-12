@@ -42,7 +42,8 @@ SCAN_PID=$!
 # ═══════════════════════════════════════════════════════
 EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
-        SELECT id, platform, our_url, our_content, thread_title, upvotes, project_name
+        SELECT id, platform, our_url, our_content, thread_title, upvotes, project_name,
+               CASE WHEN thread_url = our_url THEN 1 ELSE 0 END as is_self_post
         FROM posts
         WHERE status='active'
           AND posted_at < NOW() - INTERVAL '6 hours'
@@ -92,7 +93,77 @@ Process ALL of them. For each post:
      -H "Content-Type: application/json" \\
      -d '{"content": "FULL_CONTENT"}' \\
      "https://www.moltbook.com/api/v1/comments/COMMENT_UUID"
-7. For Reddit: navigate to old.reddit.com comment permalink via the reddit-agent browser (mcp__reddit-agent__* tools), click "edit", append the link text to the existing content, save, verify.
+7. For Reddit: navigate to the old.reddit.com URL via the reddit-agent browser (mcp__reddit-agent__* tools). Use browser_run_code with ONE of these two Playwright snippets depending on is_self_post:
+
+   **If is_self_post=1** (we OWN the thread, editing the self-post body):
+   \`\`\`javascript
+   async (page) => {
+     const LINK_TEXT = 'LINK_TEXT_HERE';  // replace with 1-sentence + url
+     await page.waitForSelector('#siteTable .thing', { timeout: 5000 });
+     const post = await page.\$('#siteTable .thing');
+     if (!post) return 'ERROR: post not found';
+     const isSelf = await post.evaluate(el => el.classList.contains('self'));
+     if (!isSelf) return 'ERROR: not a self-post';
+     const author = await post.\$eval('.tagline .author', el => el.textContent).catch(() => '');
+     if (author !== 'Deep_Ad1959') return 'ERROR: not our post (author=' + author + ')';
+     const clicked = await post.evaluate(el => {
+       const a = el.querySelector('.flat-list .edit-btn a');
+       if (a) { a.click(); return true; }
+       return false;
+     });
+     if (!clicked) return 'ERROR: edit button not found';
+     await page.waitForSelector('#siteTable .thing .usertext-edit textarea', { timeout: 5000 });
+     const textarea = await post.\$('.usertext-edit textarea');
+     if (!textarea) return 'ERROR: textarea not found';
+     const existing = await textarea.inputValue();
+     if (existing.includes('vipassana.cool') || existing.includes(LINK_TEXT.split(' - ')[1] || LINK_TEXT)) return 'already_has_link';
+     await textarea.fill(existing + '\\n\\n' + LINK_TEXT);
+     const saved = await post.evaluate(el => {
+       const btn = el.querySelector('.usertext-edit button.save, .usertext-edit .save');
+       if (btn) { btn.click(); return true; }
+       return false;
+     });
+     if (!saved) return 'ERROR: save button not found';
+     await page.waitForTimeout(3000);
+     const body = await post.\$eval('.usertext-body .md', el => el.textContent).catch(() => '');
+     const marker = LINK_TEXT.split(' - ').pop();
+     return body.includes(marker) ? 'success' : ('verification_failed: ' + body.substring(0, 200));
+   }
+   \`\`\`
+
+   **If is_self_post=0** (editing OUR comment on someone else's thread): extract the comment ID from our_url (the t1_xxx part, usually the last path segment before the trailing slash), navigate to our_url, then use browser_run_code with:
+   \`\`\`javascript
+   async (page) => {
+     const COMMENT_ID = 'COMMENT_ID_HERE';  // without t1_ prefix
+     const LINK_TEXT = 'LINK_TEXT_HERE';
+     const thing = await page.\$('#thing_t1_' + COMMENT_ID);
+     if (!thing) return 'ERROR: comment not found';
+     const author = await thing.\$eval('.tagline .author', el => el.textContent).catch(() => '');
+     if (author !== 'Deep_Ad1959') return 'ERROR: not our comment (author=' + author + ')';
+     const clicked = await thing.evaluate(el => {
+       const a = el.querySelector('.flat-list .edit-btn a');
+       if (a) { a.click(); return true; }
+       return false;
+     });
+     if (!clicked) return 'ERROR: edit button not found';
+     await page.waitForSelector('#thing_t1_' + COMMENT_ID + ' .usertext-edit textarea', { timeout: 5000 });
+     const textarea = await thing.\$('.usertext-edit textarea');
+     const existing = await textarea.inputValue();
+     if (existing.includes('vipassana.cool') || existing.includes(LINK_TEXT.split(' - ')[1] || LINK_TEXT)) return 'already_has_link';
+     await textarea.fill(existing + '\\n\\n' + LINK_TEXT);
+     const saved = await thing.evaluate(el => {
+       const btn = el.querySelector('.usertext-edit button.save, .usertext-edit .save');
+       if (btn) { btn.click(); return true; }
+       return false;
+     });
+     if (!saved) return 'ERROR: save button not found';
+     await page.waitForTimeout(3000);
+     const body = await thing.\$eval('.usertext-body .md', el => el.textContent).catch(() => '');
+     const marker = LINK_TEXT.split(' - ').pop();
+     return body.includes(marker) ? 'success' : ('verification_failed: ' + body.substring(0, 200));
+   }
+   \`\`\`
+   Mark SKIPPED if the JS returns 'already_has_link' (use skip reason 'already_has_link'). Mark as successfully edited if it returns 'success'.
 8. For LinkedIn: navigate to the post URL via the linkedin-agent browser (mcp__linkedin-agent__* tools), find our comment, click the three-dot menu (⋯) on it, click "Edit", append the link text to the existing content, save, verify.
    - For LinkedIn (professional tone): "I've been building something related - URL"
 9. After each successful edit, update the DB:
