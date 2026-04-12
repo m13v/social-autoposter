@@ -524,23 +524,34 @@ def update_state(trigger: str, product: str, keyword: str, status: str,
         pass  # caller manages state
 
 
-def generate(product: str, keyword: str, slug: str, trigger: str = "manual") -> dict:
+def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
+             content_type: str | None = None) -> dict:
     """
     Full generation lifecycle. Caller already marked the row in_progress.
     Returns a structured result; also updates state on success/failure.
+
+    content_type: override classifier. If None, classify_content_type() runs.
     """
+    if content_type is None:
+        content_type = classify_content_type(keyword)
+    if content_type not in CONTENT_TYPES:
+        content_type = "guide"
+
     product_cfg = load_product_config(product)
     repo_path = os.path.expanduser(
         product_cfg.get("landing_pages", {}).get("repo", "")
     )
     if not repo_path or not os.path.isdir(repo_path):
         update_state(trigger, product, keyword, "pending",
-                     notes="repo missing on disk", slug=slug)
-        return {"success": False, "error": f"repo not found: {repo_path}"}
+                     notes="repo missing on disk", slug=slug,
+                     content_type=content_type)
+        return {"success": False, "error": f"repo not found: {repo_path}",
+                "content_type": content_type}
 
     sources = resolve_source_paths(product_cfg)
     source_block = format_source_block(sources)
-    prompt = build_prompt(product, keyword, slug, trigger, product_cfg, source_block)
+    prompt = build_prompt(product, keyword, slug, trigger, product_cfg,
+                          source_block, content_type=content_type)
 
     log_dir = SCRIPT_DIR / "logs" / product.lower()
     concepts_dir = SCRIPT_DIR / "concepts" / product.lower()
@@ -559,22 +570,26 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual") -> 
 
     if stream.get("error"):
         update_state(trigger, product, keyword, "pending",
-                     notes=stream["error"][:500], slug=slug)
+                     notes=stream["error"][:500], slug=slug,
+                     content_type=content_type)
         return {"success": False, "error": stream["error"],
+                "content_type": content_type,
                 "stream_log": stream["stream_log_path"],
                 "tool_summary": stream["tool_summary"]}
 
     if not final_json or not final_json.get("success"):
         err = (final_json or {}).get("error", "no final success JSON from claude")
         update_state(trigger, product, keyword, "pending",
-                     notes=err[:500], slug=slug)
+                     notes=err[:500], slug=slug,
+                     content_type=content_type)
         return {"success": False, "error": err,
+                "content_type": content_type,
                 "stream_log": stream["stream_log_path"],
                 "tool_summary": stream["tool_summary"]}
 
     expected_file_candidates = [
-        f"src/app/t/{slug}/page.tsx",
-        f"src/app/(main)/t/{slug}/page.tsx",
+        tmpl.format(slug=slug)
+        for tmpl in CONTENT_TYPES[content_type]["path_candidates"]
     ]
     verify = {"ok": False, "error": "file candidates not checked"}
     for candidate in expected_file_candidates:
@@ -587,19 +602,22 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual") -> 
     if not verify["ok"]:
         update_state(trigger, product, keyword, "pending",
                      notes=f"commit not on origin/main: {verify.get('error','')}"[:500],
-                     slug=slug)
+                     slug=slug, content_type=content_type)
         return {"success": False, "error": verify.get("error"),
+                "content_type": content_type,
                 "stream_log": stream["stream_log_path"],
                 "tool_summary": stream["tool_summary"]}
 
     page_url = final_json.get("page_url") or ""
     update_state(trigger, product, keyword, "done",
-                 page_url=page_url, slug=slug)
+                 page_url=page_url, slug=slug,
+                 content_type=content_type)
 
     return {
         "success": True,
         "page_url": page_url,
         "commit_sha": verify["commit_sha"],
+        "content_type": content_type,
         "concept": concept,
         "tool_summary": stream["tool_summary"],
         "source_touches": touches,
@@ -613,10 +631,13 @@ def main() -> int:
     ap.add_argument("--keyword", required=True)
     ap.add_argument("--slug", required=True)
     ap.add_argument("--trigger", choices=["serp", "gsc", "manual"], default="manual")
+    ap.add_argument("--content-type", choices=list(CONTENT_TYPES.keys()), default=None,
+                    help="Override the regex classifier. Default: auto-classify from keyword.")
     args = ap.parse_args()
 
     result = generate(product=args.product, keyword=args.keyword,
-                      slug=args.slug, trigger=args.trigger)
+                      slug=args.slug, trigger=args.trigger,
+                      content_type=args.content_type)
     print(json.dumps(result, indent=2, default=str))
     return 0 if result.get("success") else 1
 
