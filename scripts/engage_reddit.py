@@ -27,8 +27,7 @@ REPLY_DB = os.path.join(REPO_DIR, "scripts", "reply_db.py")
 REDDIT_MCP_CONFIG = os.path.expanduser("~/.claude/browser-agent-configs/reddit-agent-mcp.json")
 API_KEY_KEYCHAIN_SERVICE = "Anthropic API Key Fazm"
 
-VALID_STYLES = {"critic", "storyteller", "pattern_recognizer", "curious_probe",
-                "contrarian", "data_point_drop", "snarky_oneliner", "recommendation"}
+from engagement_styles import REPLY_STYLES as VALID_STYLES, get_styles_prompt, get_content_rules, get_anti_patterns
 
 
 def load_config():
@@ -105,39 +104,13 @@ Your last {len(recent_replies)} replies (vary your style, don't repeat the same 
 Read ~/social-autoposter/config.json for project details and content_angle.
 {recent_context}
 ## Content rules
-- Write like texting a coworker. Lowercase OK, fragments OK.
+{get_content_rules("reddit")}
 - First person, specific details from content_angle in config.json.
-- NO em dashes. Use commas, periods, or regular dashes (-).
-- No markdown in Reddit (no ##, **, numbered lists).
-- Include imperfections: contractions, casual asides, occasional lowercase.
 - Vary openings. Don't always start with credentials.
 
-## Engagement styles (rotate, pick a DIFFERENT one from your recent replies above):
+{get_styles_prompt("reddit", context="replying")}
 
-Match the style to the subreddit and conversation tone:
-
-- **critic**: Point out what's missing or flawed. Reframe the problem. "the part that breaks down is..."
-  Best in: r/Entrepreneur, r/smallbusiness, business subs.
-- **storyteller**: Pure first-person narrative with specific details. Lead with failure, not success.
-  Best in: r/startups, r/Meditation, r/vipassana.
-- **pattern_recognizer**: Name the phenomenon. "this is called X" / "i've seen this play out dozens of times."
-  Best in: r/ExperiencedDevs, r/programming, technical subs.
-- **curious_probe**: ONE specific follow-up question. Include "curious because..." context.
-  Best in: r/startups, r/SaaS, niche subs.
-- **contrarian**: Take a clear opposing position backed by experience. Must have evidence.
-  Best in: r/Entrepreneur, r/ExperiencedDevs.
-- **data_point_drop**: Share one specific believable metric. Let the number speak.
-  Best in: r/Entrepreneur, r/startups, r/SaaS.
-- **snarky_oneliner**: 1 sentence max. Sharp, emotionally resonant. Validates shared frustration.
-  Best in: large subs (500k+ members). NEVER in small/serious subs.
-- **recommendation**: Recommend a project from config casually. MAX 20% of replies.
-
-AVOID "pleaser/validator" style ("this is great", "had similar results"). It gets the lowest engagement.
-
-## Anti-patterns
-- NEVER start with "exactly", "yeah totally", "100%", "that's smart".
-- NEVER say "I built" / "we built" / "I'm working on". Frame as recommendations.
-- Some replies should be 1 sentence.
+{get_anti_patterns()}
 - On Moltbook: write as an agent ("my human" not "I").
 
 ## Tiered links
