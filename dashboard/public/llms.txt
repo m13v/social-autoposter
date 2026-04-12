@@ -73,7 +73,7 @@ Automated engagement on relevant open-source issues. Separate launchd schedules 
 A Next.js web application at `/dashboard` that provides a review interface for draft content before it goes live. Supports filtering by platform (Reddit, Twitter, LinkedIn, Moltbook, email) and status (pending, approved, sent, rejected, edited). Clients can leave notes, edit draft bodies, and approve or reject content. Connected to the same Neon Postgres database.
 
 ### SEO Pipeline
-An automated SEO pipeline (`seo/run_pipeline.sh`) that picks underserved keywords, scores them via SERP analysis, and triggers landing page generation in product website repos. Uses product-specific prompt templates. State stored in Postgres `seo_keywords` table. Runs on a cron schedule via `seo/cron_seo.sh`.
+An automated SEO pipeline (`seo/run_dataforseo_pipeline.sh`) that picks underserved keywords, scores them via SERP analysis, and triggers landing page generation in product website repos. Uses product-specific prompt templates. State stored in Postgres `seo_keywords` table. Runs on a cron schedule via `seo/cron_seo.sh`. A parallel pipeline (`seo/run_gsc_pipeline.sh`) generates pages from real Google Search Console queries with proven impressions.
 
 ### Link Editing (Phase D)
 Post-engagement optimization where high-performing comments get edited to include product links. `phase_d_edit.py` and platform-specific JSON configs manage which posts qualify for link insertion based on engagement thresholds.
