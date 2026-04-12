@@ -220,11 +220,10 @@ If you cannot fill in all four lines with specific non-generic answers, stop and
 
 You are working in an existing website repo. It already has reusable SEO components. Your job is to use them, not reinvent them.
 
-- Look at existing pages: {example_dirs_str}. Read one or two existing `page.tsx` files. See what they import from `@/components/` and how they compose layout.
-- Also look at `{repo}/src/components/seo/` for the full SEO component library (Breadcrumbs, ArticleMeta, ProofBand, InlineTestimonial, FaqSection, any `*PageShell` components, etc.). These are your trust-signal primitives.
-- If the repo has a shell component for this content type (AlternativePageShell, UseCasePageShell, etc.), prefer it. Emit a typed data object and return `<TheShell data={{data}} />` — the shell will render breadcrumbs, FAQ, JSON-LD, and everything else automatically.
-- If no shell exists, compose the trust-signal components yourself. See Step 4 for the hard requirements.
-- If you need a component that does not exist yet, you may add one under `src/components/`, but only if the page genuinely needs it.
+- The repo has a shared SEO component library installed as `@seo/components`. This package provides trust-signal primitives (Breadcrumbs, ArticleMeta, ProofBand, FaqSection, InlineTestimonial, ComparisonTable), content-display components (AnimatedCodeBlock, TerminalOutput, FlowDiagram, SequenceDiagram, CodeComparison, AnimatedChecklist, AnimatedSection), metrics (AnimatedMetric, MetricsRow), CTAs (InlineCta, StickyBottomCta), proof (ProofBanner), and JSON-LD helpers (articleSchema, breadcrumbListSchema, faqPageSchema, howToSchema). Import from `@seo/components`.
+- Look at existing pages: {example_dirs_str}. Read one or two existing `page.tsx` files to see how they compose layout and which components they use.
+- If the repo also has local components (e.g. in `@/components/seo/` or `@/components/`), you may use those too. Prefer the shared `@seo/components` package for trust signals and JSON-LD; prefer repo-local components for product-specific layout shells (AlternativePageShell, etc.).
+- If the repo has a shell component for this content type (AlternativePageShell, UseCasePageShell, etc.), prefer it. Emit a typed data object and return `<TheShell data={{data}} />` — the shell handles trust signals automatically.
 - Match the theme, typography, and visual conventions of the existing pages.
 
 ## Step 4 — Build the page
@@ -240,11 +239,11 @@ You are working in an existing website repo. It already has reusable SEO compone
 
 Unless you are using a shell component that already renders these (e.g. AlternativePageShell), every page MUST include all of the following:
 
-1. **`Breadcrumbs`** imported from `@/components/seo/Breadcrumbs` (or wherever the repo puts it — check an existing page). Rendered near the top of the hero.
-2. **`ArticleMeta`** or equivalent byline component showing author, published date, updated date, and reading time.
-3. **`ProofBand`** or equivalent social-proof component if the repo has one. Skip only if no such component exists in this repo.
-4. **`FaqSection`** imported from `@/components/seo/FaqSection`. At least 5 concrete, specific FAQs drawn from your research in Step 1. Generic FAQs are worse than no FAQs — if you cannot write 5 non-generic questions, your angle is too thin; go back to Step 1.
-5. **JSON-LD structured data** via a `<script type="application/ld+json">` tag in the page body. It must emit: `articleSchema`, `breadcrumbListSchema`, and `faqPageSchema` (import from `@/lib/seo/json-ld` or the repo's equivalent). Read an existing page to see the exact import and usage.
+1. **`Breadcrumbs`** from `@seo/components`. Rendered near the top of the hero.
+2. **`ArticleMeta`** from `@seo/components`. Shows author, published date, updated date, and reading time.
+3. **`ProofBand`** from `@seo/components`. Social-proof display with rating and highlights.
+4. **`FaqSection`** from `@seo/components`. At least 5 concrete, specific FAQs drawn from your research in Step 1. Generic FAQs are worse than no FAQs — if you cannot write 5 non-generic questions, your angle is too thin; go back to Step 1.
+5. **JSON-LD structured data** via a `<script type="application/ld+json">` tag in the page body. Import `articleSchema`, `breadcrumbListSchema`, and `faqPageSchema` from `@seo/components`. Read an existing page to see exact usage.
 
 If a shell component renders all of these internally, importing and using the shell satisfies this requirement.
 
