@@ -8,7 +8,6 @@
 #
 # Products must have:
 #   1. landing_pages.repo in config.json (repo exists on disk)
-#   2. A page template in seo/templates/<product>.md
 #
 # Usage: cron_seo.sh (no args, picks product by weighted random)
 #
@@ -41,13 +40,14 @@ echo "$$" > "$LOCK_FILE"
 trap 'rm -f "$LOCK_FILE"' EXIT
 
 # --- Pick product by weighted random ---
+# Eligible = any project with a landing_pages.repo that exists on disk.
+# The unified generator (generate_page.py) handles the rest.
 PRODUCT=$(python3 -c "
 import json, random, os
 
 with open('$CONFIG') as f:
     config = json.load(f)
 
-# Filter to products that have repos + templates
 eligible = []
 for p in config.get('projects', []):
     repo = p.get('landing_pages', {}).get('repo', '')
@@ -56,9 +56,7 @@ for p in config.get('projects', []):
     repo_path = os.path.expanduser(repo)
     if not os.path.isdir(repo_path):
         continue
-    template_path = os.path.join('$SCRIPT_DIR', 'templates', p['name'].lower() + '.md')
-    if os.path.exists(template_path):
-        eligible.append((p['name'], p.get('weight', 1)))
+    eligible.append((p['name'], p.get('weight', 1)))
 
 if not eligible:
     print('NONE')
