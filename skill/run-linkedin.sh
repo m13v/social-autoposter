@@ -23,6 +23,9 @@ echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
 # Generate top performers feedback report (LinkedIn-specific)
 TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform linkedin 2>/dev/null || echo "(top performers report unavailable)")
 
+# Generate engagement style and content rules from shared module
+STYLES_BLOCK=$(python3 -c "import sys; sys.path.insert(0,'$REPO_DIR/scripts'); from engagement_styles import get_styles_prompt, get_content_rules, get_anti_patterns; print(get_styles_prompt('linkedin', context='posting')); print(); print('## Content rules'); print(get_content_rules('linkedin')); print(); print(get_anti_patterns())" 2>/dev/null || echo "(style module unavailable)")
+
 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
@@ -37,12 +40,14 @@ The project_name for all posts this run MUST be '$PROJECT'.
 ## FEEDBACK FROM PAST PERFORMANCE (use this to write better comments):
 $TOP_REPORT
 
+$STYLES_BLOCK
+
 Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
 1. Find candidate posts: python3 $REPO_DIR/scripts/find_threads.py --include-linkedin --project '$PROJECT'
    From the output, pick ONLY linkedin candidates (discovery_method: search_url).
    Browse the search URL via mcp__linkedin-agent__browser_navigate to find actual posts.
 2. Pick the best LinkedIn post relevant to $PROJECT to comment on
-3. Draft the comment using the project's voice/angle (follow Content Rules - NEVER use em dashes, professional but casual tone)
+3. Draft the comment using the engagement style that best fits the post. Professional but casual tone, NEVER use em dashes.
 4. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools)
 5. **CAPTURE THE POST URL** — BEFORE closing the tab, extract the actual post URL.
    After posting the comment, run this JS via mcp__linkedin-agent__browser_run_code:
@@ -70,7 +75,7 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
    \`\`\`
    Use this URL as \`our_url\` in the database INSERT. It MUST be a linkedin.com/feed/update/ URL.
    If you cannot get a feed/update URL, use the current page URL as fallback.
-6. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT). Use the captured feed/update URL for our_url.
+6. Log to database with project_name='$PROJECT', engagement_style='STYLE_YOU_CHOSE' (MUST include feedback_report_used=TRUE in the INSERT). Use the captured feed/update URL for our_url.
 
 Up to 30 posts per run. If nothing fits, say '## No good post found' and stop.
 
