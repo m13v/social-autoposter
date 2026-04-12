@@ -309,7 +309,7 @@ $PRODUCT_SOURCE_BLOCK
 
 These are not prompts to extract facts from. They are places where real implementation, real behavior, real data, and real constraints live. If the keyword touches something the product actually does, reading the relevant files often yields an angle no competitor has. If it does not, do not force it.
 
-Same for product data: if the product has stored runs, logs, scenarios, examples, or records, you are welcome to look at them as inspiration or for real numbers to cite. Do not invent stats. Do not copy private data verbatim. Use judgment.
+Same for product data. If the product has stored runs, logs, scenarios, examples, or records, you are welcome to look at them as inspiration or for real numbers to cite. The way you access data is by running scripts from the product's \`scripts/\` folder. That is where the database queries, analytics pulls, and data exports live. Look there first, read what is available, and run whatever gets you real numbers instead of trying to connect to databases directly. Do not invent stats. Do not copy private data verbatim. Use judgment.
 
 Follow these instructions exactly:
 
