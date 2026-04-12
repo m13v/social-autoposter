@@ -51,6 +51,59 @@ import db_helpers  # noqa: E402
 CLAUDE_TIMEOUT_SECONDS = 1200  # 20 minutes, generous for research + generation
 
 
+# Content-type routing. Each entry owns the route prefix, the candidate file
+# paths Claude should write to, and the example directories the generator tells
+# Claude to read for component-composition patterns. Adding a new type (e.g.
+# "comparison", "integration") is a matter of adding a row here and, if the
+# website repo has a shell component for it, teaching the prompt about it.
+CONTENT_TYPES = {
+    "guide": {
+        "route_prefix": "/t/",
+        "path_candidates": [
+            "src/app/t/{slug}/page.tsx",
+            "src/app/(main)/t/{slug}/page.tsx",
+        ],
+        "example_dirs": ["src/app/t/"],
+        "description": "a keyword-targeted guide page",
+    },
+    "alternative": {
+        "route_prefix": "/alternative/",
+        "path_candidates": [
+            "src/app/alternative/{slug}/page.tsx",
+        ],
+        "example_dirs": ["src/app/alternative/", "src/app/t/"],
+        "description": "an alternative/comparison page against a competitor product",
+    },
+    "use_case": {
+        "route_prefix": "/use-case/",
+        "path_candidates": [
+            "src/app/use-case/{slug}/page.tsx",
+        ],
+        "example_dirs": ["src/app/use-case/", "src/app/t/"],
+        "description": "a use-case page describing one specific job the product does",
+    },
+}
+
+
+_ALTERNATIVE_RE = re.compile(
+    r"\b(vs|alternative|alternatives|replacement|replace|competitor|competitors)\b",
+    re.IGNORECASE,
+)
+
+
+def classify_content_type(keyword: str) -> str:
+    """Cheap regex classifier. Defaults to 'guide' (safe fallback, no shell).
+
+    Conservative on purpose: misrouting a keyword to the wrong shell is worse
+    than leaving it on the general /t/ guide path. Expand the patterns as we
+    build more page-type shells in the website repo.
+    """
+    kw = (keyword or "").lower().strip()
+    if _ALTERNATIVE_RE.search(kw):
+        return "alternative"
+    return "guide"
+
+
 def load_product_config(product: str) -> dict:
     with open(CONFIG_PATH) as f:
         cfg = json.load(f)
@@ -89,7 +142,8 @@ def format_source_block(sources: list[dict]) -> str:
 
 
 def build_prompt(product: str, keyword: str, slug: str, trigger: str,
-                 product_cfg: dict, source_block: str) -> str:
+                 product_cfg: dict, source_block: str,
+                 content_type: str = "guide") -> str:
     repo = os.path.expanduser(product_cfg.get("landing_pages", {}).get("repo", ""))
     website = (product_cfg.get("landing_pages", {}).get("base_url")
                or product_cfg.get("website", ""))
@@ -101,7 +155,22 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
         "manual": "This is an adhoc trigger. Treat the keyword as worth building.",
     }.get(trigger, "")
 
-    return f"""You are building one SEO guide page for {product}. You decide the structure, the angle, and the content. There is no template. Your one job is to find something real about the product that no competitor page mentions, and build a page around that.
+    ct = CONTENT_TYPES.get(content_type, CONTENT_TYPES["guide"])
+    route_prefix = ct["route_prefix"]
+    primary_path = ct["path_candidates"][0].format(slug=slug)
+    example_dirs_str = ", ".join(f"`{repo}/{d}`" for d in ct["example_dirs"])
+    page_url = f"{website.rstrip('/')}{route_prefix}{slug}"
+
+    type_context = {
+        "guide": "This is a general guide/explainer page. You have the most creative freedom here — the angle, section shape, and length are all yours.",
+        "alternative": f"This is an alternative/comparison page. Readers arrived by searching for a competitor product. Your job is to show them {product} is the better pick for the use case their keyword implies. Read an existing alternative page in `{repo}/src/app/alternative/` to see if a shell component exists (e.g. AlternativePageShell) — if it does, use it and emit only a typed data object. If no shell exists in this repo, compose raw sections using the trust-signal components below.",
+        "use_case": f"This is a use-case page describing one concrete job {product} does. Readers want to know whether {product} can handle their specific workflow. Show them, with at least one anchor_fact drawn from real product source. If a UseCasePageShell exists in `{repo}/src/components/seo/`, prefer it; otherwise compose raw sections.",
+    }.get(content_type, "")
+
+    return f"""You are building one SEO page for {product}. You decide the angle and the content. Your one job is to find something real about the product that no competitor page mentions, and build a page around that.
+
+CONTENT TYPE: {content_type} ({ct['description']})
+{type_context}
 
 KEYWORD: "{keyword}"
 SLUG: "{slug}"
@@ -151,22 +220,37 @@ If you cannot fill in all four lines with specific non-generic answers, stop and
 
 You are working in an existing website repo. It already has reusable SEO components. Your job is to use them, not reinvent them.
 
-- Look at existing pages: `ls {repo}/src/app/t/` (or equivalent landing-page directory) and read one or two existing `page.tsx` files. See what they import from `@/components/` and how they compose layout.
-- That is your palette. Prefer reusing those components over writing raw JSX from scratch.
+- Look at existing pages: {example_dirs_str}. Read one or two existing `page.tsx` files. See what they import from `@/components/` and how they compose layout.
+- Also look at `{repo}/src/components/seo/` for the full SEO component library (Breadcrumbs, ArticleMeta, ProofBand, InlineTestimonial, FaqSection, any `*PageShell` components, etc.). These are your trust-signal primitives.
+- If the repo has a shell component for this content type (AlternativePageShell, UseCasePageShell, etc.), prefer it. Emit a typed data object and return `<TheShell data={{data}} />` — the shell will render breadcrumbs, FAQ, JSON-LD, and everything else automatically.
+- If no shell exists, compose the trust-signal components yourself. See Step 4 for the hard requirements.
 - If you need a component that does not exist yet, you may add one under `src/components/`, but only if the page genuinely needs it.
 - Match the theme, typography, and visual conventions of the existing pages.
 
 ## Step 4 — Build the page
 
-- Location: `{repo}/src/app/t/{slug}/page.tsx` (or match the convention you found in Step 3 if the repo uses a different path).
-- Structure, section count, section order, headings: entirely your choice. Let the angle from Step 2 drive the structure. Do not follow a fixed outline.
+- Location: `{repo}/{primary_path}` (or match the convention you found in Step 3 if the repo uses a different path).
+- Structure, section count, section order, headings: your choice. Let the angle from Step 2 drive the structure. Do not follow a fixed outline.
 - Length: however long the angle deserves. Shorter and specific beats longer and generic. Do not pad.
 - Style: no em dashes, no en dashes, anywhere. Plain direct prose. First person fine where natural.
 - At least one section must surface the anchor_fact from your concept, with enough specificity that a reader could verify it (file name, command, number, behavior description). This is the uncopyable part of the page.
 - Do not invent statistics. Do not fabricate quotes. If you use numbers, they come from something you read or ran.
 
-## Step 5 — Commit and deploy
+### Required trust signals (non-negotiable)
 
+Unless you are using a shell component that already renders these (e.g. AlternativePageShell), every page MUST include all of the following:
+
+1. **`Breadcrumbs`** imported from `@/components/seo/Breadcrumbs` (or wherever the repo puts it — check an existing page). Rendered near the top of the hero.
+2. **`ArticleMeta`** or equivalent byline component showing author, published date, updated date, and reading time.
+3. **`ProofBand`** or equivalent social-proof component if the repo has one. Skip only if no such component exists in this repo.
+4. **`FaqSection`** imported from `@/components/seo/FaqSection`. At least 5 concrete, specific FAQs drawn from your research in Step 1. Generic FAQs are worse than no FAQs — if you cannot write 5 non-generic questions, your angle is too thin; go back to Step 1.
+5. **JSON-LD structured data** via a `<script type="application/ld+json">` tag in the page body. It must emit: `articleSchema`, `breadcrumbListSchema`, and `faqPageSchema` (import from `@/lib/seo/json-ld` or the repo's equivalent). Read an existing page to see the exact import and usage.
+
+If a shell component renders all of these internally, importing and using the shell satisfies this requirement.
+
+## Step 5 — Typecheck, commit, and deploy
+
+- Run `npx tsc --noEmit` in the repo to confirm the page compiles cleanly. Fix any errors you introduced before committing. Do not commit a file that fails typecheck.
 - Stage the new page file (and any new components you added).
 - Commit on the current branch with a clear message naming the keyword.
 - Push to origin main (or whatever the repo's main branch is).
@@ -179,7 +263,7 @@ Output your CONCEPT block from Step 2 in the conversation so it is captured in t
 
 Then, as your FINAL message (nothing after it), output exactly one line of JSON with this shape:
 
-{{"success": true, "page_url": "{website}/t/{slug}", "slug": "{slug}", "commit_sha": "<7-char sha>", "concept_angle": "<one-line angle>"}}
+{{"success": true, "page_url": "{page_url}", "slug": "{slug}", "commit_sha": "<7-char sha>", "concept_angle": "<one-line angle>"}}
 
 If anything went wrong:
 
