@@ -30,8 +30,7 @@ API_KEY_KEYCHAIN_SERVICE = "Anthropic API Key Fazm"
 REDDIT_BROWSER = os.path.join(REPO_DIR, "scripts", "reddit_browser.py")
 REDDIT_TOOLS = os.path.join(REPO_DIR, "scripts", "reddit_tools.py")
 
-VALID_STYLES = {"critic", "storyteller", "pattern_recognizer", "curious_probe",
-                "contrarian", "data_point_drop", "snarky_oneliner"}
+from engagement_styles import VALID_STYLES, get_styles_prompt, get_content_rules
 
 
 def mark_subreddit_restricted(thread_url: str) -> None:
@@ -175,33 +174,7 @@ Your role: You are a practitioner sharing real experience. Your comments should 
 from any other knowledgeable person in the conversation. NEVER mention product names, links, websites,
 or GitHub repos. Product mentions happen ONLY later in the reply pipeline when people respond to you.
 {recent_ctx}{top_ctx}
-## Engagement styles (CRITICAL: pick the best style for each thread based on the subreddit and topic)
-
-Match your style to the subreddit culture. Each comment MUST use one of these styles:
-
-**critic** - Point out what's missing, flawed, or naive. Reframe the problem. "The part that breaks down is..."
-  Best in: r/Entrepreneur, r/smallbusiness, r/startups. NEVER just nitpick; offer a non-obvious insight.
-
-**storyteller** - Pure first-person narrative with specific details (numbers, dates, names). Lead with failure/surprise, not success.
-  "we tracked this for six months and found..." / "i made this exact mistake when..."
-  Best in: r/startups, r/Meditation, r/vipassana. NEVER pivot to a product pitch.
-
-**pattern_recognizer** - Name the pattern or phenomenon. "This is called X" or "I've seen this play out dozens of times across Y."
-  Best in: r/ExperiencedDevs, r/programming, r/webdev, technical subs. Authority through pattern recognition, not credentials.
-
-**curious_probe** - One specific follow-up question about the most interesting detail. Include "curious because..." context.
-  Best in: r/startups, r/SaaS, niche subs. ONE question only. Never multiple.
-
-**contrarian** - Take a clear opposing position backed by experience. "Everyone recommends X. I've done X for Y years and it's wrong."
-  Best in: r/Entrepreneur, r/ExperiencedDevs. Must have credible evidence. Empty hot takes get destroyed.
-
-**data_point_drop** - Share one specific, believable metric. "$12k in a month" not "a lot of money". Let the number do the talking.
-  Best in: r/Entrepreneur, r/startups, r/SaaS. No links. Numbers must be believable, not impressive.
-
-**snarky_oneliner** - Short, sharp, emotionally resonant observation (1 sentence max). Validates a shared frustration.
-  Best in: r/ExperiencedDevs, r/programming, large subs (500k+). NEVER in small/serious subs like r/vipassana.
-
-AVOID the "pleaser/validator" style ("this is real, i've seen the same thing"). It consistently gets the lowest engagement.
+{get_styles_prompt("reddit", context="posting")}
 
 ## Tools (via Bash) - ALWAYS foreground, NEVER run_in_background
 - Search: python3 {REDDIT_TOOLS} search "QUERY" --limit 15
@@ -223,12 +196,7 @@ AVOID the "pleaser/validator" style ("this is real, i've seen the same thing"). 
 4. Output each as a JSON object, then DONE.
 
 ## Content rules
-- Casual tone, lowercase OK, fragments OK. 2-4 short sentences (1 sentence for snarky_oneliner).
-- NO em dashes. No markdown. No product links. No product names. No tool recommendations.
-- Never say "I built" or "we built". Never mention any project by name.
-- Never start with "exactly", "yeah totally", "100%", "that's smart".
-- Specificity is the #1 authenticity signal. Use concrete numbers, dates, timeframes.
-- End with a genuine question when possible (drives reply chains).
+{get_content_rules("reddit")}
 
 ## CRITICAL OUTPUT FORMAT
 You MUST output each draft as a raw JSON object on its own line. No commentary before or after. Example:
