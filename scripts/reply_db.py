@@ -15,11 +15,10 @@ if cmd == "processing":
     db.commit()
     print(f"ok {rid}")
 elif cmd == "replied":
-    # reply_db.py replied ID "content" [url] [engagement_style]
+    # reply_db.py replied ID "content" [url]
     rid, content = int(sys.argv[2]), sys.argv[3]
     url = sys.argv[4] if len(sys.argv) > 4 else None
-    style = sys.argv[5] if len(sys.argv) > 5 else None
-    db.execute("UPDATE replies SET status='replied', our_reply_content=%s, our_reply_url=%s, replied_at=NOW(), engagement_style=%s WHERE id=%s", [content, url, style, rid])
+    db.execute("UPDATE replies SET status='replied', our_reply_content=%s, our_reply_url=%s, replied_at=NOW() WHERE id=%s", [content, url, rid])
     db.commit()
     print(f"ok {rid}")
 elif cmd == "skipped":
