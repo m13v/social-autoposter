@@ -485,7 +485,8 @@ def save_concept_file(concepts_dir: Path, slug: str, product: str, keyword: str,
 
 def update_state(trigger: str, product: str, keyword: str, status: str,
                  page_url: str | None = None, notes: str | None = None,
-                 slug: str | None = None) -> None:
+                 slug: str | None = None,
+                 content_type: str | None = None) -> None:
     """Dispatch state updates to the right table based on trigger."""
     if trigger == "serp":
         kwargs = {}
@@ -493,6 +494,8 @@ def update_state(trigger: str, product: str, keyword: str, status: str,
             kwargs["page_url"] = page_url
         if notes is not None:
             kwargs["notes"] = notes
+        if content_type is not None:
+            kwargs["content_type"] = content_type
         db_helpers.update_status(product, keyword, status, **kwargs)
     elif trigger == "gsc":
         conn = db_helpers.get_conn()
@@ -505,6 +508,8 @@ def update_state(trigger: str, product: str, keyword: str, status: str,
             sets.append("page_slug = %s"); vals.append(slug)
         if notes is not None:
             sets.append("notes = %s"); vals.append(notes)
+        if content_type is not None:
+            sets.append("content_type = %s"); vals.append(content_type)
         if status == "done":
             sets.append("completed_at = NOW()")
         vals.extend([product, keyword])
