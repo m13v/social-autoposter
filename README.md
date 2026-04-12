@@ -126,7 +126,15 @@ The skill works with any agent that has shell access, browser automation, and an
 
 ## Pause and resume
 
+Use the dashboard at `localhost:3141` (Pause All / Resume All button), or manually:
+
 ```bash
-touch ~/.social-paused   # halts every cron run cleanly
-rm ~/.social-paused      # resume
+# Pause: unload all jobs + kill running processes
+for plist in ~/Library/LaunchAgents/com.m13v.social-*.plist; do launchctl unload "$plist"; done
+
+# Resume: reload all jobs
+for plist in ~/social-autoposter/launchd/com.m13v.social-*.plist; do
+  ln -sf "$plist" ~/Library/LaunchAgents/
+  launchctl load ~/Library/LaunchAgents/$(basename "$plist")
+done
 ```
