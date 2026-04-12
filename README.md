@@ -71,7 +71,7 @@ launchd  ──▶  skill/run-{platform}.sh  ──▶  claude -p  --strict-mcp-
 
 Each `skill/run-*.sh`:
 
-1. Bails out if `~/.social-paused` exists (kill switch via `skill/pause.sh` / `skill/resume.sh`)
+1. Controlled by launchd (load/unload). Use the dashboard Pause All / Resume All button, or `launchctl unload/load` directly
 2. Acquires a per-platform lock from `skill/lock.sh` (waits up to 60 min for any prior run)
 3. Sources `~/social-autoposter/.env`
 4. Picks a project, builds a feedback report, fetches `llms.txt` for product context
