@@ -92,7 +92,7 @@ def solve_challenge(challenge_text):
     check_texts = [lower, stripped_lower, deduped_lower]
     if any(any(w in t for t in check_texts) for w in ['multipl', 'product', 'times', 'triple', 'double']) or '*' in challenge_text:
         primary = 'mul'
-    elif any(any(w in t for t in check_texts) for w in ['differ', 'subtract', 'less', 'minus', 'remain', 'reduc', 'loses', 'lose', 'lost', 'slow']):
+    elif any(any(w in t for t in check_texts) for w in ['differ', 'subtract', 'less', 'minus', 'remain', 'reduc', 'decreas', 'loses', 'lose', 'lost', 'slow']):
         primary = 'sub'
     else:
         primary = 'add'
