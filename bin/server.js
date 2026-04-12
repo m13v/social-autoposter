@@ -134,6 +134,33 @@ function getLaunchAgentPath(plistFile) {
   return path.join(os.homedir(), 'Library', 'LaunchAgents', plistFile);
 }
 
+const PAUSE_FILE = path.join(os.homedir(), '.social-paused');
+
+function isPaused() {
+  return fs.existsSync(PAUSE_FILE);
+}
+
+function pauseAll() {
+  // Create pause file
+  fs.writeFileSync(PAUSE_FILE, `Paused at ${new Date().toISOString()}\n`);
+  // Kill all running job processes
+  const killed = [];
+  for (const job of JOBS) {
+    const pids = getJobPids(job.script);
+    for (const pid of pids) {
+      try { process.kill(pid, 'SIGTERM'); killed.push(pid); } catch {}
+    }
+    try { execSync(`pkill -f "claude.*${job.script.replace('.sh', '')}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
+  }
+  // Also kill any scan_replies.py or find_threads.py
+  try { execSync('pkill -f "social-autoposter/scripts/(scan_replies|find_threads|update_stats)" 2>/dev/null', { stdio: 'pipe' }); } catch {}
+  return killed;
+}
+
+function resumeAll() {
+  try { fs.unlinkSync(PAUSE_FILE); } catch {}
+}
+
 // --- API Routes ---
 
 function handleApi(req, res) {
@@ -168,7 +195,19 @@ function handleApi(req, res) {
       };
     });
     const pending = psql("SELECT COUNT(*) FROM replies WHERE status='pending'");
-    return json(res, { jobs, pendingReplies: pending ? parseInt(pending, 10) : null });
+    return json(res, { jobs, pendingReplies: pending ? parseInt(pending, 10) : null, paused: isPaused() });
+  }
+
+  // POST /api/pause
+  if (p === '/api/pause' && req.method === 'POST') {
+    const killed = pauseAll();
+    return json(res, { paused: true, killedPids: killed });
+  }
+
+  // POST /api/resume
+  if (p === '/api/resume' && req.method === 'POST') {
+    resumeAll();
+    return json(res, { paused: false });
   }
 
   // POST /api/jobs/:label/toggle
@@ -582,7 +621,8 @@ const HTML = `<!DOCTYPE html>
 
 <div class="header">
   <h1>Social Autoposter</h1>
-  <div>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <button class="btn" id="pause-btn" onclick="togglePause()" style="font-weight:600;"></button>
     <span class="pending" id="pending-badge">-- pending</span>
   </div>
 </div>
@@ -789,6 +829,9 @@ async function loadStatus() {
     const data = await statusRes.json();
     const pending = await pendingRes.json();
 
+    _paused = !!data.paused;
+    updatePauseBtn();
+
     document.getElementById('pending-badge').textContent =
       (data.pendingReplies != null ? data.pendingReplies : '--') + ' pending';
 
@@ -829,6 +872,31 @@ async function loadStatus() {
       '</div>';
     }
   } catch(e) { toast('Failed to load status: ' + e.message, true); }
+}
+
+let _paused = false;
+
+function updatePauseBtn() {
+  const btn = document.getElementById('pause-btn');
+  if (_paused) {
+    btn.textContent = '\\u25B6 Resume All';
+    btn.className = 'btn primary';
+  } else {
+    btn.textContent = '\\u23F8 Pause All';
+    btn.className = 'btn danger';
+  }
+}
+
+async function togglePause() {
+  try {
+    const endpoint = _paused ? '/api/resume' : '/api/pause';
+    const res = await fetch(endpoint, { method: 'POST' });
+    const data = await res.json();
+    _paused = data.paused;
+    updatePauseBtn();
+    toast(_paused ? 'All pipelines paused & processes killed' : 'Pipelines resumed');
+    loadStatus();
+  } catch(e) { toast('Error: ' + e.message, true); }
 }
 
 async function toggleJob(label) {
