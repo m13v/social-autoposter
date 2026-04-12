@@ -11,7 +11,6 @@
 # Called by launchd every 4 hours.
 
 
-[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
 
 # Parse --platform flag
