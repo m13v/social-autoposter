@@ -70,7 +70,7 @@ def update_status(product, keyword, status, **kwargs):
     sets = ["status = %s", "updated_at = NOW()"]
     vals = [status]
 
-    for field in ("score", "signal1", "signal2", "signal3", "notes", "page_url"):
+    for field in ("score", "signal1", "signal2", "signal3", "notes", "page_url", "content_type"):
         if field in kwargs:
             sets.append(f"{field} = %s")
             vals.append(kwargs[field])
