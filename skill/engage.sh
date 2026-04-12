@@ -125,11 +125,11 @@ Process ALL of them. For each post:
        return false;
      });
      if (!saved) return 'ERROR: save button not found';
-     await page.waitForTimeout(3000);
-     const body = await post.\$eval('.usertext-body .md', el => el.textContent).catch(() => '');
-     return body.includes(URL_MARKER) ? 'success' : ('verification_failed (len=' + body.length + '): no URL_MARKER in body');
+     await page.waitForTimeout(5000);
+     return 'saved';
    }
    \`\`\`
+   After this snippet returns 'saved', verify by navigating back to the same URL (mcp__reddit-agent__browser_navigate) and running a second browser_run_code that reads \`.usertext-body .md\` and checks for URL_MARKER. If found, mark success; otherwise mark verification_failed with body length.
 
    **If is_self_post=0** (editing OUR comment on someone else's thread): extract the comment ID from our_url (the t1_xxx segment, usually the last path segment before the trailing slash), navigate to our_url, then use browser_run_code with:
    \`\`\`javascript
@@ -158,12 +158,11 @@ Process ALL of them. For each post:
        return false;
      });
      if (!saved) return 'ERROR: save button not found';
-     await page.waitForTimeout(3000);
-     const body = await thing.\$eval('.usertext-body .md', el => el.textContent).catch(() => '');
-     return body.includes(URL_MARKER) ? 'success' : ('verification_failed (len=' + body.length + ')');
+     await page.waitForTimeout(5000);
+     return 'saved';
    }
    \`\`\`
-   Replace URL_MARKER with the unique URL substring (e.g. 'vipassana.cool/guide/why-20-minutes'). Mark SKIPPED if the JS returns 'already_has_link'. Mark as successfully edited if it returns 'success'.
+   After 'saved', verify by navigating back to our_url and reading the comment body; check for URL_MARKER. Replace URL_MARKER with the unique URL substring (e.g. 'vipassana.cool/guide/why-20-minutes'). Mark SKIPPED if the JS returns 'already_has_link'. Mark as successfully edited only if the re-fetched body contains URL_MARKER.
 8. For LinkedIn: navigate to the post URL via the linkedin-agent browser (mcp__linkedin-agent__* tools), find our comment, click the three-dot menu (⋯) on it, click "Edit", append the link text to the existing content, save, verify.
    - For LinkedIn (professional tone): "I've been building something related - URL"
 9. After each successful edit, update the DB:
