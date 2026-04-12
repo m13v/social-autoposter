@@ -10,7 +10,6 @@
 # Usage: cron_gsc.sh (no args)
 #
 
-[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
