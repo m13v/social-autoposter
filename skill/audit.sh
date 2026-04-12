@@ -8,7 +8,6 @@
 # Called by launchd every 24 hours.
 
 
-[ -f "$HOME/.social-paused" ] && echo "PAUSED: ~/.social-paused exists, skipping run." && exit 0
 set -uo pipefail
 
 # Audit lock: wait up to 60min for previous audit run to finish, then skip
