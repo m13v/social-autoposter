@@ -127,27 +127,43 @@ def verify_with_brute_force(candidates, primary_op, verification_code, headers):
         'mul': lambda a, b: a * b,
     }
 
-    # Try primary op first with last two candidates
     op_order = [primary_op] + [o for o in ['add', 'sub', 'mul'] if o != primary_op]
 
+    # Build all (answer, op_name, a, b) combos, prioritizing last two candidates
+    combos = []
     for op_name in op_order:
+        pairs = []
         for i in range(len(candidates)):
             for j in range(len(candidates)):
                 if i == j:
                     continue
-                a, b = candidates[i], candidates[j]
-                answer = f"{ops[op_name](a, b):.2f}"
-                try:
-                    r = requests.post(
-                        f"{BASE}/verify",
-                        headers=headers,
-                        json={"answer": answer, "verification_code": verification_code},
-                        timeout=15,
-                    )
-                    if r.json().get("success"):
-                        return True, answer, f"{op_name}({a},{b})"
-                except Exception:
-                    continue
+                pairs.append((candidates[i], candidates[j]))
+        # Prioritize pairs using the last two candidates (most likely the real operands)
+        if len(candidates) >= 2:
+            last_pair = (candidates[-2], candidates[-1])
+            last_pair_rev = (candidates[-1], candidates[-2])
+            priority = [p for p in pairs if p == last_pair or p == last_pair_rev]
+            rest = [p for p in pairs if p not in priority]
+            pairs = priority + rest
+        for a, b in pairs:
+            combos.append((op_name, a, b))
+
+    for op_name, a, b in combos:
+        answer = f"{ops[op_name](a, b):.2f}"
+        try:
+            r = requests.post(
+                f"{BASE}/verify",
+                headers=headers,
+                json={"answer": answer, "verification_code": verification_code},
+                timeout=15,
+            )
+            resp = r.json()
+            if resp.get("success"):
+                return True, answer, f"{op_name}({a},{b})"
+            if resp.get("error") and "expired" in str(resp.get("error", "")).lower():
+                return False, None, None
+        except Exception:
+            continue
 
     return False, None, None
 
