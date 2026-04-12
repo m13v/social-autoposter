@@ -107,6 +107,6 @@ fi
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Running pipeline for $PRODUCT" >> "$LOG_FILE"
 
 # --- Run the pipeline ---
-"$SCRIPT_DIR/run_pipeline.sh" "$PRODUCT" >> "$LOG_FILE" 2>&1
+"$SCRIPT_DIR/run_dataforseo_pipeline.sh" "$PRODUCT" >> "$LOG_FILE" 2>&1
 
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Pipeline complete for $PRODUCT" >> "$LOG_FILE"
