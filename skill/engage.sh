@@ -95,10 +95,11 @@ Process ALL of them. For each post:
      "https://www.moltbook.com/api/v1/comments/COMMENT_UUID"
 7. For Reddit: navigate to the old.reddit.com URL via the reddit-agent browser (mcp__reddit-agent__* tools). Use browser_run_code with ONE of these two Playwright snippets depending on is_self_post:
 
-   **If is_self_post=1** (we OWN the thread, editing the self-post body):
+   **If is_self_post=1** (we OWN the thread, editing the self-post body). IMPORTANT: Reddit uses \`a.edit-usertext\` for self-post edit buttons, NOT \`.edit-btn\` (which is for comments):
    \`\`\`javascript
    async (page) => {
      const LINK_TEXT = 'LINK_TEXT_HERE';  // replace with 1-sentence + url
+     const URL_MARKER = 'URL_MARKER_HERE'; // just the URL, used to verify save worked
      await page.waitForSelector('#siteTable .thing', { timeout: 5000 });
      const post = await page.\$('#siteTable .thing');
      if (!post) return 'ERROR: post not found';
@@ -107,16 +108,16 @@ Process ALL of them. For each post:
      const author = await post.\$eval('.tagline .author', el => el.textContent).catch(() => '');
      if (author !== 'Deep_Ad1959') return 'ERROR: not our post (author=' + author + ')';
      const clicked = await post.evaluate(el => {
-       const a = el.querySelector('.flat-list .edit-btn a');
+       const a = el.querySelector('.flat-list a.edit-usertext');
        if (a) { a.click(); return true; }
        return false;
      });
-     if (!clicked) return 'ERROR: edit button not found';
+     if (!clicked) return 'ERROR: edit button not found (self-post uses a.edit-usertext)';
      await page.waitForSelector('#siteTable .thing .usertext-edit textarea', { timeout: 5000 });
      const textarea = await post.\$('.usertext-edit textarea');
      if (!textarea) return 'ERROR: textarea not found';
      const existing = await textarea.inputValue();
-     if (existing.includes('vipassana.cool') || existing.includes(LINK_TEXT.split(' - ')[1] || LINK_TEXT)) return 'already_has_link';
+     if (existing.includes(URL_MARKER)) return 'already_has_link';
      await textarea.fill(existing + '\\n\\n' + LINK_TEXT);
      const saved = await post.evaluate(el => {
        const btn = el.querySelector('.usertext-edit button.save, .usertext-edit .save');
@@ -126,22 +127,22 @@ Process ALL of them. For each post:
      if (!saved) return 'ERROR: save button not found';
      await page.waitForTimeout(3000);
      const body = await post.\$eval('.usertext-body .md', el => el.textContent).catch(() => '');
-     const marker = LINK_TEXT.split(' - ').pop();
-     return body.includes(marker) ? 'success' : ('verification_failed: ' + body.substring(0, 200));
+     return body.includes(URL_MARKER) ? 'success' : ('verification_failed (len=' + body.length + '): no URL_MARKER in body');
    }
    \`\`\`
 
-   **If is_self_post=0** (editing OUR comment on someone else's thread): extract the comment ID from our_url (the t1_xxx part, usually the last path segment before the trailing slash), navigate to our_url, then use browser_run_code with:
+   **If is_self_post=0** (editing OUR comment on someone else's thread): extract the comment ID from our_url (the t1_xxx segment, usually the last path segment before the trailing slash), navigate to our_url, then use browser_run_code with:
    \`\`\`javascript
    async (page) => {
      const COMMENT_ID = 'COMMENT_ID_HERE';  // without t1_ prefix
      const LINK_TEXT = 'LINK_TEXT_HERE';
+     const URL_MARKER = 'URL_MARKER_HERE';
      const thing = await page.\$('#thing_t1_' + COMMENT_ID);
      if (!thing) return 'ERROR: comment not found';
      const author = await thing.\$eval('.tagline .author', el => el.textContent).catch(() => '');
      if (author !== 'Deep_Ad1959') return 'ERROR: not our comment (author=' + author + ')';
      const clicked = await thing.evaluate(el => {
-       const a = el.querySelector('.flat-list .edit-btn a');
+       const a = el.querySelector('.flat-list a.edit-usertext, .flat-list .edit-btn a');
        if (a) { a.click(); return true; }
        return false;
      });
@@ -149,7 +150,7 @@ Process ALL of them. For each post:
      await page.waitForSelector('#thing_t1_' + COMMENT_ID + ' .usertext-edit textarea', { timeout: 5000 });
      const textarea = await thing.\$('.usertext-edit textarea');
      const existing = await textarea.inputValue();
-     if (existing.includes('vipassana.cool') || existing.includes(LINK_TEXT.split(' - ')[1] || LINK_TEXT)) return 'already_has_link';
+     if (existing.includes(URL_MARKER)) return 'already_has_link';
      await textarea.fill(existing + '\\n\\n' + LINK_TEXT);
      const saved = await thing.evaluate(el => {
        const btn = el.querySelector('.usertext-edit button.save, .usertext-edit .save');
@@ -159,11 +160,10 @@ Process ALL of them. For each post:
      if (!saved) return 'ERROR: save button not found';
      await page.waitForTimeout(3000);
      const body = await thing.\$eval('.usertext-body .md', el => el.textContent).catch(() => '');
-     const marker = LINK_TEXT.split(' - ').pop();
-     return body.includes(marker) ? 'success' : ('verification_failed: ' + body.substring(0, 200));
+     return body.includes(URL_MARKER) ? 'success' : ('verification_failed (len=' + body.length + ')');
    }
    \`\`\`
-   Mark SKIPPED if the JS returns 'already_has_link' (use skip reason 'already_has_link'). Mark as successfully edited if it returns 'success'.
+   Replace URL_MARKER with the unique URL substring (e.g. 'vipassana.cool/guide/why-20-minutes'). Mark SKIPPED if the JS returns 'already_has_link'. Mark as successfully edited if it returns 'success'.
 8. For LinkedIn: navigate to the post URL via the linkedin-agent browser (mcp__linkedin-agent__* tools), find our comment, click the three-dot menu (⋯) on it, click "Edit", append the link text to the existing content, save, verify.
    - For LinkedIn (professional tone): "I've been building something related - URL"
 9. After each successful edit, update the DB:
