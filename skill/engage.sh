@@ -229,7 +229,7 @@ NEVER use psql directly. reply_db.py is faster (persistent connection, no env so
 MANDATORY reply flow for every item:
   Step 1: python3 reply_db.py processing ID      ← mark BEFORE touching browser
   Step 2: post reply via browser
-  Step 3: python3 reply_db.py replied ID "text" [url]   ← mark AFTER success
+  Step 3: python3 reply_db.py replied ID "text" [url] [engagement_style]   ← mark AFTER success (e.g. critic, storyteller)
 If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run — safe to retry.
 
 GitHub issues engagement is handled by a separate pipeline (github-engage.sh). Skip any github_issues replies in this batch.
