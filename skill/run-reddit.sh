@@ -23,6 +23,9 @@ echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
 # Generate top performers feedback report (Reddit + project-specific)
 TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform reddit --project "$PROJECT" 2>/dev/null || echo "(top performers report unavailable)")
 
+# Generate engagement style and content rules from shared module
+STYLES_BLOCK=$(python3 -c "import sys; sys.path.insert(0,'$REPO_DIR/scripts'); from engagement_styles import get_styles_prompt, get_content_rules, get_anti_patterns; print(get_styles_prompt('reddit', context='posting')); print(); print('## Content rules'); print(get_content_rules('reddit')); print(); print(get_anti_patterns())" 2>/dev/null || echo "(style module unavailable)")
+
 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
@@ -37,12 +40,14 @@ The project_name for all posts this run MUST be '$PROJECT'.
 ## FEEDBACK FROM PAST PERFORMANCE (use this to write better comments):
 $TOP_REPORT
 
+$STYLES_BLOCK
+
 Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
 1. Find candidate threads: python3 $REPO_DIR/scripts/find_threads.py --project '$PROJECT'
 2. Pick the best Reddit thread relevant to the $PROJECT project
-3. Draft the comment using the project's voice/angle (follow Content Rules - NEVER use em dashes)
+3. Draft the comment using the engagement style that best fits the subreddit and thread. NEVER use em dashes.
 4. Post it using the reddit-agent browser (mcp__reddit-agent__* tools)
-5. Log to database with project_name='$PROJECT' (MUST include feedback_report_used=TRUE in the INSERT)
+5. Log to database with project_name='$PROJECT', engagement_style='STYLE_YOU_CHOSE' (MUST include feedback_report_used=TRUE in the INSERT)
 
 Up to 100 posts per run. If nothing fits, say '## No good thread found' and stop.
 
