@@ -48,13 +48,9 @@ for p in config.get('projects', []):
     if not lp.get('gsc_property'):
         continue
     repo = lp.get('repo', '')
-    if not repo:
+    if not repo or not os.path.isdir(os.path.expanduser(repo)):
         continue
-    if not os.path.isdir(os.path.expanduser(repo)):
-        continue
-    template_path = os.path.join('$SCRIPT_DIR', 'templates', p['name'].lower() + '.md')
-    if os.path.exists(template_path):
-        eligible.append((p['name'], p.get('weight', 1)))
+    eligible.append((p['name'], p.get('weight', 1)))
 
 if not eligible:
     print('NONE')
