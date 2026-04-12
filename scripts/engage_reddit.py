@@ -27,6 +27,9 @@ REPLY_DB = os.path.join(REPO_DIR, "scripts", "reply_db.py")
 REDDIT_MCP_CONFIG = os.path.expanduser("~/.claude/browser-agent-configs/reddit-agent-mcp.json")
 API_KEY_KEYCHAIN_SERVICE = "Anthropic API Key Fazm"
 
+VALID_STYLES = {"critic", "storyteller", "pattern_recognizer", "curious_probe",
+                "contrarian", "data_point_drop", "snarky_oneliner", "recommendation"}
+
 
 def load_config():
     with open(CONFIG_PATH) as f:
@@ -387,6 +390,9 @@ def main():
                 reply_text = decision.get("text", "")
                 project = decision.get("project")
                 engagement_style = decision.get("engagement_style")
+                if engagement_style and engagement_style not in VALID_STYLES:
+                    print(f"[engage_reddit] #{reply['id']} unknown style '{engagement_style}', clearing")
+                    engagement_style = None
                 if not reply_text:
                     failed += 1
                     print(f"[engage_reddit] #{reply['id']} empty reply text")
