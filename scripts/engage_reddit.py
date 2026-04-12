@@ -386,6 +386,7 @@ def main():
             elif decision.get("action") == "reply":
                 reply_text = decision.get("text", "")
                 project = decision.get("project")
+                engagement_style = decision.get("engagement_style")
                 if not reply_text:
                     failed += 1
                     print(f"[engage_reddit] #{reply['id']} empty reply text")
@@ -429,7 +430,10 @@ def main():
                             continue
 
                         # Mark as replied in DB
-                        cmd_args = ["python3", REPLY_DB, "replied", str(reply["id"]), reply_text]
+                        reply_url = post_result.get("url", "")
+                        cmd_args = ["python3", REPLY_DB, "replied", str(reply["id"]), reply_text, reply_url]
+                        if engagement_style:
+                            cmd_args.append(engagement_style)
                         subprocess.run(cmd_args)
                         # Update project if recommended
                         if project:
