@@ -80,6 +80,26 @@ def solve_challenge(challenge_text):
             nums.append(val)
             i += 1
 
+    # Fallback: if not enough numbers, try dedup + substring matching
+    if len(nums) < 2:
+        deduped = re.sub(r'(.)\1+', r'\1', nospace)
+        for word, val in sorted(NUMBER_WORDS.items(), key=lambda x: len(x[0]), reverse=True):
+            deduped_word = re.sub(r'(.)\1+', r'\1', word)
+            if deduped_word in deduped:
+                if val not in [n for n in nums]:
+                    nums_raw.append(val)
+                    deduped = deduped.replace(deduped_word, '', 1)
+        nums = []
+        i = 0
+        while i < len(nums_raw):
+            val = nums_raw[i]
+            if val >= 20 and val < 100 and i+1 < len(nums_raw) and nums_raw[i+1] < 10:
+                nums.append(val + nums_raw[i+1])
+                i += 2
+            else:
+                nums.append(val)
+                i += 1
+
     # Filter to reasonable candidates (5-999)
     candidates = [n for n in nums if 5 <= n <= 999]
     if len(candidates) < 2:
