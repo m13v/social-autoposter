@@ -98,6 +98,28 @@ if [ ! -f "$TEMPLATE_FILE" ]; then
     exit 1
 fi
 
+PRODUCT_SOURCE_BLOCK=$(CONFIG="$CONFIG" PRODUCT_LOWER="$PRODUCT_LOWER" python3 <<'PYEOF'
+import json, os
+with open(os.environ["CONFIG"]) as f:
+    c = json.load(f)
+block = ""
+for p in c.get("projects", []):
+    if p["name"].lower() == os.environ["PRODUCT_LOWER"]:
+        sources = p.get("landing_pages", {}).get("product_source", [])
+        if sources:
+            parts = []
+            for s in sources:
+                path = os.path.expanduser(s.get("path", ""))
+                desc = s.get("description", "").strip()
+                parts.append(f"- {path}\n  {desc}")
+            block = "\n\n".join(parts)
+        else:
+            block = "(no external product source repo configured for this product)\n\nYour current working directory is effectively both the website and the product. Feel free to read anywhere in the repo if it helps you find a real angle, including landing copy, existing guide pages, components, and any fixtures or data files."
+        break
+print(block)
+PYEOF
+)
+
 echo "=== SEO Pipeline: $PRODUCT ==="
 echo "  Repo: $REPO_PATH"
 echo "  Website: $WEBSITE"
@@ -273,6 +295,18 @@ SLUG: \"$SLUG\"
 PRODUCT: $PRODUCT
 WEBSITE: $WEBSITE
 DIFFERENTIATOR: $DIFFERENTIATOR
+
+## Source material beyond the website repo
+
+You are working in a website repo, but the product is not only here. If it helps you find a more unique angle for this page, you are free to read from the locations listed below. Nothing is required. Use them when they serve the topic, ignore them when they do not.
+
+Product source for $PRODUCT:
+
+$PRODUCT_SOURCE_BLOCK
+
+These are not prompts to extract facts from. They are places where real implementation, real behavior, real data, and real constraints live. If the keyword touches something the product actually does, reading the relevant files often yields an angle no competitor has. If it does not, do not force it.
+
+Same for product data: if the product has stored runs, logs, scenarios, examples, or records, you are welcome to look at them as inspiration or for real numbers to cite. Do not invent stats. Do not copy private data verbatim. Use judgment.
 
 Follow these instructions exactly:
 
