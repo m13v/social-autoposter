@@ -75,10 +75,15 @@ async (page) => {
     const createTweetResp = await createTweetPromise;
 
     let capturedReplyId = null;
+    let actualParentId = null;
+    let actualParentScreenName = null;
     if (createTweetResp) {
       try {
         const body = await createTweetResp.json();
-        capturedReplyId = body?.data?.create_tweet?.tweet_results?.result?.rest_id || null;
+        const result = body?.data?.create_tweet?.tweet_results?.result;
+        capturedReplyId = result?.rest_id || null;
+        actualParentId = result?.legacy?.in_reply_to_status_id_str || null;
+        actualParentScreenName = result?.legacy?.in_reply_to_screen_name || null;
       } catch {
         // Response body parsing failed
       }
@@ -106,9 +111,19 @@ async (page) => {
       ? `https://x.com/m13v_/status/${capturedReplyId}`
       : null;
 
+    // Ground-truth parent URL from the CreateTweet response (authoritative; may
+    // differ from the URL we navigated to if it was mid-thread and Twitter
+    // re-anchored to the root conversation).
+    const actualParentUrl = (actualParentId && actualParentScreenName)
+      ? `https://x.com/${actualParentScreenName}/status/${actualParentId}`
+      : null;
+
     return JSON.stringify({
       ok: true,
       tweet_url: tweetUrl,
+      actual_parent_url: actualParentUrl,
+      actual_parent_id: actualParentId,
+      actual_parent_screen_name: actualParentScreenName,
       reply_url: replyUrl,
       verified
     });
