@@ -290,8 +290,11 @@ if [ "$STATUS" = "pending" ] && [ "$MODE" != "--score-only" ]; then
     TEMPLATE_CONTENT=$(cat "$TEMPLATE_FILE")
 
     # Run Claude in the target repo to generate the page
+    # Timeout after 15 minutes to prevent indefinite hangs
+    PAGE_GEN_START=$(date +%s)
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Starting page generation (timeout: 900s)" >> "$LOG_FILE"
     cd "$REPO_PATH"
-    claude -p "You are an SEO content engineer. Create a guide page for this keyword.
+    if ! gtimeout 900 claude -p "You are an SEO content engineer. Create a guide page for this keyword.
 
 KEYWORD: \"$KEYWORD\"
 SLUG: \"$SLUG\"
@@ -319,12 +322,15 @@ After the page is created, committed, and deployed, report back with:
 1. The page URL
 2. The slug
 3. Whether the build succeeded
-" 2>>"$LOG_FILE" | tee -a "$LOG_FILE"
+" 2>>"$LOG_FILE" | tee -a "$LOG_FILE"; then
+        PAGE_GEN_END=$(date +%s)
+        PAGE_GEN_DURATION=$(( PAGE_GEN_END - PAGE_GEN_START ))
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Page generation completed in ${PAGE_GEN_DURATION}s" >> "$LOG_FILE"
 
-    # Mark as done in Postgres
-    cd "$SCRIPT_DIR"
-    SEO_PRODUCT="$PRODUCT" SEO_KEYWORD="$KEYWORD" SEO_PAGE_URL="$WEBSITE/t/$SLUG" SEO_SCRIPT_DIR="$SCRIPT_DIR" \
-    python3 -c "
+        # Mark as done in Postgres
+        cd "$SCRIPT_DIR"
+        SEO_PRODUCT="$PRODUCT" SEO_KEYWORD="$KEYWORD" SEO_PAGE_URL="$WEBSITE/t/$SLUG" SEO_SCRIPT_DIR="$SCRIPT_DIR" \
+        python3 -c "
 import sys, os
 sys.path.insert(0, os.environ['SEO_SCRIPT_DIR'])
 from db_helpers import update_status
@@ -332,8 +338,39 @@ update_status(os.environ['SEO_PRODUCT'], os.environ['SEO_KEYWORD'], 'done',
               page_url=os.environ['SEO_PAGE_URL'])
 "
 
-    echo ""
-    echo "=== Page generated for: $KEYWORD ==="
+        echo ""
+        echo "=== Page generated for: $KEYWORD ==="
+    else
+        EXIT_CODE=$?
+        PAGE_GEN_END=$(date +%s)
+        PAGE_GEN_DURATION=$(( PAGE_GEN_END - PAGE_GEN_START ))
+        cd "$SCRIPT_DIR"
+        if [ "$EXIT_CODE" -eq 124 ]; then
+            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) TIMEOUT: Page generation killed after ${PAGE_GEN_DURATION}s (limit 900s)" >> "$LOG_FILE"
+            echo "TIMEOUT: Page generation killed after ${PAGE_GEN_DURATION}s"
+            # Check if page file was at least written before timeout
+            if [ -f "$REPO_PATH/src/app/(main)/t/$SLUG/page.tsx" ] || [ -f "$REPO_PATH/src/app/t/$SLUG/page.tsx" ]; then
+                echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Page file exists despite timeout, marking done" >> "$LOG_FILE"
+                echo "Page file exists despite timeout, marking done"
+                SEO_PRODUCT="$PRODUCT" SEO_KEYWORD="$KEYWORD" SEO_PAGE_URL="$WEBSITE/t/$SLUG" SEO_SCRIPT_DIR="$SCRIPT_DIR" \
+                python3 -c "
+import sys, os
+sys.path.insert(0, os.environ['SEO_SCRIPT_DIR'])
+from db_helpers import update_status
+update_status(os.environ['SEO_PRODUCT'], os.environ['SEO_KEYWORD'], 'done',
+              page_url=os.environ['SEO_PAGE_URL'])
+"
+            else
+                echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) No page file found after timeout, resetting to pending" >> "$LOG_FILE"
+                echo "No page file found after timeout, resetting to pending"
+                $DB update "$PRODUCT" "$KEYWORD" pending
+            fi
+        else
+            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ERROR: Page generation failed (exit $EXIT_CODE) after ${PAGE_GEN_DURATION}s" >> "$LOG_FILE"
+            echo "ERROR: Page generation failed (exit $EXIT_CODE) after ${PAGE_GEN_DURATION}s"
+            $DB update "$PRODUCT" "$KEYWORD" pending
+        fi
+    fi
 else
     if [ "$STATUS" = "skip" ]; then
         echo "Keyword scored below threshold, skipping page generation."
