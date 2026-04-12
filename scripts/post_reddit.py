@@ -30,6 +30,9 @@ API_KEY_KEYCHAIN_SERVICE = "Anthropic API Key Fazm"
 REDDIT_BROWSER = os.path.join(REPO_DIR, "scripts", "reddit_browser.py")
 REDDIT_TOOLS = os.path.join(REPO_DIR, "scripts", "reddit_tools.py")
 
+VALID_STYLES = {"critic", "storyteller", "pattern_recognizer", "curious_probe",
+                "contrarian", "data_point_drop", "snarky_oneliner"}
+
 
 def mark_subreddit_restricted(thread_url: str) -> None:
     """Persist a subreddit as restricted so future searches skip it."""
@@ -468,6 +471,9 @@ def main():
         thread_author = decision.get("thread_author", "unknown")
         thread_title = decision.get("thread_title", "unknown")
         engagement_style = decision.get("engagement_style")
+        if engagement_style and engagement_style not in VALID_STYLES:
+            print(f"[post_reddit] unknown style '{engagement_style}', clearing")
+            engagement_style = None
 
         target = reply_to_url or thread_url
         print(f"[post_reddit] Posting {i + 1}/{len(decisions)}: "
