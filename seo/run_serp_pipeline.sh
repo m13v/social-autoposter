@@ -13,8 +13,10 @@
 # Usage:
 #   ./run_serp_pipeline.sh <product_name> [--score-only] [--generate-only]
 #
-# Page generation uses product-specific prompt templates stored in
-# seo/templates/<product>.md. No per-repo skills needed.
+# Scoring is inline Claude. Page generation is delegated to generate_page.py
+# (the unified generator shared with run_gsc_pipeline.sh). No templates —
+# the generator uses a creative brief prompt and discovers components
+# dynamically in the target repo.
 #
 # Requires: python3, claude CLI, psycopg2
 #
@@ -242,7 +244,6 @@ if [ "$STATUS" = "pending" ] && [ "$MODE" != "--score-only" ]; then
     echo "--- Page Generation ---"
     echo "Keyword: $KEYWORD"
     echo "Repo: $REPO_PATH"
-    echo "Template: $TEMPLATE_FILE"
 
     # Check if slug already exists as a done page
     SLUG_CHECK=$($DB check_slug "$PRODUCT" "$SLUG")
@@ -252,93 +253,22 @@ if [ "$STATUS" = "pending" ] && [ "$MODE" != "--score-only" ]; then
         exit 0
     fi
 
-    # Mark as in_progress in Postgres
+    # Mark as in_progress (generator expects caller to hold the row)
     $DB update "$PRODUCT" "$KEYWORD" in_progress
 
-    # Read the template and substitute variables
-    TEMPLATE_CONTENT=$(cat "$TEMPLATE_FILE")
+    # Hand off to the unified generator. It owns prompt, tool capture,
+    # git verification, and state transition to done/pending.
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Invoking generate_page.py" >> "$LOG_FILE"
+    $GENERATOR --product "$PRODUCT" --keyword "$KEYWORD" --slug "$SLUG" --trigger serp \
+        2>&1 | tee -a "$LOG_FILE"
+    GEN_EXIT=${PIPESTATUS[0]}
 
-    # Run Claude in the target repo to generate the page
-    # Timeout after 15 minutes to prevent indefinite hangs
-    PAGE_GEN_START=$(date +%s)
-    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Starting page generation (timeout: 900s)" >> "$LOG_FILE"
-    cd "$REPO_PATH"
-    if ! gtimeout 900 claude -p "You are an SEO content engineer. Create a guide page for this keyword.
-
-KEYWORD: \"$KEYWORD\"
-SLUG: \"$SLUG\"
-PRODUCT: $PRODUCT
-WEBSITE: $WEBSITE
-DIFFERENTIATOR: $DIFFERENTIATOR
-
-## Source material beyond the website repo
-
-You are working in a website repo, but the product is not only here. If it helps you find a more unique angle for this page, you are free to read from the locations listed below. Nothing is required. Use them when they serve the topic, ignore them when they do not.
-
-Product source for $PRODUCT:
-
-$PRODUCT_SOURCE_BLOCK
-
-These are not prompts to extract facts from. They are places where real implementation, real behavior, real data, and real constraints live. If the keyword touches something the product actually does, reading the relevant files often yields an angle no competitor has. If it does not, do not force it.
-
-Same for product data. If the product has stored runs, logs, scenarios, examples, or records, you are welcome to look at them as inspiration or for real numbers to cite. The way you access data is by running scripts from the product's \`scripts/\` folder. That is where the database queries, analytics pulls, and data exports live. Look there first, read what is available, and run whatever gets you real numbers instead of trying to connect to databases directly. Do not invent stats. Do not copy private data verbatim. Use judgment.
-
-Follow these instructions exactly:
-
-$TEMPLATE_CONTENT
-
-After the page is created, committed, and deployed, report back with:
-1. The page URL
-2. The slug
-3. Whether the build succeeded
-" 2>>"$LOG_FILE" | tee -a "$LOG_FILE"; then
-        PAGE_GEN_END=$(date +%s)
-        PAGE_GEN_DURATION=$(( PAGE_GEN_END - PAGE_GEN_START ))
-        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Page generation completed in ${PAGE_GEN_DURATION}s" >> "$LOG_FILE"
-
-        # Mark as done in Postgres
-        cd "$SCRIPT_DIR"
-        SEO_PRODUCT="$PRODUCT" SEO_KEYWORD="$KEYWORD" SEO_PAGE_URL="$WEBSITE/t/$SLUG" SEO_SCRIPT_DIR="$SCRIPT_DIR" \
-        python3 -c "
-import sys, os
-sys.path.insert(0, os.environ['SEO_SCRIPT_DIR'])
-from db_helpers import update_status
-update_status(os.environ['SEO_PRODUCT'], os.environ['SEO_KEYWORD'], 'done',
-              page_url=os.environ['SEO_PAGE_URL'])
-"
-
+    if [ "$GEN_EXIT" -eq 0 ]; then
         echo ""
         echo "=== Page generated for: $KEYWORD ==="
     else
-        EXIT_CODE=$?
-        PAGE_GEN_END=$(date +%s)
-        PAGE_GEN_DURATION=$(( PAGE_GEN_END - PAGE_GEN_START ))
-        cd "$SCRIPT_DIR"
-        if [ "$EXIT_CODE" -eq 124 ]; then
-            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) TIMEOUT: Page generation killed after ${PAGE_GEN_DURATION}s (limit 900s)" >> "$LOG_FILE"
-            echo "TIMEOUT: Page generation killed after ${PAGE_GEN_DURATION}s"
-            # Check if page file was at least written before timeout
-            if [ -f "$REPO_PATH/src/app/(main)/t/$SLUG/page.tsx" ] || [ -f "$REPO_PATH/src/app/t/$SLUG/page.tsx" ]; then
-                echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Page file exists despite timeout, marking done" >> "$LOG_FILE"
-                echo "Page file exists despite timeout, marking done"
-                SEO_PRODUCT="$PRODUCT" SEO_KEYWORD="$KEYWORD" SEO_PAGE_URL="$WEBSITE/t/$SLUG" SEO_SCRIPT_DIR="$SCRIPT_DIR" \
-                python3 -c "
-import sys, os
-sys.path.insert(0, os.environ['SEO_SCRIPT_DIR'])
-from db_helpers import update_status
-update_status(os.environ['SEO_PRODUCT'], os.environ['SEO_KEYWORD'], 'done',
-              page_url=os.environ['SEO_PAGE_URL'])
-"
-            else
-                echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) No page file found after timeout, resetting to pending" >> "$LOG_FILE"
-                echo "No page file found after timeout, resetting to pending"
-                $DB update "$PRODUCT" "$KEYWORD" pending
-            fi
-        else
-            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ERROR: Page generation failed (exit $EXIT_CODE) after ${PAGE_GEN_DURATION}s" >> "$LOG_FILE"
-            echo "ERROR: Page generation failed (exit $EXIT_CODE) after ${PAGE_GEN_DURATION}s"
-            $DB update "$PRODUCT" "$KEYWORD" pending
-        fi
+        echo ""
+        echo "=== Generation failed (exit $GEN_EXIT); state reset to pending by generator ==="
     fi
 else
     if [ "$STATUS" = "skip" ]; then
