@@ -25,8 +25,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG="$ROOT_DIR/config.json"
 LOCK_DIR="$SCRIPT_DIR/.locks"
-TEMPLATES_DIR="$SCRIPT_DIR/templates"
 DB="python3 $SCRIPT_DIR/db_helpers.py"
+GENERATOR="python3 $SCRIPT_DIR/generate_page.py"
 
 PRODUCT="${1:?Usage: $0 <product_name> [--score-only] [--generate-only]}"
 MODE="${2:-full}"  # full, --score-only, --generate-only
@@ -93,40 +93,9 @@ if [ ! -d "$REPO_PATH" ]; then
     exit 1
 fi
 
-# --- Ensure template exists ---
-TEMPLATE_FILE="$TEMPLATES_DIR/$PRODUCT_LOWER.md"
-if [ ! -f "$TEMPLATE_FILE" ]; then
-    echo "Error: no page template found at $TEMPLATE_FILE"
-    echo "Create a template for $PRODUCT first."
-    exit 1
-fi
-
-PRODUCT_SOURCE_BLOCK=$(CONFIG="$CONFIG" PRODUCT_LOWER="$PRODUCT_LOWER" python3 <<'PYEOF'
-import json, os
-with open(os.environ["CONFIG"]) as f:
-    c = json.load(f)
-block = ""
-for p in c.get("projects", []):
-    if p["name"].lower() == os.environ["PRODUCT_LOWER"]:
-        sources = p.get("landing_pages", {}).get("product_source", [])
-        if sources:
-            parts = []
-            for s in sources:
-                path = os.path.expanduser(s.get("path", ""))
-                desc = s.get("description", "").strip()
-                parts.append(f"- {path}\n  {desc}")
-            block = "\n\n".join(parts)
-        else:
-            block = "(no external product source repo configured for this product)\n\nYour current working directory is effectively both the website and the product. Feel free to read anywhere in the repo if it helps you find a real angle, including landing copy, existing guide pages, components, and any fixtures or data files."
-        break
-print(block)
-PYEOF
-)
-
-echo "=== SEO Pipeline: $PRODUCT ==="
+echo "=== SERP Pipeline: $PRODUCT ==="
 echo "  Repo: $REPO_PATH"
 echo "  Website: $WEBSITE"
-echo "  Template: $TEMPLATE_FILE"
 echo ""
 
 # --- Step 1: Pick next keyword from Postgres ---
