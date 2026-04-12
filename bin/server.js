@@ -134,31 +134,46 @@ function getLaunchAgentPath(plistFile) {
   return path.join(os.homedir(), 'Library', 'LaunchAgents', plistFile);
 }
 
-const PAUSE_FILE = path.join(os.homedir(), '.social-paused');
-
 function isPaused() {
-  return fs.existsSync(PAUSE_FILE);
+  // Paused = no jobs loaded in launchd
+  return JOBS.every(job => !isJobLoaded(job.label));
 }
 
 function pauseAll() {
-  // Create pause file
-  fs.writeFileSync(PAUSE_FILE, `Paused at ${new Date().toISOString()}\n`);
-  // Kill all running job processes
   const killed = [];
   for (const job of JOBS) {
+    // Unload from launchd
+    const agentLink = getLaunchAgentPath(job.plist);
+    if (isJobLoaded(job.label)) {
+      try { execSync(`launchctl unload "${agentLink}"`, { stdio: 'pipe' }); } catch {}
+    }
+    // Kill running processes
     const pids = getJobPids(job.script);
     for (const pid of pids) {
       try { process.kill(pid, 'SIGTERM'); killed.push(pid); } catch {}
     }
     try { execSync(`pkill -f "claude.*${job.script.replace('.sh', '')}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
   }
-  // Also kill any scan_replies.py or find_threads.py
-  try { execSync('pkill -f "social-autoposter/scripts/(scan_replies|find_threads|update_stats)" 2>/dev/null', { stdio: 'pipe' }); } catch {}
+  // Also kill helper scripts
+  try { execSync('pkill -f "social-autoposter/scripts/" 2>/dev/null', { stdio: 'pipe' }); } catch {}
+  try { execSync('pkill -f "social-autoposter/seo/" 2>/dev/null', { stdio: 'pipe' }); } catch {}
   return killed;
 }
 
 function resumeAll() {
-  try { fs.unlinkSync(PAUSE_FILE); } catch {}
+  const agentDir = path.join(os.homedir(), 'Library', 'LaunchAgents');
+  fs.mkdirSync(agentDir, { recursive: true });
+  for (const job of JOBS) {
+    const plistSrc = path.join(LAUNCHD_DIR, job.plist);
+    const agentLink = getLaunchAgentPath(job.plist);
+    if (!isJobLoaded(job.label) && fs.existsSync(plistSrc)) {
+      try { fs.unlinkSync(agentLink); } catch {}
+      try {
+        fs.symlinkSync(plistSrc, agentLink);
+        execSync(`launchctl load "${agentLink}"`, { stdio: 'pipe' });
+      } catch {}
+    }
+  }
 }
 
 // --- API Routes ---
