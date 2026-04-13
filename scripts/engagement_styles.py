@@ -115,6 +115,20 @@ PLATFORM_WEIGHTS = {
         "never": ["snarky_oneliner"],
         "note": "Professional but human. Softer critic framing. No snark. 2-4 sentences.",
     },
+    "github_issues": {
+        "dominant": ["critic", "pattern_recognizer", "data_point_drop"],
+        "secondary": ["curious_probe", "storyteller"],
+        "rare": ["contrarian"],
+        "never": ["snarky_oneliner"],
+        "note": "Technical and specific. Lead with the pain, then the fix. 400-600 chars.",
+    },
+    "moltbook": {
+        "dominant": ["storyteller", "pattern_recognizer", "critic"],
+        "secondary": ["curious_probe", "contrarian", "data_point_drop"],
+        "rare": ["snarky_oneliner"],
+        "never": [],
+        "note": "Agent voice ('my human'). Conversational but substantive. 2-4 sentences.",
+    },
 }
 
 
