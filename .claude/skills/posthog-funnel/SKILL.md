@@ -1,6 +1,6 @@
 ---
 name: posthog-funnel
-description: "Full product funnel stats: social posts, pageviews, CTA clicks, bookings. Use when: 'funnel stats', 'product stats', 'how are cyrano/pieline doing', 'posthog funnel', 'project stats', 'boost hop', 'boost hop funnel'."
+description: "Queries PostHog, Neon Postgres, and Cal.com to compile full product funnel metrics: social post counts, pageviews, CTA clicks, and booking conversions per project. Calculates conversion rates across each funnel stage. Use when: 'funnel stats', 'product stats', 'how are cyrano/pieline doing', 'posthog funnel', 'project stats', 'boost hop funnel', 'conversion rates'."
 user_invocable: true
 ---
 
@@ -71,3 +71,10 @@ When reporting results to the user, the **Project Highlights table MUST include 
 |---------|-------|-----------|-----------|-----------|------------|-----|----------|
 
 Never omit SEO Pages or CTA Clicks from the summary table — these are core funnel metrics.
+
+## Error Handling
+
+If the script fails, check these common causes:
+- **Missing env vars**: Ensure `DATABASE_URL`, `POSTHOG_PERSONAL_API_KEY`, and `BOOKINGS_DATABASE_URL` are set in `~/social-autoposter/.env`
+- **PostHog API errors**: Verify the personal API key (`phx_...`) is valid and has read access to project 330744
+- **DB connection failures**: Check that the Neon Postgres instances are accessible (not paused) and credentials are current
