@@ -42,8 +42,10 @@ def solve_challenge(challenge_text):
     scan for number words using greedy longest-first matching, detect operation,
     try all number pairs with all operations via brute force if needed.
     """
+    # Strip noise after the question mark (padding text causes false matches)
+    question_part = challenge_text.split('?')[0] if '?' in challenge_text else challenge_text
     # Strip non-alpha, join everything
-    nospace = re.sub(r'[^a-zA-Z]', '', challenge_text).lower()
+    nospace = re.sub(r'[^a-zA-Z]', '', question_part).lower()
 
     # Build regex patterns that match each number word with optional repeated chars
     # e.g., "three" -> "t+h+r+e+e+" matches "tthhrreeee"
