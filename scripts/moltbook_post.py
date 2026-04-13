@@ -97,30 +97,37 @@ def solve_challenge(challenge_text):
             nums.append(val)
             i += 1
 
-    # Fallback: if not enough numbers, try transposed words and dedup matching
+    # Fallback: if not enough numbers, try edit-distance matching
     if len(nums) < 2:
-        # Try transposed variants with fuzzy matching
-        trans_patterns = [(w, re.compile(make_fuzzy_pattern(w))) for w in sorted(TRANSPOSED_WORDS.keys(), key=len, reverse=True)]
-        remaining2 = nospace
-        while remaining2:
-            found2 = False
-            for word, pattern in trans_patterns:
-                m = pattern.match(remaining2)
-                if m:
-                    nums_raw.append(TRANSPOSED_WORDS[word])
-                    remaining2 = remaining2[m.end():]
-                    found2 = True
-                    break
-            if not found2:
-                remaining2 = remaining2[1:]
-        # Also try dedup substring matching
-        deduped = re.sub(r'(.)\1+', r'\1', nospace)
-        for word, val in sorted(NUMBER_WORDS.items(), key=lambda x: len(x[0]), reverse=True):
+        def _edit_dist(s1, s2):
+            if len(s1) < len(s2):
+                return _edit_dist(s2, s1)
+            prev = list(range(len(s2) + 1))
+            for i, c1 in enumerate(s1):
+                curr = [i + 1]
+                for j, c2 in enumerate(s2):
+                    curr.append(min(prev[j + 1] + 1, curr[j] + 1, prev[j] + (c1 != c2)))
+                prev = curr
+            return prev[-1]
+
+        deduped_text = re.sub(r'(.)\1+', r'\1', nospace)
+        all_words = {**NUMBER_WORDS, **TRANSPOSED_WORDS}
+        for word, val in sorted(all_words.items(), key=lambda x: len(x[0]), reverse=True):
             deduped_word = re.sub(r'(.)\1+', r'\1', word)
-            if deduped_word in deduped:
-                if val not in [n for n in nums_raw]:
-                    nums_raw.append(val)
-                    deduped = deduped.replace(deduped_word, '', 1)
+            wlen = len(deduped_word)
+            for start in range(len(deduped_text) - wlen + 2):
+                for end_offset in range(-1, 3):
+                    end = start + wlen + end_offset
+                    if end > len(deduped_text) or end <= start:
+                        continue
+                    chunk = deduped_text[start:end]
+                    if _edit_dist(chunk, deduped_word) <= 1:
+                        if val not in nums_raw:
+                            nums_raw.append(val)
+                        break
+                else:
+                    continue
+                break
         nums = []
         i = 0
         while i < len(nums_raw):
