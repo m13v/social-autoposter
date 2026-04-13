@@ -5,13 +5,12 @@ Commands:
     python3 scripts/github_tools.py search "QUERY" [--limit 10]
     python3 scripts/github_tools.py view OWNER/REPO NUMBER
     python3 scripts/github_tools.py already-posted "THREAD_URL"
-    python3 scripts/github_tools.py log-post THREAD_URL OUR_URL OUR_TEXT PROJECT THREAD_AUTHOR THREAD_TITLE [--account m13v] [--engagement-style STYLE] [--self-reply]
+    python3 scripts/github_tools.py log-post THREAD_URL OUR_URL OUR_TEXT PROJECT THREAD_AUTHOR THREAD_TITLE [--account m13v] [--engagement-style STYLE]
 """
 
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 
@@ -166,14 +165,13 @@ def cmd_already_posted(args):
 def cmd_log_post(args):
     """Log a posted GitHub comment to the database.
 
-    Without --self-reply: enforces one initial post per thread (hard dedup on thread_url).
-    With --self-reply: allows a second row on the same thread_url (for the self-reply follow-up).
-    Always hard-dedups on our_url so the same comment URL can't be logged twice.
+    Enforces two dedup rules:
+      1. Same comment URL is never logged twice (our_url hard dedup).
+      2. Only one post per GitHub issue thread (thread_url hard dedup).
     """
     dbmod.load_env()
     conn = dbmod.get_conn()
 
-    # Always dedup on our_url if we have one (never log the same comment twice)
     if args.our_url:
         cur = conn.execute(
             "SELECT id FROM posts WHERE platform='github_issues' AND our_url = %s LIMIT 1",
@@ -185,37 +183,33 @@ def cmd_log_post(args):
             print(json.dumps({"error": "DUPLICATE_URL", "message": "Already logged this comment URL", "existing_post_id": existing[0]}))
             return
 
-    # For non-self-reply posts, also enforce one initial post per thread
-    if not args.self_reply:
-        cur = conn.execute(
-            "SELECT id, LEFT(our_content, 100) FROM posts WHERE platform='github_issues' AND thread_url = %s LIMIT 1",
-            [args.thread_url],
-        )
-        existing = cur.fetchone()
-        if existing:
-            conn.close()
-            print(json.dumps({
-                "error": "DUPLICATE_THREAD",
-                "message": "Already posted initial comment in this thread",
-                "existing_post_id": existing[0],
-                "content_preview": existing[1],
-            }))
-            return
+    cur = conn.execute(
+        "SELECT id, LEFT(our_content, 100) FROM posts WHERE platform='github_issues' AND thread_url = %s LIMIT 1",
+        [args.thread_url],
+    )
+    existing = cur.fetchone()
+    if existing:
+        conn.close()
+        print(json.dumps({
+            "error": "DUPLICATE_THREAD",
+            "message": "Already posted in this thread",
+            "existing_post_id": existing[0],
+            "content_preview": existing[1],
+        }))
+        return
 
     conn.execute(
         """INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
            thread_title, thread_content, our_url, our_content, our_account,
            source_summary, project_name, status, posted_at, feedback_report_used, engagement_style)
-           VALUES ('github_issues', %s, %s, %s, %s, '', %s, %s, %s, %s, %s, 'active', NOW(), TRUE, %s)""",
+           VALUES ('github_issues', %s, %s, %s, %s, '', %s, %s, %s, '', %s, 'active', NOW(), TRUE, %s)""",
         [args.thread_url, args.thread_author, args.thread_author, args.thread_title,
-         args.our_url, args.our_text, args.account,
-         "self-reply" if args.self_reply else "",
-         args.project,
+         args.our_url, args.our_text, args.account, args.project,
          getattr(args, "engagement_style", None)],
     )
     conn.commit()
     conn.close()
-    print(json.dumps({"logged": True, "self_reply": bool(args.self_reply)}))
+    print(json.dumps({"logged": True}))
 
 
 def main():
@@ -246,8 +240,6 @@ def main():
     p_log.add_argument("thread_title")
     p_log.add_argument("--account", default="m13v")
     p_log.add_argument("--engagement-style", dest="engagement_style", default=None)
-    p_log.add_argument("--self-reply", dest="self_reply", action="store_true",
-                       help="Mark as self-reply; skips thread_url dedup")
 
     args = parser.parse_args()
     if args.command == "search":
