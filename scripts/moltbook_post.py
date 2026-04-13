@@ -86,17 +86,20 @@ def solve_challenge(challenge_text):
         consumed = 1
 
         # Try joining 1 to 4 consecutive segments to handle split words
+        # Only use NUMBER_WORDS (not transpositions) to avoid false positives
         for join_count in range(1, min(5, len(segments) - i_seg + 1)):
             joined = ''.join(segments[i_seg:i_seg + join_count]).lower()
             joined_dedup = re.sub(r'(.)\1+', r'\1', joined)
 
-            for word, val in sorted_wordlist:
+            # For multi-segment joins, require exact match (dist=0) to avoid false positives
+            use_max_dist = (1 if len(joined_dedup) >= 4 else 0) if join_count == 1 else 0
+
+            for word, val in sorted(NUMBER_WORDS.items(), key=lambda x: len(x[0]), reverse=True):
                 dw = re.sub(r'(.)\1+', r'\1', word)
                 if len(dw) < 3:
                     continue
-                max_dist = 1 if len(dw) >= 4 else 0
-                if abs(len(joined_dedup) - len(dw)) <= max_dist + 1:
-                    if _edit_dist(joined_dedup, dw) <= max_dist:
+                if abs(len(joined_dedup) - len(dw)) <= use_max_dist + 1:
+                    if _edit_dist(joined_dedup, dw) <= use_max_dist:
                         if len(dw) > best_len:
                             best_val = val
                             best_len = len(dw)
