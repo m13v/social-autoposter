@@ -56,8 +56,9 @@ TARGETING (data-driven, from engagement analysis):
 
 COMMENT STYLE (what gets replies):
 - Lead with the pain you hit, then your fix. \"the token overhead is brutal\" > \"here is how to optimize\".
-- Keep it conversational, no code blocks in the initial comment. Save code/links for the self-reply.
+- Keep it conversational, no code blocks in the initial comment.
 - Aim for 400-600 chars. Short enough to read, long enough to show real experience.
+- Do NOT include any links to our repos in the comment. Links are added later by Phase D after the comment earns engagement.
 - Share specific implementation details (file names, metrics, tradeoffs), not generic advice.
 
 Run the **Workflow: GitHub Issues** section. Follow every step:
@@ -71,34 +72,9 @@ Run the **Workflow: GitHub Issues** section. Follow every step:
 6. Draft helpful comments (follow Content Rules and COMMENT STYLE above - NEVER use em dashes)
 7. Post via: gh issue comment NUMBER -R OWNER/REPO --body \"...\"
 8. Log to database with project_name='$PROJECT', engagement_style='STYLE_YOU_CHOSE' (MUST include engagement_style and project_name in the INSERT)
-10. Self-reply with a link to a SPECIFIC FILE in our repos (not just the repo homepage).
-   Map expertise to files:
-   - macOS accessibility/AX/click/screen control -> mediar-ai/mcp-server-macos-use/Sources/MCPServer/main.swift
-   - Desktop automation framework/element interaction -> mediar-ai/terminator/crates/terminator/src/element.rs
-   - Desktop automation core/Rust -> mediar-ai/terminator/crates/terminator/src/lib.rs
-   - MCP server for desktop -> mediar-ai/terminator/crates/terminator-mcp-agent/src/server.rs
-   - Screen capture/ScreenCaptureKit -> m13v/macos-session-replay/Sources/SessionReplay/ScreenCaptureService.swift
-   - Video encoding/recording -> m13v/macos-session-replay/Sources/SessionReplay/VideoChunkEncoder.swift
-   - Voice/transcription/WhisperKit -> m13v/fazm/Desktop/Sources/TranscriptionService.swift
-   - Claude API/LLM provider -> m13v/fazm/Desktop/Sources/Providers/ChatProvider.swift
-   - Tool execution/function calling -> m13v/fazm/Desktop/Sources/Providers/ChatToolExecutor.swift
-   - Floating UI/overlay -> m13v/fazm/Desktop/Sources/FloatingControlBar/FloatingControlBarView.swift
-   - Browser lock/multi-agent Playwright -> m13v/browser-lock/playwright-lock.sh
-   - User memory/knowledge extraction -> m13v/ai-browser-profile/ai_browser_profile/db.py
-   - Memory embeddings/semantic search -> m13v/ai-browser-profile/ai_browser_profile/embeddings.py
-   - Browser history ingestion -> m13v/ai-browser-profile/ai_browser_profile/ingestors/history.py
-   - Social posting pipeline -> m13v/social-autoposter/skill/SKILL.md
-   - Launchd scheduling -> m13v/social-autoposter/launchd/ (directory)
-   - Reply scanning -> m13v/social-autoposter/scripts/scan_replies.py
-   - Video editing/ffmpeg -> m13v/video-edit/SKILL.md
-   - Video upload to social -> m13v/social-media-video-upload
-   - Tmux agent orchestration -> m13v/tmux-background-agents/SKILL.md
-   - Skill publishing -> m13v/publish-skill
-   - Skill registry -> m13v/skill-registry
-   - Vector embeddings/semantic search -> m13v/ai-browser-profile/ai_browser_profile/embeddings.py
-   - Local knowledge extraction/browser data -> m13v/ai-browser-profile
-   - Offline voice/speech recognition -> m13v/fazm/Desktop/Sources/TranscriptionService.swift
-11. Log self-reply to database too (same project_name)
+   IMPORTANT: Save the comment URL from gh output. Store it as our_url in the INSERT.
+
+Do NOT self-reply with links. Links are added later by a separate pipeline (Phase D) that edits the comment after it earns engagement.
 
 Post to 10 issues per run. Spread across different repos and topics.
 
