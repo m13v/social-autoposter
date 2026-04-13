@@ -1,6 +1,6 @@
 #!/bin/bash
 # Social Autoposter - GitHub Issues posting
-# Find relevant open issues across GitHub, post helpful comments, self-reply with specific file links.
+# Find relevant open issues across GitHub, post helpful comments. Links added later by Phase D.
 # Called by launchd every 4 hours.
 
 set -euo pipefail
