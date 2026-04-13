@@ -129,6 +129,10 @@ EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.j
 EXCLUDED_TWITTER=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('twitter_accounts',[])))" 2>/dev/null || echo "")
 EXCLUDED_LINKEDIN=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('linkedin_profiles',[])))" 2>/dev/null || echo "")
 
+# Generate engagement style and content rules from shared module
+source "$REPO_DIR/skill/styles.sh"
+STYLES_BLOCK=$(generate_styles_block reddit replying)
+
 BATCH_NUM=0
 
 while true; do
@@ -201,17 +205,7 @@ PROMPT_HEADER
 - **Tier 3 (direct ask):** They ask for link/tool/source. Give it immediately.
 
 
-### Reply archetypes — MUST rotate, never use the same type twice in a row:
-- **Short affirm** (1 sentence): "love this framing" / "this is underrated" — no product tie-in
-- **Pure question** (1-2 sentences): Ask something genuine. Don't mention any tools at all.
-- **Respectful pushback**: Disagree or add nuance. "I've actually seen the opposite..."
-- **Story/anecdote**: Share a specific experience WITHOUT tying back to any product.
-- **Recommendation reply**: Recommend a relevant project from config as something you've used or come across. Use for MAX 30% of replies.
-
-### Anti-pattern rules:
-- NEVER start with "exactly", "yeah totally", "100%", "that's smart". Vary first words.
-- NEVER say "I built" / "we built" / "I'm working on". Frame products as recommendations, not self-promotion. Most replies should NOT mention any product.
-- Some replies should be 1 sentence. Not everything needs 3-4 sentences.
+$STYLES_BLOCK
 
 ### Commitment guardrails (applies to ALL comment replies):
 - NEVER suggest, offer, or agree to calls, meetings, demos, or video chats.
@@ -227,7 +221,7 @@ CRITICAL: Process EVERY reply in this batch. For each: either post a response an
 
 CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql):
   python3 $REPO_DIR/scripts/reply_db.py processing ID          # BEFORE browser action
-  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url]   # AFTER posting
+  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url] [engagement_style]   # AFTER posting (include the style name)
   python3 $REPO_DIR/scripts/reply_db.py skipped ID "reason"
   python3 $REPO_DIR/scripts/reply_db.py skip_batch '{"ids":[1,2,3],"reason":"..."}'
   python3 $REPO_DIR/scripts/reply_db.py status
@@ -236,7 +230,7 @@ NEVER use psql directly. reply_db.py is faster (persistent connection, no env so
 MANDATORY reply flow for every item:
   Step 1: python3 reply_db.py processing ID      ← mark BEFORE touching browser
   Step 2: post reply via browser
-  Step 3: python3 reply_db.py replied ID "text" [url]   ← mark AFTER success
+  Step 3: python3 reply_db.py replied ID "text" [url] [engagement_style]   ← mark AFTER success (e.g. critic, storyteller)
 If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run — safe to retry.
 
 GitHub issues engagement is handled by a separate pipeline (github-engage.sh). Skip any github_issues replies in this batch.
