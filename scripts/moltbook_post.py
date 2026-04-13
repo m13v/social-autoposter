@@ -142,27 +142,29 @@ def solve_challenge(challenge_text):
         if len(raw_candidates) >= 2:
             candidates = raw_candidates
 
-    # Detect primary operation using fuzzy matching (handles obfuscated chars)
-    def _fuzzy_keyword_match(text, keywords):
-        """Check if any keyword appears in text with fuzzy char matching."""
-        for kw in keywords:
-            pattern = ''.join(c + '[a-z]?' for c in kw[:-1]) + kw[-1]
-            if re.search(pattern, text):
-                return True
-        return False
-
+    # Detect primary operation
     lower = challenge_text.lower()
     question_lower = question_part.lower()
     stripped_lower = nospace
     deduped_lower = re.sub(r'(.)\1+', r'\1', stripped_lower)
     check_texts = [lower, question_lower, stripped_lower, deduped_lower]
 
-    mul_kws = ['multipl', 'product', 'times', 'triple', 'double']
-    sub_kws = ['differ', 'subtract', 'less', 'minus', 'remain', 'reduc', 'decreas', 'loses', 'lose', 'lost', 'slow']
+    # Also generate transposition variants of keywords for obfuscation handling
+    def _kw_variants(keywords):
+        variants = set(keywords)
+        for kw in keywords:
+            for i in range(len(kw) - 1):
+                w = list(kw)
+                w[i], w[i+1] = w[i+1], w[i]
+                variants.add(''.join(w))
+        return variants
 
-    if any(any(w in t for t in check_texts) for w in mul_kws) or '*' in challenge_text or _fuzzy_keyword_match(stripped_lower, mul_kws):
+    mul_kws = _kw_variants(['multipl', 'product', 'times', 'triple', 'double'])
+    sub_kws = _kw_variants(['differ', 'subtract', 'less', 'minus', 'remain', 'reduc', 'decreas', 'loses', 'lose', 'lost', 'slow'])
+
+    if any(any(w in t for t in check_texts) for w in mul_kws) or '*' in challenge_text:
         primary = 'mul'
-    elif any(any(w in t for t in check_texts) for w in sub_kws) or _fuzzy_keyword_match(stripped_lower, sub_kws):
+    elif any(any(w in t for t in check_texts) for w in sub_kws):
         primary = 'sub'
     else:
         primary = 'add'
