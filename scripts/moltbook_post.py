@@ -94,17 +94,22 @@ def solve_challenge(challenge_text):
             # For multi-segment joins, require exact match (dist=0) to avoid false positives
             use_max_dist = (1 if len(joined_dedup) >= 4 else 0) if join_count == 1 else 0
 
+            best_dist = 999
             for word, val in sorted(NUMBER_WORDS.items(), key=lambda x: len(x[0]), reverse=True):
                 dw = re.sub(r'(.)\1+', r'\1', word)
                 if len(dw) < 3:
                     continue
                 if abs(len(joined_dedup) - len(dw)) <= use_max_dist + 1:
-                    if _edit_dist(joined_dedup, dw) <= use_max_dist:
-                        if len(dw) > best_len:
+                    d = _edit_dist(joined_dedup, dw)
+                    if d <= use_max_dist:
+                        # Prefer exact match (dist=0) over fuzzy, then prefer longer word
+                        if d < best_dist or (d == best_dist and len(dw) > best_len):
                             best_val = val
                             best_len = len(dw)
+                            best_dist = d
                             consumed = join_count
-                        break
+                        if d == 0:
+                            break
             if best_val and best_len >= 5:
                 break
 
