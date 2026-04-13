@@ -209,8 +209,9 @@ For skip:
 {{"action": "skip", "reason": "REASON_FROM_LIST_ABOVE"}}
 
 For reply:
-{{"action": "reply", "text": "YOUR_REPLY_TEXT", "project": null}}
+{{"action": "reply", "text": "YOUR_REPLY_TEXT", "project": null, "engagement_style": "STYLE_NAME"}}
 
+Set "engagement_style" to the style you chose: critic, storyteller, pattern_recognizer, curious_probe, contrarian, data_point_drop, or snarky_oneliner. Every reply MUST have an engagement_style.
 If you recommended a project from config.json in the reply text, set "project" to that project name.
 The orchestrator posts the reply via gh CLI and updates the database. You only decide and draft.
 """
@@ -479,6 +480,11 @@ def main():
                         cmd_args = ["python3", REPLY_DB, "replied", str(reply["id"]), reply_text]
                         if url_or_err:
                             cmd_args.append(url_or_err)
+                        style = decision.get("engagement_style", "")
+                        if style:
+                            if not url_or_err:
+                                cmd_args.append("")  # placeholder for url
+                            cmd_args.append(style)
                         subprocess.run(cmd_args)
                         if project:
                             db_url = os.environ.get("DATABASE_URL", "")
