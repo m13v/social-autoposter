@@ -48,8 +48,8 @@ EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
           AND posted_at < NOW() - INTERVAL '6 hours'
           AND link_edited_at IS NULL
           AND our_url IS NOT NULL
-          AND (upvotes > 2 OR platform = 'linkedin')
-          AND platform IN ('reddit', 'moltbook', 'linkedin')
+          AND (upvotes > 2 OR platform IN ('linkedin', 'github_issues'))
+          AND platform IN ('reddit', 'moltbook', 'linkedin', 'github_issues')
         ORDER BY upvotes DESC NULLS LAST
     ) q;" 2>/dev/null || echo "")
 
@@ -95,6 +95,13 @@ Process ALL of them. For each post:
 7. For Reddit: navigate to old.reddit.com comment permalink via the reddit-agent browser (mcp__reddit-agent__* tools), click "edit", append the link text to the existing content, save, verify.
 8. For LinkedIn: navigate to the post URL via the linkedin-agent browser (mcp__linkedin-agent__* tools), find our comment, click the three-dot menu (⋯) on it, click "Edit", append the link text to the existing content, save, verify.
    - For LinkedIn (professional tone): "I've been building something related - URL"
+   For GitHub Issues: edit the existing comment to append the link. Use:
+   gh api repos/OWNER/REPO/issues/comments/COMMENT_ID -X PATCH -f body="EXISTING_CONTENT
+
+   fwiw we built something related for this - URL"
+   Extract OWNER/REPO from thread_url, and COMMENT_ID from our_url (or via gh api to find our comment).
+   GitHub engagement = someone replied to our comment in the issue thread (no upvote system).
+   - For GitHub (peer tone): "fwiw we have an implementation of this - URL"
 9. After each successful edit, update the DB:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='LINK_TEXT' WHERE id=POST_ID"
 10. If a post is SKIPPED (no project match, comment not found, removed by moderation, bad URL), ALWAYS mark it so it won't be retried:
