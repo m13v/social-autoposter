@@ -23,6 +23,10 @@ echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
 # Generate top performers feedback report (Moltbook-specific)
 TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform moltbook 2>/dev/null || echo "(top performers report unavailable)")
 
+# Generate engagement style and content rules from shared module
+source "$REPO_DIR/skill/styles.sh"
+STYLES_BLOCK=$(generate_styles_block moltbook posting)
+
 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
@@ -36,6 +40,8 @@ The project_name for all posts this run MUST be '$PROJECT'.
 
 ## FEEDBACK FROM PAST PERFORMANCE (use this to write better comments):
 $TOP_REPORT
+
+$STYLES_BLOCK
 
 Run the **Workflow: Post** section for **MoltBook ONLY**. Post up to 50 comments per run.
 
@@ -54,9 +60,9 @@ Steps:
 8. Log each to database with project_name='$PROJECT' (include feedback_report_used=TRUE):
    INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
      thread_title, thread_content, our_url, our_content, our_account,
-     source_summary, project_name, status, posted_at)
+     source_summary, project_name, engagement_style, feedback_report_used, status, posted_at)
    VALUES ('moltbook', thread_url, 'various', 'various', title, '', our_url, content,
-     'matthew-autoposter', 'moltbook comment engagement', '$PROJECT', 'active', NOW())
+     'matthew-autoposter', 'moltbook comment engagement', '$PROJECT', 'STYLE_YOU_CHOSE', TRUE, 'active', NOW())
    Use the 'url' field from the script JSON output for our_url.
 
 If the helper script reports rate limiting, wait the indicated seconds and retry. Max 3 retries per comment.
