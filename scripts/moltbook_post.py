@@ -73,36 +73,49 @@ def solve_challenge(challenge_text):
             prev = curr
         return prev[-1]
 
-    # Hybrid number extraction: dedup text, then scan with edit-distance matching
-    deduped = re.sub(r'(.)\1+', r'\1', nospace)
+    # Split challenge into word-like segments (split on non-alpha), then match
+    segments = re.findall(r'[a-zA-Z]+', question_part)
     all_words = {**NUMBER_WORDS, **TRANSPOSED_WORDS}
-    sorted_words = sorted(all_words.items(), key=lambda x: len(x[0]), reverse=True)
+    sorted_wordlist = sorted(all_words.items(), key=lambda x: len(x[0]), reverse=True)
 
     nums_raw = []
-    pos = 0
-    while pos < len(deduped):
-        best_match = None
-        best_end = pos
-        for word, val in sorted_words:
-            dw = re.sub(r'(.)\1+', r'\1', word)
-            for end_offset in range(-1, 3):
-                end = pos + len(dw) + end_offset
-                if end > len(deduped) or end <= pos:
+    i_seg = 0
+    while i_seg < len(segments):
+        seg = segments[i_seg].lower()
+        seg_dedup = re.sub(r'(.)\1+', r'\1', seg)
+        best_val = None
+        best_len = 0
+        consumed = 1
+
+        # Try matching this segment (and optionally next segment joined) against number words
+        for try_joined in [False, True]:
+            if try_joined and i_seg + 1 < len(segments):
+                joined = seg + segments[i_seg + 1].lower()
+                joined_dedup = re.sub(r'(.)\1+', r'\1', joined)
+                test_seg = joined_dedup
+                c = 2
+            else:
+                test_seg = seg_dedup
+                c = 1
+
+            for word, val in sorted_wordlist:
+                dw = re.sub(r'(.)\1+', r'\1', word)
+                if len(dw) < 3:
                     continue
-                chunk = deduped[pos:end]
                 max_dist = 1 if len(dw) >= 4 else 0
-                if _edit_dist(chunk, dw) <= max_dist:
-                    if best_match is None or len(dw) > len(re.sub(r'(.)\1+', r'\1', best_match[0])):
-                        best_match = (word, val)
-                        best_end = end
-                    break
-            if best_match and len(re.sub(r'(.)\1+', r'\1', best_match[0])) >= 5:
-                break
-        if best_match:
-            nums_raw.append(best_match[1])
-            pos = best_end
+                if abs(len(test_seg) - len(dw)) <= max_dist + 1:
+                    if _edit_dist(test_seg, dw) <= max_dist:
+                        if len(dw) > best_len:
+                            best_val = val
+                            best_len = len(dw)
+                            consumed = c
+                        break
+
+        if best_val is not None:
+            nums_raw.append(best_val)
+            i_seg += consumed
         else:
-            pos += 1
+            i_seg += 1
 
     # Combine tens+ones (e.g., twenty + three = 23)
     nums = []
