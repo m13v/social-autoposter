@@ -62,28 +62,47 @@ def solve_challenge(challenge_text):
     # Strip non-alpha, join everything
     nospace = re.sub(r'[^a-zA-Z]', '', question_part).lower()
 
-    # Build regex patterns that match each number word with optional repeated chars
-    # e.g., "three" -> "t+h+r+e+e+" matches "tthhrreeee"
-    def make_fuzzy_pattern(word):
-        return ''.join(c + '+' for c in word)
+    def _edit_dist(s1, s2):
+        if len(s1) < len(s2):
+            return _edit_dist(s2, s1)
+        prev = list(range(len(s2) + 1))
+        for i, c1 in enumerate(s1):
+            curr = [i + 1]
+            for j, c2 in enumerate(s2):
+                curr.append(min(prev[j + 1] + 1, curr[j] + 1, prev[j] + (c1 != c2)))
+            prev = curr
+        return prev[-1]
 
-    sorted_words = sorted(NUMBER_WORDS.keys(), key=len, reverse=True)
-    fuzzy_patterns = [(w, re.compile(make_fuzzy_pattern(w))) for w in sorted_words]
+    # Hybrid number extraction: dedup text, then scan with edit-distance matching
+    deduped = re.sub(r'(.)\1+', r'\1', nospace)
+    all_words = {**NUMBER_WORDS, **TRANSPOSED_WORDS}
+    sorted_words = sorted(all_words.items(), key=lambda x: len(x[0]), reverse=True)
 
-    # Scan for number words using fuzzy matching on the raw stripped text
     nums_raw = []
-    remaining = nospace
-    while remaining:
-        found = False
-        for word, pattern in fuzzy_patterns:
-            m = pattern.match(remaining)
-            if m:
-                nums_raw.append(NUMBER_WORDS[word])
-                remaining = remaining[m.end():]
-                found = True
+    pos = 0
+    while pos < len(deduped):
+        best_match = None
+        best_end = pos
+        for word, val in sorted_words:
+            dw = re.sub(r'(.)\1+', r'\1', word)
+            for end_offset in range(-1, 3):
+                end = pos + len(dw) + end_offset
+                if end > len(deduped) or end <= pos:
+                    continue
+                chunk = deduped[pos:end]
+                max_dist = 1 if len(dw) >= 4 else 0
+                if _edit_dist(chunk, dw) <= max_dist:
+                    if best_match is None or len(dw) > len(re.sub(r'(.)\1+', r'\1', best_match[0])):
+                        best_match = (word, val)
+                        best_end = end
+                    break
+            if best_match and len(re.sub(r'(.)\1+', r'\1', best_match[0])) >= 5:
                 break
-        if not found:
-            remaining = remaining[1:]
+        if best_match:
+            nums_raw.append(best_match[1])
+            pos = best_end
+        else:
+            pos += 1
 
     # Combine tens+ones (e.g., twenty + three = 23)
     nums = []
@@ -96,48 +115,6 @@ def solve_challenge(challenge_text):
         else:
             nums.append(val)
             i += 1
-
-    # Fallback: if not enough numbers, try edit-distance matching
-    if len(nums) < 2:
-        def _edit_dist(s1, s2):
-            if len(s1) < len(s2):
-                return _edit_dist(s2, s1)
-            prev = list(range(len(s2) + 1))
-            for i, c1 in enumerate(s1):
-                curr = [i + 1]
-                for j, c2 in enumerate(s2):
-                    curr.append(min(prev[j + 1] + 1, curr[j] + 1, prev[j] + (c1 != c2)))
-                prev = curr
-            return prev[-1]
-
-        deduped_text = re.sub(r'(.)\1+', r'\1', nospace)
-        all_words = {**NUMBER_WORDS, **TRANSPOSED_WORDS}
-        for word, val in sorted(all_words.items(), key=lambda x: len(x[0]), reverse=True):
-            deduped_word = re.sub(r'(.)\1+', r'\1', word)
-            wlen = len(deduped_word)
-            for start in range(len(deduped_text) - wlen + 2):
-                for end_offset in range(-1, 3):
-                    end = start + wlen + end_offset
-                    if end > len(deduped_text) or end <= start:
-                        continue
-                    chunk = deduped_text[start:end]
-                    if _edit_dist(chunk, deduped_word) <= 1:
-                        if val not in nums_raw:
-                            nums_raw.append(val)
-                        break
-                else:
-                    continue
-                break
-        nums = []
-        i = 0
-        while i < len(nums_raw):
-            val = nums_raw[i]
-            if val >= 20 and val < 100 and i+1 < len(nums_raw) and nums_raw[i+1] < 10:
-                nums.append(val + nums_raw[i+1])
-                i += 2
-            else:
-                nums.append(val)
-                i += 1
 
     # Filter to reasonable candidates (5-999)
     candidates = [n for n in nums if 5 <= n <= 999]
