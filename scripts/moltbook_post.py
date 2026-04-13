@@ -148,18 +148,8 @@ def solve_challenge(challenge_text):
     deduped_lower = re.sub(r'(.)\1+', r'\1', stripped_lower)
     check_texts = [lower, question_lower, stripped_lower, deduped_lower]
 
-    # Also generate transposition variants of keywords for obfuscation handling
-    def _kw_variants(keywords):
-        variants = set(keywords)
-        for kw in keywords:
-            for i in range(len(kw) - 1):
-                w = list(kw)
-                w[i], w[i+1] = w[i+1], w[i]
-                variants.add(''.join(w))
-        return variants
-
-    mul_kws = _kw_variants(['multipl', 'product', 'times', 'triple', 'double'])
-    sub_kws = _kw_variants(['differ', 'subtract', 'less', 'minus', 'remain', 'reduc', 'decreas', 'loses', 'lose', 'lost', 'slow'])
+    mul_kws = ['multipl', 'product', 'times', 'triple', 'double']
+    sub_kws = ['differ', 'subtract', 'less', 'minus', 'remain', 'reduc', 'decreas', 'loses', 'lose', 'lost', 'slow']
 
     # Also check segments against keywords with edit distance
     seg_words = [s.lower() for s in re.findall(r'[a-zA-Z]+', question_part)]
@@ -170,7 +160,7 @@ def solve_challenge(challenge_text):
             return True
         for sd in seg_deduped:
             for kw in keywords:
-                if len(kw) >= 4 and abs(len(sd) - len(kw)) <= 2 and _edit_dist(sd, kw) <= 1:
+                if len(kw) >= 5 and abs(len(sd) - len(kw)) <= 1 and _edit_dist(sd, kw) <= 1:
                     return True
         return False
 
