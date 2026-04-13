@@ -17,3 +17,13 @@
 - **NEVER edit, modify, or write to `setup/SKILL.md`** - it is also locked with `chflags uchg`. Same rules as above: do not unlock, do not modify, do not "fix" it.
 - **Do NOT add rate limits to ANY file** - do not add "Max N posts per 24 hours" or any posting rate limit language to SKILL.md, setup/SKILL.md, shell scripts, or any other file. There is NO posting rate limit. If a file does not contain a rate limit, that is intentional.
 - **Do NOT "improve" or "fix" the workflow** - do not renumber steps, do not add safety checks, do not restructure the file.
+
+
+## Engagement Styles System (DO NOT REMOVE)
+
+All posting and engagement scripts use `scripts/engagement_styles.py` to generate a `STYLES_BLOCK` variable injected into prompts. This is an A/B testing system that tracks which comment style gets the best engagement.
+
+- **NEVER remove `STYLES_BLOCK`** from any `skill/run-*.sh` or `skill/engage*.sh` script
+- **NEVER remove `engagement_style`** from DB logging (reply_db.py calls, INSERT statements)
+- **NEVER remove or simplify style definitions** in `scripts/engagement_styles.py`
+- **NEVER inline style definitions** back into individual scripts; the shared module is the single source of truth
