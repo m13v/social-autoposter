@@ -35,21 +35,6 @@ NUMBER_WORDS = {
     'seventy':70,'eighty':80,'ninety':90
 }
 
-def _generate_transpositions(word):
-    """Generate all single adjacent-char transpositions of a word."""
-    variants = set()
-    for i in range(len(word) - 1):
-        w = list(word)
-        w[i], w[i+1] = w[i+1], w[i]
-        variants.add(''.join(w))
-    return variants
-
-TRANSPOSED_WORDS = {}
-for _w, _v in NUMBER_WORDS.items():
-    for _t in _generate_transpositions(_w):
-        if _t not in NUMBER_WORDS:
-            TRANSPOSED_WORDS[_t] = _v
-
 def solve_challenge(challenge_text):
     """Solve Moltbook's obfuscated lobster math CAPTCHA.
 
@@ -57,67 +42,31 @@ def solve_challenge(challenge_text):
     scan for number words using greedy longest-first matching, detect operation,
     try all number pairs with all operations via brute force if needed.
     """
-    # Strip noise after the question mark (padding text causes false matches)
-    question_part = challenge_text.split('?')[0] if '?' in challenge_text else challenge_text
     # Strip non-alpha, join everything
-    nospace = re.sub(r'[^a-zA-Z]', '', question_part).lower()
+    nospace = re.sub(r'[^a-zA-Z]', '', challenge_text).lower()
 
-    def _edit_dist(s1, s2):
-        if len(s1) < len(s2):
-            return _edit_dist(s2, s1)
-        prev = list(range(len(s2) + 1))
-        for i, c1 in enumerate(s1):
-            curr = [i + 1]
-            for j, c2 in enumerate(s2):
-                curr.append(min(prev[j + 1] + 1, curr[j] + 1, prev[j] + (c1 != c2)))
-            prev = curr
-        return prev[-1]
+    # Build regex patterns that match each number word with optional repeated chars
+    # e.g., "three" -> "t+h+r+e+e+" matches "tthhrreeee"
+    def make_fuzzy_pattern(word):
+        return ''.join(c + '+' for c in word)
 
-    # Split challenge into word-like segments (split on non-alpha), then match
-    segments = re.findall(r'[a-zA-Z]+', question_part)
-    all_words = {**NUMBER_WORDS, **TRANSPOSED_WORDS}
-    sorted_wordlist = sorted(all_words.items(), key=lambda x: len(x[0]), reverse=True)
+    sorted_words = sorted(NUMBER_WORDS.keys(), key=len, reverse=True)
+    fuzzy_patterns = [(w, re.compile(make_fuzzy_pattern(w))) for w in sorted_words]
 
+    # Scan for number words using fuzzy matching on the raw stripped text
     nums_raw = []
-    i_seg = 0
-    while i_seg < len(segments):
-        best_val = None
-        best_len = 0
-        consumed = 1
-
-        # Try joining 1 to 4 consecutive segments to handle split words
-        # Only use NUMBER_WORDS (not transpositions) to avoid false positives
-        for join_count in range(1, min(5, len(segments) - i_seg + 1)):
-            joined = ''.join(segments[i_seg:i_seg + join_count]).lower()
-            joined_dedup = re.sub(r'(.)\1+', r'\1', joined)
-
-            # For multi-segment joins, require exact match (dist=0) to avoid false positives
-            use_max_dist = (1 if len(joined_dedup) >= 4 else 0) if join_count == 1 else 0
-
-            best_dist = 999
-            for word, val in sorted(NUMBER_WORDS.items(), key=lambda x: len(x[0]), reverse=True):
-                dw = re.sub(r'(.)\1+', r'\1', word)
-                if len(dw) < 3:
-                    continue
-                if abs(len(joined_dedup) - len(dw)) <= use_max_dist + 1:
-                    d = _edit_dist(joined_dedup, dw)
-                    if d <= use_max_dist:
-                        # Prefer exact match (dist=0) over fuzzy, then prefer longer word
-                        if d < best_dist or (d == best_dist and len(dw) > best_len):
-                            best_val = val
-                            best_len = len(dw)
-                            best_dist = d
-                            consumed = join_count
-                        if d == 0:
-                            break
-            if best_val and best_len >= 5:
+    remaining = nospace
+    while remaining:
+        found = False
+        for word, pattern in fuzzy_patterns:
+            m = pattern.match(remaining)
+            if m:
+                nums_raw.append(NUMBER_WORDS[word])
+                remaining = remaining[m.end():]
+                found = True
                 break
-
-        if best_val is not None:
-            nums_raw.append(best_val)
-            i_seg += consumed
-        else:
-            i_seg += 1
+        if not found:
+            remaining = remaining[1:]
 
     # Combine tens+ones (e.g., twenty + three = 23)
     nums = []
@@ -135,38 +84,15 @@ def solve_challenge(challenge_text):
     candidates = [n for n in nums if 5 <= n <= 999]
     if len(candidates) < 2:
         candidates = [n for n in nums if n > 0]
-    # If combining tens+ones left us with too few candidates, also try raw numbers
-    if len(candidates) < 2 and len(nums_raw) >= 2:
-        raw_candidates = [n for n in nums_raw if n > 0]
-        if len(raw_candidates) >= 2:
-            candidates = raw_candidates
 
-    # Detect primary operation
+    # Detect primary operation (check raw, stripped, and deduped text)
     lower = challenge_text.lower()
-    question_lower = question_part.lower()
-    stripped_lower = nospace
+    stripped_lower = nospace  # already lowercase stripped
     deduped_lower = re.sub(r'(.)\1+', r'\1', stripped_lower)
-    check_texts = [lower, question_lower, stripped_lower, deduped_lower]
-
-    mul_kws = ['multipl', 'product', 'times', 'triple', 'double']
-    sub_kws = ['differ', 'subtract', 'less', 'minus', 'remain', 'reduc', 'decreas', 'loses', 'lose', 'lost', 'slow']
-
-    # Also check segments against keywords with edit distance
-    seg_words = [s.lower() for s in re.findall(r'[a-zA-Z]+', question_part)]
-    seg_deduped = [re.sub(r'(.)\1+', r'\1', s) for s in seg_words]
-
-    def _kw_match(keywords):
-        if any(any(w in t for t in check_texts) for w in keywords):
-            return True
-        for sd in seg_deduped:
-            for kw in keywords:
-                if len(kw) >= 5 and abs(len(sd) - len(kw)) <= 1 and _edit_dist(sd, kw) <= 1:
-                    return True
-        return False
-
-    if _kw_match(mul_kws) or '*' in challenge_text:
+    check_texts = [lower, stripped_lower, deduped_lower]
+    if any(any(w in t for t in check_texts) for w in ['multipl', 'product', 'times', 'triple', 'double']) or '*' in challenge_text:
         primary = 'mul'
-    elif _kw_match(sub_kws):
+    elif any(any(w in t for t in check_texts) for w in ['differ', 'subtract', 'less', 'minus', 'remain', 'reduc', 'loses', 'lose', 'lost', 'slow']):
         primary = 'sub'
     else:
         primary = 'add'
@@ -181,23 +107,27 @@ def verify_with_brute_force(candidates, primary_op, verification_code, headers):
         'mul': lambda a, b: a * b,
     }
 
-    # CRITICAL: verification allows only ONE attempt per code.
-    # Use best guess: primary op with the two most prominent candidates.
-    a, b = candidates[-2], candidates[-1]
-    answer = f"{ops[primary_op](a, b):.2f}"
-    print(f"  Single attempt: {primary_op}({a},{b})={answer}", file=sys.stderr)
-    try:
-        r = requests.post(
-            f"{BASE}/verify",
-            headers=headers,
-            json={"answer": answer, "verification_code": verification_code},
-            timeout=15,
-        )
-        resp = r.json()
-        if resp.get("success"):
-            return True, answer, f"{primary_op}({a},{b})"
-    except Exception:
-        pass
+    # Try primary op first with last two candidates
+    op_order = [primary_op] + [o for o in ['add', 'sub', 'mul'] if o != primary_op]
+
+    for op_name in op_order:
+        for i in range(len(candidates)):
+            for j in range(len(candidates)):
+                if i == j:
+                    continue
+                a, b = candidates[i], candidates[j]
+                answer = f"{ops[op_name](a, b):.2f}"
+                try:
+                    r = requests.post(
+                        f"{BASE}/verify",
+                        headers=headers,
+                        json={"answer": answer, "verification_code": verification_code},
+                        timeout=15,
+                    )
+                    if r.json().get("success"):
+                        return True, answer, f"{op_name}({a},{b})"
+                except Exception:
+                    continue
 
     return False, None, None
 
