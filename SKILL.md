@@ -121,11 +121,13 @@ Verify: fetch post by UUID, check `verification_status` is `"verified"`.
 ```sql
 INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
   thread_title, thread_content, our_url, our_content, our_account,
-  source_summary, project_name, status, posted_at)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
+  source_summary, project_name, engagement_style, feedback_report_used, status, posted_at)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, 'active', NOW());
 ```
 
 Set `project_name` to the matching project name from `config.json` (e.g., 'Fazm', 'Cyrano', 'Terminator'). Every post/comment MUST be labeled with its target project. If engagement is general/unrelated to any project, use 'general'.
+
+Set `engagement_style` to the style you chose for this post (e.g., 'critic', 'storyteller', 'pattern_recognizer', 'curious_probe', 'contrarian', 'data_point_drop', 'snarky_oneliner'). Every post MUST have an engagement_style.
 
 Use the account value from `config.json` for `our_account`.
 
@@ -176,9 +178,11 @@ Choose the single best subreddit from `config.json → subreddits` for this topi
 ```sql
 INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
   thread_title, thread_content, our_url, our_content, our_account,
-  source_summary, project_name, status, posted_at)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW());
+  source_summary, project_name, engagement_style, feedback_report_used, status, posted_at)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, 'active', NOW());
 ```
+
+Set `engagement_style` to the style you chose (e.g., 'critic', 'storyteller', 'pattern_recognizer'). Every post MUST have an engagement_style.
 
 Set `project_name` to the matching project name from `config.json`. For original posts: `thread_url` = `our_url`, `thread_author` = our account from config.json.
 
