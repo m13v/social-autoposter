@@ -22,6 +22,10 @@ PROJECT=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform github_issues 2
 PROJECT_JSON=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform github_issues --json 2>/dev/null || echo "{}")
 echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
 
+# Generate engagement style and content rules from shared module
+source "$REPO_DIR/skill/styles.sh"
+STYLES_BLOCK=$(generate_styles_block github_issues posting)
+
 # Load exclusions from config
 EXCLUDED_REPOS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('github_repos',[])))" 2>/dev/null || echo "")
 EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('authors',[])))" 2>/dev/null || echo "")
@@ -41,6 +45,8 @@ EXCLUSIONS — do NOT interact with these:
 - Excluded repos/orgs: $EXCLUDED_REPOS
 - Excluded authors: $EXCLUDED_AUTHORS
 Skip any issues from excluded repos/orgs. Do not reply to excluded authors. Do not post on issues owned by excluded orgs.
+
+$STYLES_BLOCK
 
 TARGETING (data-driven, from engagement analysis):
 - Best topics: Agents (8.6%), Accessibility (8.3%), Voice/ASR (8.0%), Tool Use (7.9%). Prioritize these.
@@ -64,7 +70,7 @@ Run the **Workflow: GitHub Issues** section. Follow every step:
 5. Read each issue fully (body + existing comments)
 6. Draft helpful comments (follow Content Rules and COMMENT STYLE above - NEVER use em dashes)
 7. Post via: gh issue comment NUMBER -R OWNER/REPO --body \"...\"
-8. Log to database with project_name='$PROJECT' (MUST include project_name in the INSERT)
+8. Log to database with project_name='$PROJECT', engagement_style='STYLE_YOU_CHOSE' (MUST include engagement_style and project_name in the INSERT)
 10. Self-reply with a link to a SPECIFIC FILE in our repos (not just the repo homepage).
    Map expertise to files:
    - macOS accessibility/AX/click/screen control -> mediar-ai/mcp-server-macos-use/Sources/MCPServer/main.swift
