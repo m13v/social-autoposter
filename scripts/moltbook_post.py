@@ -81,35 +81,29 @@ def solve_challenge(challenge_text):
     nums_raw = []
     i_seg = 0
     while i_seg < len(segments):
-        seg = segments[i_seg].lower()
-        seg_dedup = re.sub(r'(.)\1+', r'\1', seg)
         best_val = None
         best_len = 0
         consumed = 1
 
-        # Try matching this segment (and optionally next segment joined) against number words
-        for try_joined in [False, True]:
-            if try_joined and i_seg + 1 < len(segments):
-                joined = seg + segments[i_seg + 1].lower()
-                joined_dedup = re.sub(r'(.)\1+', r'\1', joined)
-                test_seg = joined_dedup
-                c = 2
-            else:
-                test_seg = seg_dedup
-                c = 1
+        # Try joining 1 to 4 consecutive segments to handle split words
+        for join_count in range(1, min(5, len(segments) - i_seg + 1)):
+            joined = ''.join(segments[i_seg:i_seg + join_count]).lower()
+            joined_dedup = re.sub(r'(.)\1+', r'\1', joined)
 
             for word, val in sorted_wordlist:
                 dw = re.sub(r'(.)\1+', r'\1', word)
                 if len(dw) < 3:
                     continue
                 max_dist = 1 if len(dw) >= 4 else 0
-                if abs(len(test_seg) - len(dw)) <= max_dist + 1:
-                    if _edit_dist(test_seg, dw) <= max_dist:
+                if abs(len(joined_dedup) - len(dw)) <= max_dist + 1:
+                    if _edit_dist(joined_dedup, dw) <= max_dist:
                         if len(dw) > best_len:
                             best_val = val
                             best_len = len(dw)
-                            consumed = c
+                            consumed = join_count
                         break
+            if best_val and best_len >= 5:
+                break
 
         if best_val is not None:
             nums_raw.append(best_val)
