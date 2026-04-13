@@ -137,9 +137,9 @@ Your last {len(recent_comments)} comments (don't repeat talking points):
 Topic area: {project_json}
 Content angle: {content_angle}
 
-Your role: You are a practitioner sharing real experience. The initial comment should be indistinguishable
-from any other knowledgeable person in the conversation. The self_reply_text is where you can drop a
-specific file link from our repos.
+Your role: You are a practitioner sharing real experience. The comment should be indistinguishable from
+any other knowledgeable person in the conversation. Do NOT include any links to our repos in the comment.
+Links are added later by a separate pipeline (Phase D) after the comment earns engagement.
 {recent_ctx}{top_ctx}
 {get_styles_prompt("github_issues", context="posting")}
 
@@ -159,30 +159,37 @@ specific file link from our repos.
 - Excluded repos/orgs: {', '.join(excluded_repos) if excluded_repos else '(none)'}
 - Excluded authors: {', '.join(excluded_authors) if excluded_authors else '(none)'}
 
+## Targeting
+- Best topics: Agents, Accessibility, Voice/ASR, Tool Use. Prioritize these.
+- Target small-to-mid repos (<1000 stars) where the maintainer is active. Solo maintainers reply; big repos bury comments.
+- Prefer issues updated in last 7 days.
+
+## Comment style
+- Lead with the pain you hit, then your fix. "the token overhead is brutal" > "here is how to optimize".
+- Keep it conversational, no code blocks.
+- Aim for 400-600 chars. Short enough to read, long enough to show real experience.
+- Share specific implementation details (file names, metrics, tradeoffs), not generic advice.
+- Do NOT include any links.
+
 ## Steps
 1. Search 2-3 topics from: {json.dumps(topics_list)}. Rotate topics across runs, don't always search the same ones.
 2. Skip any entry where already_posted=true.
 3. Pick {limit} best issues where we have genuine expertise. View each one for full context.
-4. Draft an initial comment (400-600 chars, no links, lead with pain then fix).
-5. Draft a self_reply_text with ONE specific file link from our repos (not repo homepages).
-6. Output each as a JSON object, then DONE.
+4. Draft a helpful comment (400-600 chars, NO links).
+5. Output each as a JSON object, then DONE.
 
 ## Content rules
 {get_content_rules("github_issues")}
 
 {get_anti_patterns()}
 
-## Self-reply file link hints
-{FILE_LINK_HINTS}
-
 ## CRITICAL OUTPUT FORMAT
 You MUST output each draft as a raw JSON object on its own line. No commentary before or after. Example:
 
-{{"action": "post", "thread_url": "https://github.com/owner/repo/issues/123", "text": "initial comment here", "self_reply_text": "follow-up with ONE specific file link", "thread_author": "alice", "thread_title": "Issue title", "engagement_style": "critic"}}
+{{"action": "post", "thread_url": "https://github.com/owner/repo/issues/123", "text": "full comment body here", "thread_author": "alice", "thread_title": "Issue title", "engagement_style": "critic"}}
 
 Rules for the JSON:
-- `text`: the initial comment body (400-600 chars, NO links, NO em dashes)
-- `self_reply_text`: follow-up body with ONE https://github.com/... blob URL (can be null/omitted if no suitable file)
+- `text`: the full comment body (400-600 chars, NO links, NO em dashes)
 - `engagement_style`: one of {', '.join(sorted(VALID_STYLES))}
 - `thread_author`: issue opener's GitHub username (from the search/view output)
 - `thread_title`: exact issue title
@@ -363,7 +370,7 @@ def post_comment(owner, repo, number, body):
 
 
 def log_post(thread_url, our_url, text, project_name, thread_author, thread_title,
-             github_username, engagement_style=None, self_reply=False):
+             github_username, engagement_style=None):
     """Log a successful post to the DB via github_tools.py."""
     try:
         cmd = ["python3", GITHUB_TOOLS, "log-post",
@@ -372,8 +379,6 @@ def log_post(thread_url, our_url, text, project_name, thread_author, thread_titl
                "--account", github_username]
         if engagement_style:
             cmd.extend(["--engagement-style", engagement_style])
-        if self_reply:
-            cmd.append("--self-reply")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if result.stdout.strip():
             try:
@@ -460,7 +465,6 @@ def main():
     for i, decision in enumerate(decisions):
         thread_url = decision["thread_url"]
         text = decision["text"]
-        self_reply_text = decision.get("self_reply_text")
         thread_author = decision.get("thread_author", "unknown")
         thread_title = decision.get("thread_title", "")
         engagement_style = decision.get("engagement_style")
@@ -486,23 +490,9 @@ def main():
         comment_url = url_or_err
         log_post(thread_url, comment_url, text, project_name,
                  thread_author, thread_title, github_username,
-                 engagement_style=engagement_style, self_reply=False)
+                 engagement_style=engagement_style)
         posted += 1
         print(f"[post_github] POSTED: {comment_url or 'ok'}")
-
-        # Self-reply (optional)
-        if self_reply_text and isinstance(self_reply_text, str) and self_reply_text.strip():
-            time.sleep(2)
-            ok_sr, sr_url_or_err = post_comment(owner, repo, number, self_reply_text)
-            if ok_sr:
-                log_post(thread_url, sr_url_or_err, self_reply_text, project_name,
-                         thread_author, thread_title, github_username,
-                         engagement_style=engagement_style, self_reply=True)
-                posted += 1
-                print(f"[post_github] SELF-REPLY POSTED: {sr_url_or_err or 'ok'}")
-            else:
-                print(f"[post_github] SELF-REPLY FAILED: {sr_url_or_err}")
-                failed += 1
 
         time.sleep(3)
 
