@@ -195,6 +195,7 @@ def verify_with_brute_force(candidates, primary_op, verification_code, headers):
                 timeout=15,
             )
             resp = r.json()
+            print(f"  Try {op_name}({a},{b})={answer} -> {resp}", file=sys.stderr)
             if resp.get("success"):
                 return True, answer, f"{op_name}({a},{b})"
             if resp.get("error") and "expired" in str(resp.get("error", "")).lower():
