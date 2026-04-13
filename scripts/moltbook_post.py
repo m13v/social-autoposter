@@ -35,6 +35,21 @@ NUMBER_WORDS = {
     'seventy':70,'eighty':80,'ninety':90
 }
 
+def _generate_transpositions(word):
+    """Generate all single adjacent-char transpositions of a word."""
+    variants = set()
+    for i in range(len(word) - 1):
+        w = list(word)
+        w[i], w[i+1] = w[i+1], w[i]
+        variants.add(''.join(w))
+    return variants
+
+TRANSPOSED_WORDS = {}
+for _w, _v in NUMBER_WORDS.items():
+    for _t in _generate_transpositions(_w):
+        if _t not in NUMBER_WORDS:
+            TRANSPOSED_WORDS[_t] = _v
+
 def solve_challenge(challenge_text):
     """Solve Moltbook's obfuscated lobster math CAPTCHA.
 
@@ -82,13 +97,28 @@ def solve_challenge(challenge_text):
             nums.append(val)
             i += 1
 
-    # Fallback: if not enough numbers, try dedup + substring matching
+    # Fallback: if not enough numbers, try transposed words and dedup matching
     if len(nums) < 2:
+        # Try transposed variants with fuzzy matching
+        trans_patterns = [(w, re.compile(make_fuzzy_pattern(w))) for w in sorted(TRANSPOSED_WORDS.keys(), key=len, reverse=True)]
+        remaining2 = nospace
+        while remaining2:
+            found2 = False
+            for word, pattern in trans_patterns:
+                m = pattern.match(remaining2)
+                if m:
+                    nums_raw.append(TRANSPOSED_WORDS[word])
+                    remaining2 = remaining2[m.end():]
+                    found2 = True
+                    break
+            if not found2:
+                remaining2 = remaining2[1:]
+        # Also try dedup substring matching
         deduped = re.sub(r'(.)\1+', r'\1', nospace)
         for word, val in sorted(NUMBER_WORDS.items(), key=lambda x: len(x[0]), reverse=True):
             deduped_word = re.sub(r'(.)\1+', r'\1', word)
             if deduped_word in deduped:
-                if val not in [n for n in nums]:
+                if val not in [n for n in nums_raw]:
                     nums_raw.append(val)
                     deduped = deduped.replace(deduped_word, '', 1)
         nums = []
@@ -106,6 +136,11 @@ def solve_challenge(challenge_text):
     candidates = [n for n in nums if 5 <= n <= 999]
     if len(candidates) < 2:
         candidates = [n for n in nums if n > 0]
+    # If combining tens+ones left us with too few candidates, also try raw numbers
+    if len(candidates) < 2 and len(nums_raw) >= 2:
+        raw_candidates = [n for n in nums_raw if n > 0]
+        if len(raw_candidates) >= 2:
+            candidates = raw_candidates
 
     # Detect primary operation (check raw, stripped, and deduped text)
     lower = challenge_text.lower()
