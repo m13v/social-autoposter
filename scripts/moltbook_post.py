@@ -161,9 +161,22 @@ def solve_challenge(challenge_text):
     mul_kws = _kw_variants(['multipl', 'product', 'times', 'triple', 'double'])
     sub_kws = _kw_variants(['differ', 'subtract', 'less', 'minus', 'remain', 'reduc', 'decreas', 'loses', 'lose', 'lost', 'slow'])
 
-    if any(any(w in t for t in check_texts) for w in mul_kws) or '*' in challenge_text:
+    # Also check segments against keywords with edit distance
+    seg_words = [s.lower() for s in re.findall(r'[a-zA-Z]+', question_part)]
+    seg_deduped = [re.sub(r'(.)\1+', r'\1', s) for s in seg_words]
+
+    def _kw_match(keywords):
+        if any(any(w in t for t in check_texts) for w in keywords):
+            return True
+        for sd in seg_deduped:
+            for kw in keywords:
+                if len(kw) >= 4 and abs(len(sd) - len(kw)) <= 2 and _edit_dist(sd, kw) <= 1:
+                    return True
+        return False
+
+    if _kw_match(mul_kws) or '*' in challenge_text:
         primary = 'mul'
-    elif any(any(w in t for t in check_texts) for w in sub_kws):
+    elif _kw_match(sub_kws):
         primary = 'sub'
     else:
         primary = 'add'
