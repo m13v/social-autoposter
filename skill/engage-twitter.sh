@@ -79,7 +79,8 @@ else
         ) q;")
 
     # Generate engagement style and content rules from shared module
-    STYLES_BLOCK=$(python3 -c "import sys; sys.path.insert(0,'$REPO_DIR/scripts'); from engagement_styles import get_styles_prompt, get_content_rules, get_anti_patterns; print(get_styles_prompt('twitter', context='replying')); print(); print('## Content rules'); print(get_content_rules('twitter')); print(); print(get_anti_patterns())" 2>/dev/null || echo "(style module unavailable)")
+    source "$REPO_DIR/skill/styles.sh"
+    STYLES_BLOCK=$(generate_styles_block twitter replying)
 
     PHASE_B_PROMPT=$(mktemp)
     cat > "$PHASE_B_PROMPT" <<PROMPT_EOF
