@@ -153,18 +153,39 @@ def get_styles_prompt(platform, context="posting"):
     lines.append(f"Match your style to the conversation. {weights['note']}")
     lines.append("")
 
-    for name, style in STYLES.items():
-        if name in never_styles:
-            continue
+    # Group styles by tier so the LLM biases toward dominant styles
+    dominant = set(weights.get("dominant", []))
+    secondary = set(weights.get("secondary", []))
+    rare = set(weights.get("rare", []))
+
+    def format_style(name, style):
+        result = []
         best = style["best_in"].get(platform, [])
         best_str = ", ".join(best) if best else ""
-        lines.append(f'**{name}**: {style["description"]}')
-        lines.append(f'  "{style["example"]}"')
+        result.append(f'**{name}**: {style["description"]}')
+        result.append(f'  "{style["example"]}"')
         if best_str:
-            lines.append(f"  Best in: {best_str}.")
+            result.append(f"  Best in: {best_str}.")
         if style.get("note"):
-            lines.append(f"  {style['note']}")
-        lines.append("")
+            result.append(f"  {style['note']}")
+        result.append("")
+        return result
+
+    lines.append("### PRIMARY styles (use these ~60% of the time):")
+    for name, style in STYLES.items():
+        if name in dominant and name not in never_styles:
+            lines.extend(format_style(name, style))
+
+    lines.append("### SECONDARY styles (use these ~30% of the time):")
+    for name, style in STYLES.items():
+        if name in secondary and name not in never_styles:
+            lines.extend(format_style(name, style))
+
+    if rare - never_styles:
+        lines.append("### RARE styles (use sparingly, ~10% of the time):")
+        for name, style in STYLES.items():
+            if name in rare and name not in never_styles:
+                lines.extend(format_style(name, style))
 
     # Add recommendation style for reply contexts
     if context == "replying":
