@@ -216,37 +216,66 @@ CONCEPT
 
 If you cannot fill in all four lines with specific non-generic answers, stop and do more research. Do not proceed to Step 3 with a generic concept.
 
-## Step 3 — Discover your component palette
+## Step 3 — Pick your component palette
 
-You are working in an existing website repo. It already has reusable SEO components. Your job is to use them, not reinvent them.
+You are working in an existing website repo with a shared SEO component library (`@seo/components`). Import everything from `@seo/components`. If the repo also has local components (e.g. in `@/components/`), you may use those too.
 
-- The repo has a shared SEO component library installed as `@seo/components`. This package provides trust-signal primitives (Breadcrumbs, ArticleMeta, ProofBand, FaqSection, InlineTestimonial, ComparisonTable), content-display components (AnimatedCodeBlock, TerminalOutput, FlowDiagram, SequenceDiagram, CodeComparison, AnimatedChecklist, AnimatedSection), metrics (AnimatedMetric, MetricsRow), CTAs (InlineCta, StickyBottomCta), proof (ProofBanner), and JSON-LD helpers (articleSchema, breadcrumbListSchema, faqPageSchema, howToSchema). Import from `@seo/components`.
-- Look at existing pages: {example_dirs_str}. Read one or two existing `page.tsx` files to see how they compose layout and which components they use.
-- If the repo also has local components (e.g. in `@/components/seo/` or `@/components/`), you may use those too. Prefer the shared `@seo/components` package for trust signals and JSON-LD; prefer repo-local components for product-specific layout shells (AlternativePageShell, etc.).
-- If the repo has a shell component for this content type (AlternativePageShell, UseCasePageShell, etc.), prefer it. Emit a typed data object and return `<TheShell data={{data}} />` — the shell handles trust signals automatically.
-- Match the theme, typography, and visual conventions of the existing pages.
-- **Color palette (mandatory):** bg-white base, text-zinc-900 for headings, text-zinc-500/text-gray-600 for secondary text. Accent colors: `from-cyan-500 to-teal-500` gradient for CTAs, `text-teal-600` for links, `bg-teal-50 text-teal-700` for badges/pills, `bg-teal-50 border-teal-200` for tinted boxes. NEVER use violet, indigo, or purple anywhere. If an existing page uses violet, that page is wrong; use teal/cyan instead.
+### Available components
+
+**Trust signals** (required, see below): Breadcrumbs, ArticleMeta, ProofBand, FaqSection, JSON-LD helpers (articleSchema, breadcrumbListSchema, faqPageSchema, howToSchema).
+
+**Visual content** (pick at least 3 from this list for each page):
+- `AnimatedCodeBlock` (code, language?, filename?, typingSpeed?) — syntax-highlighted code with typing animation. Use when showing real code, config, or CLI commands from the product.
+- `TerminalOutput` (lines[], title?) — terminal session with command/output/success/error lines. Use when showing what happens when you run something.
+- `FlowDiagram` (title, steps[]) — visual step-by-step flow with icons and arrows. Use when explaining a process or architecture.
+- `SequenceDiagram` (title, actors[], messages[]) — SVG sequence diagram with lifelines. Use when showing how components communicate.
+- `CodeComparison` (leftCode, rightCode, leftLabel, rightLabel, title?) — side-by-side before/after. Use when showing what the product replaces or simplifies.
+- `AnimatedChecklist` (title, items[]) — animated checklist with checkmarks. Use for feature lists or requirement breakdowns.
+- `AnimatedMetric` / `MetricsRow` (metrics[]) — animated number counters. Use when you have real metrics (boot time, build count, response time).
+- `InlineTestimonial` (quote, name, role?, stars?) — testimonial card. Use when you can reference a real user or credible source.
+- `ComparisonTable` (productName, competitorName, rows[]) — feature comparison grid. Use for versus/alternative pages.
+- `ProofBanner` (quote, source?, metric) — compact proof with large metric. Use for a standout stat mid-page.
+- `AnimatedSection` (delay?) — scroll-triggered fade-in wrapper. Use to stagger content reveals.
+
+**CTAs:**
+- `InlineCta` (heading, body, linkText?, href?) — inline CTA block with PostHog tracking.
+- `StickyBottomCta` (description, buttonLabel, href) — fixed bottom bar that appears on scroll. Use instead of (or alongside) InlineCta for variety.
+
+### Differentiation rule
+
+**Do NOT clone the structure of existing pages.** Read one existing page in {example_dirs_str} ONLY to understand the import syntax and color conventions. Do NOT copy its section ordering, component selection, or layout pattern.
+
+Each page must feel editorially distinct. Pick visual components that match YOUR angle:
+- A "how it works" angle might use FlowDiagram + TerminalOutput + AnimatedCodeBlock
+- A "vs. competitors" angle might use ComparisonTable + MetricsRow + CodeComparison
+- A "deep dive" angle might use SequenceDiagram + AnimatedCodeBlock + ProofBanner
+- A "getting started" angle might use AnimatedChecklist + TerminalOutput + FlowDiagram
+
+You must use at least 3 visual content components (not counting trust signals). Using only prose sections with no visual components is a failure.
+
+### Color palette (mandatory)
+
+bg-white base, text-zinc-900 for headings, text-zinc-500/text-gray-600 for secondary text. Accent colors: `from-cyan-500 to-teal-500` gradient for CTAs, `text-teal-600` for links, `bg-teal-50 text-teal-700` for badges/pills, `bg-teal-50 border-teal-200` for tinted boxes. NEVER use violet, indigo, or purple anywhere.
 
 ## Step 4 — Build the page
 
 - Location: `{repo}/{primary_path}` (or match the convention you found in Step 3 if the repo uses a different path).
-- Structure, section count, section order, headings: your choice. Let the angle from Step 2 drive the structure. Do not follow a fixed outline.
+- **Structure is yours to invent.** Let the angle from Step 2 dictate everything: section count, section order, which visual components appear where, how the story unfolds. Do not follow a fixed outline. Do not replicate the skeleton of any existing page.
 - Length: however long the angle deserves. Shorter and specific beats longer and generic. Do not pad.
 - Style: no em dashes, no en dashes, anywhere. Plain direct prose. First person fine where natural.
 - At least one section must surface the anchor_fact from your concept, with enough specificity that a reader could verify it (file name, command, number, behavior description). This is the uncopyable part of the page.
 - Do not invent statistics. Do not fabricate quotes. If you use numbers, they come from something you read or ran.
+- **Visual rhythm:** Alternate between prose sections and visual components. Never stack more than two consecutive prose-only sections without a visual break (diagram, code block, metrics row, comparison table, checklist, or terminal output).
 
-### Required trust signals (non-negotiable)
+### Required trust signals
 
-Unless you are using a shell component that already renders these (e.g. AlternativePageShell), every page MUST include all of the following:
+Every page MUST include all of the following, but their PLACEMENT is flexible (not locked to a fixed position):
 
-1. **`Breadcrumbs`** from `@seo/components`. Rendered near the top of the hero.
-2. **`ArticleMeta`** from `@seo/components`. Shows author, published date, updated date, and reading time.
-3. **`ProofBand`** from `@seo/components`. Social-proof display with rating and highlights.
-4. **`FaqSection`** from `@seo/components`. At least 5 concrete, specific FAQs drawn from your research in Step 1. Generic FAQs are worse than no FAQs — if you cannot write 5 non-generic questions, your angle is too thin; go back to Step 1.
-5. **JSON-LD structured data** via a `<script type="application/ld+json">` tag in the page body. Import `articleSchema`, `breadcrumbListSchema`, and `faqPageSchema` from `@seo/components`. Read an existing page to see exact usage.
-
-If a shell component renders all of these internally, importing and using the shell satisfies this requirement.
+1. **`Breadcrumbs`** — near the top of the page.
+2. **`ArticleMeta`** — near the top, after or alongside the title.
+3. **`ProofBand`** — anywhere in the top third of the page.
+4. **`FaqSection`** — anywhere in the bottom third (does not have to be the last section). At least 5 concrete, specific FAQs drawn from your research. Generic FAQs are worse than no FAQs.
+5. **JSON-LD structured data** — `<script type="application/ld+json">` tag. Import `articleSchema`, `breadcrumbListSchema`, and `faqPageSchema` from `@seo/components`.
 
 ## Step 5 — Typecheck, commit, and deploy
 
