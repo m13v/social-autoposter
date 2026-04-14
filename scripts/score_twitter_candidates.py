@@ -122,7 +122,7 @@ def upsert_candidates(tweets, config):
     inserted = updated = skipped = 0
 
     for tweet in tweets:
-        url = tweet.get("tweet_url", "").strip()
+        url = (tweet.get("tweet_url") or tweet.get("tweetUrl") or "").strip()
         if not url:
             continue
 
