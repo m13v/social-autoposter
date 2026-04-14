@@ -39,7 +39,7 @@ def load_config():
         return json.load(f)
 
 
-def pick_project(platform="github_issues"):
+def pick_project(platform="github"):
     try:
         result = subprocess.run(
             ["python3", os.path.join(REPO_DIR, "scripts", "pick_project.py"),
@@ -53,7 +53,7 @@ def pick_project(platform="github_issues"):
     return None
 
 
-def get_top_performers(project_name, platform="github_issues"):
+def get_top_performers(project_name, platform="github"):
     try:
         result = subprocess.run(
             ["python3", os.path.join(REPO_DIR, "scripts", "top_performers.py"),
@@ -72,7 +72,7 @@ def get_recent_comments(limit=5):
     conn = dbmod.get_conn()
     cur = conn.execute(
         "SELECT LEFT(our_content, 150) FROM posts "
-        "WHERE platform='github_issues' ORDER BY id DESC LIMIT %s",
+        "WHERE platform='github' ORDER BY id DESC LIMIT %s",
         [limit],
     )
     results = [row[0] for row in cur.fetchall()]
@@ -141,7 +141,7 @@ Your role: You are a practitioner sharing real experience. The comment should be
 any other knowledgeable person in the conversation. Do NOT include any links to our repos in the comment.
 Links are added later by a separate pipeline (Phase D) after the comment earns engagement.
 {recent_ctx}{top_ctx}
-{get_styles_prompt("github_issues", context="posting")}
+{get_styles_prompt("github", context="posting")}
 
 ## Tools (via Bash) - ALWAYS foreground, NEVER run_in_background
 - Search: python3 {GITHUB_TOOLS} search "QUERY" --limit 10
@@ -179,7 +179,7 @@ Links are added later by a separate pipeline (Phase D) after the comment earns e
 5. Output each as a JSON object, then DONE.
 
 ## Content rules
-{get_content_rules("github_issues")}
+{get_content_rules("github")}
 
 {get_anti_patterns()}
 
@@ -412,7 +412,7 @@ def main():
             print(f"[post_github] ERROR: project '{args.project}' not found")
             sys.exit(1)
     else:
-        project = pick_project("github_issues")
+        project = pick_project("github")
         if not project:
             print("[post_github] ERROR: could not pick project")
             sys.exit(1)
