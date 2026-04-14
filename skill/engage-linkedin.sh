@@ -144,6 +144,7 @@ $STYLES_BLOCK
 Here are the replies to process:
 $PENDING_DATA
 
+CRITICAL: Reply in the SAME LANGUAGE as the message you are responding to. Match the language exactly.
 CRITICAL: Process EVERY reply. For each: either post a response and mark as 'replied', OR mark as 'skipped' with a skip_reason.
 
 CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql):
