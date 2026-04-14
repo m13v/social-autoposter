@@ -69,24 +69,6 @@ def get_project_platform_summary(conn, project=None, platform=None):
     return cur.fetchall()
 
 
-def has_anti_pattern(content):
-    """Check if a top post contains anti-patterns that would send mixed signals.
-
-    We don't want the feedback report to show Claude examples where product
-    mentions or links happened to get upvotes, since those are outliers.
-    """
-    content = (content or "").lower()
-    # Product names
-    product_names = ["fazm", "assrt", "pieline", "cyrano", "mk0r", "s4l",
-                     "vipassana.cool", "mcp-server-macos", "mediar-ai"]
-    if any(name in content for name in product_names):
-        return True
-    # URLs/links
-    if any(p in content for p in ["http://", "https://", "github.com/", ".ai/gh"]):
-        return True
-    return False
-
-
 def get_top_posts(conn, project=None, platform=None, limit=15, min_upvotes=None):
     """Top performing posts with full factual details.
 
@@ -113,21 +95,15 @@ def get_top_posts(conn, project=None, platform=None, limit=15, min_upvotes=None)
         params.append(platform)
 
     where = " AND ".join(where_clauses)
-    # Fetch extra rows so we can filter out anti-pattern examples
     cur = conn.execute(
         f"SELECT id, platform, upvotes, comments_count, views, "
         f"our_content, thread_title, thread_content, "
         f"project_name, posted_at::date, our_account "
         f"FROM posts WHERE {where} "
         f"ORDER BY upvotes DESC LIMIT %s",
-        params + [limit * 3]
+        params + [limit]
     )
-    rows = cur.fetchall()
-    # Filter out posts with anti-patterns (product mentions, links)
-    # to avoid teaching Claude that those patterns work
-    clean = [r for r in rows if not has_anti_pattern(r[5])]
-    # Fall back to unfiltered if filtering removes everything
-    return clean[:limit] if clean else rows[:limit]
+    return cur.fetchall()
 
 
 def get_bottom_posts(conn, project=None, platform=None, limit=10):
@@ -185,74 +161,6 @@ def format_post(row, include_thread_content=True):
     return "\n".join(lines)
 
 
-def annotate_failure(row):
-    """Annotate a bottom post with the likely failure reason."""
-    content = (row[5] or "").lower()
-    thread_title = (row[6] or "").lower()
-    reasons = []
-    # Check for product names
-    product_names = ["fazm", "assrt", "pieline", "cyrano", "terminator", "mk0r", "s4l",
-                     "vipassana.cool", "mcp-server", "mediar"]
-    for name in product_names:
-        if name in content:
-            reasons.append(f"mentions product '{name}'")
-            break
-    # Check for links
-    if any(p in content for p in ["http", "www.", ".com/", ".ai/", ".io/", "github.com"]):
-        reasons.append("contains URL/link")
-    # Check for self-promotional patterns
-    if any(p in content for p in ["i built", "we built", "i'm building", "i'm working on", "i made",
-                                   "building desktop", "building a desktop", "building macOS",
-                                   "building a macOS", "building an mcp", "building agents"]):
-        reasons.append("self-promotional framing (sounds like pitching own product)")
-    # Check for product-adjacent language even without explicit names
-    if any(p in content for p in ["macos app", "desktop agent", "accessibility api",
-                                   "mcp server", "desktop automation"]):
-        if not any("product" in r for r in reasons):
-            reasons.append("product-adjacent language (readers can tell you're promoting something)")
-    # Check if very long
-    if len(content) > 500:
-        reasons.append("too long (500+ chars)")
-    # Check for question-heavy style
-    qmarks = content.count("?")
-    if qmarks >= 2:
-        reasons.append("multiple questions (curious_probe pattern)")
-    # Check for generic agreement/validation
-    if any(p in content[:50] for p in ["genuinely good", "had similar results", "same boat",
-                                        "100% agree", "exactly this"]):
-        reasons.append("generic validation/agreement opener (pleaser pattern)")
-    # Check for comparison/evangelism (cursor vs CC etc.)
-    if any(p in content for p in ["cc advantage", "cursor ", "vs cursor", "vs cc"]):
-        reasons.append("tool comparison/evangelism in hostile community")
-    if not reasons:
-        reasons.append("likely wrong subreddit fit or generic content")
-    return " + ".join(reasons)
-
-
-def get_reddit_distilled_rules(platform):
-    """Return data-driven rules distilled from analysis of 2,732+ Reddit comments."""
-    if platform != "reddit":
-        return ""
-    return """### Data-Driven Rules (from analysis of 2,732 Reddit comments)
-WHAT WORKS (copy these patterns):
-- Short (<100 chars) = 6.66 avg upvotes. 1 sentence = 6.03 avg. BEST length.
-- First-person opening ("I", "my") = 4.18 avg (37% above baseline). Only 2.8% of comments use this. DO IT MORE.
-- Contrarian style = 7.00 avg (best of all styles).
-- Reply to OP = 10.82 avg (4.2x better than replying to commenters).
-- 1-5 min gaps between posts = 7.00 avg (best timing).
-- Statements > questions (2.98 vs 2.64 avg).
-- Naming a pain point people recognize but haven't articulated.
-
-WHAT FAILS (NEVER do these):
-- Mentioning product names = avg drops from 3.05 to 1.17, max caps at 10. NEVER.
-- Including URLs = avg drops from 3.02 to 1.38. NEVER.
-- curious_probe style = -0.11 avg (ONLY style with negative upvotes). NEVER on Reddit.
-- 2-3 sentence comments = 1.90 avg (dead zone). Go shorter or longer.
-- "I built" / "we built" framing = reads as self-promotion, gets downvoted.
-- Multiple questions in one comment = concern-trolling pattern.
-"""
-
-
 def format_report(summary, top, bottom, project=None, platform=None,
                    top_by_group=None, fallback_top=None):
     """Format the full report."""
@@ -266,50 +174,43 @@ def format_report(summary, top, bottom, project=None, platform=None,
     lines.append(f"## Performance Feedback Report{scope}")
     lines.append("")
 
-    # Distilled rules first (most important, top of context)
-    rules = get_reddit_distilled_rules(platform)
-    if rules:
-        lines.append(rules)
-
-    # Summary table (filtered to relevant project+platform only)
-    lines.append("### Performance Summary")
+    # Summary table
+    lines.append("### Posts per Project per Platform")
     for row in summary:
-        # Only show the current project's platforms and the current platform's projects
         lines.append(f"  {row[0]:<20} {row[1]:<12} {row[2]:>5} posts  avg_upvotes={row[3]}  best={row[4]}")
     lines.append("")
 
-    # Top posts (reduced to 5 max for focus)
-    display_top = top[:5] if top else []
+    # Per-project top performers (when no project filter)
     if top_by_group:
-        lines.append(f"### Top Examples by Project (>= {MIN_UPVOTES} upvotes, 3 per project)")
+        lines.append(f"### Top Posts by Project (>= {MIN_UPVOTES} upvotes)")
         for group_name, posts in top_by_group.items():
             if not posts:
                 continue
             lines.append(f"\n#### {group_name}")
-            for p in posts[:3]:
+            for p in posts:
                 lines.append(format_post(p))
                 lines.append("")
-    elif display_top:
-        lines.append(f"### Top {len(display_top)} Posts for {project or 'all'} (study these)")
-        for p in display_top:
+    elif top:
+        # Filtered view with results
+        lines.append(f"### Top {len(top)} Posts for {project or 'all projects'} (>= {MIN_UPVOTES} upvotes)")
+        for p in top:
             lines.append(format_post(p))
             lines.append("")
     elif fallback_top:
+        # No project-specific posts met threshold — show general high performers
         platform_label = f" on {platform}" if platform else ""
         lines.append(f"### No {project} posts with >= {MIN_UPVOTES} upvotes{platform_label}.")
-        lines.append(f"### Top posts from other projects as reference:")
+        lines.append(f"### Showing top posts from OTHER projects{platform_label} as reference:")
         lines.append("")
-        for p in (fallback_top[:5] if fallback_top else []):
+        for p in fallback_top:
             lines.append(format_post(p))
             lines.append("")
 
-    # Bottom posts with annotations
-    display_bottom = bottom[:5] if bottom else []
-    if display_bottom:
-        lines.append(f"### Bottom {len(display_bottom)} Posts (AVOID these patterns)")
-        for p in display_bottom:
+    # Bottom posts
+    if bottom:
+        lines.append(f"### Bottom {len(bottom)} Posts (avoid these patterns)")
+        for p in bottom:
             lines.append(format_post(p, include_thread_content=False))
-            lines.append(f"  FAILURE REASON: {annotate_failure(p)}")
             lines.append("")
 
     return "\n".join(lines)
@@ -319,8 +220,8 @@ def main():
     parser = argparse.ArgumentParser(description="Generate top performers feedback report")
     parser.add_argument("--platform", default=None, help="Filter to specific platform")
     parser.add_argument("--project", default=None, help="Filter to specific project")
-    parser.add_argument("--top", type=int, default=5, help="Number of top posts to show (per group or total)")
-    parser.add_argument("--bottom", type=int, default=5, help="Number of bottom posts to show")
+    parser.add_argument("--top", type=int, default=15, help="Number of top posts to show (per group or total)")
+    parser.add_argument("--bottom", type=int, default=10, help="Number of bottom posts to show")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
