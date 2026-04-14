@@ -237,6 +237,11 @@ You are working in an existing website repo with a shared SEO component library 
 - `ShimmerButton` (children, href?) — premium pill CTA button with a continuous diagonal light shimmer sweeping across it. Use as the hero CTA.
 - `GradientText` (children, variant?, animate?) — inline gradient text treatment for hero headings. Cyan → teal gradient, optionally animated. Wraps a meaningful word or phrase.
 - `BackgroundGrid` (children, pattern?, glow?) — Vercel/Linear style wrapper with a subtle dot or line grid background and a soft radial teal glow. Wrap hero sections, standout callouts, or anchor-fact blocks.
+- `MorphingText` (texts[]) — cycles through an array of strings with blur/opacity morph transitions. Use for hero headings that rotate through benefit phrases or product capabilities.
+- `Particles` (color?, quantity?, size?) — canvas-based floating particle background that follows the mouse cursor. Use as a background layer inside a `BackgroundGrid` or standalone hero wrapper.
+- `ShineBorder` (children, color?, borderWidth?, duration?) — wrapper with an animated rotating radial-gradient border (shine effect). Use around key callout cards, pricing, or feature highlights for a premium look.
+- `TextShimmer` (children, duration?, spread?) — inline text with a sweeping teal shimmer highlight. Use for a single standout phrase, stat, or brand name.
+- `TypingAnimation` (text, duration?) — typewriter effect that reveals text character by character. Use for terminal-style headings, command examples, or "what you can build" intros.
 
 **Visual content** (pick at least 3 distinct from here + Rich layout, as below):
 - `AnimatedCodeBlock` (code, language?, filename?, typingSpeed?) — syntax-highlighted code with typing animation. Use when showing real code, config, or CLI commands from the product.

@@ -15,13 +15,18 @@ LOG_FILE="$LOG_DIR/run-reddit-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Reddit Post Run: $(date) ===" | tee "$LOG_FILE"
 
-# Pick project based on weight distribution
-PROJECT=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform reddit 2>/dev/null || echo "Fazm")
-PROJECT_JSON=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform reddit --json 2>/dev/null || echo "{}")
-echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
+# Load all projects for LLM-driven selection
+ALL_PROJECTS_JSON=$(python3 -c "
+import json, os
+config = json.load(open(os.path.expanduser('~/social-autoposter/config.json')))
+print(json.dumps({p['name']: p for p in config.get('projects', [])}, indent=2))
+" 2>/dev/null || echo "{}")
 
-# Generate top performers feedback report (Reddit + project-specific)
-TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform reddit --project "$PROJECT" 2>/dev/null || echo "(top performers report unavailable)")
+# Project distribution (how many posts per project today, so LLM can balance)
+PROJECT_DIST=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform reddit --distribution 2>/dev/null || echo "(distribution unavailable)")
+
+# Generate top performers feedback report (platform-wide)
+TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform reddit 2>/dev/null || echo "(top performers report unavailable)")
 
 # Generate engagement style and content rules from shared module
 source "$REPO_DIR/skill/styles.sh"
@@ -32,11 +37,17 @@ claude -p "You are the Social Autoposter.
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for project details.
 
-## TARGET PROJECT FOR THIS RUN: $PROJECT
-You MUST find threads relevant to this project and post about it.
-Project config: $PROJECT_JSON
-Use this project's content_angle/voice if it has one, otherwise use the global content_angle.
-The project_name for all posts this run MUST be '$PROJECT'.
+## PROJECT SELECTION (LLM-driven, you choose)
+Pick the best project for this run based on thread quality and project fit.
+Here are all projects and their configs:
+$ALL_PROJECTS_JSON
+
+Today's distribution (balance underrepresented projects):
+$PROJECT_DIST
+
+You may search for threads across 1-2 projects to find the best opportunity:
+  python3 $REPO_DIR/scripts/find_threads.py --project 'PROJECT_NAME'
+Choose the project that has the best natural fit with the thread you find.
 
 ## FEEDBACK FROM PAST PERFORMANCE (use this to write better comments):
 $TOP_REPORT
@@ -44,8 +55,10 @@ $TOP_REPORT
 $STYLES_BLOCK
 
 Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
-1. Find candidate threads: python3 $REPO_DIR/scripts/find_threads.py --project '$PROJECT'
-2. Pick the single best Reddit thread relevant to the $PROJECT project. Prefer replying to OP (top-level reply) over replying to commenters.
+1. Find candidate threads for 1-2 projects you think fit best:
+     python3 $REPO_DIR/scripts/find_threads.py --project 'PROJECT_NAME'
+   Try the project with the best thread opportunities. If nothing good, try another project.
+2. Pick the single best Reddit thread. Prefer replying to OP (top-level reply) over replying to commenters.
 3. Draft the comment. CRITICAL CONTENT RULES:
    - Go bimodal: either 1 punchy sentence (<100 chars) OR 4-5 sentences of real substance. AVOID the 2-3 sentence middle ground.
    - Start with 'I' or 'my' when possible (first-person experience gets 37% more upvotes).
@@ -55,9 +68,10 @@ Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
    - Favor contrarian and snarky_oneliner styles (highest performers).
    - NEVER use em dashes.
 4. Post it using the reddit-agent browser (mcp__reddit-agent__* tools). Wait at least 3 minutes between posts.
-5. Log to database with project_name='$PROJECT', engagement_style='STYLE_YOU_CHOSE' (MUST include feedback_report_used=TRUE in the INSERT)
+5. Log to database with project_name='PROJECT_YOU_CHOSE', engagement_style='STYLE_YOU_CHOSE', language='DETECTED_LANGUAGE' (MUST include feedback_report_used=TRUE in the INSERT)
 
 Post exactly 1 comment per run. Pick the single best thread and write the best possible comment. If nothing fits, say '## No good thread found' and stop.
+CRITICAL: Reply in the SAME LANGUAGE as the thread/post. Match the language exactly.
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
 CRITICAL: Close browser tabs after every page visit (browser_tabs action 'close', NOT browser_close).
 CRITICAL: Use ONLY mcp__reddit-agent__* tools for Reddit. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
