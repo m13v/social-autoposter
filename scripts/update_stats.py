@@ -693,7 +693,7 @@ def get_aggregate_totals(db):
 
     row = db.execute(
         "SELECT SUM(views), SUM(upvotes), SUM(comments_count), COUNT(*), MIN(posted_at) "
-        "FROM posts WHERE status='active' AND platform NOT IN ('github_issues')"
+        "FROM posts WHERE status='active' AND platform NOT IN ('github')"
     ).fetchone()
 
     total_views = row[0] or 0
