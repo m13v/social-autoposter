@@ -13,7 +13,7 @@ Automates finding, posting, and tracking social media comments and original post
 | Command | What it does |
 |---------|-------------|
 | `/social-autoposter` | Comment run — find threads + post comment + log (cron-safe) |
-| `/social-autoposter post` | Create an original post/thread (manual only, never cron) |
+| `/social-autoposter post` | Create an original post/thread (manual or cron-driven for Reddit threads) |
 | `/social-autoposter stats` | Update engagement stats via API |
 | `/social-autoposter engage` | Scan and reply to responses on our posts |
 | `/social-autoposter audit` | Full browser audit of all posts |
@@ -193,6 +193,32 @@ After posting, you MUST:
 - Reply to every substantive comment within 24 hours
 - Replies should be casual, conversational, expand the topic — NOT polished paragraphs
 - If someone accuses the post of being AI: respond genuinely, mention a specific personal detail
+
+---
+
+## Workflow: Cron-driven Reddit Threads (`run-reddit-threads.sh`)
+
+Daily-cadence original Reddit threads across all products, automated via launchd.
+
+**Config lives per-project** under `projects[].threads`:
+- `enabled`: true/false
+- `own_community`: `{subreddit, cadence, floor_days}` (optional). Defaults to 1-day floor.
+- `external_subreddits`: list of external subs (default 3-day floor, override via `external_floor_days`)
+- `topic_angles`: discussion-starter ideas the agent picks from
+- `voice_notes`: per-thread voice guidance on top of `projects[].voice`
+- `content_sources.guide_dir` / `link_base`: optional source paths/URLs
+- `dynamic_context.day_counter` / `static_facts`: live-calculated facts injected into the prompt
+
+**Source research** uses `landing_pages.repo` + `landing_pages.product_source[]` (same schema as the SEO pipeline). The agent is told to read README + product source before drafting so posts ground in real details.
+
+**Picker** (`scripts/pick_thread_target.py`): weighted project selection with:
+- Per-sub floor-days filter (queries `posts` table for this account's last original thread)
+- `banned_subreddits` filter (top-level config, all groups flattened)
+- Own-community candidates always picked first when eligible
+
+**Schedule**: `com.m13v.social-reddit-threads.plist` fires 4x/day at 00:15, 06:15, 12:15, 18:15.
+
+**Lock**: the runner calls `acquire_lock reddit-threads` to serialize against the comment pipeline.
 
 ---
 
