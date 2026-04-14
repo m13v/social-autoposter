@@ -283,11 +283,13 @@ def format_report(summary, top, bottom, project=None, platform=None,
             lines.append(format_post(p))
             lines.append("")
 
-    # Bottom posts
+    # Bottom posts with failure annotations
     if bottom:
         lines.append(f"### Bottom {len(bottom)} Posts (avoid these patterns)")
         for p in bottom:
             lines.append(format_post(p, include_thread_content=False))
+            reason = annotate_failure(p)
+            lines.append(f"  >> FAILURE REASON: {reason}")
             lines.append("")
 
     return "\n".join(lines)
@@ -297,8 +299,8 @@ def main():
     parser = argparse.ArgumentParser(description="Generate top performers feedback report")
     parser.add_argument("--platform", default=None, help="Filter to specific platform")
     parser.add_argument("--project", default=None, help="Filter to specific project")
-    parser.add_argument("--top", type=int, default=15, help="Number of top posts to show (per group or total)")
-    parser.add_argument("--bottom", type=int, default=10, help="Number of bottom posts to show")
+    parser.add_argument("--top", type=int, default=5, help="Number of top posts to show (per group or total)")
+    parser.add_argument("--bottom", type=int, default=5, help="Number of bottom posts to show")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
