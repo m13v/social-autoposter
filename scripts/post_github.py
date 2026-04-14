@@ -425,28 +425,32 @@ def main():
     config = load_config()
     github_username = config.get("accounts", {}).get("github", {}).get("username", "m13v")
 
+    all_projects = config.get("projects", [])
+
     if args.project:
         project = None
-        for p in config.get("projects", []):
+        for p in all_projects:
             if p.get("name", "").lower() == args.project.lower():
                 project = p
                 break
         if not project:
             print(f"[post_github] ERROR: project '{args.project}' not found")
             sys.exit(1)
+        project_name = project.get("name", "general")
+        print(f"[post_github] Project (forced): {project_name}")
+        use_all = False
     else:
-        project = pick_project("github")
-        if not project:
-            print("[post_github] ERROR: could not pick project")
-            sys.exit(1)
+        # LLM-driven: pass all projects, let LLM choose per-issue
+        project = all_projects[0] if all_projects else {"name": "general"}
+        project_name = None  # per-decision
+        print(f"[post_github] LLM-driven project selection ({len(all_projects)} projects)")
+        use_all = True
 
-    project_name = project.get("name", "general")
-    print(f"[post_github] Project: {project_name}")
-
-    top_report = get_top_performers(project_name)
+    top_report = get_top_performers(project_name or "general")
     recent_comments = get_recent_comments()
 
-    prompt = build_prompt(project, config, args.limit, top_report, recent_comments)
+    prompt = build_prompt(project, config, args.limit, top_report, recent_comments,
+                          all_projects=all_projects if use_all else None)
 
     if args.dry_run:
         print(f"=== DRY RUN ===")
@@ -511,7 +515,8 @@ def main():
             continue
 
         comment_url = url_or_err
-        log_post(thread_url, comment_url, text, project_name,
+        decision_project = decision.get("project_name") or project_name or "general"
+        log_post(thread_url, comment_url, text, decision_project,
                  thread_author, thread_title, github_username,
                  engagement_style=engagement_style)
         posted += 1
