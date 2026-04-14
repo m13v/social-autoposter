@@ -115,7 +115,7 @@ PLATFORM_WEIGHTS = {
         "never": ["snarky_oneliner"],
         "note": "Professional but human. Softer critic framing. No snark. 2-4 sentences.",
     },
-    "github_issues": {
+    "github": {
         "dominant": ["critic", "pattern_recognizer", "data_point_drop"],
         "secondary": ["curious_probe", "storyteller"],
         "rare": ["contrarian"],
