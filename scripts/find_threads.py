@@ -53,21 +53,6 @@ def get_already_posted():
     return {row[0] for row in rows}
 
 
-def get_subreddit_counts_today():
-    """Return dict of subreddit -> post count for today (Reddit only).
-
-    Used to enforce per-subreddit daily caps (max 2 per sub per day).
-    """
-    conn = dbmod.get_conn()
-    rows = conn.execute(
-        "SELECT LOWER(REGEXP_REPLACE(thread_url, '.*/r/([^/]+)/.*', '\\1')) as sub, COUNT(*) "
-        "FROM posts WHERE platform = 'reddit' AND posted_at >= NOW() - INTERVAL '24 hours' "
-        "AND thread_url IS NOT NULL GROUP BY sub"
-    ).fetchall()
-    conn.close()
-    return {row[0]: row[1] for row in rows}
-
-
 def get_engaged_linkedin_authors():
     """Return set of LinkedIn authors we've already commented on.
 
@@ -339,24 +324,10 @@ def is_excluded(thread, exclusions):
     return None
 
 
-def filter_threads(threads, already_posted, topic=None, exclusions=None, subreddit_cap=2):
-    """Filter out already-posted threads and optionally filter by topic.
-
-    Args:
-        subreddit_cap: Max posts per subreddit per day for Reddit threads (default 2).
-            Set to 0 to disable.
-    """
+def filter_threads(threads, already_posted, topic=None, exclusions=None):
+    """Filter out already-posted threads and optionally filter by topic."""
     if exclusions is None:
         exclusions = {"authors": set(), "subreddits": set(), "urls": [], "keywords": []}
-
-    # Load per-subreddit daily counts for Reddit cap enforcement
-    sub_counts = {}
-    if subreddit_cap > 0:
-        try:
-            sub_counts = get_subreddit_counts_today()
-        except Exception:
-            pass
-
     filtered = []
     for t in threads:
         if t["url"] in already_posted:
@@ -366,12 +337,6 @@ def filter_threads(threads, already_posted, topic=None, exclusions=None, subredd
         if excl_reason:
             t["skip_reason"] = excl_reason
             continue
-        # Per-subreddit daily cap (Reddit only)
-        if t.get("platform") == "reddit" and subreddit_cap > 0:
-            sub = t.get("subreddit", "").lower().lstrip("r/")
-            if sub and sub_counts.get(sub, 0) >= subreddit_cap:
-                t["skip_reason"] = f"subreddit_cap_{subreddit_cap}_per_day"
-                continue
         if topic and t.get("discovery_method") != "search_url":
             text = f"{t.get('title', '')} {t.get('selftext', '')} {t.get('content', '')}".lower()
             if topic.lower() not in text:
@@ -470,20 +435,12 @@ def main():
     # Filter
     candidates = filter_threads(threads, already_posted, topic=args.topic, exclusions=exclusions)
 
-    # Show which subs are at or near cap
-    try:
-        sub_counts = get_subreddit_counts_today()
-        capped_subs = {k: v for k, v in sub_counts.items() if v >= 2}
-    except Exception:
-        capped_subs = {}
-
     output = {
         "posts_today": posts_today,
         "can_post": can_post,
         "project": project_config["name"] if project_config else None,
         "total_found": len(threads),
         "candidates": len(candidates),
-        "subreddits_at_daily_cap": capped_subs,
         "recent_post_snippets": [p[:100] if p else "" for p in recent_posts],
         "threads": candidates,
     }
