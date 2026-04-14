@@ -24,6 +24,71 @@ import db as dbmod
 MIN_CONTENT_LEN = 30  # skip posts with empty/placeholder content
 MIN_UPVOTES = 10  # only show posts with meaningful engagement
 
+# Product names that indicate self-promotion (teaching Claude bad habits)
+PRODUCT_NAMES = [
+    "fazm", "assrt", "pieline", "cyrano", "terminator", "mk0r", "s4l",
+    "vipassana.cool", "vipassana-cool",
+]
+
+
+def get_distilled_rules(platform):
+    """Return data-driven rules for the platform as a text block."""
+    if platform == "reddit":
+        return """## DATA-DRIVEN RULES (from analysis of 3,000+ past comments)
+- Posts with product mentions avg 1.2 upvotes vs 3.0 without. NEVER mention product names.
+- Posts with URLs/links avg 1.4 vs 3.0 without. NEVER include links.
+- 1 punchy sentence (<100 chars) averages 6.0 upvotes. 4-5 sentences averages 4.2. The 2-3 sentence middle averages 2.1. Go bimodal.
+- Starting with "I" or "my" gets 37% more upvotes than "you should" or "have you".
+- Top-level replies to OP get 4.2x the upvotes of replies to other commenters.
+- Contrarian style averages 7.0 upvotes. curious_probe averages negative. Be authoritative, not inquisitive.
+- Statements beat questions (2.98 vs 2.64 avg).
+"""
+    return ""
+
+
+def has_anti_pattern(content):
+    """Check if content contains product names or links (bad teaching examples)."""
+    if not content:
+        return False
+    lower = content.lower()
+    for name in PRODUCT_NAMES:
+        if name in lower:
+            return True
+    if "http://" in lower or "https://" in lower or "www." in lower:
+        return True
+    return False
+
+
+def annotate_failure(row):
+    """Detect why a bottom post likely failed and return a reason string."""
+    content = (row[5] or "").lower()
+    reasons = []
+    for name in PRODUCT_NAMES:
+        if name in content:
+            reasons.append(f"mentions '{name}'")
+            break
+    if "http://" in content or "https://" in content or "www." in content:
+        reasons.append("contains URL/link")
+    if any(phrase in content for phrase in [
+        "phone order", "missed call", "phone call", "unanswered call",
+        "call capture", "answering service",
+    ]):
+        reasons.append("product-adjacent pitch (phone/call capture)")
+    if any(phrase in content for phrase in [
+        "macOS app", "macos app", "desktop agent", "accessibility api",
+        "mcp server", "mcp layer",
+    ]):
+        reasons.append("product-adjacent (mentions own project)")
+    if content.count("?") >= 3:
+        reasons.append("too many questions (reads as interrogation)")
+    if "curious" in content and ("?" in content):
+        reasons.append("curious_probe style (negative avg on Reddit)")
+    if len(content) < 100:
+        reasons.append("too short without being punchy")
+    if not reasons:
+        reasons.append("likely wrong subreddit or off-topic")
+    return " | ".join(reasons)
+
 
 def get_project_platform_summary(conn, project=None, platform=None):
     """Post count and avg upvotes per project per platform.
@@ -95,15 +160,21 @@ def get_top_posts(conn, project=None, platform=None, limit=15, min_upvotes=None)
         params.append(platform)
 
     where = " AND ".join(where_clauses)
+    # Fetch extra rows so we can filter out anti-pattern examples
+    fetch_limit = limit * 3
     cur = conn.execute(
         f"SELECT id, platform, upvotes, comments_count, views, "
         f"our_content, thread_title, thread_content, "
         f"project_name, posted_at::date, our_account "
         f"FROM posts WHERE {where} "
         f"ORDER BY upvotes DESC LIMIT %s",
-        params + [limit]
+        params + [fetch_limit]
     )
-    return cur.fetchall()
+    rows = cur.fetchall()
+    # Filter out top posts that contain product names or links
+    # (these send mixed signals about what works)
+    clean = [r for r in rows if not has_anti_pattern(r[5])]
+    return clean[:limit]
 
 
 def get_bottom_posts(conn, project=None, platform=None, limit=10):
