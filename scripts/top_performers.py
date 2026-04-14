@@ -69,6 +69,24 @@ def get_project_platform_summary(conn, project=None, platform=None):
     return cur.fetchall()
 
 
+def has_anti_pattern(content):
+    """Check if a top post contains anti-patterns that would send mixed signals.
+
+    We don't want the feedback report to show Claude examples where product
+    mentions or links happened to get upvotes, since those are outliers.
+    """
+    content = (content or "").lower()
+    # Product names
+    product_names = ["fazm", "assrt", "pieline", "cyrano", "mk0r", "s4l",
+                     "vipassana.cool", "mcp-server-macos", "mediar-ai"]
+    if any(name in content for name in product_names):
+        return True
+    # URLs/links
+    if any(p in content for p in ["http://", "https://", "github.com/", ".ai/gh"]):
+        return True
+    return False
+
+
 def get_top_posts(conn, project=None, platform=None, limit=15, min_upvotes=None):
     """Top performing posts with full factual details.
 
@@ -95,15 +113,21 @@ def get_top_posts(conn, project=None, platform=None, limit=15, min_upvotes=None)
         params.append(platform)
 
     where = " AND ".join(where_clauses)
+    # Fetch extra rows so we can filter out anti-pattern examples
     cur = conn.execute(
         f"SELECT id, platform, upvotes, comments_count, views, "
         f"our_content, thread_title, thread_content, "
         f"project_name, posted_at::date, our_account "
         f"FROM posts WHERE {where} "
         f"ORDER BY upvotes DESC LIMIT %s",
-        params + [limit]
+        params + [limit * 3]
     )
-    return cur.fetchall()
+    rows = cur.fetchall()
+    # Filter out posts with anti-patterns (product mentions, links)
+    # to avoid teaching Claude that those patterns work
+    clean = [r for r in rows if not has_anti_pattern(r[5])]
+    # Fall back to unfiltered if filtering removes everything
+    return clean[:limit] if clean else rows[:limit]
 
 
 def get_bottom_posts(conn, project=None, platform=None, limit=10):
@@ -164,6 +188,7 @@ def format_post(row, include_thread_content=True):
 def annotate_failure(row):
     """Annotate a bottom post with the likely failure reason."""
     content = (row[5] or "").lower()
+    thread_title = (row[6] or "").lower()
     reasons = []
     # Check for product names
     product_names = ["fazm", "assrt", "pieline", "cyrano", "terminator", "mk0r", "s4l",
@@ -176,8 +201,15 @@ def annotate_failure(row):
     if any(p in content for p in ["http", "www.", ".com/", ".ai/", ".io/", "github.com"]):
         reasons.append("contains URL/link")
     # Check for self-promotional patterns
-    if any(p in content for p in ["i built", "we built", "i'm building", "i'm working on", "i made"]):
-        reasons.append("self-promotional framing ('I built')")
+    if any(p in content for p in ["i built", "we built", "i'm building", "i'm working on", "i made",
+                                   "building desktop", "building a desktop", "building macOS",
+                                   "building a macOS", "building an mcp", "building agents"]):
+        reasons.append("self-promotional framing (sounds like pitching own product)")
+    # Check for product-adjacent language even without explicit names
+    if any(p in content for p in ["macos app", "desktop agent", "accessibility api",
+                                   "mcp server", "desktop automation"]):
+        if not any("product" in r for r in reasons):
+            reasons.append("product-adjacent language (readers can tell you're promoting something)")
     # Check if very long
     if len(content) > 500:
         reasons.append("too long (500+ chars)")
@@ -185,6 +217,13 @@ def annotate_failure(row):
     qmarks = content.count("?")
     if qmarks >= 2:
         reasons.append("multiple questions (curious_probe pattern)")
+    # Check for generic agreement/validation
+    if any(p in content[:50] for p in ["genuinely good", "had similar results", "same boat",
+                                        "100% agree", "exactly this"]):
+        reasons.append("generic validation/agreement opener (pleaser pattern)")
+    # Check for comparison/evangelism (cursor vs CC etc.)
+    if any(p in content for p in ["cc advantage", "cursor ", "vs cursor", "vs cc"]):
+        reasons.append("tool comparison/evangelism in hostile community")
     if not reasons:
         reasons.append("likely wrong subreddit fit or generic content")
     return " + ".join(reasons)

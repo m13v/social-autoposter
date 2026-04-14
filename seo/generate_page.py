@@ -244,6 +244,7 @@ You are working in an existing website repo with a shared SEO component library 
 - `GlowCard` (children) — card with mouse-tracking glow effect (like Linear/Stripe). Glow follows cursor on hover. Use as a wrapper around feature highlights or key content blocks for premium feel.
 - `ParallaxSection` (children, background?, intensity?) — section with parallax scrolling effect. Background moves at a different speed than foreground content. Use for hero-style visual breaks between content sections.
 - `StepTimeline` (title?, steps[]) — vertical timeline with animated line drawing and staggered step reveals. Each step has a numbered dot, title, description, and optional detail panel. Use for processes, setup guides, or "how it works" narratives.
+- `MotionSequence` (title?, frames[], defaultDuration?, loop?) — Remotion-style timeline animation. Plays through a list of frames automatically when scrolled into view, each frame has a duration, title, body, and optional `visual` React node. Feels like an embedded explainer video without adding a video file. Use for "watch it work" concept animations, for product story arcs (problem → tension → solution), or for step-by-step conceptual walkthroughs where you want forced pacing rather than scroll-paced reveals.
 
 **CTAs:**
 - `InlineCta` (heading, body, linkText?, href?) — inline CTA block with PostHog tracking.
