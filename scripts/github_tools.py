@@ -69,7 +69,7 @@ def cmd_search(args):
     dbmod.load_env()
     conn = dbmod.get_conn()
     cur = conn.execute(
-        "SELECT thread_url FROM posts WHERE platform='github_issues' AND thread_url IS NOT NULL"
+        "SELECT thread_url FROM posts WHERE platform='github' AND thread_url IS NOT NULL"
     )
     already_posted = {row[0] for row in cur.fetchall()}
     conn.close()
@@ -151,7 +151,7 @@ def cmd_already_posted(args):
     dbmod.load_env()
     conn = dbmod.get_conn()
     cur = conn.execute(
-        "SELECT id, LEFT(our_content, 100) FROM posts WHERE platform='github_issues' AND thread_url = %s LIMIT 1",
+        "SELECT id, LEFT(our_content, 100) FROM posts WHERE platform='github' AND thread_url = %s LIMIT 1",
         [args.url],
     )
     row = cur.fetchone()
@@ -174,7 +174,7 @@ def cmd_log_post(args):
 
     if args.our_url:
         cur = conn.execute(
-            "SELECT id FROM posts WHERE platform='github_issues' AND our_url = %s LIMIT 1",
+            "SELECT id FROM posts WHERE platform='github' AND our_url = %s LIMIT 1",
             [args.our_url],
         )
         existing = cur.fetchone()
@@ -184,7 +184,7 @@ def cmd_log_post(args):
             return
 
     cur = conn.execute(
-        "SELECT id, LEFT(our_content, 100) FROM posts WHERE platform='github_issues' AND thread_url = %s LIMIT 1",
+        "SELECT id, LEFT(our_content, 100) FROM posts WHERE platform='github' AND thread_url = %s LIMIT 1",
         [args.thread_url],
     )
     existing = cur.fetchone()
@@ -202,7 +202,7 @@ def cmd_log_post(args):
         """INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
            thread_title, thread_content, our_url, our_content, our_account,
            source_summary, project_name, status, posted_at, feedback_report_used, engagement_style)
-           VALUES ('github_issues', %s, %s, %s, %s, '', %s, %s, %s, '', %s, 'active', NOW(), TRUE, %s)""",
+           VALUES ('github', %s, %s, %s, %s, '', %s, %s, %s, '', %s, 'active', NOW(), TRUE, %s)""",
         [args.thread_url, args.thread_author, args.thread_author, args.thread_title,
          args.our_url, args.our_text, args.account, args.project,
          getattr(args, "engagement_style", None)],
