@@ -331,6 +331,18 @@ You are not building a cookie-cutter SEO shell. Draw from the best modern produc
 
 Motion principles: prefer spring physics (`type: "spring"`, `stiffness: 200-400`, `damping: 20-30`) over linear easing. Stagger reveals by 80-120ms. Use `whileInView` with `viewport={{ once: true, margin: "-40px" }}` for scroll entrances. For hover, use subtle scale (1.02) not aggressive (1.1). For emphasis, animate numbers counting up rather than just fading in.
 
+### Tailwind setup (do this BEFORE writing the page)
+
+Check `src/app/globals.css` for a `@source` line pointing at the `@seo/components` package. If it is missing, add it right after the `@import "tailwindcss"` line:
+
+```
+@source "../../node_modules/@seo/components/src";
+```
+
+Without this line, Tailwind will not generate utility classes used inside the components and SVGs/icons will render at wrong sizes. This only needs to be done once per repo.
+
+Also check that the repo has `transpilePackages: ["@seo/components"]` in its `next.config.ts` (or `.mjs`/`.js`). If missing, add it. This tells Next.js to compile the raw TypeScript source from the package.
+
 ## Step 4 — Build the page
 
 - Location: `{repo}/{primary_path}` (or match the convention you found in Step 3 if the repo uses a different path).
