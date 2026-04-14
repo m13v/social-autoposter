@@ -101,16 +101,30 @@ def build_content_angle(project, config):
     return config.get("content_angle", "")
 
 
-def build_prompt(project, config, limit, top_report, recent_comments):
+def build_prompt(project, config, limit, top_report, recent_comments, all_projects=None):
     content_angle = build_content_angle(project, config)
 
-    project_json = json.dumps({k: project.get(k) for k in
-        ["name", "description", "github_search_topics"]
-        if project.get(k)}, indent=2)
+    # If all_projects provided, pass all of them for LLM-driven selection
+    if all_projects:
+        project_json = json.dumps([
+            {k: p.get(k) for k in ["name", "description", "github_search_topics"] if p.get(k)}
+            for p in all_projects
+        ], indent=2)
+    else:
+        project_json = json.dumps({k: project.get(k) for k in
+            ["name", "description", "github_search_topics"]
+            if project.get(k)}, indent=2)
 
-    # Prefer project-specific github_search_topics; fall back to global
-    topics_list = project.get("github_search_topics") or \
-        config.get("accounts", {}).get("github", {}).get("search_topics", [])
+    # Collect all topics across projects
+    topics_list = []
+    if all_projects:
+        for p in all_projects:
+            topics_list.extend(p.get("github_search_topics", []))
+        if not topics_list:
+            topics_list = config.get("accounts", {}).get("github", {}).get("search_topics", [])
+    else:
+        topics_list = project.get("github_search_topics") or \
+            config.get("accounts", {}).get("github", {}).get("search_topics", [])
 
     recent_ctx = ""
     if recent_comments:
@@ -132,9 +146,16 @@ Your last {len(recent_comments)} comments (don't repeat talking points):
     excluded_repos = config.get("exclusions", {}).get("github_repos", [])
     excluded_authors = config.get("exclusions", {}).get("authors", [])
 
-    return f"""Find {limit} GitHub issues where you can add genuine value as someone with expertise in {project.get('name', 'general')}.
-
-Topic area: {project_json}
+    project_selection = ""
+    if all_projects:
+        project_selection = """
+## PROJECT SELECTION (LLM-driven, you choose)
+For each issue, pick the project that fits best from the list below.
+Include the project name in your JSON output as "project_name".
+"""
+    return f"""Find {limit} GitHub issues where you can add genuine value.
+{project_selection}
+Available projects: {project_json}
 Content angle: {content_angle}
 
 Your role: You are a practitioner sharing real experience. The comment should be indistinguishable from
@@ -186,13 +207,15 @@ Links are added later by a separate pipeline (Phase D) after the comment earns e
 ## CRITICAL OUTPUT FORMAT
 You MUST output each draft as a raw JSON object on its own line. No commentary before or after. Example:
 
-{{"action": "post", "thread_url": "https://github.com/owner/repo/issues/123", "text": "full comment body here", "thread_author": "alice", "thread_title": "Issue title", "engagement_style": "critic"}}
+{{"action": "post", "thread_url": "https://github.com/owner/repo/issues/123", "text": "full comment body here", "thread_author": "alice", "thread_title": "Issue title", "engagement_style": "critic", "project_name": "Fazm", "language": "en"}}
 
 Rules for the JSON:
-- `text`: the full comment body (400-600 chars, NO links, NO em dashes)
+- `text`: the full comment body (400-600 chars, NO links, NO em dashes). Reply in the SAME LANGUAGE as the issue.
 - `engagement_style`: one of {', '.join(sorted(VALID_STYLES))}
 - `thread_author`: issue opener's GitHub username (from the search/view output)
 - `thread_title`: exact issue title
+- `project_name`: the project this comment relates to (from the available projects list)
+- `language`: ISO 639-1 language code of the issue (e.g. "en", "ja", "zh", "es")
 
 After all {limit} JSON objects, output DONE on its own line.
 Do NOT describe what you are doing. Do NOT narrate. Just search, view, draft, output JSON, DONE.
