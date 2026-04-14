@@ -59,7 +59,7 @@ def pick_project(config, platform=None):
     platform_topic_key = {
         "twitter": "twitter_topics",
         "linkedin": "linkedin_topics",
-        "github_issues": "github_search_topics",
+        "github": "github_search_topics",
     }.get(platform)
     if platform_topic_key:
         weighted = [p for p in weighted if p.get(platform_topic_key)]
@@ -96,10 +96,25 @@ def main():
     parser = argparse.ArgumentParser(description="Pick next project to post about")
     parser.add_argument("--platform", default=None, help="Platform to check distribution for")
     parser.add_argument("--json", action="store_true", help="Output full project config as JSON")
+    parser.add_argument("--project", default=None, help="Select a specific project by name")
     parser.add_argument("--show-weights", action="store_true", help="Show all projects and their current distribution")
+    parser.add_argument("--distribution", action="store_true", help="Show compact distribution for LLM prompts")
     args = parser.parse_args()
 
     config = load_config()
+
+    if args.distribution:
+        projects = config.get("projects", [])
+        weighted = [p for p in projects if p.get("weight", 0) > 0]
+        total_weight = sum(p.get("weight", 0) for p in weighted)
+        counts = get_posts_today_by_project(args.platform)
+        lines = []
+        for p in sorted(weighted, key=lambda x: x["weight"], reverse=True):
+            target_pct = (p["weight"] / total_weight * 100) if total_weight else 0
+            actual = counts.get(p["name"], 0)
+            lines.append(f"{p['name']}: {actual} posts today (target {target_pct:.0f}%)")
+        print("\n".join(lines))
+        return
 
     if args.show_weights:
         projects = config.get("projects", [])
@@ -118,7 +133,17 @@ def main():
             print(f"{p['name']:25} {p['weight']:>8} {target_pct:>7.1f}% {actual:>6} {actual_pct:>7.1f}% {deficit:>+7.1f}%")
         return
 
-    project = pick_project(config, args.platform)
+    if args.project:
+        project = None
+        for p in config.get("projects", []):
+            if p.get("name", "").lower() == args.project.lower():
+                project = p
+                break
+        if not project:
+            print(f"Unknown project: {args.project}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        project = pick_project(config, args.platform)
 
     if args.json:
         print(json.dumps(project, indent=2))
