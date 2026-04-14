@@ -82,18 +82,22 @@ $STYLES_BLOCK
 
 ## WORKFLOW
 For each candidate (up to 3):
-1. Navigate to the candidate URL via mcp__twitter-agent__browser_navigate
+1. Navigate to the candidate URL via mcp__twitter-agent__browser_navigate (read-only, to understand context)
 2. Read the full thread to understand context
 3. Draft a reply using the best engagement style. Keep it 1-2 sentences. NEVER use em dashes.
-4. Post it using the twitter-agent browser tools
-5. Log to database: project_name from the candidate's matched_project (or '$TOP_PROJECT'), engagement_style, feedback_report_used=TRUE
+4. Post via the CDP script (NOT the MCP browser tools for posting):
+     python3 $REPO_DIR/scripts/twitter_browser.py reply \"CANDIDATE_URL\" \"YOUR_REPLY_TEXT\"
+   It returns JSON like {\"ok\": true, \"tweet_url\": \"parent\", \"reply_url\": \"https://x.com/m13v_/status/...\"}.
+   Parse reply_url from the JSON. If reply_url is missing, empty, or does not contain x.com/m13v_/status/, treat the post as FAILED: do NOT log a row, and mark the candidate as 'failed' instead of 'posted'. NEVER fall back to using the parent/candidate URL as our_url.
+5. Log to database. our_url MUST be the reply_url returned from the CDP script (the x.com/m13v_/status/... permalink). Include: project_name from the candidate's matched_project (or '$TOP_PROJECT'), engagement_style, feedback_report_used=TRUE.
 6. After posting, mark the candidate: UPDATE twitter_candidates SET status='posted', posted_at=NOW() WHERE id=CANDIDATE_ID
 
 If a thread is no longer available or not relevant, mark it skipped:
 UPDATE twitter_candidates SET status='skipped' WHERE id=CANDIDATE_ID
 
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
-CRITICAL: Use ONLY mcp__twitter-agent__* tools.
+CRITICAL: Use twitter_browser.py for posting. Use mcp__twitter-agent__* ONLY for reading threads.
+CRITICAL: our_url must always be our own reply permalink (x.com/m13v_/status/...). Logging the parent URL as our_url causes the daily stats report to attribute parent-tweet engagement to us (this happened on 2026-04-14 with a viral @levie thread). Do not repeat it.
 CRITICAL: Post at most 3 replies this run. Quality over quantity.
 CRITICAL: If a browser tool call is blocked or times out, wait 30 seconds and retry (up to 3 times)." 2>&1 | tee -a "$LOG_FILE"
 
