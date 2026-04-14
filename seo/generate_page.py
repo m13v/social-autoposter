@@ -244,7 +244,20 @@ You are working in an existing website repo with a shared SEO component library 
 - `GlowCard` (children) — card with mouse-tracking glow effect (like Linear/Stripe). Glow follows cursor on hover. Use as a wrapper around feature highlights or key content blocks for premium feel.
 - `ParallaxSection` (children, background?, intensity?) — section with parallax scrolling effect. Background moves at a different speed than foreground content. Use for hero-style visual breaks between content sections.
 - `StepTimeline` (title?, steps[]) — vertical timeline with animated line drawing and staggered step reveals. Each step has a numbered dot, title, description, and optional detail panel. Use for processes, setup guides, or "how it works" narratives.
-- `MotionSequence` (title?, frames[], defaultDuration?, loop?) — Remotion-style timeline animation. Plays through a list of frames automatically when scrolled into view, each frame has a duration, title, body, and optional `visual` React node. Feels like an embedded explainer video without adding a video file. Use for "watch it work" concept animations, for product story arcs (problem → tension → solution), or for step-by-step conceptual walkthroughs where you want forced pacing rather than scroll-paced reveals.
+- `MotionSequence` (title?, frames[], defaultDuration?, loop?) — timeline animation powered by framer-motion. Plays through a list of frames automatically when scrolled into view, each frame has a duration, title, body, and optional `visual` React node. Feels like an embedded explainer video without adding a video file. Use for "watch it work" concept animations or step-by-step conceptual walkthroughs.
+
+**Video + motion graphics (Remotion / Lottie):**
+- `RemotionClip` (title, subtitle?, captions[], accent?, durationInFrames?) — real Remotion-powered video clip rendered live in the browser via `@remotion/player`. Uses the built-in `ConceptReveal` composition: a gradient background, animated title/subtitle, and a stack of captions that spring in one by one. Use for concept intros, product pitches, or angle-defining hero animations. Max 4-6 captions per clip.
+- `LottiePlayer` (animationData or src) — Lottie JSON player using `lottie-react`. Use when you have a production-grade motion graphic (e.g. a file exported from LottieFiles) and want it inline. Only use if you can reference a real Lottie JSON file at a known path in `public/`.
+
+**Magic UI / Aceternity style components:**
+- `Marquee` (children, speed?, reverse?, pauseOnHover?, fade?) — infinite horizontal marquee. Wrap logos, testimonials, feature pills, or mini metric cards. Edges fade softly. Pauses on hover.
+- `AnimatedBeam` (from[], hub, to[], title?) — Magic UI style animated beam diagram with a central hub connecting sources on the left to destinations on the right. Glowing teal beams travel along each connection. Use for "pipeline," "integration," or "how data flows" visualizations.
+- `OrbitingCircles` (center, items[], radius?, duration?, reverse?) — central element with smaller items revolving around it on a dashed orbit ring. Use for ecosystem / integrations / "works with everything" showcases.
+- `NumberTicker` (value, decimals?, prefix?, suffix?) — spring-animated number that counts up from 0 when it scrolls into view. Use inside a metric or stat callout. Example: `<NumberTicker value={94} suffix="%" />`.
+- `ShimmerButton` (children, href?) — premium pill CTA button with a continuous diagonal light shimmer sweeping across it. Use as the hero CTA or a standout conversion point.
+- `GradientText` (children, variant?, animate?) — inline gradient text treatment for hero headings. Cyan → teal gradient, optionally animated. Keeps the brand teal only.
+- `BackgroundGrid` (children, pattern?, glow?) — Vercel/Linear style wrapper with a subtle dot or line grid background and a soft radial teal glow. Wrap hero sections, standout callouts, or anchor-fact blocks.
 
 **CTAs:**
 - `InlineCta` (heading, body, linkText?, href?) — inline CTA block with PostHog tracking.
