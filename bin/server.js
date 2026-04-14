@@ -243,6 +243,85 @@ function resumeAll() {
   }
 }
 
+function deriveName(label) {
+  return label.replace(/^com\.m13v\.social-/, '')
+    .split('-')
+    .map(s => s.charAt(0).toUpperCase() + s.slice(1))
+    .join(' ');
+}
+
+function getPidsForScriptPath(scriptPath) {
+  if (!scriptPath) return [];
+  try {
+    const out = execSync(`pgrep -f "${scriptPath}"`, { stdio: 'pipe' }).toString().trim();
+    return out.length > 0 ? out.split('\n').map(p => parseInt(p, 10)).filter(n => !isNaN(n)) : [];
+  } catch { return []; }
+}
+
+// Returns a display string for a plist's schedule, handling both StartInterval
+// (numeric seconds) and StartCalendarInterval (hour/minute cron). Returns null
+// if neither is present.
+function getPlistSchedule(plistPath) {
+  try {
+    const xml = fs.readFileSync(plistPath, 'utf8');
+    const si = xml.match(/<key>StartInterval<\/key>\s*<integer>(\d+)<\/integer>/);
+    if (si) {
+      const secs = parseInt(si[1], 10);
+      if (secs % 3600 === 0) return `every ${secs / 3600}h`;
+      if (secs % 60 === 0) return `every ${secs / 60}m`;
+      return `every ${secs}s`;
+    }
+    // StartCalendarInterval can be a dict or an array of dicts
+    const calBlock = xml.match(/<key>StartCalendarInterval<\/key>\s*([\s\S]*?)(?=<key>|<\/dict>\s*<\/plist>)/);
+    if (!calBlock) return null;
+    const dicts = [...calBlock[1].matchAll(/<dict>([\s\S]*?)<\/dict>/g)].map(m => m[1]);
+    const entries = dicts.length ? dicts : [calBlock[1]];
+    const parts = entries.map(body => {
+      const h = body.match(/<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/);
+      const m = body.match(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/);
+      if (h && m) return `${h[1].padStart(2, '0')}:${m[1].padStart(2, '0')}`;
+      if (h) return `${h[1].padStart(2, '0')}:00`;
+      if (m) return `:${m[1].padStart(2, '0')}`;
+      return null;
+    }).filter(Boolean);
+    return parts.length ? parts.join(', ') : null;
+  } catch { return null; }
+}
+
+// Resolve a job label to a normalized descriptor usable by every per-job
+// endpoint. Looks up static JOBS first (for matrix metadata) and falls back to
+// discovered plists so newly added jobs work without touching JOBS.
+function findJob(label) {
+  const staticJob = JOBS.find(j => j.label === label);
+  if (staticJob) {
+    return {
+      label: staticJob.label,
+      plist: staticJob.plist,
+      scriptPath: path.join(DEST, 'skill', staticJob.script),
+      scriptBasename: staticJob.script,
+      name: staticJob.name,
+      type: staticJob.type,
+      platform: staticJob.platform,
+      logPrefix: staticJob.logPrefix,
+      matrix: true,
+    };
+  }
+  const discovered = discoverLaunchdJobs().find(j => j.label === label);
+  if (!discovered) return null;
+  const scriptBasename = discovered.scriptPath ? path.basename(discovered.scriptPath) : null;
+  return {
+    label: discovered.label,
+    plist: discovered.plist,
+    scriptPath: discovered.scriptPath,
+    scriptBasename,
+    name: deriveName(discovered.label),
+    type: 'Other',
+    platform: 'all',
+    logPrefix: scriptBasename ? scriptBasename.replace(/\.(sh|py|js)$/, '-') : null,
+    matrix: false,
+  };
+}
+
 // --- API Routes ---
 
 function handleApi(req, res) {
@@ -276,8 +355,43 @@ function handleApi(req, res) {
         plistFile: job.plist,
       };
     });
+
+    // Discovered jobs that aren't in the static matrix. These get a flat row
+    // in the "Other Jobs" table so they're visible and controllable in the UI.
+    const matrixLabels = new Set(JOBS.map(j => j.label));
+    const discovered = discoverLaunchdJobs();
+    const otherJobs = discovered
+      .filter(d => !matrixLabels.has(d.label))
+      .map(d => {
+        const loaded = isJobLoaded(d.label);
+        const pids = getPidsForScriptPath(d.scriptPath);
+        const running = pids.length > 0;
+        const status = running ? 'running' : loaded ? 'scheduled' : 'stopped';
+        const scriptBasename = d.scriptPath ? path.basename(d.scriptPath) : null;
+        const logPrefix = scriptBasename ? scriptBasename.replace(/\.(sh|py|js)$/, '-') : null;
+        const lastLog = logPrefix ? getLastLog({ logPrefix }) : { file: null, time: null };
+        // Prefer repo plist for schedule; fall back to installed
+        let plistPath = path.join(LAUNCHD_DIR, d.plist);
+        if (!fs.existsSync(plistPath)) plistPath = getLaunchAgentPath(d.plist);
+        const schedule = getPlistSchedule(plistPath);
+        return {
+          label: d.label,
+          name: deriveName(d.label),
+          script: scriptBasename,
+          loaded,
+          running,
+          pids,
+          status,
+          schedule,
+          lastRun: lastLog.time,
+          lastLogFile: lastLog.file,
+          plistFile: d.plist,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+
     const pending = psql("SELECT COUNT(*) FROM replies WHERE status='pending'");
-    return json(res, { jobs, pendingReplies: pending ? parseInt(pending, 10) : null, paused: isPaused() });
+    return json(res, { jobs, otherJobs, pendingReplies: pending ? parseInt(pending, 10) : null, paused: isPaused() });
   }
 
   // POST /api/pause
