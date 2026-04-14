@@ -34,7 +34,7 @@ def get_project_platform_summary(conn, project=None, platform=None):
     """
     where_clauses = [
         "status = 'active'",
-        "platform NOT IN ('github_issues','hackernews','dev','youtube','github')",
+        "platform NOT IN ('github','hackernews','dev','youtube','github')",
         "our_content IS NOT NULL",
         f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
     ]
@@ -84,7 +84,7 @@ def get_top_posts(conn, project=None, platform=None, limit=15, min_upvotes=None)
         f"upvotes >= {min_upvotes}",
         "our_content IS NOT NULL",
         f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
-        "platform NOT IN ('github_issues')",
+        "platform NOT IN ('github')",
     ]
     params = []
     if project:
@@ -114,7 +114,7 @@ def get_bottom_posts(conn, project=None, platform=None, limit=10):
         "upvotes < 1",
         "our_content IS NOT NULL",
         f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
-        "platform NOT IN ('github_issues')",
+        "platform NOT IN ('github')",
     ]
     params = []
     if project:
@@ -246,7 +246,7 @@ def main():
         # Get distinct projects (respecting platform filter)
         cur = conn.execute(
             f"SELECT DISTINCT COALESCE(project_name, '(no project)') FROM posts "
-            f"WHERE status = 'active' AND platform NOT IN ('github_issues') "
+            f"WHERE status = 'active' AND platform NOT IN ('github') "
             f"AND our_content IS NOT NULL AND LENGTH(our_content) >= %s "
             f"AND upvotes IS NOT NULL AND upvotes >= %s "
             f"{platform_filter} "
@@ -264,7 +264,7 @@ def main():
                 f"project_name, posted_at::date, our_account "
                 f"FROM posts WHERE status = 'active' AND upvotes >= {MIN_UPVOTES} "
                 f"AND our_content IS NOT NULL AND LENGTH(our_content) >= {MIN_CONTENT_LEN} "
-                f"AND platform NOT IN ('github_issues') "
+                f"AND platform NOT IN ('github') "
                 f"{where_extra} {platform_filter} "
                 f"ORDER BY upvotes DESC LIMIT 5",
                 params
