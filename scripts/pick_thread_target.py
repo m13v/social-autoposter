@@ -3,13 +3,16 @@
 
 Rules:
 - Only consider projects with threads.enabled=true.
-- A project's own_community (if set) is a candidate every run.
-- External subreddits are candidates too, subject to the 3-day floor filter.
+- A project's own_community (if set) is a candidate every run (subject to its
+  own floor_days override, default 1 day for own community).
+- External subreddits are subject to the default 3-day floor (configurable via
+  threads.external_floor_days).
 - Entry filter: skip any subreddit where this account has posted an original
-  thread (thread_url == our_url) in the last 3 days.
-- Among eligible candidates, prefer own_community if present (those are
-  intended to be daily). Otherwise, weight projects by config weight and pick
-  a random eligible external subreddit for the chosen project.
+  thread (thread_url == our_url) within that sub's floor window.
+- Also skip any subreddit listed in the top-level banned_subreddits map (all
+  groups flattened).
+- Among eligible candidates, prefer own_community if present. Otherwise, weight
+  projects by config weight.
 
 Usage:
   python3 scripts/pick_thread_target.py              # stdout: PROJECT\tSUBREDDIT
@@ -27,7 +30,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
 
 CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
-FLOOR_DAYS = 3
+DEFAULT_OWN_FLOOR_DAYS = 1
+DEFAULT_EXTERNAL_FLOOR_DAYS = 3
 
 
 def load_config():
@@ -35,40 +39,7 @@ def load_config():
         return json.load(f)
 
 
-def recent_thread_subs():
-    """Return set of subreddit slugs (lowercased, no r/) that had an original
-    thread posted within FLOOR_DAYS days.
-
-    An "original thread" means a row where thread_url == our_url (we posted it,
-    not a comment on someone else's thread).
-    """
-    conn = dbmod.get_conn()
-    rows = conn.execute(
-        """
-        SELECT thread_url
-        FROM posts
-        WHERE platform='reddit'
-          AND thread_url = our_url
-          AND posted_at > NOW() - INTERVAL '%s days'
-        """ % FLOOR_DAYS
-    ).fetchall()
-    conn.close()
-    subs = set()
-    for (url,) in rows:
-        if not url:
-            continue
-        # Extract /r/NAME/ segment
-        parts = url.split("/r/")
-        if len(parts) < 2:
-            continue
-        tail = parts[1]
-        sub = tail.split("/", 1)[0]
-        subs.add(sub.lower())
-    return subs
-
-
 def norm_sub(s):
-    """Return just the slug, lowercased, no 'r/' prefix."""
     if not s:
         return ""
     s = s.strip()
@@ -77,88 +48,135 @@ def norm_sub(s):
     return s.lower()
 
 
-def build_candidates(config, recent_subs):
-    """Build a list of (project, subreddit_display, is_own_community) tuples
-    for every eligible (not in recent_subs) target.
-    """
+def flatten_banned(config):
+    """banned_subreddits is a dict of groups -> list of slugs. Flatten."""
+    banned = config.get("banned_subreddits") or {}
+    out = set()
+    if isinstance(banned, dict):
+        for group in banned.values():
+            for s in group or []:
+                out.add(norm_sub(s))
+    elif isinstance(banned, list):
+        for s in banned:
+            out.add(norm_sub(s))
+    return out
+
+
+def recent_posts_by_sub(max_days):
+    """Return dict: sub_slug (lowercased) -> days_since_last_our_thread."""
+    conn = dbmod.get_conn()
+    rows = conn.execute(
+        """
+        SELECT thread_url,
+               EXTRACT(EPOCH FROM (NOW() - posted_at))/86400.0 AS days_ago
+        FROM posts
+        WHERE platform='reddit'
+          AND thread_url = our_url
+          AND posted_at > NOW() - INTERVAL '%s days'
+        ORDER BY posted_at DESC
+        """ % max_days
+    ).fetchall()
+    conn.close()
+    latest = {}
+    for url, days_ago in rows:
+        if not url or "/r/" not in url:
+            continue
+        sub = url.split("/r/", 1)[1].split("/", 1)[0].lower()
+        if sub not in latest or days_ago < latest[sub]:
+            latest[sub] = float(days_ago)
+    return latest
+
+
+def build_candidates(config):
+    recent = recent_posts_by_sub(max_days=max(
+        DEFAULT_OWN_FLOOR_DAYS, DEFAULT_EXTERNAL_FLOOR_DAYS, 14))
+    banned = flatten_banned(config)
     candidates = []
     for p in config.get("projects", []):
         t = p.get("threads") or {}
         if not t.get("enabled"):
             continue
-        # Own community (daily)
+        ext_floor = int(t.get("external_floor_days", DEFAULT_EXTERNAL_FLOOR_DAYS))
+        # Own community
         own = t.get("own_community")
         if own:
-            sub_display = own.get("subreddit") if isinstance(own, dict) else own
-            if sub_display and norm_sub(sub_display) not in recent_subs:
-                candidates.append((p, sub_display, True))
-        # External subs (weekly rotation via 3-day floor)
+            if isinstance(own, dict):
+                sub_display = own.get("subreddit")
+                own_floor = int(own.get("floor_days", DEFAULT_OWN_FLOOR_DAYS))
+            else:
+                sub_display = own
+                own_floor = DEFAULT_OWN_FLOOR_DAYS
+            slug = norm_sub(sub_display)
+            if sub_display and slug not in banned:
+                last = recent.get(slug)
+                if last is None or last >= own_floor:
+                    candidates.append((p, sub_display, True, own_floor, last))
+        # External subs
         for sub in t.get("external_subreddits") or []:
-            if norm_sub(sub) not in recent_subs:
-                candidates.append((p, sub, False))
-    return candidates
+            slug = norm_sub(sub)
+            if slug in banned:
+                continue
+            last = recent.get(slug)
+            if last is not None and last < ext_floor:
+                continue
+            candidates.append((p, sub, False, ext_floor, last))
+    return candidates, recent, banned
 
 
-def pick(config, candidates):
-    """Pick one candidate.
-
-    Strategy: if any own_community candidate exists, pick one of them uniformly
-    (these are meant to be daily). Otherwise, sample a project weighted by
-    config weight (restricted to projects with at least one eligible external
-    sub), then pick a random eligible external sub for that project.
-    """
+def pick(candidates):
     own_candidates = [c for c in candidates if c[2]]
     if own_candidates:
         return random.choice(own_candidates)
-
-    # Weighted selection among projects with external candidates
-    by_project = {}
-    for p, sub, _ in candidates:
-        by_project.setdefault(p["name"], {"project": p, "subs": []})
-        by_project[p["name"]]["subs"].append(sub)
-
-    if not by_project:
+    if not candidates:
         return None
-
+    by_project = {}
+    for p, sub, is_own, floor, last in candidates:
+        by_project.setdefault(p["name"], {"project": p, "entries": []})
+        by_project[p["name"]]["entries"].append((sub, is_own, floor, last))
     names = list(by_project.keys())
     weights = [by_project[n]["project"].get("weight", 1) for n in names]
     chosen_name = random.choices(names, weights=weights, k=1)[0]
     proj = by_project[chosen_name]["project"]
-    sub = random.choice(by_project[chosen_name]["subs"])
-    return (proj, sub, False)
+    sub, is_own, floor, last = random.choice(by_project[chosen_name]["entries"])
+    return (proj, sub, is_own, floor, last)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--json", action="store_true", help="Output full JSON context")
-    ap.add_argument("--show-all", action="store_true", help="Print all eligible candidates and recent floor")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--show-all", action="store_true")
     args = ap.parse_args()
 
     config = load_config()
-    recent = recent_thread_subs()
-    candidates = build_candidates(config, recent)
+    candidates, recent, banned = build_candidates(config)
 
     if args.show_all:
-        print(f"Recent subs (last {FLOOR_DAYS}d):", sorted(recent))
-        print(f"Eligible candidates: {len(candidates)}")
-        for p, sub, is_own in candidates:
+        print(f"Banned subs ({len(banned)}): {sorted(banned)}")
+        print(f"Recent thread subs: {len(recent)}")
+        for sub, days in sorted(recent.items(), key=lambda x: x[1]):
+            print(f"  {sub}: {days:.2f}d ago")
+        print(f"\nEligible candidates: {len(candidates)}")
+        for p, sub, is_own, floor, last in candidates:
             tag = "OWN" if is_own else "ext"
-            print(f"  [{tag}] {p['name']:25} {sub}")
+            last_str = f"last={last:.2f}d" if last is not None else "last=never"
+            print(f"  [{tag}] {p['name']:25} {sub:30} floor={floor}d {last_str}")
         return
 
-    choice = pick(config, candidates)
+    choice = pick(candidates)
     if not choice:
         print("NO_ELIGIBLE_TARGET", file=sys.stderr)
         sys.exit(2)
 
-    proj, sub, is_own = choice
+    proj, sub, is_own, floor, last = choice
     if args.json:
         print(json.dumps({
             "project": proj,
             "subreddit": sub,
             "is_own_community": is_own,
-            "recent_subs": sorted(recent),
+            "floor_days": floor,
+            "last_posted_days_ago": last,
             "eligible_count": len(candidates),
+            "banned_count": len(banned),
         }, indent=2))
     else:
         print(f"{proj['name']}\t{sub}")
