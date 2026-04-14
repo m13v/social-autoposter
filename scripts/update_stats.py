@@ -593,23 +593,6 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
             username = re.search(r'twitter\.com/([^/]+)/status', our_url or '')
         username = username.group(1) if username else 'i'
 
-        # Guard: our_url MUST point to our own account. If it points to someone
-        # else, the posting flow failed to capture the reply permalink and left
-        # our_url set to the parent tweet. Fetching stats for the parent would
-        # leak the parent tweet's numbers into our dashboard (bug seen 2026-04-14).
-        our_handle = (config.get("accounts", {}).get("twitter", {}).get("handle") or "").lstrip("@").lower()
-        if our_handle and username.lower() != our_handle:
-            if not quiet:
-                print(f"SKIP [{post_id}] our_url points to @{username} not @{our_handle} (parent-stat leak guard); clearing our_url")
-            db.execute(
-                "UPDATE posts SET our_url=NULL, "
-                "source_summary = COALESCE(source_summary,'') || ' [url_lost: parent-stat leak guard]' "
-                "WHERE id=%s",
-                [post_id],
-            )
-            errors += 1
-            continue
-
         url = f"https://api.fxtwitter.com/{username}/status/{tweet_id}"
         data = fetch_json(url)
 
