@@ -2,10 +2,11 @@
 # Social Autoposter - Original Reddit thread poster (generalized)
 #
 # Picks one (project, subreddit) target via pick_thread_target.py,
-# which enforces a 3-day-per-subreddit floor, then spawns a Claude session
-# with the reddit-agent to research, draft, and post ONE original thread.
+# which enforces per-sub floor and banned-subreddit filtering, then spawns a
+# Claude session with reddit-agent to research, draft, and post ONE original
+# thread.
 #
-# Called by launchd (daily). See com.m13v.social-reddit-threads.plist.
+# Called by launchd every 6 hours. See com.m13v.social-reddit-threads.plist.
 
 set -euo pipefail
 
@@ -20,9 +21,13 @@ LOG_FILE="$LOG_DIR/run-reddit-threads-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Reddit Threads Run: $(date) ===" | tee "$LOG_FILE"
 
-# Pick target: one (project, subreddit) pair, 3-day floor enforced
+# Serialize with other reddit-agent consumers
+source "$REPO_DIR/skill/lock.sh"
+acquire_lock "reddit-threads" 600
+
+# Pick target
 TARGET_JSON=$(/usr/bin/python3 "$REPO_DIR/scripts/pick_thread_target.py" --json 2>&1) || {
-  echo "NO_ELIGIBLE_TARGET: every eligible subreddit was posted to within 3 days. Stopping." | tee -a "$LOG_FILE"
+  echo "NO_ELIGIBLE_TARGET: every eligible subreddit is inside its floor window. Stopping." | tee -a "$LOG_FILE"
   exit 0
 }
 
@@ -31,100 +36,133 @@ SUBREDDIT=$(echo "$TARGET_JSON" | /usr/bin/python3 -c "import sys,json; print(js
 IS_OWN=$(echo "$TARGET_JSON" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['is_own_community'])")
 
 echo "Target: project=$PROJECT subreddit=$SUBREDDIT own_community=$IS_OWN" | tee -a "$LOG_FILE"
-
-# Normalize subreddit slug (strip r/)
 SUB_SLUG=$(echo "$SUBREDDIT" | sed 's|^r/||I')
 
-# Extract full project config and threads section
-PROJECT_JSON=$(/usr/bin/python3 -c "
+# Posting account (hardcoded for now; the only configured reddit account)
+POST_ACCOUNT=$(/usr/bin/python3 -c "
 import json
 c = json.load(open('$CONFIG_FILE'))
-for p in c['projects']:
-    if p['name'] == '$PROJECT':
-        print(json.dumps(p, indent=2))
-        break
+print(c.get('accounts',{}).get('reddit',{}).get('username','Deep_Ad1959'))
 ")
 
-THREADS_JSON=$(echo "$PROJECT_JSON" | /usr/bin/python3 -c "
-import sys, json
-p = json.load(sys.stdin)
-print(json.dumps(p.get('threads', {}), indent=2))
-")
-
-# Compute dynamic context (e.g., day counter for Vipassana)
-export THREADS_JSON_ENV="$THREADS_JSON"
-DYNAMIC_BLOCK=$(/usr/bin/python3 -c "
+# Build full per-project context block (JSON-driven so prompt stays compact)
+export PROJECT_ENV="$PROJECT"
+CONTEXT_BLOCK=$(/usr/bin/python3 <<'PYEOF'
 import json, datetime, os
-t = json.loads(os.environ['THREADS_JSON_ENV'])
-lines = []
+CONFIG = '/Users/matthewdi/social-autoposter/config.json'
+name = os.environ['PROJECT_ENV']
+c = json.load(open(CONFIG))
+proj = next((p for p in c['projects'] if p['name'] == name), None)
+if not proj:
+    print("(project not found)")
+    raise SystemExit(0)
+
+t = proj.get('threads') or {}
+lp = proj.get('landing_pages') or {}
+
+out = []
+out.append(f"Project: {proj['name']}")
+out.append(f"Description: {proj.get('description','').strip()}")
+if proj.get('website'): out.append(f"Website: {proj['website']}")
+if lp.get('base_url'): out.append(f"Base URL: {lp['base_url']}")
+if proj.get('content_angle'):
+    out.append(f"\nContent angle: {proj['content_angle']}")
+
+voice = proj.get('voice')
+if voice:
+    out.append(f"\nVoice tone: {voice.get('tone','')}")
+    if voice.get('never'):
+        out.append("Voice never: " + "; ".join(voice['never']))
+
+tn = t.get('voice_notes')
+if tn:
+    out.append(f"\nThread voice notes: {tn}")
+
+# Dynamic day counter
 dc = t.get('dynamic_context') or {}
 day = dc.get('day_counter')
 if day:
     base = day['base_count']
     ref = datetime.date.fromisoformat(day['ref_date'])
-    today = datetime.date.today()
-    days = (today - ref).days
+    days = (datetime.date.today() - ref).days
     count = base + days
-    label = day.get('label', 'day count')
-    lines.append(f'{label.title()}: {count}+')
-facts = dc.get('static_facts') or []
-if facts:
-    lines.append('Static facts:')
-    for f in facts:
-        lines.append(f'- {f}')
-print('\n'.join(lines))
-")
+    label = day.get('label','day count')
+    out.append(f"\nLive {label}: {count}+")
+for f in dc.get('static_facts') or []:
+    out.append(f"- {f}")
 
-echo "Dynamic context:" | tee -a "$LOG_FILE"
-echo "$DYNAMIC_BLOCK" | tee -a "$LOG_FILE"
+# Topic angles
+angles = t.get('topic_angles') or []
+if angles:
+    out.append("\nTopic angles to choose from:")
+    for a in angles:
+        out.append(f"- {a}")
 
-# Optional guide dir (Vipassana uses this; other projects may not have it)
-GUIDE_DIR=$(echo "$THREADS_JSON" | /usr/bin/python3 -c "
-import sys, json, os
-t = json.load(sys.stdin)
+# Source paths (SEO pipeline pattern)
+out.append("\n## Product source (READ for context before drafting)")
+repo = lp.get('repo','')
+if repo:
+    rp = os.path.expanduser(repo)
+    status = "" if os.path.isdir(rp) else " [MISSING ON DISK]"
+    out.append(f"- Website repo: {rp}{status}")
+for s in lp.get('product_source') or []:
+    p = os.path.expanduser(s.get('path',''))
+    status = "" if os.path.isdir(p) else " [MISSING]"
+    desc = s.get('description','').strip()
+    out.append(f"- {p}{status}\n  {desc}")
+
+# Threads content_sources
 cs = t.get('content_sources') or {}
-gd = cs.get('guide_dir') or ''
-if gd:
-    print(os.path.expanduser(gd))
-")
-GUIDES_BLOCK=""
-if [ -n "$GUIDE_DIR" ] && [ -d "$GUIDE_DIR" ]; then
-  GUIDES=$(ls -d "$GUIDE_DIR"/*/ 2>/dev/null | xargs -I{} basename {} | tr '\n' ', ')
-  GUIDES_BLOCK="Available guide slugs: $GUIDES
-Guide source files live at: $GUIDE_DIR/[slug]/page.tsx
-Before drafting, READ the page.tsx source of any guide that relates to your chosen topic. Use specific details, quotes, or framing from the guide content to make the post richer and more authentic."
-  echo "Guides available: $GUIDES" | tee -a "$LOG_FILE"
-fi
+if cs.get('guide_dir'):
+    gd = os.path.expanduser(cs['guide_dir'])
+    out.append(f"\nGuide dir (read page.tsx files here for specific detail): {gd}")
+if cs.get('link_base'):
+    out.append(f"Link base for any URL you include: {cs['link_base']}")
+if cs.get('read_instructions'):
+    out.append(cs['read_instructions'])
 
-# Recent posts for this subreddit (avoid repeats)
-RECENT_POSTS=$(psql "$DATABASE_URL" -t -A -c "
+print("\n".join(out))
+PYEOF
+)
+
+echo "--- Context block ---" | tee -a "$LOG_FILE"
+echo "$CONTEXT_BLOCK" | tee -a "$LOG_FILE"
+echo "---------------------" | tee -a "$LOG_FILE"
+
+# Recent posts in THIS sub (avoid repeats)
+RECENT_POSTS_SUB=$(psql "$DATABASE_URL" -t -A -c "
   SELECT thread_title FROM posts
-  WHERE thread_url ILIKE '%/r/${SUB_SLUG}/%'
-    AND thread_url = our_url
+  WHERE thread_url ILIKE '%/r/${SUB_SLUG}/%' AND thread_url = our_url
   ORDER BY posted_at DESC LIMIT 15
-" 2>/dev/null || echo "(could not fetch recent posts)")
+" 2>/dev/null || echo "(psql error)")
 
-# Top performing posts for this project (tone calibration)
+# Recent posts project-wide (cross-sub dedup)
+RECENT_POSTS_PROJECT=$(psql "$DATABASE_URL" -t -A -c "
+  SELECT thread_title FROM posts
+  WHERE project_name='${PROJECT}' AND thread_url = our_url
+    AND posted_at > NOW() - INTERVAL '14 days'
+  ORDER BY posted_at DESC LIMIT 20
+" 2>/dev/null || echo "(psql error)")
+
+# Top performers (tone calibration)
 TOP_POSTS=$(psql "$DATABASE_URL" -t -A -c "
   SELECT thread_title, upvotes, comments_count, views FROM posts
   WHERE project_name='${PROJECT}' AND thread_url=our_url AND status='active'
     AND (COALESCE(upvotes,0) + COALESCE(comments_count,0)*3) > 5
-  ORDER BY (COALESCE(upvotes,0) + COALESCE(comments_count,0)*3) DESC
-  LIMIT 10
-" 2>/dev/null || echo "(could not fetch top posts)")
+  ORDER BY (COALESCE(upvotes,0) + COALESCE(comments_count,0)*3) DESC LIMIT 10
+" 2>/dev/null || echo "(psql error)")
 
-# Cadence note
 if [ "$IS_OWN" = "True" ]; then
-  CADENCE_NOTE="This is our OWNED subreddit. Daily cadence. Be yourself, no product pitches."
+  CADENCE_NOTE="This is our OWNED subreddit. Daily cadence (1-day floor). Be yourself, no product pitches."
 else
-  CADENCE_NOTE="This is an EXTERNAL subreddit. We only post here once every ~week. The thread must pass the subreddit's self-promo / community bar. No product links unless genuinely relevant (max 1)."
+  CADENCE_NOTE="This is an EXTERNAL subreddit (3-day floor). The thread must pass the sub's self-promo bar. No product links unless genuinely relevant (max 1)."
 fi
 
-claude -p "You are posting an original thread to ${SUBREDDIT} for the ${PROJECT} project.
+claude -p "You are posting an ORIGINAL thread to ${SUBREDDIT} for the ${PROJECT} project as u/${POST_ACCOUNT}.
 
 ## Config & Rules
 Read $SKILL_FILE for content rules and anti-AI-detection checklist.
-Read $CONFIG_FILE and find the project named '${PROJECT}'. Use its content_angle, voice, and threads section.
+You may also open $CONFIG_FILE for the full project block if you need anything not summarized below.
 
 ## Target
 Project: ${PROJECT}
@@ -132,64 +170,73 @@ Subreddit: ${SUBREDDIT}
 Own community: ${IS_OWN}
 ${CADENCE_NOTE}
 
-## Project threads config
-${THREADS_JSON}
+## Project context (live-assembled)
+${CONTEXT_BLOCK}
 
-## Dynamic context (live-calculated)
-${DYNAMIC_BLOCK}
+## Recent posts by us in ${SUBREDDIT} (DO NOT repeat topics)
+${RECENT_POSTS_SUB}
 
-${GUIDES_BLOCK}
+## Recent posts by us for ${PROJECT} across all subs (last 14d - don't recycle same angle)
+${RECENT_POSTS_PROJECT}
 
-## Recent posts in ${SUBREDDIT} by us (DO NOT repeat these topics)
-${RECENT_POSTS}
-
-## Top performing ${PROJECT} posts (match this tone/style)
+## Top performing ${PROJECT} posts (match tone/style)
 ${TOP_POSTS}
 
-## Task: Create exactly 1 original thread
+## Workflow
 
-1. Pick a topic from the threads.topic_angles list that:
-   - Has NOT been posted recently in this subreddit (check list above)
+1. RESEARCH (required): Read the product source paths listed in the context block. Specifically:
+   - README.md at the repo root
+   - Any files under src/ or docs/ that relate to your chosen topic angle
+   - For Vipassana: read relevant page.tsx under the guide dir
+   Pull 1-2 concrete, specific details from the source code or docs to anchor the post. Generic posts get ignored.
+
+2. Pick a topic from the threads.topic_angles list (in the context block above) that:
+   - Has NOT been posted recently in this subreddit (see above)
+   - Is not a recycled angle from other subs (see project-wide list)
    - Fits this subreddit's community and rules
-   - Invites genuine discussion (ends with a question or open thread)
+   - Invites genuine discussion (end with a question or open thread)
 
-2. Draft the post following ALL content rules from SKILL.md and the project's voice object:
-   - No em dashes. Use commas, periods, or regular dashes (-) instead
-   - No markdown formatting (no ##, no **bold**, no lists)
-   - 2-4 short paragraphs, casual tone, first person
-   - Include at least one imperfection (fragment, aside, lowercase)
-   - Title: lowercase, no clickbait patterns
-   - Read it out loud. If it sounds like a blog post, rewrite it
-   - Follow the threads.voice_notes guidance above
+3. Draft the post. RULES:
+   - No em dashes anywhere. Commas, periods, or plain '-' only.
+   - No markdown formatting (no ##, no **bold**, no bullet lists).
+   - 2-4 short paragraphs, casual tone, first person.
+   - Include at least one imperfection (sentence fragment, aside, lowercase start).
+   - Title: lowercase, no clickbait patterns, no emojis.
+   - Ground in a specific detail from the product source you read in step 1.
+   - Follow voice_notes. Read it out loud; if it sounds like a blog post, rewrite.
 
-3. Before posting, BRIEFLY check the subreddit rules page and any posting flair requirements:
-   - Navigate to https://old.reddit.com/${SUBREDDIT}/about/rules
-   - If the subreddit has strict no-self-promo rules and our post would read as promotional, ABORT and log: 'ABORTED: ${SUBREDDIT} rules incompatible with this post'
-   - Close the tab after reading
+4. SUBREDDIT CHECK via mcp__reddit-agent__browser_navigate to https://old.reddit.com/${SUBREDDIT}/about/rules
+   - If strict no-self-promo and our post would read promotional, ABORT. Log: 'ABORTED: ${SUBREDDIT} rules incompatible'.
+   - Note whether flair is required.
+   - Close the tab.
 
-4. Post it using mcp__reddit-agent__* browser tools:
+5. POST via mcp__reddit-agent__*:
    - Navigate to https://old.reddit.com/${SUBREDDIT}/submit?selftext=true
-   - Fill title via textarea[name=\"title\"] and body via textarea[name=\"text\"] (use browser_evaluate to set value directly if locator fails)
-   - Select flair if the subreddit requires one
-   - Click submit button
-   - Verify the post appeared and capture the permalink URL
-   - Close tabs after each navigation
+   - Fill title and body. If Playwright locator hits the md-container wrapper div, fall back to:
+     browser_evaluate with:
+       document.querySelector('textarea[name=\"title\"]').value = TITLE;
+       document.querySelector('textarea[name=\"title\"]').dispatchEvent(new Event('input',{bubbles:true}));
+       document.querySelector('textarea[name=\"text\"]').value = BODY;
+       document.querySelector('textarea[name=\"text\"]').dispatchEvent(new Event('input',{bubbles:true}));
+   - FLAIR HELPER (if flair required): click '.flairselector-button' OR the 'add flair' button, then in the flair dialog click the appropriate .flairoption matching the post type, then click the 'Save' button. If no suitable flair, ABORT.
+   - Click the submit button. Wait 3 seconds. Capture the permalink (document.location.href after submission).
+   - Close the tab.
 
-5. Log to database:
+6. LOG to database. IMPORTANT: Build a RICH source_summary - 2-3 sentences covering (a) what topic angle you chose and why, (b) which source file(s) you read for grounding, (c) which specific detail you used. This is NOT optional:
    INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
      thread_title, thread_content, our_url, our_content, our_account,
      source_summary, project_name, status, posted_at)
-   VALUES ('reddit', PERMALINK, 'Deep_Ad1959', 'Deep_Ad1959',
-     TITLE, BODY, PERMALINK, BODY, 'Deep_Ad1959',
-     'thread on ${SUBREDDIT} for ${PROJECT}', '${PROJECT}', 'active', NOW());
+   VALUES ('reddit', PERMALINK, '${POST_ACCOUNT}', '${POST_ACCOUNT}',
+     TITLE, BODY, PERMALINK, BODY, '${POST_ACCOUNT}',
+     RICH_SOURCE_SUMMARY, '${PROJECT}', 'active', NOW());
 
-6. After posting, output a single line summary:
+7. Print exactly:
    POSTED: [permalink] | [title]
 
-CRITICAL: NEVER use em dashes in any content.
-CRITICAL: Use ONLY mcp__reddit-agent__* tools. NEVER use generic browser tools.
-CRITICAL: If browser tools are blocked/timeout, wait 30 seconds and retry up to 3 times. If still blocked, log the error and stop.
-CRITICAL: Close browser tabs after page visits (browser_tabs action 'close', NOT browser_close)." 2>&1 | tee -a "$LOG_FILE"
+CRITICAL: NEVER use em dashes.
+CRITICAL: Use ONLY mcp__reddit-agent__* tools.
+CRITICAL: Close browser tabs after each navigation (browser_tabs action 'close').
+CRITICAL: If a browser call times out, wait 30s and retry up to 3 times." 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 find "$LOG_DIR" -name "run-reddit-threads-*.log" -mtime +14 -delete 2>/dev/null || true
