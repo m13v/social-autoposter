@@ -80,7 +80,7 @@ def check_rate_limit(max_per_day=4000):
     """Return (posts_today, can_post). Default limit: 4000/day."""
     conn = dbmod.get_conn()
     row = conn.execute(
-        "SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours' AND platform != 'github_issues'"
+        "SELECT COUNT(*) FROM posts WHERE posted_at >= NOW() - INTERVAL '24 hours' AND platform != 'github'"
     ).fetchone()
     conn.close()
     count = row[0]
@@ -225,7 +225,7 @@ def generate_linkedin_search_urls(topics, exclusions=None):
     return threads
 
 
-def fetch_github_issues(search_topics, exclusions=None, limit=10):
+def fetch_github(search_topics, exclusions=None, limit=10):
     """Search GitHub issues using gh CLI and return candidate threads.
 
     Rotates through search_topics, picking a random subset each run.
@@ -269,7 +269,7 @@ def fetch_github_issues(search_topics, exclusions=None, limit=10):
                 continue
 
             threads.append({
-                "platform": "github_issues",
+                "platform": "github",
                 "url": issue.get("url", ""),
                 "title": issue.get("title", ""),
                 "author": author,
@@ -430,7 +430,7 @@ def main():
         if args.topic:
             github_topics = [t for t in github_topics if args.topic.lower() in t.lower()]
         raw_excl = config.get("exclusions", {})
-        threads.extend(fetch_github_issues(github_topics, exclusions=raw_excl))
+        threads.extend(fetch_github(github_topics, exclusions=raw_excl))
 
     # Filter
     candidates = filter_threads(threads, already_posted, topic=args.topic, exclusions=exclusions)
