@@ -224,7 +224,21 @@ You are working in an existing website repo with a shared SEO component library 
 
 **Trust signals** (required, see below): Breadcrumbs, ArticleMeta, ProofBand, FaqSection, JSON-LD helpers (articleSchema, breadcrumbListSchema, faqPageSchema, howToSchema).
 
-**Visual content** (pick at least 3 from this list for each page):
+**⭐ Video + motion graphics (MANDATORY — pick at least one):**
+- `RemotionClip` (title, subtitle?, captions[], accent?, durationInFrames?) — real Remotion-powered video clip rendered live in the browser via `@remotion/player`. Uses the built-in `ConceptReveal` composition: a gradient background, animated title/subtitle, and a stack of captions that spring in one by one. **This is the single highest-signal component in this library.** Use for concept intros, product pitches, or angle-defining hero animations. Max 4-6 captions per clip.
+- `MotionSequence` (title?, frames[], defaultDuration?, loop?) — timeline animation powered by framer-motion. Plays through a list of frames automatically when scrolled into view, each frame has a duration, title, body, and optional `visual` React node. Feels like an embedded explainer video without adding a video file. Use for "watch it work" concept animations or step-by-step conceptual walkthroughs.
+- `LottiePlayer` (animationData or src) — Lottie JSON player using `lottie-react`. Use when you have a production-grade motion graphic exported from LottieFiles. Only use if you will create the JSON file in `public/` yourself.
+
+**⭐ Magic UI style high-signal components (MANDATORY — pick at least TWO):**
+- `AnimatedBeam` (from[], hub, to[], title?) — Magic UI style animated beam diagram with a central hub connecting sources on the left to destinations on the right. Glowing teal beams travel along each connection. Use for "pipeline," "integration," or "how data flows" visualizations. **Almost always a good fit if the product receives, processes, and returns something.**
+- `OrbitingCircles` (center, items[], radius?, duration?, reverse?) — central element with smaller items revolving around it on a dashed orbit ring. Use for ecosystem / integrations / "works with everything" showcases.
+- `Marquee` (children, speed?, reverse?, pauseOnHover?, fade?) — infinite horizontal marquee. Wrap logos, testimonials, feature pills, or mini metric cards. Edges fade softly. Pauses on hover. Use for "trusted by," "works with," or a chip row of competitor names.
+- `NumberTicker` (value, decimals?, prefix?, suffix?) — spring-animated number that counts up from 0 when it scrolls into view. Use inside any metric section. Example: `<NumberTicker value={94} suffix="%" />`.
+- `ShimmerButton` (children, href?) — premium pill CTA button with a continuous diagonal light shimmer sweeping across it. Use as the hero CTA.
+- `GradientText` (children, variant?, animate?) — inline gradient text treatment for hero headings. Cyan → teal gradient, optionally animated. Wraps a meaningful word or phrase.
+- `BackgroundGrid` (children, pattern?, glow?) — Vercel/Linear style wrapper with a subtle dot or line grid background and a soft radial teal glow. Wrap hero sections, standout callouts, or anchor-fact blocks.
+
+**Visual content** (pick at least 3 distinct from here + Rich layout, as below):
 - `AnimatedCodeBlock` (code, language?, filename?, typingSpeed?) — syntax-highlighted code with typing animation. Use when showing real code, config, or CLI commands from the product.
 - `TerminalOutput` (lines[], title?) — terminal session with command/output/success/error lines. Use when showing what happens when you run something.
 - `FlowDiagram` (title, steps[]) — visual step-by-step flow with arrows. Use when explaining a process or architecture.
@@ -244,20 +258,6 @@ You are working in an existing website repo with a shared SEO component library 
 - `GlowCard` (children) — card with mouse-tracking glow effect (like Linear/Stripe). Glow follows cursor on hover. Use as a wrapper around feature highlights or key content blocks for premium feel.
 - `ParallaxSection` (children, background?, intensity?) — section with parallax scrolling effect. Background moves at a different speed than foreground content. Use for hero-style visual breaks between content sections.
 - `StepTimeline` (title?, steps[]) — vertical timeline with animated line drawing and staggered step reveals. Each step has a numbered dot, title, description, and optional detail panel. Use for processes, setup guides, or "how it works" narratives.
-- `MotionSequence` (title?, frames[], defaultDuration?, loop?) — timeline animation powered by framer-motion. Plays through a list of frames automatically when scrolled into view, each frame has a duration, title, body, and optional `visual` React node. Feels like an embedded explainer video without adding a video file. Use for "watch it work" concept animations or step-by-step conceptual walkthroughs.
-
-**Video + motion graphics (Remotion / Lottie):**
-- `RemotionClip` (title, subtitle?, captions[], accent?, durationInFrames?) — real Remotion-powered video clip rendered live in the browser via `@remotion/player`. Uses the built-in `ConceptReveal` composition: a gradient background, animated title/subtitle, and a stack of captions that spring in one by one. Use for concept intros, product pitches, or angle-defining hero animations. Max 4-6 captions per clip.
-- `LottiePlayer` (animationData or src) — Lottie JSON player using `lottie-react`. Use when you have a production-grade motion graphic (e.g. a file exported from LottieFiles) and want it inline. Only use if you can reference a real Lottie JSON file at a known path in `public/`.
-
-**Magic UI / Aceternity style components:**
-- `Marquee` (children, speed?, reverse?, pauseOnHover?, fade?) — infinite horizontal marquee. Wrap logos, testimonials, feature pills, or mini metric cards. Edges fade softly. Pauses on hover.
-- `AnimatedBeam` (from[], hub, to[], title?) — Magic UI style animated beam diagram with a central hub connecting sources on the left to destinations on the right. Glowing teal beams travel along each connection. Use for "pipeline," "integration," or "how data flows" visualizations.
-- `OrbitingCircles` (center, items[], radius?, duration?, reverse?) — central element with smaller items revolving around it on a dashed orbit ring. Use for ecosystem / integrations / "works with everything" showcases.
-- `NumberTicker` (value, decimals?, prefix?, suffix?) — spring-animated number that counts up from 0 when it scrolls into view. Use inside a metric or stat callout. Example: `<NumberTicker value={94} suffix="%" />`.
-- `ShimmerButton` (children, href?) — premium pill CTA button with a continuous diagonal light shimmer sweeping across it. Use as the hero CTA or a standout conversion point.
-- `GradientText` (children, variant?, animate?) — inline gradient text treatment for hero headings. Cyan → teal gradient, optionally animated. Keeps the brand teal only.
-- `BackgroundGrid` (children, pattern?, glow?) — Vercel/Linear style wrapper with a subtle dot or line grid background and a soft radial teal glow. Wrap hero sections, standout callouts, or anchor-fact blocks.
 
 **CTAs:**
 - `InlineCta` (heading, body, linkText?, href?) — inline CTA block with PostHog tracking.
@@ -275,6 +275,30 @@ Each page must feel editorially distinct. Pick visual components that match YOUR
 - A "feature showcase" angle might use BentoGrid + GlowCard + ParallaxSection + MetricsRow
 
 You must use at least 3 visual content components (not counting trust signals). Using only prose sections with no visual components is a failure.
+
+### Mandatory component diversity (non-negotiable)
+
+A page that only uses code blocks, diagrams, and tables is not rich enough. Every page MUST satisfy ALL of the following quotas, distinct components only:
+
+1. **At least ONE "video-style" component**, from this group: `RemotionClip`, `MotionSequence`.
+   - Prefer `RemotionClip` for the hero / concept intro (it literally renders a Remotion composition live). Use `MotionSequence` if you want a longer narrative with visual frames. If you cannot think of what to put in it, use `RemotionClip` with the product name as the title, a one-line subtitle, and 4-5 captions that capture the angle.
+
+2. **At least TWO Magic UI style components**, from this group: `Marquee`, `AnimatedBeam`, `OrbitingCircles`, `NumberTicker`, `ShimmerButton`, `GradientText`, `BackgroundGrid`.
+   - `ShimmerButton` counts toward this quota only if it is the primary CTA, not decoration.
+   - `GradientText` counts only if it wraps a meaningful word or phrase in a heading, not an entire paragraph.
+   - `Marquee` is an excellent fit for "works with" or "trusted by" strips, integration logos, or feature chip rows.
+   - `AnimatedBeam` fits any "inputs → system → outputs" story. If your angle involves the product receiving, processing, and returning something, this is almost always a win.
+   - `OrbitingCircles` fits ecosystem / integrations stories.
+   - `NumberTicker` should appear inside any metric section that uses concrete numbers.
+   - `BackgroundGrid` should wrap the hero section or a high-signal callout.
+
+3. **At least THREE components total** from the "Visual content" and "Rich layout and animation" groups (FlowDiagram, SequenceDiagram, CodeComparison, AnimatedChecklist, AnimatedMetric, MetricsRow, AnimatedCodeBlock, TerminalOutput, BentoGrid, BeforeAfter, AnimatedDemo, GlowCard, ParallaxSection, StepTimeline, InlineTestimonial, ComparisonTable, ProofBanner).
+
+A page that satisfies (3) but not (1) and (2) is incomplete. If your angle genuinely does not want a video component, you still need one — use `RemotionClip` for the hero intro or `MotionSequence` to open the page. This is a hard requirement, not a suggestion.
+
+### Lottie
+
+If you reference a Lottie animation via `LottiePlayer`, you MUST also create the JSON file at a real path in `public/` (e.g. `public/lottie/<slug>-hero.json`). Do not reference a Lottie path that does not exist. If you cannot produce a real Lottie JSON, skip it.
 
 ### Color palette (mandatory)
 

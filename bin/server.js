@@ -134,27 +134,85 @@ function getLaunchAgentPath(plistFile) {
   return path.join(os.homedir(), 'Library', 'LaunchAgents', plistFile);
 }
 
+// Parse label and script path from a launchd plist XML blob.
+// Returns { label, scriptPath } where scriptPath is the first entry in
+// ProgramArguments that looks like a script (.sh/.py/.js), or Program if set.
+function parsePlist(xml) {
+  const labelM = xml.match(/<key>Label<\/key>\s*<string>([^<]+)<\/string>/);
+  const label = labelM ? labelM[1] : null;
+  let scriptPath = null;
+  const argsM = xml.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
+  if (argsM) {
+    const strings = [...argsM[1].matchAll(/<string>([^<]+)<\/string>/g)].map(m => m[1]);
+    scriptPath = strings.find(s => /\.(sh|py|js)$/.test(s)) || null;
+  }
+  if (!scriptPath) {
+    const progM = xml.match(/<key>Program<\/key>\s*<string>([^<]+)<\/string>/);
+    if (progM) scriptPath = progM[1];
+  }
+  return { label, scriptPath };
+}
+
+// Discover every social-autoposter launchd job from plist files.
+// Scans the repo's launchd/ dir plus ~/Library/LaunchAgents/ and merges by
+// label so we catch jobs installed without a repo copy (e.g. hand-installed).
+// This is the single source of truth for global pause/resume so any new
+// plist is covered automatically without touching the JOBS array.
+function discoverLaunchdJobs() {
+  const byLabel = new Map();
+  const scan = (dir) => {
+    try {
+      const files = fs.readdirSync(dir).filter(f =>
+        f.startsWith('com.m13v.social-') && f.endsWith('.plist')
+      );
+      for (const f of files) {
+        try {
+          const xml = fs.readFileSync(path.join(dir, f), 'utf8');
+          const { label, scriptPath } = parsePlist(xml);
+          if (!label) continue;
+          if (!byLabel.has(label)) {
+            byLabel.set(label, { label, plist: f, scriptPath });
+          }
+        } catch {}
+      }
+    } catch {}
+  };
+  scan(LAUNCHD_DIR);
+  scan(path.join(os.homedir(), 'Library', 'LaunchAgents'));
+  return [...byLabel.values()];
+}
+
 function isPaused() {
-  // Paused = no jobs loaded in launchd
-  return JOBS.every(job => !isJobLoaded(job.label));
+  const all = discoverLaunchdJobs();
+  if (!all.length) return false;
+  return all.every(job => !isJobLoaded(job.label));
 }
 
 function pauseAll() {
   const killed = [];
-  for (const job of JOBS) {
-    // Unload from launchd
+  const all = discoverLaunchdJobs();
+  for (const job of all) {
     const agentLink = getLaunchAgentPath(job.plist);
     if (isJobLoaded(job.label)) {
       try { execSync(`launchctl unload "${agentLink}"`, { stdio: 'pipe' }); } catch {}
     }
-    // Kill running processes
-    const pids = getJobPids(job.script);
-    for (const pid of pids) {
-      try { process.kill(pid, 'SIGTERM'); killed.push(pid); } catch {}
+    if (job.scriptPath) {
+      try {
+        const out = execSync(`pgrep -f "${job.scriptPath}"`, { stdio: 'pipe' }).toString().trim();
+        if (out.length) {
+          for (const pidStr of out.split('\n')) {
+            const pid = parseInt(pidStr, 10);
+            if (!isNaN(pid)) {
+              try { process.kill(pid, 'SIGTERM'); killed.push(pid); } catch {}
+            }
+          }
+        }
+      } catch {}
+      const scriptBase = path.basename(job.scriptPath).replace(/\.(sh|py|js)$/, '');
+      try { execSync(`pkill -f "claude.*${scriptBase}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
     }
-    try { execSync(`pkill -f "claude.*${job.script.replace('.sh', '')}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
   }
-  // Also kill helper scripts
+  // Also kill helper scripts that may be running outside a launchd job
   try { execSync('pkill -f "social-autoposter/scripts/" 2>/dev/null', { stdio: 'pipe' }); } catch {}
   try { execSync('pkill -f "social-autoposter/seo/" 2>/dev/null', { stdio: 'pipe' }); } catch {}
   return killed;
@@ -163,15 +221,24 @@ function pauseAll() {
 function resumeAll() {
   const agentDir = path.join(os.homedir(), 'Library', 'LaunchAgents');
   fs.mkdirSync(agentDir, { recursive: true });
-  for (const job of JOBS) {
-    const plistSrc = path.join(LAUNCHD_DIR, job.plist);
+  const all = discoverLaunchdJobs();
+  for (const job of all) {
+    if (isJobLoaded(job.label)) continue;
     const agentLink = getLaunchAgentPath(job.plist);
-    if (!isJobLoaded(job.label) && fs.existsSync(plistSrc)) {
-      try { fs.unlinkSync(agentLink); } catch {}
+    const plistSrc = path.join(LAUNCHD_DIR, job.plist);
+    let loadPath = null;
+    if (fs.existsSync(agentLink)) {
+      // Already installed (real file or symlink) — load as-is so in-place
+      // edits to the installed plist are preserved.
+      loadPath = agentLink;
+    } else if (fs.existsSync(plistSrc)) {
       try {
         fs.symlinkSync(plistSrc, agentLink);
-        execSync(`launchctl load "${agentLink}"`, { stdio: 'pipe' });
+        loadPath = agentLink;
       } catch {}
+    }
+    if (loadPath) {
+      try { execSync(`launchctl load "${loadPath}"`, { stdio: 'pipe' }); } catch {}
     }
   }
 }
