@@ -154,7 +154,8 @@ def upsert_candidates(tweets, config):
 
         score, velocity, rt_ratio = calculate_virality_score(tweet)
 
-        project = match_project(
+        # Use LLM-assigned project if available, fall back to keyword matching
+        project = tweet.get("matched_project") or match_project(
             tweet.get("text", ""),
             tweet.get("search_topic", ""),
             config,
