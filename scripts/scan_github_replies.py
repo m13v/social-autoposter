@@ -40,7 +40,7 @@ def main():
 
     # Get all unique GitHub issues we've commented on
     rows = conn.execute(
-        "SELECT DISTINCT thread_url FROM posts WHERE platform='github_issues' AND status='active'"
+        "SELECT DISTINCT thread_url FROM posts WHERE platform='github' AND status='active'"
     ).fetchall()
 
     issues = {}
@@ -71,7 +71,7 @@ def main():
 
         # Get the post_id for this issue (use the first one)
         post_row = conn.execute(
-            "SELECT id FROM posts WHERE platform='github_issues' AND thread_url=%s LIMIT 1",
+            "SELECT id FROM posts WHERE platform='github' AND thread_url=%s LIMIT 1",
             (thread_url,)
         ).fetchone()
         if not post_row:
@@ -115,7 +115,7 @@ def main():
 
             # Check if already tracked
             existing = conn.execute(
-                "SELECT COUNT(*) FROM replies WHERE platform='github_issues' AND their_comment_id=%s",
+                "SELECT COUNT(*) FROM replies WHERE platform='github' AND their_comment_id=%s",
                 (comment_id,)
             ).fetchone()
             if existing[0] > 0:
@@ -126,7 +126,7 @@ def main():
                     """INSERT INTO replies
                     (post_id, platform, their_comment_id, their_author, their_content,
                      their_comment_url, depth, status, skip_reason)
-                    VALUES (%s, 'github_issues', %s, %s, %s, %s, 1, 'skipped', 'excluded_author')""",
+                    VALUES (%s, 'github', %s, %s, %s, %s, 1, 'skipped', 'excluded_author')""",
                     (post_id, comment_id, author, body, comment_url)
                 )
                 conn.commit()
@@ -138,7 +138,7 @@ def main():
                     """INSERT INTO replies
                     (post_id, platform, their_comment_id, their_author, their_content,
                      their_comment_url, depth, status, skip_reason)
-                    VALUES (%s, 'github_issues', %s, %s, %s, %s, 1, 'skipped', %s)""",
+                    VALUES (%s, 'github', %s, %s, %s, %s, 1, 'skipped', %s)""",
                     (post_id, comment_id, author, body, comment_url,
                      f"too_short ({word_count(body)} words)")
                 )
@@ -150,7 +150,7 @@ def main():
                 """INSERT INTO replies
                 (post_id, platform, their_comment_id, their_author, their_content,
                  their_comment_url, depth, status)
-                VALUES (%s, 'github_issues', %s, %s, %s, %s, 1, 'pending')""",
+                VALUES (%s, 'github', %s, %s, %s, %s, 1, 'pending')""",
                 (post_id, comment_id, author, body, comment_url)
             )
             conn.commit()
