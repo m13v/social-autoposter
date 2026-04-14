@@ -141,7 +141,7 @@ def main():
     db = dbmod.get_conn()
     row = db.execute(
         "SELECT SUM(views), SUM(upvotes), SUM(comments_count), COUNT(*), MIN(posted_at) "
-        "FROM posts WHERE status='active' AND platform NOT IN ('github_issues', 'moltbook')"
+        "FROM posts WHERE status='active' AND platform NOT IN ('github', 'moltbook')"
     ).fetchone()
     total_views = row[0] or 0
     total_upvotes = row[1] or 0
