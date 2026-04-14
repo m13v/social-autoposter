@@ -237,6 +237,14 @@ You are working in an existing website repo with a shared SEO component library 
 - `ProofBanner` (quote, source?, metric) — compact proof with large metric. Use for a standout stat mid-page.
 - `AnimatedSection` (delay?) — scroll-triggered fade-in wrapper. Use to stagger content reveals.
 
+**Rich layout and animation components:**
+- `BentoGrid` (cards[]) — bento grid layout with varying card sizes (1x1, 2x1, 1x2, 2x2). Cards have icon, title, description, optional accent color and custom content. Use for feature overviews, capability showcases, or "what you get" sections.
+- `BeforeAfter` (before, after, title?) — animated tab toggle between "before" and "after" states. Each side has content text and highlight bullets (red X marks for before, green checks for after). Use for workflow comparisons, migration stories, or problem/solution sections.
+- `AnimatedDemo` (title, steps[], code?) — animated product demo that auto-plays through steps. Shows a dark "screen" with step content, progress bar, and step indicators. Optional collapsible code panel showing "How to build this." Use for walkthroughs, feature demos, or "watch it work" sections.
+- `GlowCard` (children) — card with mouse-tracking glow effect (like Linear/Stripe). Glow follows cursor on hover. Use as a wrapper around feature highlights or key content blocks for premium feel.
+- `ParallaxSection` (children, background?, intensity?) — section with parallax scrolling effect. Background moves at a different speed than foreground content. Use for hero-style visual breaks between content sections.
+- `StepTimeline` (title?, steps[]) — vertical timeline with animated line drawing and staggered step reveals. Each step has a numbered dot, title, description, and optional detail panel. Use for processes, setup guides, or "how it works" narratives.
+
 **CTAs:**
 - `InlineCta` (heading, body, linkText?, href?) — inline CTA block with PostHog tracking.
 - `StickyBottomCta` (description, buttonLabel, href) — fixed bottom bar that appears on scroll. Use instead of (or alongside) InlineCta for variety.
@@ -246,10 +254,11 @@ You are working in an existing website repo with a shared SEO component library 
 **Do NOT clone the structure of existing pages.** Read one existing page in {example_dirs_str} ONLY to understand the import syntax and color conventions. Do NOT copy its section ordering, component selection, or layout pattern.
 
 Each page must feel editorially distinct. Pick visual components that match YOUR angle:
-- A "how it works" angle might use FlowDiagram + TerminalOutput + AnimatedCodeBlock
-- A "vs. competitors" angle might use ComparisonTable + MetricsRow + CodeComparison
-- A "deep dive" angle might use SequenceDiagram + AnimatedCodeBlock + ProofBanner
-- A "getting started" angle might use AnimatedChecklist + TerminalOutput + FlowDiagram
+- A "how it works" angle might use FlowDiagram + StepTimeline + AnimatedDemo
+- A "vs. competitors" angle might use BeforeAfter + ComparisonTable + MetricsRow + GlowCard
+- A "deep dive" angle might use SequenceDiagram + AnimatedCodeBlock + BentoGrid
+- A "getting started" angle might use AnimatedDemo + StepTimeline + TerminalOutput
+- A "feature showcase" angle might use BentoGrid + GlowCard + ParallaxSection + MetricsRow
 
 You must use at least 3 visual content components (not counting trust signals). Using only prose sections with no visual components is a failure.
 
