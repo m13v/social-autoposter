@@ -95,11 +95,11 @@ REPLY_STYLES = VALID_STYLES | {"recommendation"}
 
 PLATFORM_WEIGHTS = {
     "reddit": {
-        "dominant": ["critic", "storyteller", "pattern_recognizer"],
-        "secondary": ["curious_probe", "contrarian", "data_point_drop"],
-        "rare": ["snarky_oneliner"],
-        "never": [],
-        "note": "Match style to subreddit culture. Varies heavily by sub.",
+        "dominant": ["contrarian", "storyteller", "snarky_oneliner"],
+        "secondary": ["critic", "pattern_recognizer", "data_point_drop"],
+        "rare": [],
+        "never": ["curious_probe"],
+        "note": "Short wins. 1 punchy sentence or 4-5 of real substance. Start with 'I' or 'my'. Match style to subreddit culture.",
     },
     "twitter": {
         "dominant": ["snarky_oneliner", "critic", "data_point_drop"],
