@@ -245,6 +245,12 @@ def format_report(summary, top, bottom, project=None, platform=None,
     lines.append(f"## Performance Feedback Report{scope}")
     lines.append("")
 
+    # Distilled rules first (most important part of the report)
+    if platform:
+        rules = get_distilled_rules(platform)
+        if rules:
+            lines.append(rules)
+
     # Summary table
     lines.append("### Posts per Project per Platform")
     for row in summary:
