@@ -1,7 +1,7 @@
 #!/bin/bash
-# Social Autoposter - Twitter/X posting only
-# Finds Twitter threads and posts up to 50 replies per run.
-# Called by launchd every 2 hours.
+# Social Autoposter - Twitter/X posting
+# Reads top-scored candidates from twitter_candidates table,
+# posts 2-3 replies per run. Called by launchd every 10 minutes.
 
 set -euo pipefail
 
@@ -15,15 +15,50 @@ LOG_FILE="$LOG_DIR/run-twitter-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Twitter Post Run: $(date) ===" | tee "$LOG_FILE"
 
-# Pick project based on weight distribution
-PROJECT=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform twitter 2>/dev/null || echo "Fazm")
-PROJECT_JSON=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform twitter --json 2>/dev/null || echo "{}")
-echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
+# Fetch top candidates from DB
+CANDIDATES=$(psql "$DATABASE_URL" -t -A -F '|' -c "
+    SELECT id, tweet_url, author_handle, tweet_text, virality_score, matched_project,
+           likes, retweets, replies, views, author_followers,
+           EXTRACT(EPOCH FROM (NOW() - tweet_posted_at))/3600 AS age_hours
+    FROM twitter_candidates
+    WHERE status = 'pending' AND virality_score > 5
+    ORDER BY virality_score DESC
+    LIMIT 3;
+" 2>/dev/null || echo "")
 
-# Generate top performers feedback report (Twitter + project-specific)
-TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter --project "$PROJECT" 2>/dev/null || echo "(top performers report unavailable)")
+if [ -z "$CANDIDATES" ]; then
+    echo "No candidates above threshold. Skipping." | tee -a "$LOG_FILE"
+    exit 0
+fi
 
-# Generate engagement style and content rules from shared module
+# Format candidates for the prompt
+CANDIDATE_COUNT=$(echo "$CANDIDATES" | wc -l | tr -d ' ')
+echo "Found $CANDIDATE_COUNT candidates" | tee -a "$LOG_FILE"
+
+CANDIDATE_BLOCK=""
+while IFS='|' read -r cid curl cauthor ctext cscore cproject clikes crts creplies cviews cfollowers cage; do
+    CANDIDATE_BLOCK="${CANDIDATE_BLOCK}
+---
+Candidate ID: $cid
+URL: $curl
+Author: @$cauthor (${cfollowers} followers)
+Text: $ctext
+Score: $cscore | Likes: $clikes | RTs: $crts | Replies: $creplies | Views: $cviews | Age: ${cage}h
+Project match: $cproject
+"
+done <<< "$CANDIDATES"
+
+# Pick project from the top candidate
+TOP_PROJECT=$(echo "$CANDIDATES" | head -1 | cut -d'|' -f6)
+if [ -z "$TOP_PROJECT" ] || [ "$TOP_PROJECT" = "" ]; then
+    TOP_PROJECT=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform twitter 2>/dev/null || echo "Fazm")
+fi
+PROJECT_JSON=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform twitter --json --project "$TOP_PROJECT" 2>/dev/null || echo "{}")
+
+# Generate top performers feedback
+TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter --project "$TOP_PROJECT" 2>/dev/null || echo "(top performers report unavailable)")
+
+# Generate engagement styles
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block twitter posting)
 
@@ -32,32 +67,35 @@ claude -p "You are the Social Autoposter.
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for account handle.
 
-## TARGET PROJECT FOR THIS RUN: $PROJECT
-You MUST find tweets relevant to this project and reply about it.
-Project config: $PROJECT_JSON
-Use this project's content_angle/voice if it has one, otherwise use the global content_angle.
-The project_name for all posts this run MUST be '$PROJECT'.
+## PRE-SCORED CANDIDATES (reply to these, best first)
+These threads were discovered and scored by the scanner. Reply to the top 2-3.
+$CANDIDATE_BLOCK
 
-## FEEDBACK FROM PAST PERFORMANCE (use this to write better replies):
+## TARGET PROJECT: $TOP_PROJECT
+Project config: $PROJECT_JSON
+The project_name for all posts this run MUST be '$TOP_PROJECT' (unless a candidate matches a different project).
+
+## FEEDBACK FROM PAST PERFORMANCE:
 $TOP_REPORT
 
 $STYLES_BLOCK
 
-Run the **Workflow: Post** section for **Twitter/X ONLY**. Follow every step:
-1. Find candidate tweets: python3 $REPO_DIR/scripts/find_threads.py --include-twitter --project '$PROJECT'
-   From the output, pick ONLY twitter candidates (discovery_method: search_url).
-   Browse the search URL via mcp__twitter-agent__browser_navigate to find actual tweets.
-2. Pick the best tweet relevant to $PROJECT to reply to
-3. Draft the reply using the engagement style that best fits the tweet. Keep it short, 1-2 sentences. NEVER use em dashes.
-4. Post it using the twitter-agent browser (mcp__twitter-agent__* tools)
-5. Log to database with project_name='$PROJECT', engagement_style='STYLE_YOU_CHOSE' (MUST include feedback_report_used=TRUE in the INSERT)
+## WORKFLOW
+For each candidate (up to 3):
+1. Navigate to the candidate URL via mcp__twitter-agent__browser_navigate
+2. Read the full thread to understand context
+3. Draft a reply using the best engagement style. Keep it 1-2 sentences. NEVER use em dashes.
+4. Post it using the twitter-agent browser tools
+5. Log to database: project_name from the candidate's matched_project (or '$TOP_PROJECT'), engagement_style, feedback_report_used=TRUE
+6. After posting, mark the candidate: UPDATE twitter_candidates SET status='posted', posted_at=NOW() WHERE id=CANDIDATE_ID
 
-Up to 50 posts per run. If nothing fits, say '## No good tweet found' and stop.
+If a thread is no longer available or not relevant, mark it skipped:
+UPDATE twitter_candidates SET status='skipped' WHERE id=CANDIDATE_ID
 
-CRITICAL: Ignore the 'Max 40 posts per 24 hours' limit in SKILL.md. The actual daily limit is 4000 posts. Post up to 50 per this run.
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
-CRITICAL: Use ONLY mcp__twitter-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
-CRITICAL: If a browser tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). If still blocked, skip and stop." 2>&1 | tee -a "$LOG_FILE"
+CRITICAL: Use ONLY mcp__twitter-agent__* tools.
+CRITICAL: Post at most 3 replies this run. Quality over quantity.
+CRITICAL: If a browser tool call is blocked or times out, wait 30 seconds and retry (up to 3 times)." 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 find "$LOG_DIR" -name "run-twitter-*.log" -mtime +7 -delete 2>/dev/null || true
