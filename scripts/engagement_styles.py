@@ -194,10 +194,11 @@ def get_content_rules(platform):
 
     platform_rules = {
         "reddit": [
-            "Casual tone, lowercase OK, fragments OK. 2-4 short sentences (1 sentence for snarky_oneliner).",
-            "No markdown in Reddit (no ##, **, numbered lists).",
-            "No product links. No product names. No tool recommendations (unless recommendation style).",
-            "End with a genuine question when possible (drives reply chains).",
+            "Go BIMODAL: either 1 punchy sentence (<100 chars, highest avg upvotes) or 4-5 sentences of real substance. AVOID the 2-3 sentence dead zone.",
+            "Start with 'I' or 'my' (first-person experience). 'I did X' beats 'you should do X'.",
+            "No markdown in Reddit (no ##, **, numbered lists). Casual tone, lowercase OK, fragments OK.",
+            "NEVER mention product names (fazm, assrt, pieline, cyrano, terminator, mk0r, s4l). NEVER include URLs or links.",
+            "Statements beat questions. Be authoritative, not inquisitive. No 'anyone else experience this?'",
         ],
         "twitter": [
             "Keep it short: 1-2 sentences max. Fragments and lowercase OK.",
