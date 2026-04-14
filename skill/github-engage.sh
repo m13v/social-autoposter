@@ -39,7 +39,7 @@ python3 "$REPO_DIR/scripts/scan_github_replies.py" 2>&1 | tee -a "$LOG_FILE"
 # ═══════════════════════════════════════════════════════
 # PHASE B: Respond to pending GitHub replies
 # ═══════════════════════════════════════════════════════
-PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='github_issues' AND status='pending';")
+PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='github' AND status='pending';")
 
 if [ "$PENDING_COUNT" -eq 0 ]; then
     log "Phase B: No pending GitHub replies. Done!"
@@ -62,9 +62,9 @@ python3 "$REPO_DIR/scripts/engage_github.py" --timeout 3000 2>&1 | tee -a "$LOG_
 # ═══════════════════════════════════════════════════════
 # engage_github.py already calls log_run.py itself with per-run counts.
 # Here we just print the cumulative status for visibility in the log file.
-TOTAL_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='github_issues' AND status='pending';")
-TOTAL_REPLIED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='github_issues' AND status='replied';")
-TOTAL_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='github_issues' AND status='skipped';")
+TOTAL_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='github' AND status='pending';")
+TOTAL_REPLIED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='github' AND status='replied';")
+TOTAL_SKIPPED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='github' AND status='skipped';")
 
 log "GitHub replies cumulative: pending=$TOTAL_PENDING replied=$TOTAL_REPLIED skipped=$TOTAL_SKIPPED"
 
