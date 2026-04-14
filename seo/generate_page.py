@@ -225,6 +225,7 @@ You are working in an existing website repo. It already has reusable SEO compone
 - If the repo also has local components (e.g. in `@/components/seo/` or `@/components/`), you may use those too. Prefer the shared `@seo/components` package for trust signals and JSON-LD; prefer repo-local components for product-specific layout shells (AlternativePageShell, etc.).
 - If the repo has a shell component for this content type (AlternativePageShell, UseCasePageShell, etc.), prefer it. Emit a typed data object and return `<TheShell data={{data}} />` — the shell handles trust signals automatically.
 - Match the theme, typography, and visual conventions of the existing pages.
+- **Color palette (mandatory):** bg-white base, text-zinc-900 for headings, text-zinc-500/text-gray-600 for secondary text. Accent colors: `from-cyan-500 to-teal-500` gradient for CTAs, `text-teal-600` for links, `bg-teal-50 text-teal-700` for badges/pills, `bg-teal-50 border-teal-200` for tinted boxes. NEVER use violet, indigo, or purple anywhere. If an existing page uses violet, that page is wrong; use teal/cyan instead.
 
 ## Step 4 — Build the page
 
