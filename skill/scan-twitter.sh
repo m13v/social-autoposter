@@ -20,35 +20,22 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOGFILE"; }
 
 log "=== Twitter Scan: $(date) ==="
 
-# Load all projects + distribution for LLM-driven topic selection
-ALL_PROJECTS_JSON=$(python3 -c "
-import json, os
-config = json.load(open(os.path.expanduser('~/social-autoposter/config.json')))
-print(json.dumps([{k: p.get(k) for k in ['name', 'description', 'topics', 'twitter_topics', 'weight'] if p.get(k)} for p in config.get('projects', []) if p.get('weight', 0) > 0], indent=2))
-" 2>/dev/null || echo "[]")
+log "Hot tweet scanner (engagement-first, no project bias)"
 
-PROJECT_DIST=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform twitter --distribution 2>/dev/null || echo "(unavailable)")
+# Claude prompt: LLM picks broad search queries, searches Twitter, extracts raw tweet data
+claude -p "You are a Twitter hot-tweet scanner. Your ONLY job is to find high-engagement tweets happening RIGHT NOW in tech/AI/automation/startups. Do NOT post anything.
 
-log "LLM-driven topic selection across all projects"
+## Step 1: Choose 4-6 broad search queries
+Find what's TRENDING and getting engagement right now. Do NOT optimize for any specific product or project.
+Optimize for HOTNESS: tweets that are fresh, getting rapid likes/replies, and sparking real discussion.
 
-# Claude prompt: LLM picks search queries, searches Twitter, extracts raw tweet data
-claude -p "You are a Twitter thread scanner. Your ONLY job is to search Twitter and extract tweet data. Do NOT post anything.
-
-## Step 1: Choose 4-6 search queries
-Based on the projects below and today's posting distribution, pick 4-6 Twitter search queries that will find high-engagement threads where we can add value. Prioritize underrepresented projects.
-
-Available projects:
-$ALL_PROJECTS_JSON
-
-Today's distribution:
-$PROJECT_DIST
-
-Guidelines for choosing queries:
-- Mix project-specific queries (e.g. 'voice AI restaurant') with broader queries that multiple projects could match (e.g. 'Claude Code', 'AI agent')
-- Favor queries that find discussions and opinions, not news or promos
-- Use natural language queries that real people would tweet about
-- Add 'min_faves:10' to filter for engagement
-- Avoid queries that return non-English noise unless a project specifically targets non-English markets
+Query strategy:
+- Use BROAD terms: 'AI', 'automation', 'vibe coding', 'developer tools', 'startup', 'no code', 'open source', 'Claude', 'GPT', 'AI agent'
+- Use HIGH engagement filters: min_faves:50 for broad queries, min_faves:20 for narrower ones
+- Favor queries that surface DISCUSSIONS and OPINIONS (people sharing experiences, asking questions, debating)
+- Avoid queries that surface NEWS ARTICLES, PROMOS, or GIVEAWAYS
+- Mix it up each run. Do not always use the same queries. Think about what's likely trending TODAY.
+- 4-6 queries total
 
 ## Step 2: Search and extract
 For EACH query you chose:
@@ -101,8 +88,7 @@ CRITICAL RULES:
 - Do NOT generate any content
 - Output the final combined JSON array at the end of your response, wrapped in a code block tagged \`\`\`json
 - If a search fails or times out, skip it and continue to the next topic
-- Add a 'search_topic' field to each tweet with the query that found it
-- Add a 'matched_project' field with the project name you think best fits each tweet (from the projects list above)" 2>&1 | tee -a "$LOGFILE" | python3 -c "
+- Add a 'search_topic' field to each tweet with the query that found it" 2>&1 | tee -a "$LOGFILE" | python3 -c "
 import sys, json, re
 
 # Extract JSON from Claude output
