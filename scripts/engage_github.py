@@ -52,7 +52,7 @@ def get_next_pending(conn):
                p.thread_title, p.thread_url, p.our_content, p.our_url
         FROM replies r
         JOIN posts p ON r.post_id = p.id
-        WHERE r.status='pending' AND r.platform='github_issues'
+        WHERE r.status='pending' AND r.platform='github'
         ORDER BY r.discovered_at ASC
         LIMIT 1
     """)
@@ -73,7 +73,7 @@ def get_recent_archetypes(conn, limit=3):
     cur = conn.execute("""
         SELECT LEFT(our_reply_content, 200)
         FROM replies
-        WHERE status='replied' AND platform='github_issues'
+        WHERE status='replied' AND platform='github'
               AND our_reply_content IS NOT NULL
         ORDER BY replied_at DESC
         LIMIT %s
