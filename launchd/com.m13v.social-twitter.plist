@@ -22,10 +22,7 @@
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-twitter-stderr.log</string>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-twitter-stdout.log</string>
-	<key>StartCalendarInterval</key>
-	<array>
-		<dict><key>Minute</key><integer>5</integer></dict>
-		<dict><key>Minute</key><integer>35</integer></dict>
-	</array>
+	<key>StartInterval</key>
+	<integer>600</integer>
 </dict>
 </plist>
