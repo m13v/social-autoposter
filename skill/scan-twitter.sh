@@ -20,39 +20,39 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOGFILE"; }
 
 log "=== Twitter Scan: $(date) ==="
 
-# Pick 2-3 projects to scan for (rotate via pick_project)
-PROJECT1=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform twitter 2>/dev/null || echo "Fazm")
-PROJECT2=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform twitter 2>/dev/null || echo "Assrt")
-log "Scanning for projects: $PROJECT1, $PROJECT2"
-
-# Get search topics for these projects
-TOPICS_JSON=$(python3 -c "
+# Load all projects + distribution for LLM-driven topic selection
+ALL_PROJECTS_JSON=$(python3 -c "
 import json, os
 config = json.load(open(os.path.expanduser('~/social-autoposter/config.json')))
-projects = {p['name']: p for p in config.get('projects', [])}
-topics = []
-for name in ['$PROJECT1', '$PROJECT2']:
-    p = projects.get(name, {})
-    for t in p.get('topics', [])[:3]:
-        topics.append({'topic': t, 'project': name})
-# Always include high-signal general topics
-topics.append({'topic': 'Claude Code', 'project': 'Assrt'})
-topics.append({'topic': 'AI agent', 'project': 'Fazm'})
-print(json.dumps(topics))
+print(json.dumps([{k: p.get(k) for k in ['name', 'description', 'topics', 'twitter_topics', 'weight'] if p.get(k)} for p in config.get('projects', []) if p.get('weight', 0) > 0], indent=2))
 " 2>/dev/null || echo "[]")
 
-log "Topics: $TOPICS_JSON"
+PROJECT_DIST=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform twitter --distribution 2>/dev/null || echo "(unavailable)")
 
-# Claude prompt: search Twitter, extract raw tweet data, output JSON
-# This is a minimal prompt: no posting, no content generation, just data extraction
+log "LLM-driven topic selection across all projects"
+
+# Claude prompt: LLM picks search queries, searches Twitter, extracts raw tweet data
 claude -p "You are a Twitter thread scanner. Your ONLY job is to search Twitter and extract tweet data. Do NOT post anything.
 
-For each search topic below, navigate to Twitter search and extract tweet data.
+## Step 1: Choose 4-6 search queries
+Based on the projects below and today's posting distribution, pick 4-6 Twitter search queries that will find high-engagement threads where we can add value. Prioritize underrepresented projects.
 
-TOPICS: $TOPICS_JSON
+Available projects:
+$ALL_PROJECTS_JSON
 
-For EACH topic:
-1. Navigate to: https://x.com/search?q={topic} min_faves:10 -filter:replies&f=live
+Today's distribution:
+$PROJECT_DIST
+
+Guidelines for choosing queries:
+- Mix project-specific queries (e.g. 'voice AI restaurant') with broader queries that multiple projects could match (e.g. 'Claude Code', 'AI agent')
+- Favor queries that find discussions and opinions, not news or promos
+- Use natural language queries that real people would tweet about
+- Add 'min_faves:10' to filter for engagement
+- Avoid queries that return non-English noise unless a project specifically targets non-English markets
+
+## Step 2: Search and extract
+For EACH query you chose:
+1. Navigate to: https://x.com/search?q={your_query} -filter:replies&f=live
    Use mcp__twitter-agent__browser_navigate
 2. Wait 4 seconds, then run this JavaScript via mcp__twitter-agent__browser_run_code to extract tweets:
 
@@ -101,7 +101,8 @@ CRITICAL RULES:
 - Do NOT generate any content
 - Output the final combined JSON array at the end of your response, wrapped in a code block tagged \`\`\`json
 - If a search fails or times out, skip it and continue to the next topic
-- Add a 'search_topic' field to each tweet with the topic that found it" 2>&1 | tee -a "$LOGFILE" | python3 -c "
+- Add a 'search_topic' field to each tweet with the query that found it
+- Add a 'matched_project' field with the project name you think best fits each tweet (from the projects list above)" 2>&1 | tee -a "$LOGFILE" | python3 -c "
 import sys, json, re
 
 # Extract JSON from Claude output
