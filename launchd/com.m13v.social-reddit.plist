@@ -17,7 +17,15 @@
 		</dict>
 		<dict>
 			<key>Minute</key>
+			<integer>15</integer>
+		</dict>
+		<dict>
+			<key>Minute</key>
 			<integer>30</integer>
+		</dict>
+		<dict>
+			<key>Minute</key>
+			<integer>45</integer>
 		</dict>
 	</array>
 	<key>StandardOutPath</key>
