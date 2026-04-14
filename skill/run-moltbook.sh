@@ -15,12 +15,17 @@ LOG_FILE="$LOG_DIR/run-moltbook-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== MoltBook Post Run: $(date) ===" | tee "$LOG_FILE"
 
-# Pick project based on weight distribution
-PROJECT=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform moltbook 2>/dev/null || echo "Fazm")
-PROJECT_JSON=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform moltbook --json 2>/dev/null || echo "{}")
-echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
+# Load all projects for LLM-driven selection
+ALL_PROJECTS_JSON=$(python3 -c "
+import json, os
+config = json.load(open(os.path.expanduser('~/social-autoposter/config.json')))
+print(json.dumps({p['name']: p for p in config.get('projects', [])}, indent=2))
+" 2>/dev/null || echo "{}")
 
-# Generate top performers feedback report (Moltbook-specific)
+# Project distribution
+PROJECT_DIST=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform moltbook --distribution 2>/dev/null || echo "(distribution unavailable)")
+
+# Generate top performers feedback report (platform-wide)
 TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform moltbook 2>/dev/null || echo "(top performers report unavailable)")
 
 # Generate engagement style and content rules from shared module
@@ -32,11 +37,15 @@ claude -p "You are the Social Autoposter.
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for the moltbook account.
 
-## TARGET PROJECT FOR THIS RUN: $PROJECT
-You MUST find Moltbook threads relevant to this project and comment about it.
-Project config: $PROJECT_JSON
-Use this project's content_angle/voice if it has one, otherwise use the global content_angle.
-The project_name for all posts this run MUST be '$PROJECT'.
+## PROJECT SELECTION (LLM-driven, you choose)
+Pick the best project for this run based on thread quality and project fit.
+Here are all projects and their configs:
+$ALL_PROJECTS_JSON
+
+Today's distribution (balance underrepresented projects):
+$PROJECT_DIST
+
+Browse hot and new posts, then choose the project that fits best for each thread.
 
 ## FEEDBACK FROM PAST PERFORMANCE (use this to write better comments):
 $TOP_REPORT
@@ -53,16 +62,16 @@ Steps:
    curl -s -H \"Authorization: Bearer \$MOLTBOOK_API_KEY\" \"https://www.moltbook.com/api/v1/posts?sort=new&limit=50\"
 3. Check which threads we already posted in: SELECT thread_url FROM posts WHERE platform='moltbook'
 4. Check last 5 comments for variety: SELECT our_content FROM posts WHERE platform='moltbook' ORDER BY id DESC LIMIT 5
-5. Pick up to 5 threads where the $PROJECT project has a genuine angle. Skip mbc20/crypto spam threads.
-6. For each thread, draft a comment in agent voice (\"my human\" not \"I\") about $PROJECT. Follow Content Rules.
+5. Pick up to 5 threads where any project has a genuine angle. Skip mbc20/crypto spam threads.
+6. For each thread, draft a comment in agent voice (\"my human\" not \"I\") about the best-fit project. Follow Content Rules. Reply in the SAME LANGUAGE as the thread.
 7. Post using the helper script:
    python3 $REPO_DIR/scripts/moltbook_post.py comment --post-id POST_UUID --content \"COMMENT\"
 8. Log each to database with project_name='$PROJECT' (include feedback_report_used=TRUE):
    INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
      thread_title, thread_content, our_url, our_content, our_account,
-     source_summary, project_name, engagement_style, feedback_report_used, status, posted_at)
+     source_summary, project_name, engagement_style, feedback_report_used, language, status, posted_at)
    VALUES ('moltbook', thread_url, 'various', 'various', title, '', our_url, content,
-     'matthew-autoposter', 'moltbook comment engagement', '$PROJECT', 'STYLE_YOU_CHOSE', TRUE, 'active', NOW())
+     'matthew-autoposter', 'moltbook comment engagement', 'PROJECT_YOU_CHOSE', 'STYLE_YOU_CHOSE', TRUE, 'DETECTED_LANGUAGE', 'active', NOW())
    Use the 'url' field from the script JSON output for our_url.
 
 If the helper script reports rate limiting, wait the indicated seconds and retry. Max 3 retries per comment.
