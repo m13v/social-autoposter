@@ -48,8 +48,8 @@ EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
           AND posted_at < NOW() - INTERVAL '6 hours'
           AND link_edited_at IS NULL
           AND our_url IS NOT NULL
-          AND (upvotes > 2 OR platform IN ('linkedin', 'github_issues'))
-          AND platform IN ('reddit', 'moltbook', 'linkedin', 'github_issues')
+          AND (upvotes > 2 OR platform IN ('linkedin', 'github'))
+          AND platform IN ('reddit', 'moltbook', 'linkedin', 'github')
         ORDER BY upvotes DESC NULLS LAST
     ) q;" 2>/dev/null || echo "")
 
@@ -240,7 +240,7 @@ MANDATORY reply flow for every item:
   Step 3: python3 reply_db.py replied ID "text" [url] [engagement_style]   ← mark AFTER success (e.g. critic, storyteller)
 If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run — safe to retry.
 
-GitHub issues engagement is handled by a separate pipeline (github-engage.sh). Skip any github_issues replies in this batch.
+GitHub issues engagement is handled by a separate pipeline (github-engage.sh). Skip any github replies in this batch.
 LinkedIn and Twitter engagement are handled by separate pipelines (engage-linkedin.sh, engage-twitter.sh). This batch contains ONLY Reddit and Moltbook replies.
 
 For **reddit** — use the reddit-agent browser (mcp__reddit-agent__* tools) with this FAST posting method (browser_run_code):
