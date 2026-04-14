@@ -248,6 +248,7 @@ $([ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ] && echo "- LinkedIn Message
 $([ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ] && echo "- X/Twitter DMs: use Python CDP scripts (scripts/twitter_browser.py) ONLY")
 NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
 If a script or tool call fails, wait 30 seconds and retry (up to 3 times).
+CRITICAL: Reply in the SAME LANGUAGE as the inbound message. Match the language exactly.
 
 $( [ -n "$PHASE0_INSTRUCTIONS" ] && echo "$PHASE0_INSTRUCTIONS
 
