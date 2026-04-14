@@ -323,12 +323,12 @@ class ReplyScanner:
             )
             time.sleep(3)
 
-    def scan_github(self):
+    def scan_github_issues(self):
         """Scan GitHub issues for new comments after ours."""
         print("\nScanning GitHub issues for replies...")
         posts = self.db.execute(
             "SELECT id, our_url, thread_url, thread_title FROM posts "
-            "WHERE platform='github' AND status='active' AND our_url IS NOT NULL "
+            "WHERE platform='github_issues' AND status='active' AND our_url IS NOT NULL "
             "AND our_url LIKE '%%issuecomment%%'"
         ).fetchall()
 
@@ -399,11 +399,11 @@ class ReplyScanner:
                 comment_url = comment.get("url", "")
 
                 if word_count(body) < MIN_WORDS:
-                    self.insert_reply(post_id, "github", comment_id, author, body, comment_url,
+                    self.insert_reply(post_id, "github_issues", comment_id, author, body, comment_url,
                                       status="skipped", skip_reason=f"too_short ({word_count(body)} words)")
                     continue
 
-                self.insert_reply(post_id, "github", comment_id, author, body, comment_url)
+                self.insert_reply(post_id, "github_issues", comment_id, author, body, comment_url)
                 print(f"  NEW: [{post_id}] @{author} on {issue_key}: {body[:80]}...")
 
             time.sleep(1)  # Light rate limiting for gh CLI
