@@ -410,7 +410,7 @@ function handleApi(req, res) {
   const toggleMatch = p.match(/^\/api\/jobs\/([^/]+)\/toggle$/);
   if (toggleMatch && req.method === 'POST') {
     const label = decodeURIComponent(toggleMatch[1]);
-    const job = JOBS.find(j => j.label === label);
+    const job = findJob(label);
     if (!job) return json(res, { error: 'Unknown job' }, 404);
     const plistSrc = path.join(LAUNCHD_DIR, job.plist);
     const agentLink = getLaunchAgentPath(job.plist);
@@ -418,13 +418,18 @@ function handleApi(req, res) {
     try {
       if (loaded) {
         execSync(`launchctl unload "${agentLink}"`, { stdio: 'pipe' });
-        try { fs.unlinkSync(agentLink); } catch {}
+        // Only unlink symlinks. Real-file installed plists (e.g. daily-report)
+        // must be preserved so the job can be toggled back on.
+        try {
+          const st = fs.lstatSync(agentLink);
+          if (st.isSymbolicLink()) fs.unlinkSync(agentLink);
+        } catch {}
       } else {
-        // Symlink plist to ~/Library/LaunchAgents/ and load
-        const agentDir = path.dirname(agentLink);
-        fs.mkdirSync(agentDir, { recursive: true });
-        try { fs.unlinkSync(agentLink); } catch {}
-        fs.symlinkSync(plistSrc, agentLink);
+        fs.mkdirSync(path.dirname(agentLink), { recursive: true });
+        if (!fs.existsSync(agentLink)) {
+          if (!fs.existsSync(plistSrc)) return json(res, { error: 'No plist source' }, 404);
+          fs.symlinkSync(plistSrc, agentLink);
+        }
         execSync(`launchctl load "${agentLink}"`, { stdio: 'pipe' });
       }
       return json(res, { loaded: !loaded });
@@ -437,32 +442,50 @@ function handleApi(req, res) {
   const runMatch = p.match(/^\/api\/jobs\/([^/]+)\/run$/);
   if (runMatch && req.method === 'POST') {
     const label = decodeURIComponent(runMatch[1]);
-    const job = JOBS.find(j => j.label === label);
+    const job = findJob(label);
     if (!job) return json(res, { error: 'Unknown job' }, 404);
-    const scriptPath = path.join(DEST, 'skill', job.script);
-    const jobEnv = { ...process.env, ...loadEnv(), HOME: os.homedir() };
-    delete jobEnv.CLAUDECODE;
-    const child = spawn('bash', [scriptPath], {
-      detached: true,
-      stdio: 'ignore',
-      env: jobEnv,
-    });
-    child.unref();
-    return json(res, { started: true, pid: child.pid });
+    // Spawn exactly what the plist would run. Works for .sh, .py, .js without
+    // needing to hardcode an interpreter.
+    let plistPath = path.join(LAUNCHD_DIR, job.plist);
+    if (!fs.existsSync(plistPath)) plistPath = getLaunchAgentPath(job.plist);
+    try {
+      const xml = fs.readFileSync(plistPath, 'utf8');
+      let cmd = null;
+      let args = [];
+      const argsM = xml.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
+      if (argsM) {
+        const parts = [...argsM[1].matchAll(/<string>([^<]+)<\/string>/g)].map(m => m[1]);
+        if (parts.length) { cmd = parts[0]; args = parts.slice(1); }
+      }
+      if (!cmd) {
+        const progM = xml.match(/<key>Program<\/key>\s*<string>([^<]+)<\/string>/);
+        if (progM) cmd = progM[1];
+      }
+      if (!cmd) return json(res, { error: 'No executable in plist' }, 500);
+      const jobEnv = { ...process.env, ...loadEnv(), HOME: os.homedir() };
+      delete jobEnv.CLAUDECODE;
+      const child = spawn(cmd, args, { detached: true, stdio: 'ignore', env: jobEnv });
+      child.unref();
+      return json(res, { started: true, pid: child.pid });
+    } catch (e) {
+      return json(res, { error: e.message }, 500);
+    }
   }
 
   // POST /api/jobs/:label/stop
   const stopMatch = p.match(/^\/api\/jobs\/([^/]+)\/stop$/);
   if (stopMatch && req.method === 'POST') {
     const label = decodeURIComponent(stopMatch[1]);
-    const job = JOBS.find(j => j.label === label);
+    const job = findJob(label);
     if (!job) return json(res, { error: 'Unknown job' }, 404);
-    const pids = getJobPids(job.script);
+    const pids = getPidsForScriptPath(job.scriptPath);
     for (const pid of pids) {
       try { process.kill(pid, 'SIGTERM'); } catch {}
     }
-    // Also kill any child claude processes spawned by the script
-    try { execSync(`pkill -f "claude.*${job.script.replace('.sh', '')}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
+    if (job.scriptBasename) {
+      const base = job.scriptBasename.replace(/\.(sh|py|js)$/, '');
+      try { execSync(`pkill -f "claude.*${base}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
+    }
     return json(res, { stopped: true, killedPids: pids });
   }
 
@@ -472,23 +495,28 @@ function handleApi(req, res) {
     return readBody(req).then(body => {
       const { interval } = JSON.parse(body);
       const label = decodeURIComponent(intervalMatch[1]);
-      const job = JOBS.find(j => j.label === label);
+      const job = findJob(label);
       if (!job) return json(res, { error: 'Unknown job' }, 404);
-      const plistPath = path.join(LAUNCHD_DIR, job.plist);
-      let xml = fs.readFileSync(plistPath, 'utf8');
+      // Prefer editing the repo plist so git tracks the change; fall back to
+      // the installed file if the repo doesn't have a copy.
+      let plistPath = path.join(LAUNCHD_DIR, job.plist);
+      if (!fs.existsSync(plistPath)) plistPath = getLaunchAgentPath(job.plist);
+      let xml;
+      try { xml = fs.readFileSync(plistPath, 'utf8'); }
+      catch (e) { return json(res, { error: e.message }, 500); }
+      if (!/<key>StartInterval<\/key>/.test(xml)) {
+        return json(res, { error: 'Job uses StartCalendarInterval; interval not settable here' }, 400);
+      }
       xml = xml.replace(
         /(<key>StartInterval<\/key>\s*<integer>)\d+(<\/integer>)/,
         `$1${interval}$2`
       );
       fs.writeFileSync(plistPath, xml);
-      // Reload if currently loaded
+      // Reload if currently loaded so the new interval takes effect
       const agentLink = getLaunchAgentPath(job.plist);
       if (isJobLoaded(label)) {
         try {
           execSync(`launchctl unload "${agentLink}"`, { stdio: 'pipe' });
-          // Re-symlink with updated plist
-          try { fs.unlinkSync(agentLink); } catch {}
-          fs.symlinkSync(plistPath, agentLink);
           execSync(`launchctl load "${agentLink}"`, { stdio: 'pipe' });
         } catch {}
       }
@@ -847,6 +875,7 @@ const HTML = `<!DOCTYPE html>
       <tbody id="matrix-body"></tbody>
     </table>
   </div>
+  <div id="other-jobs-section" style="margin-top: 24px;"></div>
   <div id="pending-section" style="margin-top: 16px;"></div>
 </div>
 
@@ -1002,6 +1031,62 @@ function updateCell(td, job) {
   if (badge) { badge.textContent = statusLabel; badge.className = 'badge ' + job.status; }
 }
 
+function renderOtherJobRow(job) {
+  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
+  const runStopBtn = job.running
+    ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
+    : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
+  const toggleBtn = job.loaded
+    ? '<button class="btn danger" onclick="toggleJob(\\'' + job.label + '\\')">Off</button>'
+    : '<button class="btn primary" onclick="toggleJob(\\'' + job.label + '\\')">On</button>';
+  return '<tr data-other-job="' + job.label + '">' +
+    '<td style="text-align:left;padding-left:16px;">' + job.name + '</td>' +
+    '<td style="color:#6b7280;font-size:12px;">' + (job.schedule || '--') + '</td>' +
+    '<td style="color:#6b7280;font-size:12px;" data-field="lastrun">' + relTime(job.lastRun) + '</td>' +
+    '<td><span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span></td>' +
+    '<td><div class="cell-actions" style="justify-content:center;">' + runStopBtn + toggleBtn + '</div></td>' +
+  '</tr>';
+}
+
+function buildOtherJobsTable(jobs) {
+  if (!jobs || !jobs.length) return '';
+  const rows = jobs.map(renderOtherJobRow).join('');
+  return '<table class="matrix-table" style="margin-top:8px;">' +
+    '<thead><tr>' +
+      '<th style="text-align:left;padding-left:16px;">Other Jobs (' + jobs.length + ')</th>' +
+      '<th>Schedule</th>' +
+      '<th>Last Run</th>' +
+      '<th>Status</th>' +
+      '<th>Actions</th>' +
+    '</tr></thead>' +
+    '<tbody id="other-jobs-body">' + rows + '</tbody>' +
+  '</table>';
+}
+
+function updateOtherJobsInPlace(jobs) {
+  for (const job of jobs) {
+    const tr = document.querySelector('[data-other-job="' + job.label + '"]');
+    if (!tr) return false;
+    const badge = tr.querySelector('[data-field="status"]');
+    const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
+    if (badge) { badge.textContent = statusLabel; badge.className = 'badge ' + job.status; }
+    const lastrun = tr.querySelector('[data-field="lastrun"]');
+    if (lastrun) lastrun.textContent = relTime(job.lastRun);
+    // Swap run/stop and on/off buttons when loaded/running state changes
+    const actions = tr.querySelector('.cell-actions');
+    if (actions) {
+      const runStopBtn = job.running
+        ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
+        : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
+      const toggleBtn = job.loaded
+        ? '<button class="btn danger" onclick="toggleJob(\\'' + job.label + '\\')">Off</button>'
+        : '<button class="btn primary" onclick="toggleJob(\\'' + job.label + '\\')">On</button>';
+      actions.innerHTML = runStopBtn + toggleBtn;
+    }
+  }
+  return true;
+}
+
 function updateFreqCells(jobs) {
   for (const jobType of JOB_TYPES) {
     const td = document.querySelector('[data-freq="' + jobType + '"]');
@@ -1032,9 +1117,12 @@ async function loadStatus() {
       (data.pendingReplies != null ? data.pendingReplies : '--') + ' pending';
 
     const container = document.getElementById('matrix-body');
+    const otherSection = document.getElementById('other-jobs-section');
+    const otherJobs = data.otherJobs || [];
 
     if (!_initialized) {
       container.innerHTML = buildMatrix(data.jobs);
+      otherSection.innerHTML = buildOtherJobsTable(otherJobs);
       _initialized = true;
     } else {
       data.jobs.forEach(job => {
@@ -1042,6 +1130,14 @@ async function loadStatus() {
         if (td) updateCell(td, job);
       });
       updateFreqCells(data.jobs);
+      // If rowset changed (new/removed jobs), rebuild the table. Otherwise
+      // update rows in place to avoid flicker.
+      const existingRows = otherSection.querySelectorAll('[data-other-job]').length;
+      if (existingRows !== otherJobs.length) {
+        otherSection.innerHTML = buildOtherJobsTable(otherJobs);
+      } else {
+        updateOtherJobsInPlace(otherJobs);
+      }
     }
 
     // Pending replies - separate full-width section
