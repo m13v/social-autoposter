@@ -48,15 +48,15 @@ Project match: $cproject
 "
 done <<< "$CANDIDATES"
 
-# Pick project from the top candidate
-TOP_PROJECT=$(echo "$CANDIDATES" | head -1 | cut -d'|' -f6)
-if [ -z "$TOP_PROJECT" ] || [ "$TOP_PROJECT" = "" ]; then
-    TOP_PROJECT=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform twitter 2>/dev/null || echo "Fazm")
-fi
-PROJECT_JSON=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform twitter --json --project "$TOP_PROJECT" 2>/dev/null || echo "{}")
+# Load all project configs for per-candidate routing
+ALL_PROJECTS_JSON=$(python3 -c "
+import json, os
+config = json.load(open(os.path.expanduser('~/social-autoposter/config.json')))
+print(json.dumps({p['name']: p for p in config.get('projects', [])}, indent=2))
+" 2>/dev/null || echo "{}")
 
-# Generate top performers feedback
-TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter --project "$TOP_PROJECT" 2>/dev/null || echo "(top performers report unavailable)")
+# Generate top performers feedback (platform-wide, not project-specific)
+TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter 2>/dev/null || echo "(top performers report unavailable)")
 
 # Generate engagement styles
 source "$REPO_DIR/skill/styles.sh"
@@ -71,9 +71,10 @@ Read $REPO_DIR/config.json for account handle.
 These threads were discovered and scored by the scanner. Reply to the top 2-3.
 $CANDIDATE_BLOCK
 
-## TARGET PROJECT: $TOP_PROJECT
-Project config: $PROJECT_JSON
-The project_name for all posts this run MUST be '$TOP_PROJECT' (unless a candidate matches a different project).
+## PROJECT ROUTING (per-candidate, not per-run)
+Each candidate has a 'Project match' field. Use that project for each reply.
+If a candidate's project match is empty, pick the most relevant project from the config based on the tweet's topic.
+All project configs: $ALL_PROJECTS_JSON
 
 ## FEEDBACK FROM PAST PERFORMANCE:
 $TOP_REPORT
@@ -90,11 +91,13 @@ For each candidate (up to 3):
    It returns JSON like {\"ok\": true, \"tweet_url\": \"parent\", \"reply_url\": \"https://x.com/m13v_/status/...\"}.
    Parse reply_url from the JSON. If reply_url is missing, empty, or does not contain x.com/m13v_/status/, treat the post as FAILED: do NOT log a row, and mark the candidate as 'failed' instead of 'posted'. NEVER fall back to using the parent/candidate URL as our_url.
 5. Log to database. our_url MUST be the reply_url returned from the CDP script (the x.com/m13v_/status/... permalink). Include: project_name from the candidate's matched_project (or '$TOP_PROJECT'), engagement_style, feedback_report_used=TRUE.
-6. After posting, mark the candidate: UPDATE twitter_candidates SET status='posted', posted_at=NOW() WHERE id=CANDIDATE_ID
+6. After logging to DB, get the post ID from the INSERT (RETURNING id). Then mark the candidate with it:
+     UPDATE twitter_candidates SET status='posted', posted_at=NOW(), post_id=THE_POST_ID WHERE id=CANDIDATE_ID
 
 If a thread is no longer available or not relevant, mark it skipped:
 UPDATE twitter_candidates SET status='skipped' WHERE id=CANDIDATE_ID
 
+CRITICAL: Reply in the SAME LANGUAGE as the parent tweet. If the tweet is in Japanese, reply in Japanese. If Chinese, reply in Chinese. If English, reply in English. Match the language exactly.
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
 CRITICAL: Use twitter_browser.py for posting. Use mcp__twitter-agent__* ONLY for reading threads.
 CRITICAL: our_url must always be our own reply permalink (x.com/m13v_/status/...). Logging the parent URL as our_url causes the daily stats report to attribute parent-tweet engagement to us (this happened on 2026-04-14 with a viral @levie thread). Do not repeat it.
