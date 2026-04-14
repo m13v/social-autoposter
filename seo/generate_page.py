@@ -227,7 +227,7 @@ You are working in an existing website repo with a shared SEO component library 
 **Visual content** (pick at least 3 from this list for each page):
 - `AnimatedCodeBlock` (code, language?, filename?, typingSpeed?) — syntax-highlighted code with typing animation. Use when showing real code, config, or CLI commands from the product.
 - `TerminalOutput` (lines[], title?) — terminal session with command/output/success/error lines. Use when showing what happens when you run something.
-- `FlowDiagram` (title, steps[]) — visual step-by-step flow with icons and arrows. Use when explaining a process or architecture.
+- `FlowDiagram` (title, steps[]) — visual step-by-step flow with arrows. Use when explaining a process or architecture.
 - `SequenceDiagram` (title, actors[], messages[]) — SVG sequence diagram with lifelines. Use when showing how components communicate.
 - `CodeComparison` (leftCode, rightCode, leftLabel, rightLabel, title?) — side-by-side before/after. Use when showing what the product replaces or simplifies.
 - `AnimatedChecklist` (title, items[]) — animated checklist with checkmarks. Use for feature lists or requirement breakdowns.
@@ -238,7 +238,7 @@ You are working in an existing website repo with a shared SEO component library 
 - `AnimatedSection` (delay?) — scroll-triggered fade-in wrapper. Use to stagger content reveals.
 
 **Rich layout and animation components:**
-- `BentoGrid` (cards[]) — bento grid layout with varying card sizes (1x1, 2x1, 1x2, 2x2). Cards have icon, title, description, optional accent color and custom content. Use for feature overviews, capability showcases, or "what you get" sections.
+- `BentoGrid` (cards[]) — bento grid layout with varying card sizes (1x1, 2x1, 1x2, 2x2). Cards have title, description, optional accent color and custom content. Use for feature overviews, capability showcases, or "what you get" sections. Do NOT pass decorative emoji as the card icon.
 - `BeforeAfter` (before, after, title?) — animated tab toggle between "before" and "after" states. Each side has content text and highlight bullets (red X marks for before, green checks for after). Use for workflow comparisons, migration stories, or problem/solution sections.
 - `AnimatedDemo` (title, steps[], code?) — animated product demo that auto-plays through steps. Shows a dark "screen" with step content, progress bar, and step indicators. Optional collapsible code panel showing "How to build this." Use for walkthroughs, feature demos, or "watch it work" sections.
 - `GlowCard` (children) — card with mouse-tracking glow effect (like Linear/Stripe). Glow follows cursor on hover. Use as a wrapper around feature highlights or key content blocks for premium feel.
@@ -265,6 +265,28 @@ You must use at least 3 visual content components (not counting trust signals). 
 ### Color palette (mandatory)
 
 bg-white base, text-zinc-900 for headings, text-zinc-500/text-gray-600 for secondary text. Accent colors: `from-cyan-500 to-teal-500` gradient for CTAs, `text-teal-600` for links, `bg-teal-50 text-teal-700` for badges/pills, `bg-teal-50 border-teal-200` for tinted boxes. NEVER use violet, indigo, or purple anywhere.
+
+Do NOT use Tailwind semantic theme tokens like `text-foreground`, `text-muted`, `bg-card`, `bg-background`, `bg-surface-light`, `border-border`, `border-white/5`. Those tokens are not wired for light pages and will render invisibly. Use explicit classes like `text-zinc-900`, `text-zinc-500`, `bg-white`, `bg-zinc-50`, `border-zinc-200`.
+
+### No decorative icons or emoji
+
+Functional icons are allowed: expand/collapse chevrons, check/x indicators in comparison tables, arrow indicators on CTA buttons, terminal chrome, status badges. These exist to convey meaning the text cannot.
+
+Decorative emoji and decorative icons are NOT allowed. Never pass emoji like 🎯 📐 🚫 🔢 🔗 📋 ✨ 🚀 💡 ⚡ as the `icon` prop of BentoGrid cards, FlowDiagram steps, StepTimeline steps, or anywhere else. Never add decorative emoji to section headers, feature lists, use case lists, how-it-works steps, or bullet points. If a component's props accept an `icon` field, leave it undefined unless the icon is genuinely functional (a check, an x, a chevron, an arrow, a lock, a warning triangle). When in doubt, omit it.
+
+### Creative inspiration
+
+You are not building a cookie-cutter SEO shell. Draw from the best modern product marketing and editorial sites. Specifically study these patterns when picking your layout and motion:
+
+- **Linear** (linear.app) — mouse-tracking radial glow on cards, ultra-clean typography, narrow content column, heavy use of whitespace, subtle gradients in accent borders, micro-interactions on hover.
+- **Vercel** (vercel.com) — geometric pattern backgrounds, grid lines, bold hero stats, inline small code chips, sequential reveal on scroll.
+- **Stripe** (stripe.com) — animated diagrams that draw themselves on scroll, floating 3D-ish cards with layered shadows, gradient meshes in hero areas, side-by-side code + diagram layouts.
+- **Apple product pages** — full-bleed sections with large-format photography (or here, large-format diagrams), sticky heading while content scrolls, dramatic scale shifts.
+- **Framer** (framer.com) — physics-based spring animations, staggered reveals, hover-triggered card flips and morphs, bold accent gradients.
+- **Remotion** (remotion.dev) — video-style sequenced animations: elements enter on a timeline, not just on scroll. Use the `MotionSequence` component (see below) for this.
+- **Magic UI / Aceternity** (magicui.design, ui.aceternity.com) — bento grids with animated content, moving gradients, animated beam connectors between elements, glowing borders.
+
+Motion principles: prefer spring physics (`type: "spring"`, `stiffness: 200-400`, `damping: 20-30`) over linear easing. Stagger reveals by 80-120ms. Use `whileInView` with `viewport={{ once: true, margin: "-40px" }}` for scroll entrances. For hover, use subtle scale (1.02) not aggressive (1.1). For emphasis, animate numbers counting up rather than just fading in.
 
 ## Step 4 — Build the page
 
