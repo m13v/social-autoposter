@@ -15,12 +15,17 @@ LOG_FILE="$LOG_DIR/run-linkedin-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== LinkedIn Post Run: $(date) ===" | tee "$LOG_FILE"
 
-# Pick project based on weight distribution
-PROJECT=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform linkedin 2>/dev/null || echo "Fazm")
-PROJECT_JSON=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform linkedin --json 2>/dev/null || echo "{}")
-echo "Selected project: $PROJECT" | tee -a "$LOG_FILE"
+# Load all projects for LLM-driven selection
+ALL_PROJECTS_JSON=$(python3 -c "
+import json, os
+config = json.load(open(os.path.expanduser('~/social-autoposter/config.json')))
+print(json.dumps({p['name']: p for p in config.get('projects', [])}, indent=2))
+" 2>/dev/null || echo "{}")
 
-# Generate top performers feedback report (LinkedIn-specific)
+# Project distribution (how many posts per project today, so LLM can balance)
+PROJECT_DIST=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform linkedin --distribution 2>/dev/null || echo "(distribution unavailable)")
+
+# Generate top performers feedback report (platform-wide)
 TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform linkedin 2>/dev/null || echo "(top performers report unavailable)")
 
 # Generate engagement style and content rules from shared module
@@ -32,11 +37,17 @@ claude -p "You are the Social Autoposter.
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for account name.
 
-## TARGET PROJECT FOR THIS RUN: $PROJECT
-You MUST find LinkedIn posts relevant to this project and comment about it.
-Project config: $PROJECT_JSON
-Use this project's content_angle/voice if it has one, otherwise use the global content_angle.
-The project_name for all posts this run MUST be '$PROJECT'.
+## PROJECT SELECTION (LLM-driven, you choose)
+Pick the best project for this run based on post quality and project fit.
+Here are all projects and their configs:
+$ALL_PROJECTS_JSON
+
+Today's distribution (balance underrepresented projects):
+$PROJECT_DIST
+
+You may search for posts across 1-2 projects to find the best opportunity:
+  python3 $REPO_DIR/scripts/find_threads.py --include-linkedin --project 'PROJECT_NAME'
+Choose the project that has the best natural fit with the post you find.
 
 ## FEEDBACK FROM PAST PERFORMANCE (use this to write better comments):
 $TOP_REPORT
@@ -44,10 +55,12 @@ $TOP_REPORT
 $STYLES_BLOCK
 
 Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
-1. Find candidate posts: python3 $REPO_DIR/scripts/find_threads.py --include-linkedin --project '$PROJECT'
+1. Find candidate posts for 1-2 projects you think fit best:
+     python3 $REPO_DIR/scripts/find_threads.py --include-linkedin --project 'PROJECT_NAME'
    From the output, pick ONLY linkedin candidates (discovery_method: search_url).
    Browse the search URL via mcp__linkedin-agent__browser_navigate to find actual posts.
-2. Pick the best LinkedIn post relevant to $PROJECT to comment on
+   If nothing good for the first project, try another.
+2. Pick the best LinkedIn post and the project that fits it best
 3. Draft the comment using the engagement style that best fits the post. Professional but casual tone, NEVER use em dashes.
 4. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools)
 5. **CAPTURE THE POST URL** — BEFORE closing the tab, extract the actual post URL.
@@ -76,7 +89,7 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
    \`\`\`
    Use this URL as \`our_url\` in the database INSERT. It MUST be a linkedin.com/feed/update/ URL.
    If you cannot get a feed/update URL, use the current page URL as fallback.
-6. Log to database with project_name='$PROJECT', engagement_style='STYLE_YOU_CHOSE' (MUST include feedback_report_used=TRUE in the INSERT). Use the captured feed/update URL for our_url.
+6. Log to database with project_name='PROJECT_YOU_CHOSE', engagement_style='STYLE_YOU_CHOSE', language='DETECTED_LANGUAGE' (MUST include feedback_report_used=TRUE in the INSERT). Use the captured feed/update URL for our_url.
 
 Up to 30 posts per run. If nothing fits, say '## No good post found' and stop.
 
