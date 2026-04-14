@@ -271,11 +271,18 @@ function getPlistSchedule(plistPath) {
       if (secs % 60 === 0) return `every ${secs / 60}m`;
       return `every ${secs}s`;
     }
-    // StartCalendarInterval can be a dict or an array of dicts
-    const calBlock = xml.match(/<key>StartCalendarInterval<\/key>\s*([\s\S]*?)(?=<key>|<\/dict>\s*<\/plist>)/);
-    if (!calBlock) return null;
-    const dicts = [...calBlock[1].matchAll(/<dict>([\s\S]*?)<\/dict>/g)].map(m => m[1]);
-    const entries = dicts.length ? dicts : [calBlock[1]];
+    // StartCalendarInterval can be either a single <dict> or an <array> of
+    // <dict>s. Match each shape explicitly so nested <key> tags inside the
+    // inner dicts don't break a generic capture.
+    let entries = null;
+    const arrM = xml.match(/<key>StartCalendarInterval<\/key>\s*<array>([\s\S]*?)<\/array>/);
+    if (arrM) {
+      entries = [...arrM[1].matchAll(/<dict>([\s\S]*?)<\/dict>/g)].map(m => m[1]);
+    } else {
+      const dictM = xml.match(/<key>StartCalendarInterval<\/key>\s*<dict>([\s\S]*?)<\/dict>/);
+      if (dictM) entries = [dictM[1]];
+    }
+    if (!entries || !entries.length) return null;
     const parts = entries.map(body => {
       const h = body.match(/<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/);
       const m = body.match(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/);
@@ -284,7 +291,10 @@ function getPlistSchedule(plistPath) {
       if (m) return `:${m[1].padStart(2, '0')}`;
       return null;
     }).filter(Boolean);
-    return parts.length ? parts.join(', ') : null;
+    if (!parts.length) return null;
+    // Collapse long lists: show first 3 then "+N more"
+    if (parts.length <= 4) return parts.join(', ');
+    return parts.slice(0, 3).join(', ') + ` +${parts.length - 3} more`;
   } catch { return null; }
 }
 
