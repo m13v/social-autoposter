@@ -1,6 +1,6 @@
 ---
 name: browser-script
-description: "Create a browser automation script that bundles multi-step browser interactions into a single browser_run_code call. Use when: 'automate browser flow', 'create browser script', 'script this browser task', 'bundle browser steps', 'reduce browser tokens'."
+description: "Create a self-contained JS browser automation script that navigates pages, clicks elements, fills forms, and extracts data — bundled into a single browser_run_code call. Replaces 5-10 Claude browser tool calls with 2 calls, cutting token usage 10-20x. Use when: 'automate browser flow', 'create browser script', 'script this browser task', 'bundle browser steps', 'reduce browser tokens'."
 user_invocable: true
 ---
 

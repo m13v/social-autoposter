@@ -1,3 +1,8 @@
+---
+name: python-cdp-scripts
+description: "Create Python functions that connect to running MCP browser agents via Chrome DevTools Protocol (CDP) for zero-token browser automation. Navigates pages, extracts data, scrapes stats, audits posts, and calls internal APIs — all without LLM involvement. Use when: 'python cdp script', 'zero token browser automation', 'scrape browser data', 'CDP browser script', 'automate without tokens', 'python browser function'."
+---
+
 # Python CDP Browser Scripts
 
 Create Python functions that connect to running MCP browser agents via Chrome DevTools Protocol (CDP) and perform complete browser automation workflows. Replaces Claude browser MCP calls entirely — zero LLM tokens consumed.
