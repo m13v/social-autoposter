@@ -60,10 +60,10 @@ CONTENT_TYPES = {
     "guide": {
         "route_prefix": "/t/",
         "path_candidates": [
+            "src/app/(content)/t/{slug}/page.tsx",
             "src/app/t/{slug}/page.tsx",
-            "src/app/(main)/t/{slug}/page.tsx",
         ],
-        "example_dirs": ["src/app/t/"],
+        "example_dirs": ["src/app/(content)/t/"],
         "description": "a keyword-targeted guide page",
     },
     "alternative": {
