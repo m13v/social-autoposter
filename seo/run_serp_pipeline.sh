@@ -187,8 +187,11 @@ try:
     if start >= 0 and end > start:
         outer = json.loads(raw[start:end])
     else:
-        print('ERROR: Could not parse score output')
-        sys.exit(1)
+        raise RuntimeError('Could not parse score output')
+
+    # Detect Claude CLI errors (e.g. rate limit) and treat as transient failure
+    if outer.get('is_error'):
+        raise RuntimeError(f'Claude error: {outer.get(\"result\", \"unknown error\")}')
 
     # --output-format json wraps the score JSON inside a 'result' string field
     if 'result' in outer and isinstance(outer['result'], str) and 'score' not in outer:
@@ -198,8 +201,7 @@ try:
         if inner_start >= 0 and inner_end > inner_start:
             result = json.loads(inner_raw[inner_start:inner_end])
         else:
-            print('ERROR: Could not parse inner score JSON from envelope')
-            sys.exit(1)
+            raise RuntimeError('Could not parse inner score JSON from envelope')
     else:
         result = outer
 
