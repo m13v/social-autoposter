@@ -59,7 +59,7 @@ def pick_project(config, platform=None):
     platform_topic_key = {
         "twitter": "twitter_topics",
         "linkedin": "linkedin_topics",
-        "github_issues": "github_search_topics",
+        "github": "github_search_topics",
     }.get(platform)
     if platform_topic_key:
         weighted = [p for p in weighted if p.get(platform_topic_key)]
