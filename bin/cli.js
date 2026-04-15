@@ -286,13 +286,23 @@ if (cmd === 'init') {
   init();
 } else if (cmd === 'update') {
   update();
+} else if (cmd === 'export-cookies') {
+  // Forward to cookie-helper with 'export' + remaining args
+  process.argv = [process.argv[0], process.argv[1], 'export', ...process.argv.slice(3)];
+  require('./cookie-helper.js');
+} else if (cmd === 'import-cookies') {
+  // Forward to cookie-helper with 'import' + remaining args
+  process.argv = [process.argv[0], process.argv[1], 'import', ...process.argv.slice(3)];
+  require('./cookie-helper.js');
 } else if (!cmd) {
   require('./server.js');
 } else {
   console.log('social-autoposter — automated social posting for Claude agents');
   console.log('');
   console.log('Usage:');
-  console.log('  npx social-autoposter          open the dashboard');
-  console.log('  npx social-autoposter init      first-time setup');
-  console.log('  npx social-autoposter update    update scripts, preserve config');
+  console.log('  npx social-autoposter              open the dashboard');
+  console.log('  npx social-autoposter init          first-time setup');
+  console.log('  npx social-autoposter update        update scripts, preserve config');
+  console.log('  npx social-autoposter export-cookies [dir]  export browser cookies');
+  console.log('  npx social-autoposter import-cookies [dir]  import browser cookies');
 }
