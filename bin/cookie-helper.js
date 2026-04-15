@@ -193,7 +193,8 @@ async function exportCookies(platforms, outputDir) {
     // Fallback: launch headless Chrome with the profile
     // This only works if the profile is not locked by another Chrome
     const lockFile = path.join(profileDir, 'SingletonLock');
-    if (fs.existsSync(lockFile)) {
+    const hasLock = (() => { try { fs.lstatSync(lockFile); return true; } catch { return false; } })();
+    if (hasLock) {
       console.log(`  ${platform}: profile is locked but no running browser found; cannot export`);
       console.log(`    (the browser may have crashed; remove ${lockFile} and retry)`);
       continue;
@@ -241,7 +242,8 @@ async function importCookies(platforms, inputDir) {
 
     // Check if profile is locked (browser already running)
     const lockFile = path.join(profileDir, 'SingletonLock');
-    if (fs.existsSync(lockFile)) {
+    const hasLock = (() => { try { fs.lstatSync(lockFile); return true; } catch { return false; } })();
+    if (hasLock) {
       // Try to inject into the running browser
       const runningPort = findRunningBrowserPort(platform);
       if (runningPort) {
