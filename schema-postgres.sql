@@ -68,10 +68,23 @@ CREATE TABLE IF NOT EXISTS campaigns (
     prompt TEXT NOT NULL,
     platforms TEXT DEFAULT 'twitter,reddit,moltbook',
     status TEXT DEFAULT 'active',
+    max_posts_per_day INTEGER DEFAULT 4,
+    max_posts_total INTEGER,
     posts_made INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS max_posts_total INTEGER;
+
+CREATE TABLE IF NOT EXISTS post_campaigns (
+    post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+    campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE,
+    attached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (post_id, campaign_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_post_campaigns_campaign ON post_campaigns(campaign_id);
 
 CREATE TABLE IF NOT EXISTS replies (
     id SERIAL PRIMARY KEY,
