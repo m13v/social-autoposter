@@ -310,13 +310,19 @@ def reply_to_tweet(tweet_url, text):
             page.keyboard.type(text, delay=10)
             page.wait_for_timeout(1000)
 
-            # Click the Reply button
+            # Click the Reply submit button. MUST target tweetButtonInline by
+            # testid; substring-matching "Reply" by accessible name matches
+            # every reply-icon on the page and picks the wrong one.
             try:
-                reply_btn = page.get_by_role("button", name="Reply").last
-                reply_btn.wait_for(timeout=5000)
+                reply_btn = page.locator('[data-testid="tweetButtonInline"]').first
+                reply_btn.wait_for(state="visible", timeout=5000)
+                for _ in range(20):
+                    if reply_btn.get_attribute("aria-disabled") != "true":
+                        break
+                    page.wait_for_timeout(100)
                 reply_btn.click()
             except Exception:
-                page.keyboard.press("Control+Enter")
+                page.keyboard.press("Meta+Enter")
 
             page.wait_for_timeout(4000)
 
