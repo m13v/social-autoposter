@@ -148,6 +148,9 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
     website = (product_cfg.get("landing_pages", {}).get("base_url")
                or product_cfg.get("website", ""))
     differentiator = product_cfg.get("differentiator", "")
+    accent_cfg = product_cfg.get("landing_pages", {}).get("accent", {})
+    accent_hex = accent_cfg.get("hex", "")
+    accent_hex_dark = accent_cfg.get("hex_dark", "")
 
     trigger_context = {
         "serp": "This keyword came from SERP discovery. It has SERP gap and the product fits the commercial intent.",
@@ -311,7 +314,17 @@ bg-white base, text-zinc-900 for headings, text-zinc-500/text-gray-600 for secon
 
 Do NOT use Tailwind semantic theme tokens like `text-foreground`, `text-muted`, `bg-card`, `bg-background`, `bg-surface-light`, `border-border`, `border-white/5`. Those tokens are not wired for light pages and will render invisibly. Use explicit classes like `text-zinc-900`, `text-zinc-500`, `bg-white`, `bg-zinc-50`, `border-zinc-200`.
 
-### No decorative icons or emoji
+{"" if not accent_hex else f'''### Product accent color override
+
+This product uses a custom accent color, NOT the default teal. Pass these props explicitly:
+
+- `<RemotionClip accentHex="{accent_hex}" accentHexDark="{accent_hex_dark or accent_hex}" ... />`
+- `<AnimatedBeam accentColor="{accent_hex}" ... />`
+- `<Particles color="{accent_hex}" ... />`
+- `<ShineBorder color="{accent_hex}" ... />`
+
+The Tailwind class overrides and CSS custom properties are handled by the repo's layout and globals.css, so components using utility classes (StepTimeline, ProofBand, etc.) will automatically pick up the right color. Only the components listed above need explicit props because they render in isolated contexts (Remotion canvas, SVG stops, HTML canvas).
+'''}### No decorative icons or emoji
 
 Functional icons are allowed: expand/collapse chevrons, check/x indicators in comparison tables, arrow indicators on CTA buttons, terminal chrome, status badges. These exist to convey meaning the text cannot.
 

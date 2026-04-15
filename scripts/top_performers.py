@@ -39,16 +39,14 @@ PRODUCT_NAMES = [
 
 
 def get_distilled_rules(platform):
-    """Return data-driven rules for the platform as a text block."""
+    """Return guidance on how to interpret the performance data below."""
     if platform == "reddit":
-        return """## DATA-DRIVEN RULES (from analysis of 3,000+ past comments)
-- Posts with product mentions avg 1.2 upvotes vs 3.0 without. NEVER mention product names.
-- Posts with URLs/links avg 1.4 vs 3.0 without. NEVER include links.
-- 1 punchy sentence (<100 chars) averages 6.0 upvotes. 4-5 sentences averages 4.2. The 2-3 sentence middle averages 2.1. Go bimodal.
-- Starting with "I" or "my" gets 37% more upvotes than "you should" or "have you".
-- Top-level replies to OP get 4.2x the upvotes of replies to other commenters.
-- Contrarian style averages 7.0 upvotes. curious_probe averages negative. Be authoritative, not inquisitive.
-- Statements beat questions (2.98 vs 2.64 avg).
+        return """## HOW TO USE THIS REPORT
+- Study the top posts: what style, length, and tone got the most upvotes? Do more of that.
+- Study the bottom posts and their FAILURE REASON annotations: avoid those patterns entirely.
+- Compare avg_upvotes across styles in the summary. Pick styles that actually perform well, not just familiar ones.
+- Posts with product mentions or URLs consistently underperform. The top posts never contain them.
+- Look at content length in top vs bottom posts. Let the data guide whether to go short or long.
 """
     return ""
 
@@ -95,6 +93,31 @@ def annotate_failure(row):
     if not reasons:
         reasons.append("likely wrong subreddit or off-topic")
     return " | ".join(reasons)
+
+
+def get_style_performance(conn, platform=None):
+    """Avg upvotes per engagement_style for the given platform."""
+    where_clauses = [
+        "status = 'active'",
+        "engagement_style IS NOT NULL",
+        "our_content IS NOT NULL",
+        f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
+        "upvotes IS NOT NULL",
+    ]
+    params = []
+    if platform:
+        where_clauses.append("platform = %s")
+        params.append(platform)
+    where = " AND ".join(where_clauses)
+    cur = conn.execute(
+        f"SELECT engagement_style, COUNT(*) as cnt, "
+        f"AVG(COALESCE(upvotes,0))::numeric(10,2) as avg_up, "
+        f"MAX(upvotes) as max_up "
+        f"FROM posts WHERE {where} "
+        f"GROUP BY engagement_style ORDER BY avg_up DESC",
+        params,
+    )
+    return cur.fetchall()
 
 
 def get_project_platform_summary(conn, project=None, platform=None):
@@ -240,7 +263,7 @@ def format_post(row, include_thread_content=True):
 
 
 def format_report(summary, top, bottom, project=None, platform=None,
-                   top_by_group=None, fallback_top=None):
+                   top_by_group=None, fallback_top=None, style_perf=None):
     """Format the full report."""
     lines = []
     filters = []
@@ -257,6 +280,13 @@ def format_report(summary, top, bottom, project=None, platform=None,
         rules = get_distilled_rules(platform)
         if rules:
             lines.append(rules)
+
+    # Style performance (live from DB)
+    if style_perf:
+        lines.append("### Avg Upvotes by Engagement Style (live data)")
+        for row in style_perf:
+            lines.append(f"  {row[0]:<22} {row[1]:>5} posts  avg_upvotes={row[2]}  best={row[3]}")
+        lines.append("")
 
     # Summary table
     lines.append("### Posts per Project per Platform")
@@ -314,6 +344,7 @@ def main():
     conn = dbmod.get_conn()
 
     summary = get_project_platform_summary(conn, project=args.project, platform=args.platform)
+    style_perf = get_style_performance(conn, platform=args.platform)
     top = get_top_posts(conn, project=args.project, platform=args.platform, limit=args.top)
     bottom = get_bottom_posts(conn, project=args.project, platform=args.platform, limit=args.bottom)
 
@@ -370,7 +401,8 @@ def main():
     else:
         print(format_report(summary, top, bottom,
                             project=args.project, platform=args.platform,
-                            top_by_group=top_by_group, fallback_top=fallback_top))
+                            top_by_group=top_by_group, fallback_top=fallback_top,
+                            style_perf=style_perf))
 
 
 if __name__ == "__main__":
