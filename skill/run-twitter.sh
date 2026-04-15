@@ -90,21 +90,15 @@ For each candidate (up to 3):
      python3 $REPO_DIR/scripts/twitter_browser.py reply \"CANDIDATE_URL\" \"YOUR_REPLY_TEXT\"
    It returns JSON like {\"ok\": true, \"tweet_url\": \"parent\", \"reply_url\": \"https://x.com/m13v_/status/...\"}.
    Parse reply_url from the JSON. If reply_url is missing, empty, or does not contain x.com/m13v_/status/, treat the post as FAILED: do NOT log a row, and mark the candidate as 'failed' instead of 'posted'. NEVER fall back to using the parent/candidate URL as our_url.
-5. Self-reply with project link. Immediately reply to YOUR OWN reply_url with a short follow-up that MUST contain the matched project's URL as literal text.
-     python3 $REPO_DIR/scripts/twitter_browser.py reply \"YOUR_REPLY_URL\" \"FOLLOW_UP_WITH_LINK\"
-   HARD REQUIREMENTS for FOLLOW_UP_WITH_LINK:
-     a) The exact project URL (e.g. https://fazm.ai) MUST appear verbatim in the text. No shortening, no omitting, no 'check our site'.
-     b) Before calling twitter_browser.py, verify the string you are about to pass contains the substring 'https://'. If it does not, STOP and rebuild the string.
-     c) Keep it to 1 short casual sentence, lowercase, no hard sell, no em dashes.
-     d) Match the parent tweet's language (Japanese parent → Japanese follow-up, etc). The URL itself stays as-is.
-   Good examples (note the literal URL at the end):
-     \"we built something similar for macOS automation https://fazm.ai\"
-     \"this is exactly why we made mk0r https://mk0r.com\"
-     \"ちょうど同じ理由で作ってる https://fazm.ai\"
-   BAD examples (these are FAILURES, do not do this):
-     \"been working on a local macOS agent for this reason\"   ← NO URL, reject and retry
-     \"building something for exactly this\"                    ← NO URL, reject and retry
-   If the project has no URL in the config, skip this step entirely (do not post a link-less follow-up).
+5. Self-reply with project link. Immediately reply to YOUR OWN reply_url with a short follow-up AND the matched project's URL.
+     python3 $REPO_DIR/scripts/twitter_browser.py self-reply \"YOUR_REPLY_URL\" \"FOLLOW_UP_TEXT\" \"PROJECT_URL\"
+   The self-reply subcommand takes the project URL as a SEPARATE third argument and appends it automatically if missing, so you cannot forget the link.
+   FOLLOW_UP_TEXT should be 1 short casual sentence, lowercase, no hard sell, no em dashes. Match the parent tweet's language.
+   PROJECT_URL must be the exact URL from the project's config (e.g. https://fazm.ai, https://mk0r.com, https://assrt.ai). Look it up from the ALL PROJECTS config above.
+   Examples:
+     python3 $REPO_DIR/scripts/twitter_browser.py self-reply \"https://x.com/m13v_/status/123\" \"we built something similar for macOS automation\" \"https://fazm.ai\"
+     python3 $REPO_DIR/scripts/twitter_browser.py self-reply \"https://x.com/m13v_/status/456\" \"ちょうど同じ理由で作ってる\" \"https://fazm.ai\"
+   If the matched project has no URL in the config, skip this step entirely.
 6. Log to database. our_url MUST be the reply_url from step 4 (the main reply, not the self-reply). Include: project_name from the candidate's matched_project (or your best guess from the config), engagement_style, language (ISO 639-1 code, e.g. 'en', 'ja', 'zh', 'es'), feedback_report_used=TRUE.
 7. After logging to DB, get the post ID from the INSERT (RETURNING id). Then mark the candidate with it:
      UPDATE twitter_candidates SET status='posted', posted_at=NOW(), post_id=THE_POST_ID WHERE id=CANDIDATE_ID
