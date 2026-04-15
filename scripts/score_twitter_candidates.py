@@ -28,12 +28,13 @@ def calculate_virality_score(tweet):
     """
     Score a tweet's viral potential. Higher = better candidate to reply to.
 
-    Signals (from research):
+    Signals (from research + production tuning):
     1. Engagement velocity (eng/hour) - strongest predictor
     2. Retweet ratio > 0.3 = strong viral signal
-    3. Reply count > 10 = active discussion (our reply gets seen)
-    4. Author followers 5K-500K sweet spot
-    5. Age penalty: exponential decay after 6 hours
+    3. Reply count is weighted heavily (discussion = visibility for our reply)
+    4. Reply-to-like ratio (discussion quality vs one-way broadcast)
+    5. Author followers 5K+ sweet spot, big names not penalized
+    6. Age penalty: exponential decay with 6h half-life (softer than before)
     """
     likes = tweet.get("likes", 0)
     retweets = tweet.get("retweets", 0)
@@ -56,11 +57,17 @@ def calculate_virality_score(tweet):
     rt_ratio = retweets / total_eng if total_eng > 0 else 0
 
     # 3. Reply activity bonus (active discussion = more visibility for our reply)
-    reply_bonus = min(replies / 10, 3.0)  # caps at 3x for 30+ replies
+    # 15 replies = +1x, 30 = +2x, 60+ = +4x cap
+    reply_bonus = min(replies / 15, 4.0)
 
-    # 4. Author reach multiplier
-    # Sweet spot: 5K-500K followers
-    # Below 5K: less reach. Above 500K: too competitive, our reply drowns.
+    # 4. Discussion quality (reply:like ratio). High ratio = real discussion.
+    # 0.05 ratio = +0.5x, 0.1+ = +1.0x cap
+    discussion_ratio = replies / likes if likes > 0 else 0
+    discussion_bonus = min(discussion_ratio * 10, 1.0)
+
+    # 5. Author reach multiplier
+    # Sweet spot: 5K+ followers. Big names (KentBeck-class) get full credit,
+    # since brand value outweighs the "too competitive" concern.
     if followers < 1000:
         reach_mult = 0.3
     elif followers < 5000:
@@ -68,22 +75,21 @@ def calculate_virality_score(tweet):
     elif followers < 50000:
         reach_mult = 1.0
     elif followers < 200000:
-        reach_mult = 1.2
+        reach_mult = 1.4
     elif followers < 500000:
-        reach_mult = 1.0
+        reach_mult = 1.3
     else:
-        reach_mult = 0.7  # mega accounts: too much competition
+        reach_mult = 1.1  # mega accounts still worth it for brand exposure
 
-    # 5. Age decay: half-life of 3 hours
-    # Fresh threads (< 1h) get full score
-    # 3h old = 50%, 6h = 25%, 12h = 6%
-    age_decay = math.exp(-0.231 * age_hours)  # ln(2)/3 = 0.231
+    # 6. Age decay: half-life of 6 hours (softened from 3h)
+    # 3h = 71%, 6h = 50%, 12h = 25%, 18h = 12.5%
+    age_decay = math.exp(-0.1155 * age_hours)  # ln(2)/6
 
-    # 6. Retweet ratio bonus
+    # 7. Retweet ratio bonus
     rt_bonus = 1.0 + min(rt_ratio * 2, 1.0)  # up to 2x for high RT ratio
 
     # Combine
-    score = velocity * reach_mult * age_decay * rt_bonus * (1 + reply_bonus)
+    score = velocity * reach_mult * age_decay * rt_bonus * (1 + reply_bonus) * (1 + discussion_bonus)
 
     return round(score, 2), round(velocity, 2), round(rt_ratio, 3)
 
@@ -144,8 +150,10 @@ def upsert_candidates(tweets, config):
             posted_at = None
             age_hours = 24
 
-        # Skip very old tweets (> 12h)
-        if age_hours > 12:
+        # Skip very old tweets (> 18h). Softened from 12h; we now have a
+        # 6h half-life decay, so 18h still scores ~12% — enough that a
+        # slow-burn banger can beat a fresh dud.
+        if age_hours > 18:
             skipped += 1
             continue
 
@@ -207,10 +215,10 @@ def upsert_candidates(tweets, config):
 
     conn.commit()
 
-    # Expire old pending candidates (> 12h)
+    # Expire old pending candidates (> 18h)
     conn.execute(
         "UPDATE twitter_candidates SET status='expired' "
-        "WHERE status='pending' AND discovered_at < NOW() - INTERVAL '12 hours'"
+        "WHERE status='pending' AND discovered_at < NOW() - INTERVAL '18 hours'"
     )
     conn.commit()
 
@@ -243,7 +251,7 @@ def main():
         conn = dbmod.get_conn()
         conn.execute(
             "UPDATE twitter_candidates SET status='expired' "
-            "WHERE status='pending' AND discovered_at < NOW() - INTERVAL '12 hours'"
+            "WHERE status='pending' AND discovered_at < NOW() - INTERVAL '18 hours'"
         )
         conn.commit()
         conn.execute(
