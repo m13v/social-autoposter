@@ -4,14 +4,15 @@
 /**
  * Export and import browser cookies for social-autoposter profiles.
  *
- * Export: launches headless Chromium per platform profile, extracts cookies
- * via CDP (Storage.getCookies), saves as Playwright-compatible JSON.
+ * Export (macOS/Linux): reads the Cookies SQLite database directly, decrypts
+ * cookie values using the OS keychain key, outputs Playwright storageState JSON.
  *
- * Import: reads cookie JSON files, launches headless Chromium per platform
- * profile, injects cookies via CDP (Storage.setCookies).
+ * Import: launches headless Chromium per platform profile, injects cookies
+ * via CDP (Network.setCookies) so they persist to the profile on disk.
  */
 
-const { spawn } = require('child_process');
+const { spawn, spawnSync, execSync } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -22,18 +23,220 @@ const DEST = path.join(HOME, 'social-autoposter');
 const PROFILES_DIR = path.join(HOME, '.claude', 'browser-profiles');
 const PLATFORMS = ['reddit', 'twitter', 'linkedin'];
 
-// Find a working Chromium/Chrome binary
+// ── SQLite-based cookie export (no Chrome launch needed) ──
+
+// Get the Chromium Safe Storage encryption key from macOS keychain
+function getEncryptionKey() {
+  // Playwright's Chromium uses "Chromium Safe Storage"
+  const candidates = [
+    { service: 'Chromium Safe Storage', account: 'Chromium' },
+    { service: 'Chrome Safe Storage', account: 'Chrome' },
+  ];
+  for (const { service, account } of candidates) {
+    try {
+      const pw = execSync(
+        `security find-generic-password -w -s "${service}" -a "${account}"`,
+        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+      ).trim();
+      if (pw) return { password: pw, browser: account };
+    } catch {
+      // not found, try next
+    }
+  }
+  return null;
+}
+
+// Derive AES key from the keychain password (Chrome's PBKDF2 params)
+function deriveKey(password) {
+  return crypto.pbkdf2Sync(password, 'saltysalt', 1003, 16, 'sha1');
+}
+
+// Decrypt a Chrome encrypted_value blob
+function decryptValue(encryptedBuf, key) {
+  if (!encryptedBuf || encryptedBuf.length === 0) return '';
+
+  // v10 prefix = AES-128-CBC with 16-byte zero IV (macOS)
+  // v11 prefix = same but different on some versions
+  const prefix = encryptedBuf.slice(0, 3).toString('ascii');
+  if (prefix !== 'v10' && prefix !== 'v11') {
+    // Not encrypted or unknown format; return as-is
+    return encryptedBuf.toString('utf8');
+  }
+
+  const encrypted = encryptedBuf.slice(3);
+  const iv = Buffer.alloc(16, ' '); // 16 space characters (0x20) per Chrome's macOS implementation
+  try {
+    const decipher = crypto.createDecipheriv('aes-128-cbc', key, iv);
+    let decrypted = decipher.update(encrypted);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+    return decrypted.toString('utf8');
+  } catch {
+    return ''; // decryption failed; skip this cookie
+  }
+}
+
+// Chrome epoch: microseconds since 1601-01-01
+// Unix epoch: seconds since 1970-01-01
+// Difference: 11644473600 seconds
+function chromeTimeToUnix(chromeTime) {
+  if (!chromeTime || chromeTime === 0) return -1;
+  return Math.floor(chromeTime / 1000000) - 11644473600;
+}
+
+// Map Chrome sameSite integer to string
+function sameSiteToString(val) {
+  switch (val) {
+    case 0: return 'None';
+    case 1: return 'Lax';
+    case 2: return 'Strict';
+    default: return 'Lax';
+  }
+}
+
+// Read cookies from a profile's SQLite database
+function readCookiesFromSqlite(profileDir, aesKey) {
+  const cookieDb = path.join(profileDir, 'Default', 'Cookies');
+  if (!fs.existsSync(cookieDb)) return [];
+
+  // Copy the database to avoid SQLite lock issues
+  const tmpDb = path.join(os.tmpdir(), `cookies-export-${Date.now()}.db`);
+  fs.copyFileSync(cookieDb, tmpDb);
+
+  // Also copy the WAL if it exists (needed for recent writes)
+  const walFile = cookieDb + '-wal';
+  if (fs.existsSync(walFile)) {
+    try { fs.copyFileSync(walFile, tmpDb + '-wal'); } catch {}
+  }
+  const shmFile = cookieDb + '-shm';
+  if (fs.existsSync(shmFile)) {
+    try { fs.copyFileSync(shmFile, tmpDb + '-shm'); } catch {}
+  }
+
+  try {
+    // Query all cookies as JSON using sqlite3
+    const query = `SELECT host_key, name, value, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite FROM cookies;`;
+    const result = spawnSync('sqlite3', ['-separator', '|||', tmpDb, query], {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      maxBuffer: 50 * 1024 * 1024,
+    });
+
+    if (result.status !== 0) {
+      console.error(`    sqlite3 error: ${result.stderr}`);
+      return [];
+    }
+
+    const cookies = [];
+    for (const line of result.stdout.split('\n')) {
+      if (!line.trim()) continue;
+      const parts = line.split('|||');
+      if (parts.length < 9) continue;
+
+      const [hostKey, name, value, encryptedHex, cookiePath, expiresUtc, isSecure, isHttpOnly, sameSite] = parts;
+
+      // Try plaintext value first; if empty, decrypt
+      let cookieValue = value;
+      if (!cookieValue && encryptedHex && aesKey) {
+        // sqlite3 outputs BLOB as hex when using separator mode; we need binary
+        // Re-query this specific cookie as hex blob
+      }
+
+      cookies.push({
+        name,
+        value: cookieValue,
+        domain: hostKey,
+        path: cookiePath || '/',
+        expires: chromeTimeToUnix(parseInt(expiresUtc, 10)),
+        httpOnly: isHttpOnly === '1',
+        secure: isSecure === '1',
+        sameSite: sameSiteToString(parseInt(sameSite, 10)),
+      });
+    }
+    return cookies;
+  } finally {
+    try { fs.unlinkSync(tmpDb); } catch {}
+    try { fs.unlinkSync(tmpDb + '-wal'); } catch {}
+    try { fs.unlinkSync(tmpDb + '-shm'); } catch {}
+  }
+}
+
+// Better approach: use sqlite3 with hex() for encrypted values
+function readCookiesFromSqliteWithDecryption(profileDir, aesKey) {
+  const cookieDb = path.join(profileDir, 'Default', 'Cookies');
+  if (!fs.existsSync(cookieDb)) return [];
+
+  const tmpDb = path.join(os.tmpdir(), `cookies-export-${Date.now()}.db`);
+  fs.copyFileSync(cookieDb, tmpDb);
+  const walFile = cookieDb + '-wal';
+  if (fs.existsSync(walFile)) {
+    try { fs.copyFileSync(walFile, tmpDb + '-wal'); } catch {}
+  }
+  const shmFile = cookieDb + '-shm';
+  if (fs.existsSync(shmFile)) {
+    try { fs.copyFileSync(shmFile, tmpDb + '-shm'); } catch {}
+  }
+
+  try {
+    // Output as JSON using sqlite3's json mode
+    const query = `SELECT host_key, name, value, hex(encrypted_value) as enc_hex, path, expires_utc, is_secure, is_httponly, samesite FROM cookies;`;
+    const result = spawnSync('sqlite3', ['-json', tmpDb, query], {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      maxBuffer: 50 * 1024 * 1024,
+    });
+
+    if (result.status !== 0) {
+      console.error(`    sqlite3 error: ${result.stderr}`);
+      return [];
+    }
+
+    let rows;
+    try { rows = JSON.parse(result.stdout); } catch { return []; }
+
+    const cookies = [];
+    for (const row of rows) {
+      let cookieValue = row.value || '';
+
+      // If no plaintext value, try to decrypt
+      if (!cookieValue && row.enc_hex && aesKey) {
+        const buf = Buffer.from(row.enc_hex, 'hex');
+        cookieValue = decryptValue(buf, aesKey);
+      }
+
+      // Skip cookies with no value at all
+      if (!cookieValue) continue;
+
+      cookies.push({
+        name: row.name,
+        value: cookieValue,
+        domain: row.host_key,
+        path: row.path || '/',
+        expires: chromeTimeToUnix(row.expires_utc),
+        httpOnly: row.is_httponly === 1,
+        secure: row.is_secure === 1,
+        sameSite: sameSiteToString(row.samesite),
+      });
+    }
+    return cookies;
+  } finally {
+    try { fs.unlinkSync(tmpDb); } catch {}
+    try { fs.unlinkSync(tmpDb + '-wal'); } catch {}
+    try { fs.unlinkSync(tmpDb + '-shm'); } catch {}
+  }
+}
+
+// ── CDP-based cookie import ──
+
 function findChromium() {
-  // Environment override (used in Freestyle VMs)
   if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
     return process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
   }
   const candidates = [
-    '/usr/bin/chromium',                                          // Debian/VM
-    '/usr/bin/chromium-browser',                                  // Ubuntu
-    '/usr/bin/google-chrome',                                     // Linux Chrome
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // macOS
-    '/Applications/Chromium.app/Contents/MacOS/Chromium',         // macOS Chromium
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
   ];
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
@@ -41,19 +244,14 @@ function findChromium() {
   return null;
 }
 
-// Get the CDP WebSocket URL from a running Chrome instance (browser-level)
 function getCdpWsUrl(port) {
   return new Promise((resolve, reject) => {
     const req = http.get(`http://127.0.0.1:${port}/json/version`, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
-        try {
-          const info = JSON.parse(data);
-          resolve(info.webSocketDebuggerUrl);
-        } catch (e) {
-          reject(new Error(`Failed to parse CDP response: ${e.message}`));
-        }
+        try { resolve(JSON.parse(data).webSocketDebuggerUrl); }
+        catch (e) { reject(new Error(`CDP parse error: ${e.message}`)); }
       });
     });
     req.on('error', reject);
@@ -61,7 +259,6 @@ function getCdpWsUrl(port) {
   });
 }
 
-// Get the CDP WebSocket URL for the first page target (needed for Network domain)
 function getPageWsUrl(port) {
   return new Promise((resolve, reject) => {
     const req = http.get(`http://127.0.0.1:${port}/json/list`, (res) => {
@@ -71,14 +268,9 @@ function getPageWsUrl(port) {
         try {
           const pages = JSON.parse(data);
           const page = pages.find(p => p.type === 'page');
-          if (page) {
-            resolve(page.webSocketDebuggerUrl);
-          } else {
-            reject(new Error('No page targets found'));
-          }
-        } catch (e) {
-          reject(new Error(`Failed to parse CDP page list: ${e.message}`));
-        }
+          if (page) resolve(page.webSocketDebuggerUrl);
+          else reject(new Error('No page targets'));
+        } catch (e) { reject(new Error(`CDP parse error: ${e.message}`)); }
       });
     });
     req.on('error', reject);
@@ -86,76 +278,45 @@ function getPageWsUrl(port) {
   });
 }
 
-// Resolve a WebSocket class (Node 22+ built-in, or ws package)
+// Resolve WebSocket class
 let WebSocketClass;
 try {
   if (typeof globalThis.WebSocket !== 'undefined') {
     WebSocketClass = globalThis.WebSocket;
   } else {
-    // Try local, then global install paths
     try { WebSocketClass = require('ws'); } catch {
-      WebSocketClass = require(path.join('/usr/lib/node_modules', 'ws'));
+      try { WebSocketClass = require(path.join('/usr/lib/node_modules', 'ws')); } catch {
+        // Will fail later if import-cookies is used without ws
+      }
     }
   }
-} catch {
-  console.error('No WebSocket implementation found. Install ws: npm install -g ws');
-  process.exit(1);
-}
+} catch {}
 
-// Minimal CDP client over WebSocket
 function cdpSend(wsUrl, method, params = {}) {
+  if (!WebSocketClass) throw new Error('No WebSocket. Install ws: npm install -g ws');
   return new Promise((resolve, reject) => {
     const ws = new WebSocketClass(wsUrl);
     const id = 1;
     let resolved = false;
-
     const timer = setTimeout(() => {
       if (!resolved) { resolved = true; ws.close(); reject(new Error(`CDP ${method} timeout`)); }
     }, 15000);
-
-    ws.on('open', () => {
-      ws.send(JSON.stringify({ id, method, params }));
-    });
-
+    ws.on('open', () => { ws.send(JSON.stringify({ id, method, params })); });
     ws.on('message', (raw) => {
       if (resolved) return;
       const msg = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
       if (msg.id === id) {
-        resolved = true;
-        clearTimeout(timer);
-        ws.close();
-        if (msg.error) {
-          reject(new Error(`CDP error: ${msg.error.message}`));
-        } else {
-          resolve(msg.result);
-        }
+        resolved = true; clearTimeout(timer); ws.close();
+        if (msg.error) reject(new Error(`CDP error: ${msg.error.message}`));
+        else resolve(msg.result);
       }
     });
-
     ws.on('error', (err) => {
       if (!resolved) { resolved = true; clearTimeout(timer); reject(err); }
     });
   });
 }
 
-// Convert CDP cookie format to Playwright storageState format
-function cdpToPlaywright(cookie) {
-  const out = {
-    name: cookie.name,
-    value: cookie.value,
-    domain: cookie.domain,
-    path: cookie.path || '/',
-    expires: cookie.expires || -1,
-    httpOnly: Boolean(cookie.httpOnly),
-    secure: Boolean(cookie.secure),
-  };
-  if (cookie.sameSite && ['Strict', 'Lax', 'None'].includes(cookie.sameSite)) {
-    out.sameSite = cookie.sameSite;
-  }
-  return out;
-}
-
-// Convert Playwright cookie format back to CDP format for setCookies
 function playwrightToCdp(cookie) {
   const out = {
     name: cookie.name,
@@ -165,106 +326,60 @@ function playwrightToCdp(cookie) {
     httpOnly: Boolean(cookie.httpOnly),
     secure: Boolean(cookie.secure),
   };
-  if (cookie.expires && cookie.expires > 0) {
-    out.expires = cookie.expires;
-  }
-  if (cookie.sameSite) {
-    out.sameSite = cookie.sameSite;
-  }
+  if (cookie.expires && cookie.expires > 0) out.expires = cookie.expires;
+  if (cookie.sameSite) out.sameSite = cookie.sameSite;
   return out;
 }
 
-// Launch Chrome with a profile, run a callback with the CDP WebSocket URL, then kill it
 async function withChrome(profileDir, callback) {
   const chromium = findChromium();
-  if (!chromium) {
-    throw new Error('No Chromium or Chrome binary found');
-  }
+  if (!chromium) throw new Error('No Chromium or Chrome binary found');
 
-  // Pick a random port to avoid collisions
   const port = 19000 + Math.floor(Math.random() * 10000);
-
   const args = [
-    '--headless=new',
-    '--no-sandbox',
-    '--disable-gpu',
-    '--disable-software-rasterizer',
-    `--user-data-dir=${profileDir}`,
-    `--remote-debugging-port=${port}`,
-    '--window-size=800,600',
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--disable-extensions',
+    '--headless=new', '--no-sandbox', '--disable-gpu',
+    '--disable-software-rasterizer', `--user-data-dir=${profileDir}`,
+    `--remote-debugging-port=${port}`, '--window-size=800,600',
+    '--no-first-run', '--no-default-browser-check', '--disable-extensions',
   ];
+  const proc = spawn(chromium, args, { stdio: ['ignore', 'pipe', 'pipe'], detached: false });
 
-  const proc = spawn(chromium, args, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: false,
-  });
-
-  // Wait for CDP to be ready (up to 10s)
   let wsUrl = null;
   for (let i = 0; i < 40; i++) {
     await new Promise(r => setTimeout(r, 250));
-    try {
-      wsUrl = await getCdpWsUrl(port);
-      if (wsUrl) break;
-    } catch {
-      // not ready yet
-    }
+    try { wsUrl = await getCdpWsUrl(port); if (wsUrl) break; } catch {}
   }
-
-  if (!wsUrl) {
-    proc.kill('SIGKILL');
-    throw new Error(`Chrome failed to start CDP on port ${port}`);
-  }
+  if (!wsUrl) { proc.kill('SIGKILL'); throw new Error(`Chrome failed to start CDP on port ${port}`); }
 
   try {
     return await callback(wsUrl, port);
   } finally {
     proc.kill('SIGTERM');
-    // Give it a moment to flush profile data to disk
     await new Promise(r => setTimeout(r, 500));
     try { proc.kill('SIGKILL'); } catch {}
-  }
-}
-
-// Copy a profile directory, skipping lock files, large caches, and transient files
-function copyProfileForExport(srcDir, destDir) {
-  const SKIP = new Set([
-    'SingletonLock', 'SingletonCookie', 'SingletonSocket',
-    'Cache', 'Code Cache', 'GrShaderCache', 'DawnGraphiteCache',
-    'GPUCache', 'ShaderCache', 'Service Worker', 'ScriptCache',
-  ]);
-  fs.mkdirSync(destDir, { recursive: true });
-  let entries;
-  try { entries = fs.readdirSync(srcDir, { withFileTypes: true }); } catch { return; }
-  for (const entry of entries) {
-    if (SKIP.has(entry.name)) continue;
-    const s = path.join(srcDir, entry.name);
-    const d = path.join(destDir, entry.name);
-    try {
-      if (entry.isDirectory()) {
-        copyProfileForExport(s, d);
-      } else {
-        fs.copyFileSync(s, d);
-      }
-    } catch {
-      // File may have been removed by the running browser; skip it
-    }
   }
 }
 
 // ── Export ──
 
 async function exportCookies(platforms, outputDir) {
-  const chromium = findChromium();
-  if (!chromium) {
-    console.error('Error: No Chromium or Chrome binary found.');
-    console.error('On macOS, install Google Chrome. On Linux, install chromium.');
+  // On macOS, get the encryption key from keychain
+  const keyInfo = (os.platform() === 'darwin') ? getEncryptionKey() : null;
+  let aesKey = null;
+  if (keyInfo) {
+    aesKey = deriveKey(keyInfo.password);
+    console.log(`Using ${keyInfo.browser} keychain for cookie decryption`);
+  } else if (os.platform() === 'darwin') {
+    console.warn('Warning: could not find Chromium/Chrome keychain entry. Encrypted cookies will be skipped.');
+  }
+
+  // Verify sqlite3 is available
+  const sqlite3Check = spawnSync('sqlite3', ['--version'], { encoding: 'utf8', stdio: 'pipe' });
+  if (sqlite3Check.status !== 0) {
+    console.error('Error: sqlite3 not found. Install it to export cookies.');
     process.exit(1);
   }
-  console.log(`Using browser: ${chromium}`);
+
   fs.mkdirSync(outputDir, { recursive: true });
 
   for (const platform of platforms) {
@@ -274,40 +389,21 @@ async function exportCookies(platforms, outputDir) {
       continue;
     }
 
-    // Check if profile has any real data (not just an empty dir)
-    const contents = fs.readdirSync(profileDir).filter(f => f !== 'SingletonLock' && f !== 'SingletonCookie' && f !== 'SingletonSocket');
-    if (contents.length === 0) {
-      console.log(`  ${platform}: empty profile, skipping`);
+    const cookieDb = path.join(profileDir, 'Default', 'Cookies');
+    if (!fs.existsSync(cookieDb)) {
+      console.log(`  ${platform}: no Cookies database, skipping`);
       continue;
     }
 
-    // Copy profile to temp dir to avoid lock file conflicts
-    const tmpProfile = path.join(os.tmpdir(), `social-autoposter-export-${platform}-${Date.now()}`);
-
-    process.stdout.write(`  ${platform}: copying profile...`);
+    process.stdout.write(`  ${platform}: reading cookies...`);
 
     try {
-      copyProfileForExport(profileDir, tmpProfile);
-      process.stdout.write(' launching browser...');
-
-      const result = await withChrome(tmpProfile, async (wsUrl, port) => {
-        process.stdout.write(' extracting cookies...');
-        const pageWsUrl = await getPageWsUrl(port);
-        // Enable Network domain first (required for getAllCookies)
-        await cdpSend(pageWsUrl, 'Network.enable');
-        const { cookies } = await cdpSend(pageWsUrl, 'Network.getAllCookies');
-        return cookies;
-      });
-
-      const exported = result.map(cdpToPlaywright);
+      const cookies = readCookiesFromSqliteWithDecryption(profileDir, aesKey);
       const outFile = path.join(outputDir, `cookies-${platform}.json`);
-      fs.writeFileSync(outFile, JSON.stringify({ cookies: exported, origins: [] }, null, 2));
-      console.log(` ${exported.length} cookies -> ${outFile}`);
+      fs.writeFileSync(outFile, JSON.stringify({ cookies, origins: [] }, null, 2));
+      console.log(` ${cookies.length} cookies -> ${outFile}`);
     } catch (err) {
       console.log(` FAILED: ${err.message}`);
-    } finally {
-      // Clean up temp profile
-      try { fs.rmSync(tmpProfile, { recursive: true, force: true }); } catch {}
     }
   }
 }
@@ -318,7 +414,10 @@ async function importCookies(platforms, inputDir) {
   const chromium = findChromium();
   if (!chromium) {
     console.error('Error: No Chromium or Chrome binary found.');
-    console.error('On macOS, install Google Chrome. On Linux, install chromium.');
+    process.exit(1);
+  }
+  if (!WebSocketClass) {
+    console.error('Error: WebSocket not available. Install ws: npm install -g ws');
     process.exit(1);
   }
   console.log(`Using browser: ${chromium}`);
@@ -346,6 +445,7 @@ async function importCookies(platforms, inputDir) {
       await withChrome(profileDir, async (wsUrl, port) => {
         process.stdout.write(` injecting ${cookies.length} cookies...`);
         const pageWsUrl = await getPageWsUrl(port);
+        await cdpSend(pageWsUrl, 'Network.enable');
         await cdpSend(pageWsUrl, 'Network.setCookies', { cookies });
       });
       console.log(' done');
@@ -359,7 +459,7 @@ async function importCookies(platforms, inputDir) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const mode = args[0]; // 'export' or 'import'
+  const mode = args[0];
 
   if (mode === 'export') {
     const outputDir = args[1] || DEST;
@@ -376,8 +476,8 @@ async function main() {
     console.log('  npx social-autoposter export-cookies [output-dir]');
     console.log('  npx social-autoposter import-cookies [input-dir]');
     console.log('');
-    console.log('Export extracts cookies from ~/.claude/browser-profiles/{reddit,twitter,linkedin}');
-    console.log('Import injects cookies from cookies-{platform}.json files into browser profiles');
+    console.log('Export reads cookies from ~/.claude/browser-profiles/{reddit,twitter,linkedin}');
+    console.log('Import injects cookies from cookies-{platform}.json into browser profiles');
     process.exit(1);
   }
 }
