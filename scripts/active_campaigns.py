@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Fetch active campaigns for a given platform with budget remaining.
+
+A campaign is "active" when:
+  - status = 'active'
+  - its platforms list includes the requested platform
+  - max_posts_total is set AND posts_made < max_posts_total
+
+Campaigns without max_posts_total are ignored by this script on purpose.
+Every campaign must declare a lifetime cap to be considered.
+
+Usage:
+    python3 active_campaigns.py --platform reddit          # prompt block (stdout)
+    python3 active_campaigns.py --platform reddit --json   # machine-readable
+"""
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import db
+
+
+def get_active_campaigns(platform):
+    conn = db.get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT id, name, prompt, max_posts_total, posts_made
+            FROM campaigns
+            WHERE status = 'active'
+              AND (',' || platforms || ',') LIKE %s
+              AND max_posts_total IS NOT NULL
+              AND posts_made < max_posts_total
+            ORDER BY id
+            """,
+            [f"%,{platform},%"],
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    return [
+        {
+            "id": r[0],
+            "name": r[1],
+            "prompt": r[2],
+            "max_posts_total": r[3],
+            "posts_made": r[4],
+            "remaining": r[3] - r[4],
+        }
+        for r in rows
+    ]
+
+
+def format_prompt_block(campaigns, repo_dir):
+    if not campaigns:
+        return ""
+
+    ids_csv = ",".join(str(c["id"]) for c in campaigns)
+    lines = []
+    lines.append("## ACTIVE CAMPAIGNS (mandatory for every post this run)")
+    lines.append("")
+    lines.append("The following campaign instructions override your defaults. Follow them exactly.")
+    lines.append("")
+
+    for c in campaigns:
+        lines.append(f"### CAMPAIGN id={c['id']} name={c['name']}")
+        lines.append(f"Lifetime budget: {c['remaining']} of {c['max_posts_total']} posts remaining.")
+        lines.append("Instruction:")
+        lines.append(c["prompt"])
+        lines.append("")
+
+    lines.append("## REQUIRED campaign attribution (do this for EVERY post you create)")
+    lines.append("")
+    lines.append("1. When inserting the post row, use `INSERT INTO posts (...) VALUES (...) RETURNING id;` to capture NEW_POST_ID.")
+    lines.append("2. Immediately after, run this shell command to attach the post to the active campaigns:")
+    lines.append("")
+    lines.append(f"   python3 {repo_dir}/scripts/campaign_bump.py --post-id NEW_POST_ID --campaign-ids {ids_csv}")
+    lines.append("")
+    lines.append("This is mandatory. If you skip it, the campaign counter does not advance and the campaign will over-post.")
+    return "\n".join(lines)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--platform", required=True)
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--repo-dir", default=os.path.expanduser("~/social-autoposter"))
+    args = ap.parse_args()
+
+    campaigns = get_active_campaigns(args.platform)
+
+    if args.json:
+        print(json.dumps({
+            "platform": args.platform,
+            "active_count": len(campaigns),
+            "campaign_ids": ",".join(str(c["id"]) for c in campaigns),
+            "campaigns": campaigns,
+        }))
+    else:
+        block = format_prompt_block(campaigns, args.repo_dir)
+        if block:
+            print(block)
+
+
+if __name__ == "__main__":
+    main()
