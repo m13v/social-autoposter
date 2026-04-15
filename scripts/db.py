@@ -78,7 +78,12 @@ class PGConn:
             return cur
 
     def commit(self):
-        self._conn.commit()
+        import psycopg2
+        try:
+            self._conn.commit()
+        except psycopg2.OperationalError:
+            self._reconnect()
+            self._conn.commit()
 
     def close(self):
         self._conn.close()
