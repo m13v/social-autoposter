@@ -2,7 +2,8 @@
 """Reddit CLI tools for Claude to call via Bash.
 
 Commands:
-    python3 scripts/reddit_tools.py search "security cameras" [--limit 10]
+    python3 scripts/reddit_tools.py search "security cameras" [--limit 10] [--sort relevance] [--time week]
+    python3 scripts/reddit_tools.py search "automation" --subreddits AI_Agents,SaaS,smallbusiness --time month
     python3 scripts/reddit_tools.py fetch <thread_url>
     python3 scripts/reddit_tools.py log-post <thread_url> <our_permalink> <our_text> <project> <thread_author> <thread_title>
     python3 scripts/reddit_tools.py already-posted <thread_url>
@@ -161,28 +162,37 @@ def _load_blocked_subreddits():
         return set()
 
 
-def cmd_search(args):
-    """Search Reddit and return threads as JSON."""
-    query = args.query
-    encoded = urllib.parse.quote(query)
-    url = f"https://old.reddit.com/search.json?q={encoded}&sort={args.sort}&limit={args.limit}&type=link"
-    data = _do_request(url)
+def _load_config_subreddits():
+    """Load the subreddit list from config.json for scoped searches."""
+    try:
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
+        with open(config_path) as f:
+            config = json.load(f)
+        return config.get("subreddits", [])
+    except Exception:
+        return []
 
-    # Load already-posted URLs for filtering
-    dbmod.load_env()
-    conn = dbmod.get_conn()
-    cur = conn.execute("SELECT thread_url FROM posts WHERE thread_url IS NOT NULL")
-    already_posted = {row[0] for row in cur.fetchall()}
-    conn.close()
 
-    blocked_subs = _load_blocked_subreddits()
+def _build_search_url(query, sort, limit, time_filter, subreddits=None):
+    """Build Reddit search URL with optional subreddit scoping."""
+    quality_suffix = " self:yes nsfw:no"
+    full_query = query + quality_suffix
+    encoded = urllib.parse.quote(full_query)
+    params = f"q={encoded}&sort={sort}&t={time_filter}&limit={limit}&type=link&raw_json=1"
+    if subreddits:
+        multi_sub = "+".join(subreddits)
+        return f"https://www.reddit.com/r/{multi_sub}/search.json?{params}&restrict_sr=on"
+    return f"https://www.reddit.com/search.json?{params}"
 
+
+def _parse_search_results(data, already_posted, blocked_subs):
+    """Parse Reddit search JSON into thread list."""
     threads = []
     for child in data.get("data", {}).get("children", []):
         post = child.get("data", {})
         subreddit = post.get("subreddit", "").lower()
         if subreddit in blocked_subs:
-            continue  # Skip blocked/banned subreddits
+            continue
         created = post.get("created_utc", 0)
         age_hours = (datetime.now(timezone.utc).timestamp() - created) / 3600 if created else 999
         permalink = f"https://old.reddit.com{post.get('permalink', '')}"
@@ -201,10 +211,40 @@ def cmd_search(args):
         if already:
             entry["SKIP"] = ">>> ALREADY POSTED IN THIS THREAD - DO NOT POST AGAIN <<<"
         if age_hours > 4320 or post.get("archived"):
-            continue  # Drop archived threads entirely (>6 months or API flag)
+            continue
         if post.get("locked"):
-            continue  # Drop locked threads entirely
+            continue
         threads.append(entry)
+    return threads
+
+
+def cmd_search(args):
+    """Search Reddit and return threads as JSON.
+
+    Uses sort=relevance by default for topically relevant results.
+    Supports --subreddits to scope search to specific subs via restrict_sr.
+    Supports --time to filter by recency (hour, day, week, month, year, all).
+    """
+    query = args.query
+    time_filter = args.time
+
+    # Load already-posted URLs for filtering
+    dbmod.load_env()
+    conn = dbmod.get_conn()
+    cur = conn.execute("SELECT thread_url FROM posts WHERE thread_url IS NOT NULL")
+    already_posted = {row[0] for row in cur.fetchall()}
+    conn.close()
+
+    blocked_subs = _load_blocked_subreddits()
+
+    # Determine subreddit scoping
+    target_subs = None
+    if args.subreddits:
+        target_subs = [s.lstrip("r/") for s in args.subreddits.split(",")]
+
+    url = _build_search_url(query, args.sort, args.limit, time_filter, subreddits=target_subs)
+    data = _do_request(url)
+    threads = _parse_search_results(data, already_posted, blocked_subs)
 
     print(json.dumps(threads, indent=2))
 
@@ -322,7 +362,9 @@ def main():
     p_search = sub.add_parser("search", help="Search Reddit for threads")
     p_search.add_argument("query", help="Search query")
     p_search.add_argument("--limit", type=int, default=15, help="Max results")
-    p_search.add_argument("--sort", default="new", help="Sort order (new, hot, relevance)")
+    p_search.add_argument("--sort", default="relevance", help="Sort order (relevance, new, hot, top, comments)")
+    p_search.add_argument("--time", default="week", help="Time filter (hour, day, week, month, year, all)")
+    p_search.add_argument("--subreddits", default=None, help="Comma-separated subreddits to scope search (e.g. AI_Agents,SaaS,smallbusiness)")
 
     # fetch
     p_fetch = sub.add_parser("fetch", help="Fetch thread + comments")
