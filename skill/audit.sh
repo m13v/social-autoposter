@@ -137,6 +137,37 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════
+# STEP 4: Orphan / stale post detection
+# ═══════════════════════════════════════════════════════
+log "Step 4: Orphan/stale detection"
+
+ORPHAN_REPORT=$(psql "$DATABASE_URL" -t -A -c "
+    SELECT platform, status, COUNT(*)
+    FROM posts
+    WHERE status NOT IN ('active', 'deleted', 'removed')
+    GROUP BY platform, status
+    ORDER BY platform, status;" 2>/dev/null || echo "")
+
+BROKEN_URL_COUNT=$(psql "$DATABASE_URL" -t -A -c "
+    SELECT COUNT(*)
+    FROM posts
+    WHERE status = 'active'
+      AND (our_url IS NULL OR our_url = '' OR our_url NOT LIKE 'http%');" 2>/dev/null || echo "0")
+
+if [ -n "$ORPHAN_REPORT" ]; then
+    log "WARNING: Posts with non-standard status:"
+    echo "$ORPHAN_REPORT" | while IFS='|' read -r plat stat cnt; do
+        log "  $plat $stat: $cnt"
+    done
+fi
+if [ "$BROKEN_URL_COUNT" -gt 0 ]; then
+    log "WARNING: $BROKEN_URL_COUNT active posts with missing/invalid our_url"
+fi
+if [ -z "$ORPHAN_REPORT" ] && [ "$BROKEN_URL_COUNT" = "0" ]; then
+    log "Step 4: Clean (no orphans, no broken URLs)"
+fi
+
+# ═══════════════════════════════════════════════════════
 # STEP 5: Report summary
 # ═══════════════════════════════════════════════════════
 log "Step 5: Summary"
