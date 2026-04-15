@@ -90,8 +90,14 @@ For each candidate (up to 3):
      python3 $REPO_DIR/scripts/twitter_browser.py reply \"CANDIDATE_URL\" \"YOUR_REPLY_TEXT\"
    It returns JSON like {\"ok\": true, \"tweet_url\": \"parent\", \"reply_url\": \"https://x.com/m13v_/status/...\"}.
    Parse reply_url from the JSON. If reply_url is missing, empty, or does not contain x.com/m13v_/status/, treat the post as FAILED: do NOT log a row, and mark the candidate as 'failed' instead of 'posted'. NEVER fall back to using the parent/candidate URL as our_url.
-5. Log to database. our_url MUST be the reply_url returned from the CDP script (the x.com/m13v_/status/... permalink). Include: project_name from the candidate's matched_project (or your best guess from the config), engagement_style, language (ISO 639-1 code, e.g. 'en', 'ja', 'zh', 'es'), feedback_report_used=TRUE.
-6. After logging to DB, get the post ID from the INSERT (RETURNING id). Then mark the candidate with it:
+5. Self-reply with project link. Immediately reply to YOUR OWN reply_url with a short follow-up that includes the matched project's URL.
+     python3 $REPO_DIR/scripts/twitter_browser.py reply \"YOUR_REPLY_URL\" \"FOLLOW_UP_WITH_LINK\"
+   The follow-up should be 1 short sentence that naturally connects the conversation to the project, ending with the project URL. Examples:
+     \"we built something similar for macOS automation https://fazm.ai\"
+     \"this is exactly why we made mk0r https://mk0r.com\"
+   Keep it casual, lowercase, no hard sell. Match the parent tweet's language. If the project has no URL in the config, skip this step.
+6. Log to database. our_url MUST be the reply_url from step 4 (the main reply, not the self-reply). Include: project_name from the candidate's matched_project (or your best guess from the config), engagement_style, language (ISO 639-1 code, e.g. 'en', 'ja', 'zh', 'es'), feedback_report_used=TRUE.
+7. After logging to DB, get the post ID from the INSERT (RETURNING id). Then mark the candidate with it:
      UPDATE twitter_candidates SET status='posted', posted_at=NOW(), post_id=THE_POST_ID WHERE id=CANDIDATE_ID
 
 If a thread is no longer available or not relevant, mark it skipped:
