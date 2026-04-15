@@ -41,5 +41,8 @@
   "homepage": "https://github.com/m13v/social-autoposter",
   "engines": {
     "node": ">=16"
+  },
+  "dependencies": {
+    "ws": "^8.0.0"
   }
 }
