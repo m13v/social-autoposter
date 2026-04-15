@@ -32,6 +32,15 @@ TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform reddit 2>/
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block reddit posting)
 
+# Active campaigns (prompt injections + budget tracking)
+CAMPAIGN_BLOCK=$(python3 "$REPO_DIR/scripts/active_campaigns.py" --platform reddit --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
+CAMPAIGN_IDS=$(python3 "$REPO_DIR/scripts/active_campaigns.py" --platform reddit --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('campaign_ids',''))" 2>/dev/null || echo "")
+if [ -n "$CAMPAIGN_IDS" ]; then
+    echo "Active campaigns: $CAMPAIGN_IDS" | tee -a "$LOG_FILE"
+else
+    echo "Active campaigns: none" | tee -a "$LOG_FILE"
+fi
+
 claude -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
@@ -54,6 +63,8 @@ $TOP_REPORT
 
 $STYLES_BLOCK
 
+$CAMPAIGN_BLOCK
+
 Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
 1. Find candidate threads for 1-2 projects you think fit best:
      python3 $REPO_DIR/scripts/find_threads.py --project 'PROJECT_NAME'
@@ -68,7 +79,9 @@ Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
    - Favor contrarian and snarky_oneliner styles (highest performers).
    - NEVER use em dashes.
 4. Post it using the reddit-agent browser (mcp__reddit-agent__* tools). Wait at least 3 minutes between posts.
-5. Log to database with project_name='PROJECT_YOU_CHOSE', engagement_style='STYLE_YOU_CHOSE', language='DETECTED_LANGUAGE' (MUST include feedback_report_used=TRUE in the INSERT)
+5. Log to database with project_name='PROJECT_YOU_CHOSE', engagement_style='STYLE_YOU_CHOSE', language='DETECTED_LANGUAGE' (MUST include feedback_report_used=TRUE in the INSERT). Use \`INSERT INTO posts (...) VALUES (...) RETURNING id\` and capture NEW_POST_ID.
+6. **Campaign attribution (only if the ACTIVE CAMPAIGNS section above was non-empty).** Active campaign IDs for this run: '$CAMPAIGN_IDS'. If that string is non-empty, run: python3 $REPO_DIR/scripts/campaign_bump.py --post-id NEW_POST_ID --campaign-ids $CAMPAIGN_IDS
+   This is required when any campaign is active. Skipping it will cause the campaign to over-post beyond its budget.
 
 Post exactly 1 comment per run. Pick the single best thread and write the best possible comment. If nothing fits, say '## No good thread found' and stop.
 CRITICAL: Reply in the SAME LANGUAGE as the thread/post. Match the language exactly.
