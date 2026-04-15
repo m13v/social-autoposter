@@ -189,15 +189,15 @@ or GitHub repos. Product mentions happen ONLY later in the reply pipeline when p
   Rate limits are global. Waiting won't help this session. Use whatever search results you already have.
 - If you can't find enough threads after 5 search attempts total, draft fewer posts (even 1-2 is fine) rather than searching more.
 
-## CRITICAL CONTENT RULES (data-driven, from analysis of 2,732 past comments)
-- Go BIMODAL on length: either 1 punchy sentence (<100 chars, 6.03 avg upvotes) or 4-5 sentences of real substance (2.88 avg). AVOID the 2-3 sentence dead zone (1.90 avg).
-- Start with "I" or "my" when possible. First-person openings get 37% more upvotes but are only used 2.8% of the time.
-- NEVER mention product names (fazm, assrt, pieline, cyrano, terminator, mk0r, s4l). Caps upside at 10 upvotes (avg drops from 3.05 to 1.17).
-- NEVER include URLs or links. Average drops from 3.02 to 1.38.
-- Prefer replying to OP (top-level reply). OP replies get 4.2x the upvotes of commenter replies.
-- ONE comment per thread. Multi-comment threads average 1.0-1.5 upvotes.
-- Statements beat questions (2.98 vs 2.64 avg). Be authoritative, not inquisitive.
-- Favor contrarian style (7.0 avg upvotes). NEVER use curious_probe (negative avg).
+## CRITICAL CONTENT RULES
+- Study the style performance data in the feedback report below. Pick styles with the highest avg upvotes.
+- Go BIMODAL on length: either 1 punchy sentence (<100 chars) or 4-5 sentences of real substance. AVOID the 2-3 sentence middle.
+- Start with "I" or "my" when possible. First-person gets more engagement.
+- NEVER mention product names (fazm, assrt, pieline, cyrano, terminator, mk0r, s4l).
+- NEVER include URLs or links.
+- Prefer replying to OP (top-level reply).
+- ONE comment per thread.
+- Statements beat questions. Be authoritative, not inquisitive.
 
 ## Steps
 1. Search 2 topics from: {json.dumps(topics_list)}. Skip already_posted=true threads.
