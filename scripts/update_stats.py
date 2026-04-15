@@ -61,7 +61,9 @@ def update_reddit(db, user_agent, config=None, quiet=False):
         "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL ORDER BY id"
     ).fetchall()
 
+    BATCH_SIZE = 200
     total = updated = deleted = removed = errors = skipped = 0
+    batch_counter = 0
     results = []
 
     for post in posts:
@@ -287,6 +289,12 @@ def update_reddit(db, user_agent, config=None, quiet=False):
                 db.execute("UPDATE posts SET scan_no_change_count = 0 WHERE id = %s", [post_id])
 
         time.sleep(5)
+
+        batch_counter += 1
+        if batch_counter % BATCH_SIZE == 0:
+            db.commit()
+            if not quiet:
+                print(f"  Committed batch ({batch_counter}/{len(posts)} processed)")
 
     db.commit()
     if skipped and not quiet:
