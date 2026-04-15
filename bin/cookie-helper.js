@@ -61,24 +61,25 @@ function getCdpWsUrl(port) {
   });
 }
 
-// Minimal CDP client over WebSocket (no dependencies beyond Node stdlib)
-function cdpSend(wsUrl, method, params = {}) {
-  // Use dynamic import for the built-in WebSocket (Node 22+) or ws package
-  return new Promise(async (resolve, reject) => {
-    let WebSocketClass;
-    try {
-      // Node 22+ has global WebSocket
-      if (typeof globalThis.WebSocket !== 'undefined') {
-        WebSocketClass = globalThis.WebSocket;
-      } else {
-        // Fallback to ws package (installed globally in VM)
-        WebSocketClass = require('ws');
-      }
-    } catch {
-      reject(new Error('No WebSocket implementation found. Install ws: npm install -g ws'));
-      return;
+// Resolve a WebSocket class (Node 22+ built-in, or ws package)
+let WebSocketClass;
+try {
+  if (typeof globalThis.WebSocket !== 'undefined') {
+    WebSocketClass = globalThis.WebSocket;
+  } else {
+    // Try local, then global install paths
+    try { WebSocketClass = require('ws'); } catch {
+      WebSocketClass = require(path.join('/usr/lib/node_modules', 'ws'));
     }
+  }
+} catch {
+  console.error('No WebSocket implementation found. Install ws: npm install -g ws');
+  process.exit(1);
+}
 
+// Minimal CDP client over WebSocket
+function cdpSend(wsUrl, method, params = {}) {
+  return new Promise((resolve, reject) => {
     const ws = new WebSocketClass(wsUrl);
     const id = 1;
     let resolved = false;
@@ -203,6 +204,22 @@ async function withChrome(profileDir, callback) {
   }
 }
 
+// Copy a profile directory, skipping lock files and large caches
+function copyProfileForExport(srcDir, destDir) {
+  const SKIP = new Set(['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'Cache', 'Code Cache', 'GrShaderCache', 'DawnGraphiteCache', 'GPUCache', 'ShaderCache', 'Service Worker']);
+  fs.mkdirSync(destDir, { recursive: true });
+  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    if (SKIP.has(entry.name)) continue;
+    const s = path.join(srcDir, entry.name);
+    const d = path.join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      copyProfileForExport(s, d);
+    } else {
+      fs.copyFileSync(s, d);
+    }
+  }
+}
+
 // ── Export ──
 
 async function exportCookies(platforms, outputDir) {
@@ -213,6 +230,7 @@ async function exportCookies(platforms, outputDir) {
     process.exit(1);
   }
   console.log(`Using browser: ${chromium}`);
+  fs.mkdirSync(outputDir, { recursive: true });
 
   for (const platform of platforms) {
     const profileDir = path.join(PROFILES_DIR, platform);
@@ -222,16 +240,22 @@ async function exportCookies(platforms, outputDir) {
     }
 
     // Check if profile has any real data (not just an empty dir)
-    const contents = fs.readdirSync(profileDir);
+    const contents = fs.readdirSync(profileDir).filter(f => f !== 'SingletonLock' && f !== 'SingletonCookie' && f !== 'SingletonSocket');
     if (contents.length === 0) {
       console.log(`  ${platform}: empty profile, skipping`);
       continue;
     }
 
-    process.stdout.write(`  ${platform}: launching browser...`);
+    // Copy profile to temp dir to avoid lock file conflicts
+    const tmpProfile = path.join(os.tmpdir(), `social-autoposter-export-${platform}-${Date.now()}`);
+
+    process.stdout.write(`  ${platform}: copying profile...`);
 
     try {
-      const result = await withChrome(profileDir, async (wsUrl) => {
+      copyProfileForExport(profileDir, tmpProfile);
+      process.stdout.write(' launching browser...');
+
+      const result = await withChrome(tmpProfile, async (wsUrl) => {
         process.stdout.write(' extracting cookies...');
         const { cookies } = await cdpSend(wsUrl, 'Storage.getCookies');
         return cookies;
@@ -243,6 +267,9 @@ async function exportCookies(platforms, outputDir) {
       console.log(` ${exported.length} cookies -> ${outFile}`);
     } catch (err) {
       console.log(` FAILED: ${err.message}`);
+    } finally {
+      // Clean up temp profile
+      try { fs.rmSync(tmpProfile, { recursive: true, force: true }); } catch {}
     }
   }
 }
