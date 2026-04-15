@@ -204,18 +204,28 @@ async function withChrome(profileDir, callback) {
   }
 }
 
-// Copy a profile directory, skipping lock files and large caches
+// Copy a profile directory, skipping lock files, large caches, and transient files
 function copyProfileForExport(srcDir, destDir) {
-  const SKIP = new Set(['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'Cache', 'Code Cache', 'GrShaderCache', 'DawnGraphiteCache', 'GPUCache', 'ShaderCache', 'Service Worker']);
+  const SKIP = new Set([
+    'SingletonLock', 'SingletonCookie', 'SingletonSocket',
+    'Cache', 'Code Cache', 'GrShaderCache', 'DawnGraphiteCache',
+    'GPUCache', 'ShaderCache', 'Service Worker', 'ScriptCache',
+  ]);
   fs.mkdirSync(destDir, { recursive: true });
-  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+  let entries;
+  try { entries = fs.readdirSync(srcDir, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) {
     if (SKIP.has(entry.name)) continue;
     const s = path.join(srcDir, entry.name);
     const d = path.join(destDir, entry.name);
-    if (entry.isDirectory()) {
-      copyProfileForExport(s, d);
-    } else {
-      fs.copyFileSync(s, d);
+    try {
+      if (entry.isDirectory()) {
+        copyProfileForExport(s, d);
+      } else {
+        fs.copyFileSync(s, d);
+      }
+    } catch {
+      // File may have been removed by the running browser; skip it
     }
   }
 }
@@ -257,7 +267,9 @@ async function exportCookies(platforms, outputDir) {
 
       const result = await withChrome(tmpProfile, async (wsUrl) => {
         process.stdout.write(' extracting cookies...');
-        const { cookies } = await cdpSend(wsUrl, 'Storage.getCookies');
+        // Network.getAllCookies returns all cookies in the browser profile,
+        // regardless of which pages are open (unlike Storage.getCookies)
+        const { cookies } = await cdpSend(wsUrl, 'Network.getAllCookies');
         return cookies;
       });
 
