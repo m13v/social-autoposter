@@ -89,23 +89,55 @@ def check_rate_limit(max_per_day=4000):
 
 
 def fetch_reddit_threads(subreddits, sort="new", limit=10, user_agent="social-autoposter/1.0"):
-    """Fetch threads from subreddits via Reddit JSON API."""
+    """Fetch threads from subreddits via Reddit JSON API.
+
+    Uses multi-subreddit requests (r/sub1+sub2+sub3) to reduce API calls.
+    Randomizes subreddit order so different subs get coverage across runs.
+    Backs off on 429 rate limits instead of silently skipping.
+    """
+    import random
+
+    clean_subs = [s.lstrip("r/") for s in subreddits]
+    random.shuffle(clean_subs)
+
+    # Batch into groups of 5 (Reddit supports multi-sub via r/a+b+c)
+    batches = []
+    for i in range(0, len(clean_subs), 5):
+        batches.append(clean_subs[i:i + 5])
+
+    # Cap at 10 batches (50 subs) per run to stay within rate limits
+    batches = batches[:10]
+
     threads = []
-    for sub in subreddits:
-        sub = sub.lstrip("r/")
-        url = f"https://old.reddit.com/r/{sub}/{sort}.json?limit={limit}"
+    consecutive_429s = 0
+    delay = 4
+
+    for batch in batches:
+        multi_sub = "+".join(batch)
+        url = f"https://old.reddit.com/r/{multi_sub}/{sort}.json?limit={limit}"
         data = fetch_json(url, user_agent=user_agent)
-        if not data or "data" not in data:
+
+        if data is None:
+            consecutive_429s += 1
+            if consecutive_429s >= 3:
+                print(f"  Rate limited after {consecutive_429s} failures, stopping with "
+                      f"{len(threads)} threads", file=sys.stderr)
+                break
+            delay = min(delay * 2, 30)
+            time.sleep(delay)
             continue
 
-        for child in data["data"].get("children", []):
+        consecutive_429s = 0
+
+        for child in data.get("data", {}).get("children", []):
             post = child.get("data", {})
             created = post.get("created_utc", 0)
             age_hours = (datetime.now(timezone.utc).timestamp() - created) / 3600 if created else 999
+            subreddit = post.get("subreddit", "")
 
             threads.append({
                 "platform": "reddit",
-                "subreddit": f"r/{sub}",
+                "subreddit": f"r/{subreddit}",
                 "url": f"https://old.reddit.com{post.get('permalink', '')}",
                 "title": post.get("title", ""),
                 "author": post.get("author", ""),
@@ -114,7 +146,8 @@ def fetch_reddit_threads(subreddits, sort="new", limit=10, user_agent="social-au
                 "age_hours": round(age_hours, 1),
                 "selftext": post.get("selftext", "")[:500],
             })
-        time.sleep(5)
+
+        time.sleep(delay)
 
     return threads
 
