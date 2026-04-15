@@ -89,7 +89,9 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
    \`\`\`
    Use this URL as \`our_url\` in the database INSERT. It MUST be a linkedin.com/feed/update/ URL.
    If you cannot get a feed/update URL, use the current page URL as fallback.
-6. Log to database with project_name='PROJECT_YOU_CHOSE', engagement_style='STYLE_YOU_CHOSE', language='DETECTED_LANGUAGE' (MUST include feedback_report_used=TRUE in the INSERT). Use the captured feed/update URL for our_url.
+6. Log to database (MANDATORY tool call, do NOT use raw INSERT SQL):
+     python3 $REPO_DIR/scripts/log_post.py --platform linkedin --thread-url THREAD_URL --our-url CAPTURED_FEED_UPDATE_URL --our-content 'YOUR_COMMENT_TEXT' --project PROJECT_YOU_CHOSE --thread-author AUTHOR --thread-title 'POST_TITLE' --engagement-style STYLE_YOU_CHOSE --language DETECTED_LANGUAGE
+   This validates the URL and enforces status='active'. If you could not capture a valid feed/update URL, do NOT log the post.
 
 Up to 30 posts per run. If nothing fits, say '## No good post found' and stop.
 
