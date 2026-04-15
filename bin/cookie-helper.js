@@ -41,7 +41,7 @@ function findChromium() {
   return null;
 }
 
-// Get the CDP WebSocket URL from a running Chrome instance
+// Get the CDP WebSocket URL from a running Chrome instance (browser-level)
 function getCdpWsUrl(port) {
   return new Promise((resolve, reject) => {
     const req = http.get(`http://127.0.0.1:${port}/json/version`, (res) => {
@@ -53,6 +53,31 @@ function getCdpWsUrl(port) {
           resolve(info.webSocketDebuggerUrl);
         } catch (e) {
           reject(new Error(`Failed to parse CDP response: ${e.message}`));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(3000, () => { req.destroy(); reject(new Error('CDP timeout')); });
+  });
+}
+
+// Get the CDP WebSocket URL for the first page target (needed for Network domain)
+function getPageWsUrl(port) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(`http://127.0.0.1:${port}/json/list`, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const pages = JSON.parse(data);
+          const page = pages.find(p => p.type === 'page');
+          if (page) {
+            resolve(page.webSocketDebuggerUrl);
+          } else {
+            reject(new Error('No page targets found'));
+          }
+        } catch (e) {
+          reject(new Error(`Failed to parse CDP page list: ${e.message}`));
         }
       });
     });
@@ -195,7 +220,7 @@ async function withChrome(profileDir, callback) {
   }
 
   try {
-    return await callback(wsUrl);
+    return await callback(wsUrl, port);
   } finally {
     proc.kill('SIGTERM');
     // Give it a moment to flush profile data to disk
@@ -265,11 +290,12 @@ async function exportCookies(platforms, outputDir) {
       copyProfileForExport(profileDir, tmpProfile);
       process.stdout.write(' launching browser...');
 
-      const result = await withChrome(tmpProfile, async (wsUrl) => {
+      const result = await withChrome(tmpProfile, async (wsUrl, port) => {
         process.stdout.write(' extracting cookies...');
-        // Network.getAllCookies returns all cookies in the browser profile,
-        // regardless of which pages are open (unlike Storage.getCookies)
-        const { cookies } = await cdpSend(wsUrl, 'Network.getAllCookies');
+        const pageWsUrl = await getPageWsUrl(port);
+        // Enable Network domain first (required for getAllCookies)
+        await cdpSend(pageWsUrl, 'Network.enable');
+        const { cookies } = await cdpSend(pageWsUrl, 'Network.getAllCookies');
         return cookies;
       });
 
@@ -317,9 +343,10 @@ async function importCookies(platforms, inputDir) {
     process.stdout.write(`  ${platform}: launching browser...`);
 
     try {
-      await withChrome(profileDir, async (wsUrl) => {
+      await withChrome(profileDir, async (wsUrl, port) => {
         process.stdout.write(` injecting ${cookies.length} cookies...`);
-        await cdpSend(wsUrl, 'Storage.setCookies', { cookies });
+        const pageWsUrl = await getPageWsUrl(port);
+        await cdpSend(pageWsUrl, 'Network.setCookies', { cookies });
       });
       console.log(' done');
     } catch (err) {
