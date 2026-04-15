@@ -814,6 +814,33 @@ def main():
         result = reply_to_tweet(sys.argv[2], sys.argv[3])
         print(json.dumps(result, indent=2))
 
+    elif cmd == "self-reply":
+        # Self-reply with guaranteed project URL. The URL is passed as a
+        # separate arg and appended at the tool level so the LLM cannot
+        # strip it from the text (which happened repeatedly when relying
+        # on prompt instructions alone).
+        if len(sys.argv) < 5:
+            print(
+                "Usage: twitter_browser.py self-reply <our_reply_url> <text> <project_url>",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        our_url, text, project_url = sys.argv[2], sys.argv[3], sys.argv[4]
+        if not project_url.startswith("http"):
+            print(
+                f"self-reply: project_url must start with http(s), got: {project_url!r}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        stripped = text.rstrip()
+        if project_url in stripped:
+            final = stripped
+        else:
+            final = f"{stripped} {project_url}"
+        result = reply_to_tweet(our_url, final)
+        result["final_text"] = final
+        print(json.dumps(result, indent=2))
+
     elif cmd == "unread-dms":
         result = unread_dms()
         print(json.dumps(result, indent=2))
