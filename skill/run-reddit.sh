@@ -90,8 +90,11 @@ Run the **Workflow: Post** section for **Reddit ONLY**. Follow every step:
    - Favor contrarian and snarky_oneliner styles (highest performers).
    - NEVER use em dashes.
 4. Post it using the reddit-agent browser (mcp__reddit-agent__* tools). Wait at least 3 minutes between posts.
-5. Log to database with project_name='PROJECT_YOU_CHOSE', engagement_style='STYLE_YOU_CHOSE', language='DETECTED_LANGUAGE' (MUST include feedback_report_used=TRUE in the INSERT). Use \`INSERT INTO posts (...) VALUES (...) RETURNING id\` and capture NEW_POST_ID.
-6. **Campaign attribution (only if the ACTIVE CAMPAIGNS section above was non-empty).** Active campaign IDs for this run: '$CAMPAIGN_IDS'. If that string is non-empty, run: python3 $REPO_DIR/scripts/campaign_bump.py --post-id NEW_POST_ID --campaign-ids $CAMPAIGN_IDS
+5. Log to database (MANDATORY tool call, do NOT use raw INSERT SQL):
+     python3 $REPO_DIR/scripts/log_post.py --platform reddit --thread-url THREAD_URL --our-url OUR_PERMALINK --our-content 'YOUR_COMMENT_TEXT' --project PROJECT_YOU_CHOSE --thread-author THREAD_AUTHOR --thread-title 'THREAD_TITLE' --engagement-style STYLE_YOU_CHOSE --language DETECTED_LANGUAGE
+   This validates the URL and enforces status='active'. Parse the JSON output for post_id.
+   If you could not capture a valid our_url (must start with http), do NOT log the post. Skip to the end.
+6. **Campaign attribution (only if the ACTIVE CAMPAIGNS section above was non-empty).** Active campaign IDs for this run: '$CAMPAIGN_IDS'. If that string is non-empty, run: python3 $REPO_DIR/scripts/campaign_bump.py --post-id POST_ID_FROM_STEP_5 --campaign-ids $CAMPAIGN_IDS
    This is required when any campaign is active. Skipping it will cause the campaign to over-post beyond its budget.
 
 ## BANNED SUBREDDITS (we are banned or have poor performance here, NEVER post)
