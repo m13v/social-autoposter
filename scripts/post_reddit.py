@@ -177,9 +177,13 @@ or GitHub repos. Product mentions happen ONLY later in the reply pipeline when p
 {get_styles_prompt("reddit", context="posting")}
 
 ## Tools (via Bash) - ALWAYS foreground, NEVER run_in_background
-- Search: python3 {REDDIT_TOOLS} search "QUERY" --limit 15
+- Search (global, by relevance): python3 {REDDIT_TOOLS} search "QUERY" --limit 15
+- Search (scoped to specific subs): python3 {REDDIT_TOOLS} search "QUERY" --subreddits AI_Agents,SaaS,smallbusiness --time month
+- Search (broader time range): python3 {REDDIT_TOOLS} search "QUERY" --time month
 - Fetch thread: python3 {REDDIT_TOOLS} fetch "THREAD_URL"
 - Check dedup: python3 {REDDIT_TOOLS} already-posted "THREAD_URL"
+
+Search defaults to sort=relevance and time=week. Use --time month for broader results. Use --subreddits for targeted sub searches.
 
 ## CRITICAL Bash rules
 - NEVER use run_in_background=true. All bash commands must run foreground and return quickly (under 20s each).
