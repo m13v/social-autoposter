@@ -99,9 +99,11 @@ For each candidate (up to 3):
      python3 $REPO_DIR/scripts/twitter_browser.py self-reply \"https://x.com/m13v_/status/123\" \"we built something similar for macOS automation\" \"https://fazm.ai\"
      python3 $REPO_DIR/scripts/twitter_browser.py self-reply \"https://x.com/m13v_/status/456\" \"ちょうど同じ理由で作ってる\" \"https://fazm.ai\"
    If the matched project has no URL in the config, skip this step entirely.
-6. Log to database. our_url MUST be the reply_url from step 4 (the main reply, not the self-reply). Include: project_name from the candidate's matched_project (or your best guess from the config), engagement_style, language (ISO 639-1 code, e.g. 'en', 'ja', 'zh', 'es'), feedback_report_used=TRUE.
-7. After logging to DB, get the post ID from the INSERT (RETURNING id). Then mark the candidate with it:
-     UPDATE twitter_candidates SET status='posted', posted_at=NOW(), post_id=THE_POST_ID WHERE id=CANDIDATE_ID
+6. Log to database (MANDATORY tool call, do NOT use raw INSERT SQL). our_url MUST be the reply_url from step 4 (the main reply, not the self-reply):
+     python3 $REPO_DIR/scripts/log_post.py --platform twitter --thread-url CANDIDATE_URL --our-url REPLY_URL --our-content 'YOUR_REPLY_TEXT' --project MATCHED_PROJECT --thread-author AUTHOR --thread-title 'TWEET_TEXT' --engagement-style STYLE --language LANG
+   This validates the URL and enforces status='active'. If reply_url is missing or invalid, do NOT log (skip to marking the candidate as 'failed').
+7. Parse post_id from the log_post.py JSON output. Then mark the candidate:
+     UPDATE twitter_candidates SET status='posted', posted_at=NOW(), post_id=POST_ID WHERE id=CANDIDATE_ID
 
 If a thread is no longer available or not relevant, mark it skipped:
 UPDATE twitter_candidates SET status='skipped' WHERE id=CANDIDATE_ID
