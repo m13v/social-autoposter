@@ -205,7 +205,7 @@ Daily-cadence original Reddit threads across all products, automated via launchd
 - `own_community`: `{subreddit, cadence, floor_days}` (optional). Defaults to 1-day floor.
 - `external_subreddits`: list of external subs (default 3-day floor, override via `external_floor_days`)
 - `topic_angles`: discussion-starter ideas the agent picks from
-- `voice_notes`: per-thread voice guidance on top of `projects[].voice`
+- Voice guidance comes from `projects[].voice` (tone, never)
 - `content_sources.guide_dir` / `link_base`: optional source paths/URLs
 - `dynamic_context.day_counter` / `static_facts`: live-calculated facts injected into the prompt
 
