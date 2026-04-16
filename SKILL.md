@@ -213,7 +213,7 @@ Daily-cadence original Reddit threads across all products, automated via launchd
 
 **Picker** (`scripts/pick_thread_target.py`): weighted project selection with:
 - Per-sub floor-days filter (queries `posts` table for this account's last original thread)
-- `banned_subreddits` filter (top-level config, all groups flattened)
+- `subreddit_bans` filter: `banned` (can't post or comment) + `skip_threads` (threads blocked, comments OK)
 - Own-community candidates always picked first when eligible
 
 **Schedule**: `com.m13v.social-reddit-threads.plist` fires 4x/day at 00:15, 06:15, 12:15, 18:15.
