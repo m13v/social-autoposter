@@ -14,7 +14,7 @@ Provide the client name, domain (if any), and existing site URL (if any). Exampl
 
 ## Prerequisites
 
-- **Vercel account** with configured scope/team
+- **Google Cloud** project under the m13v.com org (or create a new one)
 - **GitHub** org or personal account
 - **PostHog** account for analytics
 - **Google Search Console** access
@@ -25,7 +25,7 @@ Provide the client name, domain (if any), and existing site URL (if any). Exampl
 - Next.js 16 (App Router) + React 19 + TypeScript
 - Tailwind CSS 4 (inline theme via `@theme`)
 - next/image for optimized images
-- Vercel for hosting
+- Google Cloud Run for hosting (with HTTPS Load Balancer + Certificate Manager)
 - PostHog for analytics (CTA clicks, pageviews)
 
 ---
@@ -111,9 +111,23 @@ For each page:
 ```bash
 cd ~
 npx create-next-app@latest CLIENT-website --typescript --tailwind --eslint --app --src-dir --no-turbopack --import-alias "@/*"
+cd ~/CLIENT-website
 ```
 
-### 2b. Configure Theme (globals.css)
+### 2b. Install @seo/components
+
+```bash
+npm install @m13v/seo-components@latest
+npm install @seo/components@npm:@m13v/seo-components@latest
+```
+
+Both entries will appear in `package.json`:
+```json
+"@m13v/seo-components": "^0.8.15",
+"@seo/components": "npm:@m13v/seo-components@^0.8.15"
+```
+
+### 2c. Configure Theme (globals.css)
 
 The theme uses CSS custom properties in `:root` mapped into Tailwind 4 via `@theme inline`. Always define both the CSS variable AND the Tailwind mapping. Every client gets a primary color, a dark variant, and an accent color at minimum.
 
@@ -156,28 +170,37 @@ html {
 
 **Color naming convention:** Use semantic names (primary, cta, accent) in the skill templates below. When building for a specific client, you can also add client-specific names (e.g., `--color-navy`, `--color-red`, `--color-gold`) for readability.
 
-### 2c. Configure Fonts (layout.tsx)
+### 2d. Configure Fonts and @seo/components (layout.tsx)
 
 Use `next/font/google` with CSS variable mode. The body font goes on `--font-sans`, the heading font on `--font-heading`. Apply both variables to the `<html>` tag.
 
 **IMPORTANT: Route group architecture.** The root layout must NOT include Header/Footer directly. Instead, use a `(main)` route group with its own layout for pages that need the site Header/Footer. SEO guide pages under `/t/` also go inside `(main)` so they share the same Header/Footer as the rest of the site.
 
-**Root layout (`src/app/layout.tsx`):** fonts, metadata, Organization JSON-LD, and `{children}` only.
+**Root layout (`src/app/layout.tsx`):** fonts, metadata, Organization JSON-LD, @seo/components styles, and `{children}` only.
 
 ```tsx
 import { Inter, Oswald } from "next/font/google";
+import { HeadingAnchors } from "@seo/components";
+import { SeoComponentsStyles } from "@seo/components/server";
 
 const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
 const oswald = Oswald({ variable: "--font-oswald", subsets: ["latin"] });
 
 // Root layout: NO Header/Footer here
 <html lang="en" className={`${inter.variable} ${oswald.variable} h-full antialiased`}>
+  <head>
+    <SeoComponentsStyles />
+  </head>
   <body className="min-h-full flex flex-col font-sans">
+    <HeadingAnchors />
     {children}
     {/* Organization JSON-LD here */}
   </body>
 </html>
 ```
+
+- `SeoComponentsStyles` injects the package's prebuilt Tailwind CSS for all @seo/components
+- `HeadingAnchors` auto-injects `id` attributes on H2 elements for sidebar linking and anchor navigation
 
 **Main layout (`src/app/(main)/layout.tsx`):** wraps all pages with Header/Footer.
 
@@ -1082,43 +1105,179 @@ Create `src/app/robots.ts` with sitemap reference.
 
 ---
 
-## Phase 4: Programmatic SEO Guide Pages
+## Phase 4: Programmatic SEO Guide Pages (via @seo/components)
 
-### 4a. Create Shared Guide Components
+All guide page components come from the `@seo/components` package (installed in Phase 2b). Do NOT manually create guide components; import them from the package.
 
-Guide pages reuse the site Header/Footer from the `(main)` layout. They do NOT need their own navbar or footer. Create only these in-page components in `src/components/`:
+### 4a. Configure next.config for guide discovery
 
-| Component | File | Purpose |
-|-----------|------|---------|
-| GuideCTASection | `guide-cta-section.tsx` | Bottom CTA block with heading, body, subtext |
-| InlineCTA | `inline-cta.tsx` | Mid-article CTA break |
-| StickyBottomCTA | `sticky-bottom-cta.tsx` | Fixed bottom bar CTA (appears on scroll) |
-| ProofBanner | `proof-banner.tsx` | Social proof quote with metric badge |
+Wrap the Next.js config with `withSeoContent` to enable build-time guide discovery:
 
-### 4b. Create SEO Guide Pages
+```ts
+import type { NextConfig } from "next";
+import { withSeoContent } from "@seo/components/next";
+
+const nextConfig: NextConfig = {
+  output: "standalone",
+  transpilePackages: ["@seo/components"],
+};
+
+export default withSeoContent(nextConfig, { contentDir: "src/app/(main)/t" });
+```
+
+At `next build`, this walks the content directory and generates `.next/seo-guides-manifest.json` so runtime code (sidebar, chat API) can read the page inventory without filesystem access on Cloud Run.
+
+### 4b. Create guide index at `src/app/(main)/t/page.tsx`
+
+```tsx
+import { discoverGuides } from "@seo/components/server";
+import { Breadcrumbs, AnimatedSection, breadcrumbListSchema } from "@seo/components";
+
+export const metadata = { title: "Guides | CLIENT_NAME", description: "..." };
+
+export default function GuidesIndex() {
+  const guides = discoverGuides();
+  const jsonLd = breadcrumbListSchema([
+    { name: "Home", url: "https://DOMAIN" },
+    { name: "Guides", url: "https://DOMAIN/t" },
+  ]);
+
+  return (
+    <>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+      <div className="max-w-4xl mx-auto px-6 py-16">
+        <Breadcrumbs items={[{ label: "Home", href: "/" }, { label: "Guides" }]} className="mb-8" />
+        <h1 className="font-heading text-4xl font-bold text-primary mb-8">Guides</h1>
+        <div className="grid gap-4">
+          {guides.map((guide, i) => (
+            <AnimatedSection key={guide.slug} delay={i * 0.03}>
+              <a href={guide.href} className="block p-6 rounded-xl border border-white/10 hover:border-accent/20 transition-all">
+                <h2 className="font-heading text-xl font-semibold text-white">{guide.title}</h2>
+                {guide.description && <p className="text-muted mt-2">{guide.description}</p>}
+              </a>
+            </AnimatedSection>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+```
+
+### 4c. Create SEO Guide Pages
 
 **MANDATORY:** Follow the `seo-page-ui` skill (`~/social-autoposter/.claude/skills/seo-page-ui/SKILL.md`) for the page structure. It defines the exact 11-section order, animated SVG patterns, comparison tables, FAQ accordions, JSON-LD blocks, and color palette. Adapt its patterns to the client's theme colors and branding.
 
-Create guide pages at `src/app/(main)/t/{slug}/page.tsx`. They live inside the `(main)` route group so they automatically get the site Header/Footer. Each guide:
+Create guide pages at `src/app/(main)/t/{slug}/page.tsx`. They live inside the `(main)` route group so they automatically get the site Header/Footer.
 
-**Structure:**
+**Discover available components dynamically:**
+
+Before writing any guide page, read `~/seo-components/src/index.ts` to discover all available exports. Select the components that best match the page's content needs. Import ONLY from `@seo/components` (the alias).
+
+Categories of available components (read source for the full current list):
+- **JSON-LD helpers:** schema generators (articleSchema, breadcrumbListSchema, faqPageSchema, howToSchema)
+- **Trust signals:** Breadcrumbs, ArticleMeta, ProofBand, ProofBanner, FaqSection, InlineTestimonial, ComparisonTable
+- **Content display:** AnimatedCodeBlock, TerminalOutput, FlowDiagram, SequenceDiagram, CodeComparison, AnimatedChecklist, AnimatedSection, AnimatedMetric, MetricsRow
+- **CTA:** InlineCta, StickyBottomCta
+- **Rich layout:** BentoGrid, BeforeAfter, AnimatedDemo, GlowCard, ParallaxSection, StepTimeline, MotionSequence
+- **Magic UI:** Marquee, AnimatedBeam, OrbitingCircles, NumberTicker, ShimmerButton, GradientText, BackgroundGrid, MorphingText, Particles, ShineBorder, TextShimmer, TypingAnimation
+- **Media:** RemotionClip, ConceptReveal, LottiePlayer
+- **Navigation:** SitemapSidebar, HeadingAnchors, GuideChatPanel, NewsletterSignup
+- **Server utilities:** import from `@seo/components/server` (walkPages, createGuideChatHandler, discoverGuides, etc.)
+
+Read component source files in `~/seo-components/src/components/` for prop interfaces before using them.
+
+**Do NOT create local guide component files** (no `guide-cta-section.tsx`, `inline-cta.tsx`, `sticky-bottom-cta.tsx`, `proof-banner.tsx`). Everything comes from the package.
+
+**Do NOT import GuideNavbar or GuideFooter in guide pages.** The site Header/Footer handle navigation.
+
+**Page structure:**
 ```
 [Header from (main)/layout.tsx]
   article (max-w-3xl)
-    header (h1 + intro paragraph)
+    Breadcrumbs
+    header (h1 + ArticleMeta)
     ProofBanner (real client metric)
     nav (table of contents with anchor links)
-    section#topic-1 (h2 + content + h3 subtopics)
+    section#topic-1 (AnimatedSection + h2 + content)
     section#topic-2
-    InlineCTA (after 2nd section)
+    InlineCta (after 2nd section)
     section#topic-3
     section#topic-4
-    GuideCTASection
-  StickyBottomCTA
+    FaqSection
+  StickyBottomCta
 [Footer from (main)/layout.tsx]
 ```
 
-**Do NOT import GuideNavbar or GuideFooter in guide pages.** The site Header/Footer handle navigation. Only import ProofBanner, InlineCTA, GuideCTASection, and StickyBottomCTA.
+**Example guide page:**
+
+```tsx
+import type { Metadata } from "next";
+// Import components discovered from ~/seo-components/src/index.ts
+// Select only the components this page actually needs
+import {
+  Breadcrumbs, ArticleMeta, FaqSection, InlineCta,
+  StickyBottomCta, ProofBanner, AnimatedSection,
+  articleSchema, breadcrumbListSchema,
+} from "@seo/components";
+
+const TITLE = "Guide Title";
+const DESCRIPTION = "Guide description for search engines.";
+const DATE_PUBLISHED = "2026-04-15";
+
+export const metadata: Metadata = {
+  title: `${TITLE} | CLIENT_NAME`,
+  description: DESCRIPTION,
+};
+
+export default function GuidePage() {
+  const jsonLd = [
+    articleSchema({ title: TITLE, description: DESCRIPTION, url: "https://DOMAIN/t/slug", datePublished: DATE_PUBLISHED }),
+    breadcrumbListSchema([
+      { name: "Home", url: "https://DOMAIN" },
+      { name: "Guides", url: "https://DOMAIN/t" },
+      { name: TITLE, url: "https://DOMAIN/t/slug" },
+    ]),
+  ];
+
+  // Use the site's design tokens for colors. Match the site's theme (dark or light).
+  // Read the project's globals.css/tailwind.config to find the correct tokens.
+  return (
+    <>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+      <article className="max-w-3xl mx-auto px-6 py-16">
+        <Breadcrumbs items={[
+          { label: "Home", href: "/" },
+          { label: "Guides", href: "/t" },
+          { label: TITLE },
+        ]} className="mb-8" />
+        <AnimatedSection>
+          <h1 className="font-heading text-4xl font-bold text-primary mb-4">{TITLE}</h1>
+          <ArticleMeta date={DATE_PUBLISHED} readTime="8 min" />
+        </AnimatedSection>
+        <ProofBanner quote="CLIENT_PROOF_QUOTE" source="CLIENT_NAME, LOCATION" metric="METRIC_VALUE" />
+        <nav className="rounded-lg p-6 mb-12 bg-surface-light/50 border border-white/5">
+          {/* Table of contents with anchor links */}
+        </nav>
+        <section id="topic-1">
+          <AnimatedSection><h2>First Topic</h2></AnimatedSection>
+          <p>Expert-level content...</p>
+        </section>
+        <section id="topic-2">
+          <AnimatedSection><h2>Second Topic</h2></AnimatedSection>
+          <p>More content...</p>
+        </section>
+        <InlineCta heading="Ready to get started?" href="/precall" label="Schedule a Call" />
+        <section id="topic-3">
+          <AnimatedSection><h2>Third Topic</h2></AnimatedSection>
+        </section>
+        <FaqSection items={[{ question: "Q?", answer: "A." }]} />
+      </article>
+      <StickyBottomCta heading="Free consultation" href="/precall" label="Book Now" />
+    </>
+  );
+}
+```
 
 **Content requirements:**
 - 2,000+ words of genuinely useful, expert-level content
@@ -1128,6 +1287,7 @@ Create guide pages at `src/app/(main)/t/{slug}/page.tsx`. They live inside the `
 - Proper heading hierarchy (h1 > h2 > h3)
 - Table of contents with anchor links
 - Metadata with title, description, OG tags
+- Export `TITLE`, `DESCRIPTION`, `DATE_PUBLISHED` as const for manifest discovery
 
 **Topic selection:**
 - Target long-tail keywords in the client's industry
@@ -1135,24 +1295,61 @@ Create guide pages at `src/app/(main)/t/{slug}/page.tsx`. They live inside the `
 - Use "how to", "guide", "complete guide", "strategies" patterns
 - Each page should have a unique search intent
 
-### 4c. Transform Script
+### 4d. Add sidebar navigation (optional)
 
-Create a transform script at `~/social-autoposter/scripts/transform_{client}_pages.mjs` that:
+```tsx
+// src/components/site-sidebar.tsx (server component)
+import { walkPages } from "@seo/components/server";
+import { SitemapSidebarClient } from "./site-sidebar-client";
 
-1. Iterates through all `(main)/t/[slug]/` directories
-2. Injects StickyBottomCTA import and component
-3. Adds ProofBanner after `</header>` with real client metrics
-4. Adds InlineCTA after the 2nd `</section>`
-5. Replaces inline CTA sections with GuideCTASection
-6. Skips pages already transformed (checks for `@/components/`)
+export function SiteSidebar() {
+  const pages = walkPages({ excludePaths: ["api"] });
+  return <SitemapSidebarClient pages={pages} />;
+}
 
-**Template:**
+// src/components/site-sidebar-client.tsx (client component)
+"use client";
+import { SitemapSidebar } from "@seo/components";
 
-```js
-const PROOF_QUOTE = "CLIENT_PROOF_QUOTE";
-const PROOF_SOURCE = "CLIENT_NAME, LOCATION";
-const PROOF_METRIC = "METRIC_VALUE";
+export function SitemapSidebarClient({ pages }: { pages: any[] }) {
+  return <SitemapSidebar items={pages} />;
+}
 ```
+
+### 4e. Add AI guide chat (optional)
+
+Create `src/app/api/guide-chat/route.ts`:
+
+```tsx
+import { createGuideChatHandler } from "@seo/components/server";
+
+export const POST = createGuideChatHandler({
+  app: "CLIENT_SLUG",
+  brand: "CLIENT_NAME",
+  siteDescription: "Brief description of the client's business.",
+  contentDir: "src/app/(main)/t",
+});
+```
+
+Then add `<GuideChatPanel />` from `@seo/components` to guide pages or the layout.
+
+### 4f. Available @seo/components reference
+
+**JSON-LD helpers:** `breadcrumbListSchema`, `faqPageSchema`, `articleSchema`, `howToSchema`
+
+**Content components:** `Breadcrumbs`, `ArticleMeta`, `FaqSection`, `ComparisonTable`, `ProofBand`, `ProofBanner`, `InlineTestimonial`
+
+**Animation components:** `AnimatedBeam`, `MorphingText`, `NumberTicker`, `OrbitingCircles`, `Particles`, `Marquee`, `ShimmerButton`, `GradientText`, `TextShimmer`, `TypingAnimation`, `ShineBorder`, `BackgroundGrid`
+
+**Layout components:** `BentoGrid`, `BeforeAfter`, `AnimatedDemo`, `GlowCard`, `ParallaxSection`, `StepTimeline`, `MotionSequence`, `AnimatedSection`, `AnimatedMetric`, `MetricsRow`
+
+**Code/technical display:** `AnimatedCodeBlock`, `CodeComparison`, `TerminalOutput`, `FlowDiagram`, `SequenceDiagram`, `AnimatedChecklist`
+
+**CTA components:** `InlineCta`, `StickyBottomCta`
+
+**Interactive:** `SitemapSidebar`, `HeadingAnchors`, `GuideChatPanel`
+
+**Server utilities:** `walkPages()`, `discoverGuides()`, `createGuideChatHandler()`, `SeoComponentsStyles`
 
 ---
 
@@ -1194,25 +1391,195 @@ git commit -m "Initial commit: CLIENT_NAME website"
 gh repo create m13v/CLIENT-website --private --source=. --push
 ```
 
-### 6b. Vercel Deployment
+### 6b. Ensure `next.config.ts` has standalone output
 
-```bash
-vercel --yes
-vercel --prod --yes
+```ts
+import type { NextConfig } from "next";
+const nextConfig: NextConfig = { output: "standalone" };
+export default nextConfig;
 ```
 
-### 6c. Environment Variables (if using PostHog)
+### 6c. Create Dockerfile
 
-```bash
-vercel env add NEXT_PUBLIC_POSTHOG_KEY production <<< "KEY"
-vercel env add NEXT_PUBLIC_POSTHOG_HOST production <<< "https://us.i.posthog.com"
+```dockerfile
+FROM node:20-alpine AS base
+
+# --- Dependencies ---
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci --ignore-scripts
+
+# --- Builder ---
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# NEXT_PUBLIC_* vars must be present at build time because Next.js bakes them
+# into the client bundle. Runtime env vars on Cloud Run are too late.
+ARG NEXT_PUBLIC_POSTHOG_KEY
+ARG NEXT_PUBLIC_POSTHOG_HOST
+ENV NEXT_PUBLIC_POSTHOG_KEY=$NEXT_PUBLIC_POSTHOG_KEY
+ENV NEXT_PUBLIC_POSTHOG_HOST=$NEXT_PUBLIC_POSTHOG_HOST
+
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+# --- Runner ---
+FROM base AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+USER nextjs
+ENV PORT=8080
+ENV HOSTNAME="0.0.0.0"
+EXPOSE 8080
+CMD ["node", "server.js"]
 ```
 
-### 6d. Custom Domain (when ready)
+### 6d. Deploy Cloud Run service
 
 ```bash
-vercel domains add CLIENT_DOMAIN
+# Create GCP project (or reuse existing)
+gcloud services enable run.googleapis.com dns.googleapis.com \
+  compute.googleapis.com certificatemanager.googleapis.com \
+  --project=GCP_PROJECT_ID
+
+# Deploy (source-based: Cloud Build builds the Dockerfile automatically)
+gcloud run deploy SERVICE_NAME \
+  --source . \
+  --region us-central1 \
+  --project GCP_PROJECT_ID \
+  --allow-unauthenticated \
+  --quiet
 ```
+
+### 6e. Set up HTTPS Load Balancer with custom domain
+
+```bash
+# Reserve static IP
+gcloud compute addresses create PROJECT_NAME-ip --global --project=GCP_PROJECT_ID
+STATIC_IP=$(gcloud compute addresses describe PROJECT_NAME-ip --global --project=GCP_PROJECT_ID --format="value(address)")
+
+# Create Cloud DNS zone and A record
+gcloud dns managed-zones create DNS_ZONE --dns-name="DOMAIN." \
+  --description="DNS zone for DOMAIN" --project=GCP_PROJECT_ID
+gcloud dns record-sets create DOMAIN. --type=A --ttl=300 \
+  --rrdatas="$STATIC_IP" --zone=DNS_ZONE --project=GCP_PROJECT_ID
+
+# Certificate Manager DNS authorization + managed cert
+gcloud certificate-manager dns-authorizations create PROJECT_NAME-dns-auth \
+  --domain="DOMAIN" --project=GCP_PROJECT_ID
+AUTH_CNAME=$(gcloud certificate-manager dns-authorizations describe PROJECT_NAME-dns-auth \
+  --project=GCP_PROJECT_ID --format="value(dnsResourceRecord.name)")
+AUTH_DATA=$(gcloud certificate-manager dns-authorizations describe PROJECT_NAME-dns-auth \
+  --project=GCP_PROJECT_ID --format="value(dnsResourceRecord.data)")
+gcloud dns record-sets create "${AUTH_CNAME}." --type=CNAME --ttl=300 \
+  --rrdatas="${AUTH_DATA}." --zone=DNS_ZONE --project=GCP_PROJECT_ID
+gcloud certificate-manager certificates create PROJECT_NAME-cert \
+  --domains="DOMAIN" --dns-authorizations=PROJECT_NAME-dns-auth --project=GCP_PROJECT_ID
+gcloud certificate-manager maps create PROJECT_NAME-cert-map --project=GCP_PROJECT_ID
+gcloud certificate-manager maps entries create PROJECT_NAME-cert-entry \
+  --map=PROJECT_NAME-cert-map --certificates=PROJECT_NAME-cert \
+  --hostname="DOMAIN" --project=GCP_PROJECT_ID
+
+# Serverless NEG, backend, URL map, HTTPS proxy, forwarding rule
+gcloud compute network-endpoint-groups create PROJECT_NAME-neg \
+  --region=us-central1 --network-endpoint-type=serverless \
+  --cloud-run-service=SERVICE_NAME --project=GCP_PROJECT_ID
+gcloud compute backend-services create PROJECT_NAME-backend --global --project=GCP_PROJECT_ID
+gcloud compute backend-services add-backend PROJECT_NAME-backend --global \
+  --network-endpoint-group=PROJECT_NAME-neg \
+  --network-endpoint-group-region=us-central1 --project=GCP_PROJECT_ID
+gcloud compute url-maps create PROJECT_NAME-urlmap \
+  --default-service=PROJECT_NAME-backend --global --project=GCP_PROJECT_ID
+gcloud compute target-https-proxies create PROJECT_NAME-https-proxy \
+  --url-map=PROJECT_NAME-urlmap --certificate-map=PROJECT_NAME-cert-map \
+  --global --project=GCP_PROJECT_ID
+gcloud compute forwarding-rules create PROJECT_NAME-https-rule --global \
+  --target-https-proxy=PROJECT_NAME-https-proxy --address=PROJECT_NAME-ip \
+  --ports=443 --project=GCP_PROJECT_ID
+
+# HTTP to HTTPS redirect
+gcloud compute url-maps import PROJECT_NAME-http-redirect --global --project=GCP_PROJECT_ID <<EOF
+name: PROJECT_NAME-http-redirect
+defaultUrlRedirect:
+  httpsRedirect: true
+  redirectResponseCode: MOVED_PERMANENTLY_DEFAULT
+EOF
+gcloud compute target-http-proxies create PROJECT_NAME-http-proxy \
+  --url-map=PROJECT_NAME-http-redirect --global --project=GCP_PROJECT_ID
+gcloud compute forwarding-rules create PROJECT_NAME-http-rule --global \
+  --target-http-proxy=PROJECT_NAME-http-proxy --address=PROJECT_NAME-ip \
+  --ports=80 --project=GCP_PROJECT_ID
+
+# Lock down Cloud Run to LB-only traffic
+gcloud run services update SERVICE_NAME \
+  --ingress=internal-and-cloud-load-balancing \
+  --region=us-central1 --project=GCP_PROJECT_ID
+```
+
+### 6f. Create GitHub Actions workflow for CI/CD
+
+Create `.github/workflows/deploy-cloudrun.yml`:
+
+```yaml
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGION: us-central1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy SERVICE_NAME \
+            --source . \
+            --region ${{ env.REGION }} \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --quiet
+
+      - name: Verify deployment
+        run: |
+          PUBLIC=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "https://DOMAIN/" || echo "000")
+          echo "Public health (https://DOMAIN/): HTTP $PUBLIC"
+          if [ "$PUBLIC" != "200" ]; then
+            echo "::warning::Public health check returned $PUBLIC"
+          fi
+```
+
+**GitHub repo secrets to add:**
+- `GCP_SA_KEY`: service account JSON key with Cloud Run Admin, Cloud Build Editor, and Storage Admin roles
+- `GCP_PROJECT_ID`: the GCP project ID
 
 ---
 
@@ -1233,7 +1600,7 @@ clientname: {
 ### 7b. Google Search Console
 
 1. Add property in Search Console
-2. Add TXT verification record via Vercel DNS
+2. Add TXT verification record via Cloud DNS: `gcloud dns record-sets create DOMAIN. --type=TXT --ttl=300 --rrdatas='"google-site-verification=..."' --zone=DNS_ZONE --project=GCP_PROJECT_ID`
 3. Submit sitemap: `https://clientdomain.com/sitemap.xml`
 
 ---
@@ -1255,7 +1622,12 @@ clientname: {
 - [ ] Lighthouse mobile score >= 70
 - [ ] No console errors on any page
 - [ ] All internal links work (no 404s)
-- [ ] SEO guide pages at /t/{slug} load with ProofBanner, InlineCTA, StickyBottomCTA
+- [ ] SEO guide pages at /t/{slug} load with components from @seo/components (Breadcrumbs, ProofBanner, InlineCta, StickyBottomCta, FaqSection)
+- [ ] Guide index at /t lists all discovered guides
+- [ ] `@seo/components` installed and `transpilePackages` + `withSeoContent` configured in `next.config.ts`
+- [ ] HeadingAnchors injects `id` attributes on H2 elements (inspect DOM)
+- [ ] SeoComponentsStyles loads in `<head>` (check page source)
+- [ ] Build generates `.next/seo-guides-manifest.json` with correct page count
 - [ ] PostHog captures pageview and cta_click events
 - [ ] Google Search Console ownership verified
 - [ ] Client added to SEO pages dashboard
@@ -1299,8 +1671,6 @@ clientname: {
       Header.tsx
       Footer.tsx
       FAQItem.tsx             # Accordion client component
-      guide-cta-section.tsx   # Bottom CTA block for guide pages
-      inline-cta.tsx          # Mid-article CTA break
-      sticky-bottom-cta.tsx   # Fixed bottom bar CTA
-      proof-banner.tsx        # Social proof quote with metric badge
+      site-sidebar.tsx        # Server component wrapping walkPages() (optional)
+      site-sidebar-client.tsx # Client component wrapping SitemapSidebar (optional)
 ```

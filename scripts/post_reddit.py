@@ -469,11 +469,15 @@ def main():
                 continue
 
             permalink = result.get("permalink", "")
+            if not permalink or not permalink.startswith("http"):
+                print(f"[post_reddit] SKIPPED LOG: no valid permalink captured (got: {permalink!r})")
+                failed += 1
+                continue
             log_post(thread_url, permalink, text, project_name,
                      thread_author, thread_title, reddit_username,
                      engagement_style=engagement_style)
             posted += 1
-            print(f"[post_reddit] POSTED: {permalink or 'ok'}")
+            print(f"[post_reddit] POSTED: {permalink}")
         else:
             err = result.get("error", "unknown")
             failed += 1

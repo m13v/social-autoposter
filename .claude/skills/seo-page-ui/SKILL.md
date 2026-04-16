@@ -46,9 +46,9 @@ Read the project's CSS/Tailwind config to extract the actual colors. If unavaila
 | Warning | `#f59e0b` | Warning callouts |
 | Error | `#ef4444` | Error callouts |
 
-If the project has a light theme, invert appropriately (dark text on light backgrounds).
+**MANDATORY theme detection:** Before building any page, read the project's `globals.css` (or equivalent) and root layout to determine the site's theme (dark or light). Use the site's actual design tokens and color scheme. Do NOT hardcode light-mode classes (like `bg-gray-50`, `text-gray-600`, `bg-white`) on a dark-themed site, or dark-mode classes on a light-themed site.
 
-CSS classes for the page body use the site's design tokens. Common patterns: `text-white`, `text-muted`, `text-accent`, `bg-surface-light/50`, `border-white/5`, `border-accent/20`. Adapt to whatever tokens the project already uses.
+CSS classes for the page body use the site's design tokens. Common dark-theme patterns: `text-white`, `text-muted`, `text-accent`, `bg-surface-light/50`, `border-white/5`, `border-accent/20`. Common light-theme patterns: `text-gray-900`, `text-gray-600`, `bg-gray-50`, `border-gray-200`. Always match the existing site's tokens.
 
 ---
 
