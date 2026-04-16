@@ -166,7 +166,11 @@ else
   CADENCE_NOTE="This is an EXTERNAL subreddit (3-day floor). The thread must pass the sub's self-promo bar. No product links unless genuinely relevant (max 1)."
 fi
 
-claude -p "You are posting an ORIGINAL thread to ${SUBREDDIT} for the ${PROJECT} project as u/${POST_ACCOUNT}.
+# JSON schema: forces the model to return structured output with all required fields.
+# This is how we enforce step compliance programmatically.
+RESULT_SCHEMA='{"type":"object","properties":{"research_files_read":{"type":"array","items":{"type":"string"},"description":"Absolute paths of source files actually read during research step"},"subreddit_browsed":{"type":"boolean","description":"Whether you navigated to the subreddit hot page and read threads"},"hot_threads_seen":{"type":"array","items":{"type":"string"},"description":"Titles of 3-5 hot threads you read on the subreddit"},"topic_angle":{"type":"string","description":"The topic angle chosen from the list"},"engagement_style":{"type":"string","description":"The engagement style chosen"},"title":{"type":"string","description":"The exact post title submitted"},"body":{"type":"string","description":"The exact post body submitted"},"permalink":{"type":["string","null"],"description":"The Reddit permalink after successful submission, or null if aborted"},"rules_checked":{"type":"boolean","description":"Whether you checked subreddit rules"},"flair_applied":{"type":["string","null"],"description":"Flair text applied, or null if none"},"abort_reason":{"type":["string","null"],"description":"Reason for aborting, or null if posted successfully"},"source_summary":{"type":"string","description":"Rich source summary: (a) topic angle and why, (b) source files read, (c) specific details used"}},"required":["research_files_read","subreddit_browsed","hot_threads_seen","topic_angle","engagement_style","title","body","permalink","rules_checked","flair_applied","abort_reason","source_summary"]}'
+
+CLAUDE_OUTPUT=$(claude -p --output-format json --json-schema "$RESULT_SCHEMA" "You are posting an ORIGINAL thread to ${SUBREDDIT} for the ${PROJECT} project as u/${POST_ACCOUNT}.
 
 ## Config & Rules
 Read $SKILL_FILE for content rules and anti-AI-detection checklist.
@@ -231,7 +235,7 @@ ${TOP_POSTS}
    - VARY CAPITALIZATION: do NOT lowercase every sentence start. Mix it naturally: some sentences capitalized, some not. Uniform all-lowercase is a known AI tell.
 
 5. SUBREDDIT RULES CHECK via mcp__reddit-agent__browser_navigate to https://old.reddit.com/${SUBREDDIT}/about/rules
-   - If strict no-self-promo and our post would read promotional, ABORT. Log: 'ABORTED: ${SUBREDDIT} rules incompatible'.
+   - If strict no-self-promo and our post would read promotional, ABORT. Set abort_reason and permalink=null.
    - Note whether flair is required.
    - Close the tab.
 
@@ -247,21 +251,75 @@ ${TOP_POSTS}
    - Click the submit button. Wait 3 seconds. Capture the permalink (document.location.href after submission).
    - Close the tab.
 
-7. LOG to database. IMPORTANT: Build a RICH source_summary covering (a) what topic angle you chose and why, (b) which source file(s) you read for grounding, (c) which specific detail you used. This is NOT optional:
+7. LOG to database. IMPORTANT: The source_summary in your JSON output IS what gets logged. Make it rich:
    INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
      thread_title, thread_content, our_url, our_content, our_account,
      source_summary, project_name, engagement_style, feedback_report_used, status, posted_at)
    VALUES ('reddit', PERMALINK, '${POST_ACCOUNT}', '${POST_ACCOUNT}',
      TITLE, BODY, PERMALINK, BODY, '${POST_ACCOUNT}',
-     RICH_SOURCE_SUMMARY, '${PROJECT}', 'STYLE_YOU_CHOSE', TRUE, 'active', NOW());
+     SOURCE_SUMMARY, '${PROJECT}', 'STYLE_YOU_CHOSE', TRUE, 'active', NOW());
 
-8. Print exactly:
-   POSTED: [permalink] | [title]
+8. Return your structured JSON output. Every field in the schema is required. Fill permalink with the actual URL if posted, or null if aborted.
 
 CRITICAL: NEVER use em dashes.
 CRITICAL: Use ONLY mcp__reddit-agent__* tools.
 CRITICAL: Close browser tabs after each navigation (browser_tabs action 'close').
-CRITICAL: If a browser call times out, wait 30s and retry up to 3 times." 2>&1 | tee -a "$LOG_FILE"
+CRITICAL: If a browser call times out, wait 30s and retry up to 3 times." 2>&1)
+
+# Parse structured output and log results
+echo "$CLAUDE_OUTPUT" | tee -a "$LOG_FILE"
+
+# Extract fields from JSON output for the summary line
+PERMALINK=$(/usr/bin/python3 -c "
+import json,sys
+try:
+    d = json.loads(sys.stdin.read())
+    r = d.get('result', d)  # handle wrapped or unwrapped
+    print(r.get('permalink') or 'null')
+except: print('PARSE_ERROR')
+" <<< "$CLAUDE_OUTPUT" 2>/dev/null)
+
+TITLE=$(/usr/bin/python3 -c "
+import json,sys
+try:
+    d = json.loads(sys.stdin.read())
+    r = d.get('result', d)
+    print(r.get('title',''))
+except: print('PARSE_ERROR')
+" <<< "$CLAUDE_OUTPUT" 2>/dev/null)
+
+ABORT_REASON=$(/usr/bin/python3 -c "
+import json,sys
+try:
+    d = json.loads(sys.stdin.read())
+    r = d.get('result', d)
+    print(r.get('abort_reason') or '')
+except: print('PARSE_ERROR')
+" <<< "$CLAUDE_OUTPUT" 2>/dev/null)
+
+# Log step compliance summary
+/usr/bin/python3 -c "
+import json,sys
+try:
+    d = json.loads(sys.stdin.read())
+    r = d.get('result', d)
+    files = r.get('research_files_read', [])
+    browsed = r.get('subreddit_browsed', False)
+    hot = r.get('hot_threads_seen', [])
+    rules = r.get('rules_checked', False)
+    style = r.get('engagement_style', '?')
+    print(f'Step compliance: research={len(files)} files, browsed={browsed}, hot_threads={len(hot)}, rules_checked={rules}, style={style}')
+except Exception as e:
+    print(f'Step compliance: PARSE ERROR ({e})')
+" <<< "$CLAUDE_OUTPUT" 2>/dev/null | tee -a "$LOG_FILE"
+
+if [ "$PERMALINK" != "null" ] && [ "$PERMALINK" != "PARSE_ERROR" ]; then
+  echo "POSTED: $PERMALINK | $TITLE" | tee -a "$LOG_FILE"
+elif [ -n "$ABORT_REASON" ] && [ "$ABORT_REASON" != "PARSE_ERROR" ]; then
+  echo "ABORTED: $ABORT_REASON" | tee -a "$LOG_FILE"
+else
+  echo "UNKNOWN OUTCOME (check JSON output above)" | tee -a "$LOG_FILE"
+fi
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 find "$LOG_DIR" -name "run-reddit-threads-*.log" -mtime +14 -delete 2>/dev/null || true
