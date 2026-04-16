@@ -143,20 +143,23 @@ def batch_fetch_info(thing_ids, user_agent=USER_AGENT):
 
 
 def _load_blocked_subreddits():
-    """Load subreddits where Deep_Ad1959 cannot post (banned/restricted)."""
+    """Load subreddits where Deep_Ad1959 is actually banned (cannot comment).
+
+    Only loads the 'account_banned' group from config.json, not strategic
+    thread-only skips (verified, low_performance). This lets the comment
+    pipeline still find threads in subs where we can comment but chose not
+    to post original threads.
+    """
     try:
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
         with open(config_path) as f:
             config = json.load(f)
         blocked = set()
-        for subs in config.get("banned_subreddits", {}).values():
-            blocked.update(s.lower() for s in subs)
+        banned = config.get("banned_subreddits") or {}
+        if isinstance(banned, dict):
+            for s in banned.get("account_banned") or []:
+                blocked.add(s.lower())
         blocked.update(s.lower() for s in config.get("exclusions", {}).get("subreddits", []))
-        # Also load auto-tracked restricted subreddits
-        restricted_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".restricted_subreddits.json")
-        if os.path.exists(restricted_path):
-            with open(restricted_path) as f:
-                blocked.update(json.load(f).keys())
         return blocked
     except Exception:
         return set()
