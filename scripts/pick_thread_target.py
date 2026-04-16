@@ -49,7 +49,11 @@ def norm_sub(s):
 
 
 def flatten_banned(config):
-    """banned_subreddits is a dict of groups -> list of slugs. Flatten."""
+    """banned_subreddits is a dict of groups -> list of slugs. Flatten all groups.
+
+    For threads we block everything: account_banned, verified, low_performance.
+    Also loads runtime-detected restrictions from .restricted_subreddits.json.
+    """
     banned = config.get("banned_subreddits") or {}
     out = set()
     if isinstance(banned, dict):
@@ -59,6 +63,15 @@ def flatten_banned(config):
     elif isinstance(banned, list):
         for s in banned:
             out.add(norm_sub(s))
+    restricted_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   ".restricted_subreddits.json")
+    if os.path.exists(restricted_path):
+        try:
+            with open(restricted_path) as f:
+                for s in json.load(f).keys():
+                    out.add(norm_sub(s))
+        except Exception:
+            pass
     return out
 
 
