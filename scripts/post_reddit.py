@@ -25,7 +25,6 @@ import db as dbmod
 
 REPO_DIR = os.path.expanduser("~/social-autoposter")
 CONFIG_PATH = os.path.join(REPO_DIR, "config.json")
-RESTRICTED_SUBS_PATH = os.path.join(REPO_DIR, "scripts", ".restricted_subreddits.json")
 API_KEY_KEYCHAIN_SERVICE = "Anthropic API Key Fazm"
 REDDIT_BROWSER = os.path.join(REPO_DIR, "scripts", "reddit_browser.py")
 REDDIT_TOOLS = os.path.join(REPO_DIR, "scripts", "reddit_tools.py")
@@ -34,21 +33,29 @@ from engagement_styles import VALID_STYLES, get_styles_prompt, get_content_rules
 
 
 def mark_subreddit_restricted(thread_url: str) -> None:
-    """Persist a subreddit as restricted so future searches skip it."""
+    """Add a subreddit to config.json subreddit_bans.skip_threads at runtime.
+
+    Called when the bot encounters a posting restriction. The sub gets blocked
+    for original threads but comments remain allowed.
+    """
     sub_match = re.search(r'/r/([^/]+)/', thread_url)
     if not sub_match:
         return
     sub = sub_match.group(1).lower()
     try:
-        data = {}
-        if os.path.exists(RESTRICTED_SUBS_PATH):
-            with open(RESTRICTED_SUBS_PATH) as f:
-                data = json.load(f)
-        if sub not in data:
-            data[sub] = True
-            with open(RESTRICTED_SUBS_PATH, "w") as f:
-                json.dump(data, f, indent=2)
-            print(f"[post_reddit] Marked r/{sub} as restricted (won't retry)")
+        with open(CONFIG_PATH) as f:
+            config = json.load(f)
+        bans = config.setdefault("subreddit_bans", {})
+        skip = bans.setdefault("skip_threads", [])
+        existing = {s.lower() for s in skip}
+        # Also check banned list to avoid duplicates
+        banned = {s.lower() for s in bans.get("banned", [])}
+        if sub not in existing and sub not in banned:
+            skip.append(sub)
+            skip.sort(key=str.lower)
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(config, f, indent=2)
+            print(f"[post_reddit] Added r/{sub} to subreddit_bans.skip_threads")
     except Exception as e:
         print(f"[post_reddit] WARNING: could not persist restricted sub r/{sub}: {e}")
 
