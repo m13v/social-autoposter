@@ -143,21 +143,20 @@ def batch_fetch_info(thing_ids, user_agent=USER_AGENT):
 
 
 def _load_blocked_subreddits():
-    """Load subreddits where Deep_Ad1959 is actually banned (cannot comment).
+    """Load subreddits where the account is truly banned (cannot comment).
 
-    Only loads the 'account_banned' group from config.json, not strategic
-    thread-only skips (verified, low_performance). This lets the comment
-    pipeline still find threads in subs where we can comment but chose not
-    to post original threads.
+    Only loads subreddit_bans.banned, not skip_threads. The comment pipeline
+    can still find threads in subs where we strategically skip original
+    threads but can still comment.
     """
     try:
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
         with open(config_path) as f:
             config = json.load(f)
         blocked = set()
-        banned = config.get("banned_subreddits") or {}
-        if isinstance(banned, dict):
-            for s in banned.get("account_banned") or []:
+        bans = config.get("subreddit_bans") or {}
+        if isinstance(bans, dict):
+            for s in bans.get("banned") or []:
                 blocked.add(s.lower())
         blocked.update(s.lower() for s in config.get("exclusions", {}).get("subreddits", []))
         return blocked
