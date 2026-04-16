@@ -25,6 +25,10 @@ echo "=== Reddit Threads Run: $(date) ===" | tee "$LOG_FILE"
 source "$REPO_DIR/skill/lock.sh"
 acquire_lock "reddit-threads" 600
 
+# Load engagement styles
+source "$REPO_DIR/skill/styles.sh"
+STYLES_BLOCK=$(generate_styles_block reddit posting)
+
 # Pick target
 TARGET_JSON=$(/usr/bin/python3 "$REPO_DIR/scripts/pick_thread_target.py" --json 2>&1) || {
   echo "NO_ELIGIBLE_TARGET: every eligible subreddit is inside its floor window. Stopping." | tee -a "$LOG_FILE"
@@ -73,10 +77,6 @@ if voice:
     out.append(f"\nVoice tone: {voice.get('tone','')}")
     if voice.get('never'):
         out.append("Voice never: " + "; ".join(voice['never']))
-
-tn = t.get('voice_notes')
-if tn:
-    out.append(f"\nThread voice notes: {tn}")
 
 # Dynamic day counter
 dc = t.get('dynamic_context') or {}
@@ -129,19 +129,27 @@ echo "--- Context block ---" | tee -a "$LOG_FILE"
 echo "$CONTEXT_BLOCK" | tee -a "$LOG_FILE"
 echo "---------------------" | tee -a "$LOG_FILE"
 
-# Recent posts in THIS sub (avoid repeats)
+# Recent posts in THIS sub (avoid repeats - include endings for closer variation)
 RECENT_POSTS_SUB=$(psql "$DATABASE_URL" -t -A -c "
-  SELECT thread_title FROM posts
+  SELECT thread_title || ' |ENDING| ' || RIGHT(our_content, 200) FROM posts
   WHERE thread_url ILIKE '%/r/${SUB_SLUG}/%' AND thread_url = our_url
+  ORDER BY posted_at DESC LIMIT 10
+" 2>/dev/null || echo "(psql error)")
+
+# Recent posts project-wide (cross-sub dedup - include endings)
+RECENT_POSTS_PROJECT=$(psql "$DATABASE_URL" -t -A -c "
+  SELECT thread_title || ' |ENDING| ' || RIGHT(our_content, 200) FROM posts
+  WHERE project_name='${PROJECT}' AND thread_url = our_url
+    AND posted_at > NOW() - INTERVAL '14 days'
   ORDER BY posted_at DESC LIMIT 15
 " 2>/dev/null || echo "(psql error)")
 
-# Recent posts project-wide (cross-sub dedup)
-RECENT_POSTS_PROJECT=$(psql "$DATABASE_URL" -t -A -c "
-  SELECT thread_title FROM posts
+# Recent engagement styles for this project (avoid repeating)
+RECENT_STYLES=$(psql "$DATABASE_URL" -t -A -c "
+  SELECT engagement_style FROM posts
   WHERE project_name='${PROJECT}' AND thread_url = our_url
-    AND posted_at > NOW() - INTERVAL '14 days'
-  ORDER BY posted_at DESC LIMIT 20
+    AND engagement_style IS NOT NULL AND engagement_style != ''
+  ORDER BY posted_at DESC LIMIT 5
 " 2>/dev/null || echo "(psql error)")
 
 # Top performers (tone calibration)
@@ -173,11 +181,17 @@ ${CADENCE_NOTE}
 ## Project context (live-assembled)
 ${CONTEXT_BLOCK}
 
-## Recent posts by us in ${SUBREDDIT} (DO NOT repeat topics)
+${STYLES_BLOCK}
+
+## Recent posts by us in ${SUBREDDIT} (DO NOT repeat topics OR closers)
+Each entry shows: title |ENDING| last 200 chars of post body. Study the endings to vary your closer.
 ${RECENT_POSTS_SUB}
 
-## Recent posts by us for ${PROJECT} across all subs (last 14d - don't recycle same angle)
+## Recent posts by us for ${PROJECT} across all subs (last 14d, don't recycle angle OR closing style)
 ${RECENT_POSTS_PROJECT}
+
+## Recent engagement styles for ${PROJECT} (avoid repeating the same style back-to-back)
+${RECENT_STYLES}
 
 ## Top performing ${PROJECT} posts (match tone/style)
 ${TOP_POSTS}
@@ -190,27 +204,38 @@ ${TOP_POSTS}
    - For Vipassana: read relevant page.tsx under the guide dir
    Pull 1-2 concrete, specific details from the source code or docs to anchor the post. Generic posts get ignored.
 
-2. Pick a topic from the threads.topic_angles list (in the context block above) that:
+2. BROWSE THE SUBREDDIT: Navigate to https://old.reddit.com/${SUBREDDIT}/hot using mcp__reddit-agent__browser_navigate.
+   - Read 3-5 recent thread titles and their top comments to absorb community tone, vocabulary, and what topics are getting engagement right now.
+   - Note any recurring themes or hot-button issues the community cares about today.
+   - Close the tab.
+   This shapes your post to sound like it belongs in the current conversation, not like a scheduled drop.
+
+3. Pick a topic from the threads.topic_angles list (in the context block above) that:
    - Has NOT been posted recently in this subreddit (see above)
    - Is not a recycled angle from other subs (see project-wide list)
    - Fits this subreddit's community and rules
    - Invites genuine discussion (end with a question or open thread)
+   - Pick an engagement_style from the styles list above that:
+     (a) fits the topic and subreddit culture
+     (b) is NOT one of the last 3 styles used for this project (see recent styles above)
 
-3. Draft the post. RULES:
+4. Draft the post. RULES:
    - No em dashes anywhere. Commas, periods, or plain '-' only.
    - No markdown formatting (no ##, no **bold**, no bullet lists).
    - 2-4 short paragraphs, casual tone, first person.
    - Include at least one imperfection (sentence fragment, aside, lowercase start).
    - Title: lowercase, no clickbait patterns, no emojis.
    - Ground in a specific detail from the product source you read in step 1.
-   - Follow voice_notes. Read it out loud; if it sounds like a blog post, rewrite.
+   - Follow the voice guidance from the project context. Read it out loud; if it sounds like a blog post, rewrite.
+   - VARY YOUR CLOSERS: check how recent posts ended (shown after |ENDING| above). Use a DIFFERENT ending pattern. Banned closers: 'curious if anyone', 'anyone else', 'thoughts?', 'has anyone'. Sometimes end with a statement, sometimes mid-thought, sometimes a specific (not generic) question.
+   - VARY CAPITALIZATION: do NOT lowercase every sentence start. Mix it naturally: some sentences capitalized, some not. Uniform all-lowercase is a known AI tell.
 
-4. SUBREDDIT CHECK via mcp__reddit-agent__browser_navigate to https://old.reddit.com/${SUBREDDIT}/about/rules
+5. SUBREDDIT RULES CHECK via mcp__reddit-agent__browser_navigate to https://old.reddit.com/${SUBREDDIT}/about/rules
    - If strict no-self-promo and our post would read promotional, ABORT. Log: 'ABORTED: ${SUBREDDIT} rules incompatible'.
    - Note whether flair is required.
    - Close the tab.
 
-5. POST via mcp__reddit-agent__*:
+6. POST via mcp__reddit-agent__*:
    - Navigate to https://old.reddit.com/${SUBREDDIT}/submit?selftext=true
    - Fill title and body. If Playwright locator hits the md-container wrapper div, fall back to:
      browser_evaluate with:
@@ -222,15 +247,15 @@ ${TOP_POSTS}
    - Click the submit button. Wait 3 seconds. Capture the permalink (document.location.href after submission).
    - Close the tab.
 
-6. LOG to database. IMPORTANT: Build a RICH source_summary - 2-3 sentences covering (a) what topic angle you chose and why, (b) which source file(s) you read for grounding, (c) which specific detail you used. This is NOT optional:
+7. LOG to database. IMPORTANT: Build a RICH source_summary covering (a) what topic angle you chose and why, (b) which source file(s) you read for grounding, (c) which specific detail you used. This is NOT optional:
    INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
      thread_title, thread_content, our_url, our_content, our_account,
-     source_summary, project_name, status, posted_at)
+     source_summary, project_name, engagement_style, feedback_report_used, status, posted_at)
    VALUES ('reddit', PERMALINK, '${POST_ACCOUNT}', '${POST_ACCOUNT}',
      TITLE, BODY, PERMALINK, BODY, '${POST_ACCOUNT}',
-     RICH_SOURCE_SUMMARY, '${PROJECT}', 'active', NOW());
+     RICH_SOURCE_SUMMARY, '${PROJECT}', 'STYLE_YOU_CHOSE', TRUE, 'active', NOW());
 
-7. Print exactly:
+8. Print exactly:
    POSTED: [permalink] | [title]
 
 CRITICAL: NEVER use em dashes.
