@@ -9,8 +9,8 @@ Rules:
   threads.external_floor_days).
 - Entry filter: skip any subreddit where this account has posted an original
   thread (thread_url == our_url) within that sub's floor window.
-- Also skip any subreddit listed in the top-level banned_subreddits map (all
-  groups flattened).
+- Also skip any subreddit listed in subreddit_bans (both 'banned' and
+  'skip_threads' groups).
 - Among eligible candidates, prefer own_community if present. Otherwise, weight
   projects by config weight.
 
@@ -49,29 +49,19 @@ def norm_sub(s):
 
 
 def flatten_banned(config):
-    """banned_subreddits is a dict of groups -> list of slugs. Flatten all groups.
+    """Flatten all subreddit_bans groups (banned + skip_threads).
 
-    For threads we block everything: account_banned, verified, low_performance.
-    Also loads runtime-detected restrictions from .restricted_subreddits.json.
+    For original threads we block everything: true bans and strategic skips.
     """
-    banned = config.get("banned_subreddits") or {}
+    bans = config.get("subreddit_bans") or {}
     out = set()
-    if isinstance(banned, dict):
-        for group in banned.values():
+    if isinstance(bans, dict):
+        for group in bans.values():
             for s in group or []:
                 out.add(norm_sub(s))
-    elif isinstance(banned, list):
-        for s in banned:
+    elif isinstance(bans, list):
+        for s in bans:
             out.add(norm_sub(s))
-    restricted_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                   ".restricted_subreddits.json")
-    if os.path.exists(restricted_path):
-        try:
-            with open(restricted_path) as f:
-                for s in json.load(f).keys():
-                    out.add(norm_sub(s))
-        except Exception:
-            pass
     return out
 
 
