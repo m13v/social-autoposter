@@ -32,13 +32,16 @@ TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform reddit 2>/
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block reddit posting)
 
-# Load banned/restricted subreddits list
+# Load account-banned subreddits (true Reddit bans where we cannot comment).
+# Strategic thread-only skips (verified, low_performance) are NOT included here
+# because we can still comment in those subs.
 BANNED_SUBS=$(python3 -c "
 import json, os
-path = os.path.expanduser('~/social-autoposter/scripts/.restricted_subreddits.json')
-if os.path.exists(path):
-    subs = list(json.load(open(path)).keys())
-    print(', '.join('r/' + s for s in sorted(subs)))
+cfg = json.load(open(os.path.expanduser('~/social-autoposter/config.json')))
+banned = cfg.get('banned_subreddits', {})
+acct = banned.get('account_banned', []) if isinstance(banned, dict) else []
+if acct:
+    print(', '.join('r/' + s for s in sorted(acct)))
 else:
     print('(none)')
 " 2>/dev/null || echo "(unavailable)")
