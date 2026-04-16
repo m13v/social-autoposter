@@ -63,11 +63,14 @@ def update_reddit(db, user_agent, config=None, quiet=False):
 
     BATCH_SIZE = 200
     total = updated = deleted = removed = errors = skipped = 0
-    batch_counter = 0
     results = []
 
     for post in posts:
         total += 1
+        if total % BATCH_SIZE == 0:
+            db.commit()
+            if not quiet:
+                print(f"  Committed batch ({total}/{len(posts)} iterated, {updated} updated)", flush=True)
         post_id, our_url, thread_url = post[0], post[1], post[2]
         prev_upvotes, prev_comments = post[3], post[4]
         no_change = post[5]
@@ -289,12 +292,6 @@ def update_reddit(db, user_agent, config=None, quiet=False):
                 db.execute("UPDATE posts SET scan_no_change_count = 0 WHERE id = %s", [post_id])
 
         time.sleep(5)
-
-        batch_counter += 1
-        if batch_counter % BATCH_SIZE == 0:
-            db.commit()
-            if not quiet:
-                print(f"  Committed batch ({batch_counter}/{len(posts)} processed)")
 
     db.commit()
     if skipped and not quiet:
