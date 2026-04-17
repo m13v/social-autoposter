@@ -13,10 +13,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOCK_FILE="$SCRIPT_DIR/.locks/cron_gsc.lock"
-LOG_FILE="$SCRIPT_DIR/logs/cron_gsc.log"
+# Per-run log file lives in skill/logs/ so the dashboard picks it up alongside
+# every other pipeline. Filename prefix matches the script basename so
+# auto-discovered "Other Jobs" in bin/server.js resolve Last Run correctly.
+LOG_FILE="$REPO_DIR/skill/logs/cron_gsc-$(date +%Y-%m-%d_%H%M%S).log"
 
-mkdir -p "$SCRIPT_DIR/.locks" "$SCRIPT_DIR/logs"
+mkdir -p "$SCRIPT_DIR/.locks" "$REPO_DIR/skill/logs"
 
 # --- Global lock ---
 if [ -f "$LOCK_FILE" ]; then
@@ -49,3 +53,5 @@ echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Pipeline complete for $PRODUCT" >> "$LOG_FI
 
 # Clean up old per-product logs (keep 7 days)
 find "$SCRIPT_DIR/logs" -name "gsc_*.log" -mtime +7 -delete 2>/dev/null || true
+# Clean up old consolidated run logs in skill/logs (keep 14 days)
+find "$REPO_DIR/skill/logs" -name "cron_gsc-*.log" -mtime +14 -delete 2>/dev/null || true

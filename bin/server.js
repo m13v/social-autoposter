@@ -908,18 +908,6 @@ const HTML = `<!DOCTYPE html>
   <div class="log-controls">
     <select id="log-job-filter">
       <option value="">All jobs</option>
-      <option value="reddit">Reddit</option>
-      <option value="twitter">Twitter</option>
-      <option value="linkedin">LinkedIn</option>
-      <option value="moltbook">MoltBook</option>
-      <option value="github">GitHub</option>
-      <option value="engage reddit+mb">Engage</option>
-      <option value="engage twitter">Engage Twitter</option>
-      <option value="engage linkedin">Engage LinkedIn</option>
-      <option value="github engage">GitHub Engage</option>
-      <option value="stats">Stats</option>
-      <option value="audit">Audit</option>
-      <option value="octolens">Octolens</option>
     </select>
     <select id="log-file-select"><option>Loading...</option></select>
     <button class="btn" id="log-refresh-btn">Refresh</button>
@@ -1265,13 +1253,45 @@ async function setPhaseInterval(jobType, value) {
 }
 
 // Logs
+let _logFilterPopulated = false;
+
+async function populateLogFilter() {
+  // Build the job filter dropdown from /api/status so every pipeline
+  // (matrix row + discovered Other Job) is selectable, not just a hardcoded
+  // subset. Keeps the previously-selected value across rebuilds.
+  try {
+    const res = await fetch('/api/status');
+    const data = await res.json();
+    const sel = document.getElementById('log-job-filter');
+    const prev = sel.value;
+    const matrixNames = (data.jobs || []).map(j => j.name);
+    const otherNames = (data.otherJobs || []).map(j => j.name);
+    const seen = new Set();
+    const names = [...matrixNames, ...otherNames].filter(n => {
+      const k = n.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    const opts = ['<option value="">All jobs</option>']
+      .concat(names.map(n =>
+        '<option value="' + n.toLowerCase() + '">' + n + '</option>'
+      ));
+    sel.innerHTML = opts.join('');
+    if (prev) sel.value = prev;
+    _logFilterPopulated = true;
+  } catch(e) { /* leave dropdown as-is on failure */ }
+}
+
 async function loadLogFiles() {
+  if (!_logFilterPopulated) await populateLogFilter();
   const filter = document.getElementById('log-job-filter').value;
-  const res = await fetch('/api/logs?job=' + filter);
+  const res = await fetch('/api/logs?job=' + encodeURIComponent(filter));
   const data = await res.json();
   const sel = document.getElementById('log-file-select');
   sel.innerHTML = data.files.map(f => '<option value="' + f + '">' + f + '</option>').join('');
   if (data.files.length) loadLogContent(data.files[0]);
+  else { document.getElementById('log-content').textContent = 'No log files for this filter.'; }
 }
 
 let _logAutoRefresh = null;
