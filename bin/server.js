@@ -579,12 +579,27 @@ function handleApi(req, res) {
         .filter(f => f.endsWith('.log') && !f.startsWith('launchd-'))
         .sort().reverse();
       if (jobFilter) {
-        const job = JOBS.find(j => j.name.toLowerCase() === jobFilter.toLowerCase());
-        if (job) {
-          files = files.filter(f => {
-            if (job.logPrefix) return f.startsWith(job.logPrefix);
-            return /^\d{4}-\d{2}-\d{2}_/.test(f);
-          });
+        // Match against static matrix jobs by display name, or any discovered
+        // launchd job by label/name. Same derivation as /api/status so the
+        // Logs tab dropdown can filter every pipeline, not just the matrix.
+        const wanted = jobFilter.toLowerCase();
+        const staticJob = JOBS.find(j => j.name.toLowerCase() === wanted);
+        let logPrefix = staticJob ? staticJob.logPrefix : null;
+        let isPostRow = staticJob && !staticJob.logPrefix;
+        if (!staticJob) {
+          const discovered = discoverLaunchdJobs().find(d =>
+            d.label.toLowerCase() === wanted ||
+            deriveName(d.label).toLowerCase() === wanted
+          );
+          if (discovered && discovered.scriptPath) {
+            const basename = path.basename(discovered.scriptPath);
+            logPrefix = basename.replace(/\.(sh|py|js)$/, '-');
+          }
+        }
+        if (logPrefix) {
+          files = files.filter(f => f.startsWith(logPrefix));
+        } else if (isPostRow) {
+          files = files.filter(f => /^\d{4}-\d{2}-\d{2}_/.test(f));
         }
       }
       return json(res, { files: files.slice(0, 50) });
