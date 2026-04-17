@@ -828,10 +828,37 @@ const HTML = `<!DOCTYPE html>
   .matrix-cell-span { text-align: center; }
   .job-name { font-weight: 600; }
   .badge { padding: 3px 10px; border-radius: 8px; font-size: 12px; font-weight: 500; display: inline-block; }
-  .badge.running { background: #1e3a5f; color: #60a5fa; animation: pulse 2s infinite; }
+  .badge.running {
+    background: linear-gradient(135deg, #0ea5e9 0%, #22d3ee 100%);
+    color: #ffffff;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-shadow: 0 0 6px rgba(255,255,255,0.45);
+    animation: runningPulse 1.1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  .badge.running::before {
+    content: '';
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #ffffff;
+    margin-right: 7px;
+    vertical-align: middle;
+    box-shadow: 0 0 6px #ffffff;
+    animation: runningDot 1.1s ease-in-out infinite;
+  }
   .badge.scheduled { background: #064e3b; color: #6ee7b7; }
   .badge.stopped { background: #292524; color: #a3a3a3; }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+  @keyframes runningPulse {
+    0%   { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.75), 0 0 10px rgba(14, 165, 233, 0.55); transform: scale(1); }
+    60%  { box-shadow: 0 0 0 10px rgba(34, 211, 238, 0), 0 0 18px rgba(34, 211, 238, 0.85); transform: scale(1.05); }
+    100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0), 0 0 10px rgba(14, 165, 233, 0.55); transform: scale(1); }
+  }
+  @keyframes runningDot {
+    0%, 100% { transform: scale(1);   opacity: 1;    box-shadow: 0 0 6px #ffffff; }
+    50%      { transform: scale(1.5); opacity: 0.85; box-shadow: 0 0 14px #ffffff, 0 0 22px #22d3ee; }
+  }
   .job-actions { display: flex; gap: 8px; }
   .card { background: #171717; border: 1px solid #262626; border-radius: 12px; padding: 20px; }
   .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
@@ -1412,7 +1439,7 @@ document.getElementById('save-settings').addEventListener('click', saveSettings)
 
 // Init
 loadStatus();
-setInterval(loadStatus, 30000);
+setInterval(loadStatus, 5000);
 </script>
 </body>
 </html>`;
