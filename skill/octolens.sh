@@ -1,11 +1,38 @@
 #!/usr/bin/env bash
-# Octolens mention engagement - find mentions via Octolens and engage
+# Octolens mention engagement - find mentions via Octolens and engage.
+#
+# Usage:
+#   octolens.sh                    Legacy: cross-platform pool, Claude picks best 5-10.
+#   octolens.sh --platform reddit  Only Reddit mentions, engaged via reddit-agent.
+#   octolens.sh --platform twitter
+#   octolens.sh --platform linkedin
 
 set -euo pipefail
 
-# Octolens lock: wait up to 60min for previous run to finish, then skip
+# Parse args.
+PLATFORM=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --platform)    PLATFORM="${2:-}"; shift 2 ;;
+        --platform=*)  PLATFORM="${1#--platform=}"; shift ;;
+        *)             shift ;;
+    esac
+done
+
+case "$PLATFORM" in
+    ""|reddit|twitter|linkedin) ;;
+    *)
+        echo "octolens.sh: invalid --platform '$PLATFORM' (expected reddit, twitter, or linkedin)" >&2
+        exit 2
+        ;;
+esac
+
+# Per-platform lock name so all three can run in parallel without stepping on
+# each other, but repeat invocations of the same platform queue up.
+LOCK_NAME="octolens${PLATFORM:+-$PLATFORM}"
+
 source "$(dirname "$0")/lock.sh"
-acquire_lock "octolens" 3600
+acquire_lock "$LOCK_NAME" 3600
 
 cd ~/social-autoposter
 
@@ -14,26 +41,45 @@ set -a; source .env 2>/dev/null || true; set +a
 
 LOG_DIR="skill/logs"
 mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/octolens-$(date +%Y-%m-%d_%H%M%S).log"
+LOG_TAG="${PLATFORM:-all}"
+LOG_FILE="$LOG_DIR/octolens-${LOG_TAG}-$(date +%Y-%m-%d_%H%M%S).log"
 
 RUN_START=$(date +%s)
 REPO_DIR="$HOME/social-autoposter"
-echo "=== Octolens Engagement Run: $(date) ===" | tee "$LOG_FILE"
+echo "=== Octolens Engagement Run (${LOG_TAG}): $(date) ===" | tee "$LOG_FILE"
 
-# Find candidates from Octolens API
-echo "Fetching Octolens mentions..." | tee -a "$LOG_FILE"
-CANDIDATES=$(python3 scripts/octolens_threads.py --from-api --limit 20 2>>"$LOG_FILE")
+# Find candidates from Octolens API, narrowed to this platform if requested.
+FETCH_ARGS=(--from-api --limit 20)
+[ -n "$PLATFORM" ] && FETCH_ARGS+=(--platform "$PLATFORM")
+
+echo "Fetching Octolens mentions (${LOG_TAG})..." | tee -a "$LOG_FILE"
+CANDIDATES=$(python3 scripts/octolens_threads.py "${FETCH_ARGS[@]}" 2>>"$LOG_FILE")
 echo "$CANDIDATES" >> "$LOG_FILE"
 
 CANDIDATE_COUNT=$(echo "$CANDIDATES" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('candidates',[])))" 2>/dev/null || echo "0")
 echo "Found $CANDIDATE_COUNT candidates" | tee -a "$LOG_FILE"
 
+# Log-run tag so the dashboard can tell platforms apart.
+LOG_RUN_SCRIPT="octolens${PLATFORM:+-$PLATFORM}"
+
 if [ "$CANDIDATE_COUNT" = "0" ]; then
     echo "No new candidates to engage with." | tee -a "$LOG_FILE"
     RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
-    python3 "$REPO_DIR/scripts/log_run.py" --script "octolens" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "$LOG_RUN_SCRIPT" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
     find "$LOG_DIR" -name "octolens-*.log" -mtime +7 -delete 2>/dev/null || true
     exit 0
+fi
+
+# Build the platform-specific engagement instructions for Claude.
+if [ -n "$PLATFORM" ]; then
+    case "$PLATFORM" in
+        reddit)   AGENT_HINT="Use ONLY mcp__reddit-agent__* tools for posting." ;;
+        twitter)  AGENT_HINT="Use ONLY mcp__twitter-agent__* tools for posting." ;;
+        linkedin) AGENT_HINT="Use ONLY mcp__linkedin-agent__* tools for posting." ;;
+    esac
+    PLATFORM_GATE="IMPORTANT: This is the Octolens ${PLATFORM} engagement pipeline. All candidates are already filtered to ${PLATFORM}. ${AGENT_HINT} NEVER use any other browser agent."
+else
+    PLATFORM_GATE="IMPORTANT: This is the Octolens engagement pipeline. Use ONLY mcp__reddit-agent__* for Reddit, mcp__twitter-agent__* for Twitter, mcp__linkedin-agent__* for LinkedIn. NEVER use mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*."
 fi
 
 # Run Claude with the social-autoposter skill to engage
@@ -43,7 +89,7 @@ echo "$CANDIDATES" | claude --strict-mcp-config --mcp-config "$HOME/.claude/brow
 Here are the Octolens mention candidates (JSON):
 $(echo "$CANDIDATES")
 
-IMPORTANT: This is the Octolens engagement pipeline.
+${PLATFORM_GATE}
 - Max 10 Octolens-sourced posts per run
 - Check: SELECT COUNT(*) FROM posts WHERE source_summary LIKE '%octolens%' AND posted_at >= NOW() - INTERVAL '24 hours'
 - If >= 100 octolens posts in 24h, stop. Otherwise proceed.
@@ -59,20 +105,20 @@ Pick the BEST 5-10 candidates to engage with. Prioritize:
 For each picked candidate, follow the standard social-autoposter posting flow:
 - Read the full thread/post via browser to understand context
 - Draft a natural comment following content_angle from config.json
-- Post via browser automation: use ONLY mcp__reddit-agent__* for Reddit, mcp__twitter-agent__* for Twitter, mcp__linkedin-agent__* for LinkedIn. NEVER use mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
+- Post via browser automation per the platform rule above
 - Determine project_name by matching thread topic to config.json projects[].topics
 - Log to the posts table with source_summary = 'octolens: [keyword]' (MUST include project_name)
 
 Skip if nothing fits naturally. Config is at ~/social-autoposter/config.json" 2>&1 | tee -a "$LOG_FILE"
 
-echo "=== Done: $(date) ===" | tee -a "$LOG_FILE"
+echo "=== Done (${LOG_TAG}): $(date) ===" | tee -a "$LOG_FILE"
 
 # Log run to persistent monitor
 RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
 POSTED=$(grep -c "INSERT INTO posts" "$LOG_FILE" 2>/dev/null) || true
 SKIPPED=$(grep -ci "skipped\|skip" "$LOG_FILE" 2>/dev/null) || true
 FAILED=$(grep -ci "error\|failed\|FAILED" "$LOG_FILE" 2>/dev/null) || true
-python3 "$REPO_DIR/scripts/log_run.py" --script "octolens" --posted "$POSTED" --skipped "$SKIPPED" --failed "$FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
+python3 "$REPO_DIR/scripts/log_run.py" --script "$LOG_RUN_SCRIPT" --posted "$POSTED" --skipped "$SKIPPED" --failed "$FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
 
 # Clean up old logs (keep last 7 days)
 find "$LOG_DIR" -name "octolens-*.log" -mtime +7 -delete 2>/dev/null || true
