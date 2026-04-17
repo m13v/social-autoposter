@@ -38,7 +38,10 @@ const JOBS = [
   { label: 'com.m13v.social-stats-linkedin', name: 'Stats LinkedIn', type: 'Stats', platform: 'LinkedIn', script: 'stats-linkedin.sh', logPrefix: 'stats-linkedin-', plist: 'com.m13v.social-stats-linkedin.plist' },
   { label: 'com.m13v.social-stats-moltbook', name: 'Stats MoltBook', type: 'Stats', platform: 'MoltBook', script: 'stats-moltbook.sh', logPrefix: 'stats-moltbook-', plist: 'com.m13v.social-stats-moltbook.plist' },
   // Audit row
-  { label: 'com.m13v.social-audit', name: 'Audit', type: 'Audit', platform: 'all', script: 'audit.sh', logPrefix: 'audit-', plist: 'com.m13v.social-audit.plist' },
+  { label: 'com.m13v.social-audit-reddit', name: 'Audit Reddit', type: 'Audit', platform: 'Reddit', script: 'audit-reddit.sh', logPrefix: 'audit-reddit-', plist: 'com.m13v.social-audit-reddit.plist' },
+  { label: 'com.m13v.social-audit-twitter', name: 'Audit Twitter', type: 'Audit', platform: 'Twitter', script: 'audit-twitter.sh', logPrefix: 'audit-twitter-', plist: 'com.m13v.social-audit-twitter.plist' },
+  { label: 'com.m13v.social-audit-linkedin', name: 'Audit LinkedIn', type: 'Audit', platform: 'LinkedIn', script: 'audit-linkedin.sh', logPrefix: 'audit-linkedin-', plist: 'com.m13v.social-audit-linkedin.plist' },
+  { label: 'com.m13v.social-audit-moltbook', name: 'Audit MoltBook', type: 'Audit', platform: 'MoltBook', script: 'audit-moltbook.sh', logPrefix: 'audit-moltbook-', plist: 'com.m13v.social-audit-moltbook.plist' },
   // Octolens row
   { label: 'com.m13v.social-octolens', name: 'Octolens', type: 'Octolens', platform: 'all', script: 'octolens.sh', logPrefix: 'octolens-', plist: 'com.m13v.social-octolens.plist' },
 ];
