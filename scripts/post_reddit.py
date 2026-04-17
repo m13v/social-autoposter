@@ -107,11 +107,13 @@ def preflight_rate_limit(budget_seconds=PREFLIGHT_WAIT_BUDGET_SECONDS):
     )
 
 
-def mark_subreddit_restricted(thread_url: str) -> None:
-    """Add a subreddit to config.json subreddit_bans.skip_threads at runtime.
+def mark_comment_blocked(thread_url: str) -> None:
+    """Add a subreddit to config.json subreddit_bans.comment_blocked at runtime.
 
-    Called when the bot encounters a posting restriction. The sub gets blocked
-    for original threads but comments remain allowed.
+    Called when the bot's comment attempt is rejected (no comment form, locked,
+    restricted). The sub gets blocked for future comment attempts so the
+    drafter never targets it again. Thread-posting eligibility is tracked
+    separately in subreddit_bans.thread_blocked.
     """
     sub_match = re.search(r'/r/([^/]+)/', thread_url)
     if not sub_match:
@@ -121,18 +123,16 @@ def mark_subreddit_restricted(thread_url: str) -> None:
         with open(CONFIG_PATH) as f:
             config = json.load(f)
         bans = config.setdefault("subreddit_bans", {})
-        skip = bans.setdefault("skip_threads", [])
-        existing = {s.lower() for s in skip}
-        # Also check banned list to avoid duplicates
-        banned = {s.lower() for s in bans.get("banned", [])}
-        if sub not in existing and sub not in banned:
-            skip.append(sub)
-            skip.sort(key=str.lower)
+        blocked = bans.setdefault("comment_blocked", [])
+        existing = {s.lower() for s in blocked}
+        if sub not in existing:
+            blocked.append(sub)
+            blocked.sort(key=str.lower)
             with open(CONFIG_PATH, "w") as f:
                 json.dump(config, f, indent=2)
-            print(f"[post_reddit] Added r/{sub} to subreddit_bans.skip_threads")
+            print(f"[post_reddit] Added r/{sub} to subreddit_bans.comment_blocked")
     except Exception as e:
-        print(f"[post_reddit] WARNING: could not persist restricted sub r/{sub}: {e}")
+        print(f"[post_reddit] WARNING: could not persist blocked sub r/{sub}: {e}")
 
 
 def load_config():
@@ -591,7 +591,7 @@ def main():
             failed += 1
             print(f"[post_reddit] CDP FAILED: {err}")
             if err == "subreddit_restricted":
-                mark_subreddit_restricted(thread_url)
+                mark_comment_blocked(thread_url)
 
         time.sleep(180)  # 3 min gap between posts to avoid spam detection
 
