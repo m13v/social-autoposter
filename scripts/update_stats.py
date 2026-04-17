@@ -756,6 +756,8 @@ def main():
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     parser.add_argument("--twitter-only", action="store_true", help="Only update Twitter stats")
     parser.add_argument("--twitter-audit", action="store_true", help="Audit all Twitter posts (check deleted + update stats)")
+    parser.add_argument("--reddit-only", action="store_true", help="Only update Reddit stats")
+    parser.add_argument("--moltbook-only", action="store_true", help="Only update Moltbook stats")
     args = parser.parse_args()
 
     config = load_config()
@@ -773,6 +775,10 @@ def main():
         twitter_stats = update_twitter(db, config=config, quiet=args.quiet, audit_mode=True)
     elif args.twitter_only:
         twitter_stats = update_twitter(db, config=config, quiet=args.quiet)
+    elif args.reddit_only:
+        reddit_stats = update_reddit(db, user_agent, config=config, quiet=args.quiet)
+    elif args.moltbook_only:
+        moltbook_stats = update_moltbook(db, os.environ.get("MOLTBOOK_API_KEY", ""), quiet=args.quiet)
     else:
         reddit_stats = update_reddit(db, user_agent, config=config, quiet=args.quiet)
         moltbook_stats = update_moltbook(db, os.environ.get("MOLTBOOK_API_KEY", ""), quiet=args.quiet)
