@@ -165,6 +165,47 @@ def pick_reply(comments, target_author):
     return None
 
 
+def pick_non_us_content(comments, target_author=None, our_href_fragment="/in/m13v/"):
+    """Pick the best non-us comment body from a comment list.
+
+    Strategy:
+      1. Exclude any comment whose profile_href contains our_href_fragment.
+      2. If target_author given, prefer comments whose author matches.
+      3. Fall back to the first remaining comment with non-empty content.
+    Returns a string or None.
+    """
+    non_us = [
+        c for c in comments
+        if our_href_fragment not in (c.get("profile_href") or "").lower()
+    ]
+    if target_author:
+        for c in non_us:
+            if _match_author(c.get("author"), target_author) and c.get("content"):
+                return c["content"]
+    for c in non_us:
+        if c.get("content"):
+            return c["content"]
+    return None
+
+
+def fetch_live_content(activity_id, comment_urn, target_author=None):
+    """End-to-end helper: build the deep-link URL, fetch, and pick best non-us content.
+
+    Returns the comment text string (trimmed to 500 chars) or None on any failure.
+    """
+    import urllib.parse
+    try:
+        if not activity_id or not comment_urn:
+            return None
+        encoded = urllib.parse.quote(comment_urn, safe="")
+        url = f"https://www.linkedin.com/feed/update/urn:li:activity:{activity_id}?commentUrn={encoded}"
+        page_data = fetch_comments(url, target_urn=comment_urn)
+        picked = pick_non_us_content(page_data.get("comments", []), target_author=target_author)
+        return (picked or "")[:500] or None
+    except Exception:
+        return None
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: linkedin_comment_fetch.py <comment_url> [target_author] [target_urn]", file=sys.stderr)
