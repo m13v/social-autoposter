@@ -396,7 +396,12 @@ def run_claude(prompt, timeout=600):
 
 def post_via_cdp(thread_url, reply_to_url, text):
     """Post a comment or reply via CDP. Returns parsed JSON result."""
-    for attempt in range(3):
+    # 5 attempts with lock-aware backoff. Lock contention (engage.sh or other
+    # reddit-agent sessions mid-work) gets longer waits since those sessions
+    # have natural gaps every 20-60s between replies. Other errors use a short
+    # retry in case of transient network issues.
+    MAX_ATTEMPTS = 5
+    for attempt in range(MAX_ATTEMPTS):
         try:
             target = reply_to_url or thread_url
             cmd = ["python3", REDDIT_BROWSER, "reply" if reply_to_url else "post-comment", target, text]
@@ -404,7 +409,7 @@ def post_via_cdp(thread_url, reply_to_url, text):
             cdp_out = proc.stdout.strip()
             if not cdp_out:
                 print(f"[post_reddit] CDP attempt {attempt + 1}: no stdout. stderr: {proc.stderr[:200]}")
-                if attempt < 2:
+                if attempt < MAX_ATTEMPTS - 1:
                     time.sleep(10)
                 continue
             result = json.loads(cdp_out)
@@ -414,9 +419,21 @@ def post_via_cdp(thread_url, reply_to_url, text):
             print(f"[post_reddit] CDP attempt {attempt + 1}: {err}")
             if err in ("thread_not_found", "thread_locked", "thread_archived", "already_replied", "not_logged_in", "subreddit_restricted"):
                 return result  # Don't retry these
+            # Lock contention: another reddit-agent session is actively working.
+            # Back off in increasing intervals to catch a natural gap between
+            # their reply drafts. Total wait across 5 attempts: ~2.5 min.
+            if "locked by session" in err.lower():
+                if attempt < MAX_ATTEMPTS - 1:
+                    wait = [20, 35, 50, 60][attempt]
+                    print(f"[post_reddit] CDP waiting {wait}s for browser lock to free...")
+                    time.sleep(wait)
+                continue
+            # Any other error: short sleep then retry
+            if attempt < MAX_ATTEMPTS - 1:
+                time.sleep(5)
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError, json.JSONDecodeError) as e:
             print(f"[post_reddit] CDP attempt {attempt + 1} exception: {e}")
-            if attempt < 2:
+            if attempt < MAX_ATTEMPTS - 1:
                 time.sleep(10)
     return {"ok": False, "error": "all_attempts_failed"}
 
