@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
+from moltbook_tools import fetch_moltbook_json, MoltbookRateLimitedError
 
 CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
 
@@ -166,10 +167,15 @@ def fetch_moltbook_threads(api_key, limit=50):
                            'wang ', 'bot claim', 'hackai']
 
     for offset in [0, 50]:
-        data = fetch_json(
-            f"https://www.moltbook.com/api/v1/posts?sort=new&limit={limit}&offset={offset}",
-            headers={"Authorization": f"Bearer {api_key}"},
-        )
+        try:
+            data = fetch_moltbook_json(
+                f"https://www.moltbook.com/api/v1/posts?sort=new&limit={limit}&offset={offset}",
+                api_key=api_key,
+            )
+        except MoltbookRateLimitedError as e:
+            print(f"  Moltbook rate-limited for {int(e.reset_seconds)}s, skipping thread discovery",
+                  file=sys.stderr)
+            break
         if not data or "posts" not in data:
             break
 
