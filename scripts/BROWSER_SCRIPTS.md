@@ -13,7 +13,7 @@ browser_run_code code: async (page) => {
 }
 
 // Call 2: Run script  
-browser_run_code filename: scripts/the_script.js
+browser_run_code filename: scripts/browser/the_script.js
 ```
 
 ## Script Skeleton
@@ -70,9 +70,9 @@ Claude decides WHAT (pick project, write text). Scripts execute HOW (navigate, c
 
 | Script | Platform | Action |
 |--------|----------|--------|
-| `edit_linkedin_comment.js` | LinkedIn | Append text to our comment |
-| `scan_reddit_chat.js` | Reddit | Scan chat sidebar for conversations with unread indicators |
-| `scrape_reddit_views.js` | Reddit | Scroll profile page and extract post view counts |
+| `scripts/browser/edit_linkedin_comment.js` | LinkedIn | Append text to our comment |
+| `scripts/browser/scan_reddit_chat.js` | Reddit | Scan chat sidebar for conversations with unread indicators |
+| `scripts/browser/scrape_reddit_views.js` | Reddit | Scroll profile page and extract post view counts |
 
 ## Platform Notes
 
