@@ -16,7 +16,7 @@ const PORT = parseInt(process.env.PORT || '3141', 10);
 
 // Matrix: rows = job types, columns = platforms
 // Each cell is a job (or null if that combo doesn't exist)
-const PLATFORMS = ['all', 'Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
+const PLATFORMS = ['Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
 const JOB_TYPES = ['Post', 'Engage', 'Stats', 'Audit', 'Octolens'];
 
 const JOBS = [
@@ -43,7 +43,9 @@ const JOBS = [
   { label: 'com.m13v.social-audit-linkedin', name: 'Audit LinkedIn', type: 'Audit', platform: 'LinkedIn', script: 'audit-linkedin.sh', logPrefix: 'audit-linkedin-', plist: 'com.m13v.social-audit-linkedin.plist' },
   { label: 'com.m13v.social-audit-moltbook', name: 'Audit MoltBook', type: 'Audit', platform: 'MoltBook', script: 'audit-moltbook.sh', logPrefix: 'audit-moltbook-', plist: 'com.m13v.social-audit-moltbook.plist' },
   // Octolens row
-  { label: 'com.m13v.social-octolens', name: 'Octolens', type: 'Octolens', platform: 'all', script: 'octolens.sh', logPrefix: 'octolens-', plist: 'com.m13v.social-octolens.plist' },
+  { label: 'com.m13v.social-octolens-reddit', name: 'Octolens Reddit', type: 'Octolens', platform: 'Reddit', script: 'octolens-reddit.sh', logPrefix: 'octolens-reddit-', plist: 'com.m13v.social-octolens-reddit.plist' },
+  { label: 'com.m13v.social-octolens-twitter', name: 'Octolens Twitter', type: 'Octolens', platform: 'Twitter', script: 'octolens-twitter.sh', logPrefix: 'octolens-twitter-', plist: 'com.m13v.social-octolens-twitter.plist' },
+  { label: 'com.m13v.social-octolens-linkedin', name: 'Octolens LinkedIn', type: 'Octolens', platform: 'LinkedIn', script: 'octolens-linkedin.sh', logPrefix: 'octolens-linkedin-', plist: 'com.m13v.social-octolens-linkedin.plist' },
 ];
 
 // --- Helpers ---
@@ -1127,7 +1129,7 @@ function fmtInterval(secs) {
 }
 
 let _initialized = false;
-const PLATFORMS = ['all', 'Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
+const PLATFORMS = ['Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
 const JOB_TYPES = ['Post', 'Engage', 'Stats', 'Audit', 'Octolens'];
 
 function renderCell(job) {
