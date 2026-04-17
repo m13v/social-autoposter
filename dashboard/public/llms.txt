@@ -50,7 +50,8 @@ Automated engagement on relevant open-source issues. Separate launchd schedules 
 - **Tier 3 (direct ask):** When someone explicitly asks for a link, source, or way to try it, provide the URL immediately from the project config.
 
 ### Reply Management
-- `scan_replies.py`: Scans Reddit and Moltbook APIs for new replies to existing posts. No browser needed.
+- `scan_reddit_replies.py`: Scans Reddit API for new replies to existing posts and to our previous replies (BFS). No browser needed.
+- `scan_moltbook_replies.py`: Scans Moltbook API for new replies to existing posts. No browser needed.
 - `scan_twitter_mentions.py`: Checks Twitter notification mentions.
 - `scan_linkedin_notifications.py`: Browser-based LinkedIn notification scanning.
 - Replies inserted to the `replies` table as "pending" for AI-drafted responses.
@@ -95,7 +96,7 @@ Neon Postgres (serverless) via `DATABASE_URL` in `.env`. Core tables:
 Standalone scripts with no LLM dependency (pure API calls and database operations):
 - `db.py`: Shared database connection module using psycopg2
 - `find_threads.py`, `find_tweets.py`, `octolens_threads.py`: Thread discovery
-- `scan_replies.py`, `scan_twitter_mentions.py`, `scan_linkedin_notifications.py`: Reply detection
+- `scan_reddit_replies.py`, `scan_moltbook_replies.py`, `scan_twitter_mentions.py`, `scan_linkedin_notifications.py`: Reply detection
 - `update_stats.py`, `top_performers.py`, `project_stats.py`: Analytics
 - `scan_dm_candidates.py`, `batch_send_dms.py`, `dm_conversation.py`: DM pipeline
 - `pick_project.py`: Weighted project selection based on daily post distribution
