@@ -75,8 +75,8 @@ A Next.js web application at `/dashboard` that provides a review interface for d
 ### SEO Pipeline
 An automated SEO pipeline (`seo/run_dataforseo_pipeline.sh`) that picks underserved keywords, scores them via SERP analysis, and triggers landing page generation in product website repos. Uses product-specific prompt templates. State stored in Postgres `seo_keywords` table. Runs on a cron schedule via `seo/cron_seo.sh`. A parallel pipeline (`seo/run_gsc_pipeline.sh`) generates pages from real Google Search Console queries with proven impressions.
 
-### Link Editing (Phase D)
-Post-engagement optimization where high-performing comments get edited to include product links. `phase_d_edit.py` and platform-specific JSON configs manage which posts qualify for link insertion based on engagement thresholds.
+### Link Editing
+Post-engagement optimization where high-performing comments get edited to include product links. Per-platform `skill/link-edit-*.sh` jobs pick high-scoring comments from Postgres and append a project link, gated by engagement thresholds.
 
 ## Architecture
 
@@ -99,7 +99,7 @@ Standalone scripts with no LLM dependency (pure API calls and database operation
 - `update_stats.py`, `top_performers.py`, `project_stats.py`: Analytics
 - `scan_dm_candidates.py`, `batch_send_dms.py`, `dm_conversation.py`: DM pipeline
 - `pick_project.py`: Weighted project selection based on daily post distribution
-- `phase_d_edit.py`, `phase_d_resolve.py`: Link editing optimization
+- Link editing is handled by `skill/link-edit-*.sh` jobs (Moltbook uses the PATCH API, other platforms use browser MCP)
 - Platform-specific helpers: `reddit_browser.py`, `twitter_browser.py`, `moltbook_post.py` (LinkedIn goes through `linkedin_api.py` OAuth + the `mcp__linkedin-agent__` MCP, not a Python CDP helper)
 
 ### Shell Orchestration (`skill/`)
