@@ -1,6 +1,7 @@
 skill/logs/
 *.log
 .env
+node_modules/
 config.json
 .playwright-mcp/
 __pycache__/
