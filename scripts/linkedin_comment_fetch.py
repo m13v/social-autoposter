@@ -22,37 +22,52 @@ import linkedin_browser as lb
 JS_EXTRACTOR = r"""
 () => {
   // LinkedIn renders each comment with: componentkey="replaceableComment_<URN>"
-  // Each URN appears on multiple elements; dedupe by URN, keep the outermost.
+  // Multiple elements share the same key (LinkedIn double-renders for SSR+hydrate);
+  // dedupe by URN and use the first one seen.
   const all = Array.from(document.querySelectorAll('[componentkey^="replaceableComment_urn:li:comment:"]'));
   const seen = new Set();
   const comments = [];
-  const chrome = new Set(['Like','Reply','Love','Insightful','Support','Funny','Celebrate',
-                          'Curious','Author','•','·','…more','See translation','more']);
-  const agoRe = /^\d+[wdhms]$/i;
-  const reactRe = /^(\d+\s)?(Like|Reply|reaction|replies?)$/i;
 
   for (const el of all) {
     const key = el.getAttribute('componentkey') || '';
     const urn = key.replace(/^replaceableComment_/, '');
     if (seen.has(urn)) continue;
-    // Prefer the outermost element for this URN; skip if this is nested inside
-    // another componentkey for the same URN.
-    const outer = el.closest(`[componentkey="${key.replace(/"/g,'\\"')}"]`);
-    if (outer !== el) continue;
     seen.add(urn);
 
-    const textNodes = [];
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
-    let n;
-    while ((n = walker.nextNode())) {
-      const t = (n.nodeValue || '').trim();
-      if (t) textNodes.push(t);
+    // Author: find the profile anchor with /in/<slug>/ that has a non-empty
+    // text label (LinkedIn renders two: an icon link with empty text, and the
+    // named link). The commenter's profile is the one with text.
+    const profileAnchors = Array.from(el.querySelectorAll('a[href*="/in/"]'))
+      .filter(a => (a.innerText || '').trim().length > 0);
+    let profileHref = null, authorText = null;
+    if (profileAnchors.length > 0) {
+      const a = profileAnchors[0];
+      profileHref = a.getAttribute('href') || null;
+      // Collapse "Name Premium Profile You Name • You Headline" -> "Name"
+      const raw = (a.innerText || '').trim().replace(/\s+/g, ' ');
+      authorText = raw.split(/ Premium | • | Profile /)[0].trim();
     }
-    const cleaned = textNodes.filter(t => !chrome.has(t) && !agoRe.test(t) && !reactRe.test(t));
-    const author = cleaned[0] || null;
-    let body = '';
-    for (const t of cleaned.slice(1)) if (t.length > body.length) body = t;
-    comments.push({ urn, author, content: body || null });
+
+    // Content: the longest <p>/<span dir=ltr> block that isn't chrome.
+    const paraEls = Array.from(el.querySelectorAll('p, span[dir="ltr"]'));
+    const chromeRe = /^(Reaction button|Like|Reply|Love|Insightful|Support|Funny|Celebrate|Curious|Author|\d+ impressions?|\d+ reactions?|\d+ reaction|\(edited\).*|\d+[wdhms]|…more|See translation|more)$/i;
+    let bodyText = '';
+    for (const p of paraEls) {
+      const t = (p.innerText || '').trim();
+      if (!t || chromeRe.test(t)) continue;
+      // Skip the author block (contains the author's name repeated)
+      if (authorText && t.startsWith(authorText) && t.length < authorText.length + 40) continue;
+      if (t.length > bodyText.length) bodyText = t;
+    }
+    // Strip trailing "… more" LinkedIn adds on truncated comments
+    bodyText = bodyText.replace(/\s*…\s*more\s*$/, '').trim();
+
+    comments.push({
+      urn,
+      profile_href: profileHref,
+      author: authorText,
+      content: bodyText || null,
+    });
   }
   return { comments, total: comments.length };
 }
