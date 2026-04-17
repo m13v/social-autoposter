@@ -21,7 +21,7 @@ TWEETS = [
         "octolens_id": 162091429,
         "keyword": "manus ai",
         "reply": "if you're hitting credit limits on manus you might want to check out fazm, it runs locally on your mac so there's no usage cap. open source too so you can just grab it from github. I switched from cloud based agents to local ones and it's way less stressful not watching credits drain",
-        "project_name": "Fazm"
+        "project_name": "fazm"
     },
     {
         "url": "https://x.com/antonioventre_/status/2042005321044901941",
@@ -29,7 +29,7 @@ TWEETS = [
         "octolens_id": 162078806,
         "keyword": "manus ai",
         "reply": "this is exactly why we built our agent to run fully local on your machine. no data leaves your computer, no one rewrites your copy or redesigns your visuals. the moment you hand control to a cloud platform they optimize for their interests not yours",
-        "project_name": "Fazm"
+        "project_name": "fazm"
     }
 ]
 
