@@ -210,24 +210,24 @@ Show the user the candidate threads found. Don't post anything — just verify t
 Ask: "Do you want posts to run automatically on a schedule? (y/n)"
 
 If yes, and on macOS:
-- The launchd plists are already in `$SKILL_DIR/launchd/`
-- Symlink into `~/Library/LaunchAgents/`:
+- The launchd plists are already in `$SKILL_DIR/launchd/` (one per platform: reddit-search, reddit-threads, twitter-cycle, linkedin, moltbook, github, plus system jobs: stats, engage, audit, octolens, scan-*, dm-replies-*, link-edit-*)
+- Symlink and load all of them:
   ```bash
-  ln -sf "$SKILL_DIR/launchd/com.m13v.social-autoposter.plist" ~/Library/LaunchAgents/
-  ln -sf "$SKILL_DIR/launchd/com.m13v.social-stats.plist" ~/Library/LaunchAgents/
-  ln -sf "$SKILL_DIR/launchd/com.m13v.social-engage.plist" ~/Library/LaunchAgents/
-  launchctl load ~/Library/LaunchAgents/com.m13v.social-autoposter.plist
-  launchctl load ~/Library/LaunchAgents/com.m13v.social-stats.plist
-  launchctl load ~/Library/LaunchAgents/com.m13v.social-engage.plist
+  for plist in "$SKILL_DIR"/launchd/com.m13v.social-*.plist; do
+    ln -sf "$plist" ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/$(basename "$plist")
+  done
   ```
-- Schedule: posting runs hourly, stats every 6 hours, reply engagement every 2 hours
+- Cadences: Twitter cycle every 20 min, Reddit search every 30 min, Reddit threads 4x/day, reply scans 2x/day, engage loop every 4 h, stats refresh 4x/day, DM outreach and link-edit 4x/day.
 
 If yes, and on Linux:
-- Generate crontab entries:
+- Generate crontab entries (pick the platforms you use):
   ```
-  0 * * * * cd ~/social-autoposter && bash skill/run.sh
+  */20 * * * * cd ~/social-autoposter && bash skill/run-twitter-cycle.sh
+  */30 * * * * cd ~/social-autoposter && bash skill/run-reddit-search.sh
+  10 */6 * * * cd ~/social-autoposter && bash skill/run-reddit-threads.sh
   0 */6 * * * cd ~/social-autoposter && bash skill/stats.sh
-  0 */2 * * * cd ~/social-autoposter && bash skill/engage.sh
+  0 */4 * * * cd ~/social-autoposter && bash skill/engage.sh
   ```
 
 If no: "You can run manually anytime with `/social-autoposter`"
