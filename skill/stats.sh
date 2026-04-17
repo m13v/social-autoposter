@@ -52,20 +52,18 @@ case "$PLATFORM" in
 esac
 
 # Decide which steps to run.
-# No --platform means "all" (legacy behavior).
+# No --platform means "all" (legacy behavior, kept for manual invocations).
 if [ -z "$PLATFORM" ]; then
     RUN_STEP1=1; RUN_STEP2=1; RUN_STEP3=1; RUN_STEP4=1
 else
-    # Step 1 is cheap Python API work. update_stats.py does not accept a
-    # generic --platform flag (only --twitter-only), so we run it for every
-    # platform and narrow it with --twitter-only when the platform is twitter.
-    RUN_STEP1=1
+    # Per-platform mode: Step 1 is narrowed via update_stats.py's per-platform
+    # flags, and only the one browser step for this platform runs.
     RUN_STEP2=0; RUN_STEP3=0; RUN_STEP4=0
     case "$PLATFORM" in
-        reddit)   RUN_STEP2=1 ;;
-        twitter)  RUN_STEP3=1 ;;
-        linkedin) RUN_STEP4=1 ;;
-        moltbook) ;;  # API-only, covered by Step 1.
+        reddit)   RUN_STEP1=1; RUN_STEP2=1 ;;
+        twitter)  RUN_STEP1=0; RUN_STEP3=1 ;;  # Step 3 handles Twitter API directly.
+        linkedin) RUN_STEP1=0; RUN_STEP4=1 ;;  # LinkedIn has no cheap API leg.
+        moltbook) RUN_STEP1=1 ;;               # API-only, covered by Step 1.
     esac
 fi
 
@@ -74,7 +72,9 @@ fi
 [ -f "$REPO_DIR/.env" ] && source "$REPO_DIR/.env"
 
 mkdir -p "$LOG_DIR"
-LOGFILE="$LOG_DIR/stats-$(date +%Y-%m-%d_%H%M%S).log"
+# Include platform in log filename so the dashboard can distinguish per-platform runs.
+LOG_TAG="${PLATFORM:-all}"
+LOGFILE="$LOG_DIR/stats-${LOG_TAG}-$(date +%Y-%m-%d_%H%M%S).log"
 
 log() { echo "[$(date +%H:%M:%S)] $*" >> "$LOGFILE"; echo "[$(date +%H:%M:%S)] $*"; }
 
@@ -89,12 +89,15 @@ fi
 # STEP 1: API stats (upvotes, comments, deleted/removed)
 # ═══════════════════════════════════════════════════════
 if [ "$RUN_STEP1" -eq 1 ]; then
-    # Narrow the Python call when the caller asked for twitter only.
-    # update_stats.py supports --twitter-only but not a generic --platform,
-    # so for reddit/linkedin/moltbook/none we let it run its default pass.
+    # Narrow the Python call per platform. Without --platform we run the
+    # default all-platforms pass (kept for manual invocations only).
     STEP1_ARGS=()
     [ "$QUIET" = "--quiet" ] && STEP1_ARGS+=("--quiet")
-    [ "$PLATFORM" = "twitter" ] && STEP1_ARGS+=("--twitter-only")
+    case "$PLATFORM" in
+        reddit)   STEP1_ARGS+=("--reddit-only") ;;
+        moltbook) STEP1_ARGS+=("--moltbook-only") ;;
+        twitter)  STEP1_ARGS+=("--twitter-only") ;;
+    esac
 
     log "Step 1: API stats (Python) ${STEP1_ARGS[*]:-}"
     python3 "$REPO_DIR/scripts/update_stats.py" "${STEP1_ARGS[@]}" >> "$LOGFILE" 2>&1
@@ -405,5 +408,6 @@ fi
 
 log "=== Stats Pipeline complete: $(date) ==="
 
-# Clean up old logs (keep last 7 days)
+# Clean up old logs (keep last 7 days). Covers both new `stats-<platform>-*`
+# and any legacy `stats-YYYY-*` filenames.
 find "$LOG_DIR" -name "stats-*.log" -mtime +7 -delete 2>/dev/null || true
