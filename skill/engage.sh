@@ -4,7 +4,8 @@
 # Phase C: Cleanup
 # Phase D: Edit high-performing posts (>2 upvotes, 6h+ old) with a project link
 # Phase E: DM engagement
-# Reply discovery runs separately via run-scan-replies.sh (launchd: com.m13v.social-scan-replies).
+# Reply discovery runs separately via run-scan-reddit-replies.sh and run-scan-moltbook-replies.sh
+# (launchd: com.m13v.social-scan-reddit-replies, com.m13v.social-scan-moltbook-replies).
 # Called by launchd every 2 hours (7200s interval).
 
 set -euo pipefail
@@ -30,9 +31,10 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 
 log "=== Engagement Loop Run: $(date) ==="
 
-# Reply discovery (scan_replies.py) now runs on its own launchd schedule
-# (com.m13v.social-scan-replies, twice/day). engage.sh only processes replies
-# already written to the DB. This removes contention on the Reddit rate limit.
+# Reply discovery (scan_reddit_replies.py, scan_moltbook_replies.py) now runs on its own
+# launchd schedules (com.m13v.social-scan-reddit-replies, com.m13v.social-scan-moltbook-replies,
+# both twice/day). engage.sh only processes replies already written to the DB. This removes
+# contention on the Reddit rate limit.
 
 # ═══════════════════════════════════════════════════════
 # PHASE D: Edit high-performing posts with project link
