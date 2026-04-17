@@ -97,6 +97,43 @@ def _match_author(comment_author, target_author):
     return t_first and (t_first in c or c in t_first)
 
 
+def _we_already_hold_lock():
+    """True if the browser lock file is owned by the current process.
+
+    When our caller (e.g. scan_linkedin_notifications.py) already grabbed the
+    lock via linkedin_browser.get_browser_and_page and never released it
+    (is_cdp=True path doesn't release), re-acquiring would sys.exit(1). This
+    check lets us bypass re-acquisition safely within the same process.
+    """
+    try:
+        with open(lb.LOCK_FILE) as f:
+            return json.load(f).get("session_id") == lb._LOCK_SESSION_ID
+    except (OSError, json.JSONDecodeError):
+        return False
+
+
+def _get_cdp_page(playwright):
+    """Connect to the linkedin-agent CDP browser without touching the lock.
+    Caller must already hold the lock. Returns (browser, page) or (None, None)."""
+    port = lb.find_linkedin_cdp_port()
+    if not port:
+        return None, None
+    try:
+        browser = playwright.chromium.connect_over_cdp(f"http://localhost:{port}")
+        contexts = browser.contexts
+        if not contexts:
+            return None, None
+        ctx = contexts[0]
+        for pg in ctx.pages:
+            if "linkedin.com" in pg.url and "login" not in pg.url:
+                return browser, pg
+        if ctx.pages:
+            return browser, ctx.pages[0]
+    except Exception:
+        pass
+    return None, None
+
+
 def fetch_comments(url, target_urn=None, settle_ms=4000, max_expand_rounds=6):
     """Load page and aggressively expand comments until the target URN appears
     (or we run out of expansion rounds)."""
@@ -120,7 +157,13 @@ def fetch_comments(url, target_urn=None, settle_ms=4000, max_expand_rounds=6):
     }"""
 
     with sync_playwright() as p:
-        browser, page, is_cdp = lb.get_browser_and_page(p)
+        if _we_already_hold_lock():
+            browser, page = _get_cdp_page(p)
+            if page is None:
+                return {"comments": [], "total": 0, "note": "self-locked, no cdp page"}
+            is_cdp = True
+        else:
+            browser, page, is_cdp = lb.get_browser_and_page(p)
         try:
             page.goto(url, wait_until="domcontentloaded")
             page.wait_for_timeout(settle_ms)
@@ -192,6 +235,8 @@ def fetch_live_content(activity_id, comment_urn, target_author=None):
     """End-to-end helper: build the deep-link URL, fetch, and pick best non-us content.
 
     Returns the comment text string (trimmed to 500 chars) or None on any failure.
+    Catches BaseException so that a SystemExit from linkedin_browser's lock
+    path (which fires sys.exit(1) on contention) cannot kill the caller.
     """
     import urllib.parse
     try:
@@ -202,7 +247,7 @@ def fetch_live_content(activity_id, comment_urn, target_author=None):
         page_data = fetch_comments(url, target_urn=comment_urn)
         picked = pick_non_us_content(page_data.get("comments", []), target_author=target_author)
         return (picked or "")[:500] or None
-    except Exception:
+    except BaseException:
         return None
 
 
