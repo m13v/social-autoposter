@@ -244,7 +244,7 @@ Read $SKILL_FILE for content rules (tone, anti-AI detection, no em dashes).
 
 CRITICAL - Tool rules:
 $([ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ] && echo "- Reddit Chat: use Python CDP scripts (scripts/reddit_browser.py) for scanning/reading, fall back to mcp__reddit-agent__* for chat SPA operations")
-$([ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ] && echo "- LinkedIn Messages: use Python CDP scripts (scripts/linkedin_browser.py) ONLY")
+$([ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ] && echo "- LinkedIn Messages: use mcp__linkedin-agent__* tools ONLY. Do NOT call /voyager/api/ endpoints, do NOT run Python CDP scripts against LinkedIn.")
 $([ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ] && echo "- X/Twitter DMs: use Python CDP scripts (scripts/twitter_browser.py) ONLY")
 NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
 If a script or tool call fails, wait 30 seconds and retry (up to 3 times).
@@ -307,25 +307,50 @@ fi)
 $(if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ]; then cat <<'PHASE_B_EOF'
 ## PHASE B: Scan LinkedIn Messages for new messages
 
-1. Get unread LinkedIn conversations using the Python CDP script (no browser MCP needed):
-   ```bash
-   cd ~/social-autoposter && python3 scripts/linkedin_browser.py unread-dms
-   ```
-   This returns JSON with: author, preview, time, unread_count, thread_url for each unread conversation.
+CRITICAL: use mcp__linkedin-agent__* tools for ALL LinkedIn browser work. Do NOT call /voyager/api/ endpoints. Do NOT open individual post permalinks to scrape; stay inside the messaging UI.
 
-2. For each unread conversation with a thread_url, read the full messages:
-   ```bash
-   python3 scripts/linkedin_browser.py read-conversation "THREAD_URL"
-   ```
-   This returns JSON with: partner_name, messages (each with sender, content, time), total_found.
+1. Navigate to https://www.linkedin.com/messaging/ using mcp__linkedin-agent__browser_navigate.
+   Take a browser_snapshot. If the page is a login/checkpoint/verification challenge, STOP and print SESSION_INVALID — do not attempt to log in.
 
-3. For each conversation:
-   a. Identify the sender from the partner_name
-   b. Check if this person is in our DM database:
+2. Extract the list of unread conversations with a single mcp__linkedin-agent__browser_run_code call:
+
+   ```javascript
+   async (page) => {
+     const items = [];
+     const threads = document.querySelectorAll('a.msg-conversation-listitem__link, a[href*="/messaging/thread/"]');
+     for (const a of threads) {
+       const href = a.getAttribute('href') || '';
+       if (!/messaging\/thread\//.test(href)) continue;
+       const container = a.closest('li, article') || a;
+       const unreadBadge = container.querySelector('.notification-badge--show, [aria-label*="unread" i], [data-test-unread]');
+       const text = (container.innerText || '').trim();
+       const nameEl = container.querySelector('h3, .msg-conversation-listitem__participant-names');
+       const partner = nameEl ? nameEl.textContent.trim() : '';
+       items.push({
+         thread_url: href.startsWith('http') ? href : ('https://www.linkedin.com' + href),
+         partner,
+         preview: text.slice(0, 200),
+         unread: !!unreadBadge,
+       });
+     }
+     return JSON.stringify(items);
+   }
+   ```
+
+3. For each thread where unread is true:
+   a. Navigate to thread_url (mcp__linkedin-agent__browser_navigate).
+   b. Take a browser_snapshot. Read the last ~5 messages. Determine which are inbound vs from us.
+   c. Identify the sender from the partner name.
+   d. Check if this person is in our DM database:
       ```bash
       cd ~/social-autoposter && python3 scripts/dm_conversation.py find --author "PERSON_NAME"
       ```
-   c. Log inbound messages the same way as Reddit
+   e. Log inbound messages the same way as Reddit:
+      ```bash
+      python3 scripts/dm_conversation.py log-inbound --author "PERSON_NAME" --content "MESSAGE_TEXT"
+      ```
+
+4. Do NOT aggressively scroll or click "Load earlier messages" in every thread. Only read what's immediately visible after the initial navigation. If the most recent inbound message is not visible, move on.
 PHASE_B_EOF
 fi)
 
