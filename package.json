@@ -14,7 +14,7 @@
     "SKILL.md",
     "skill/run-reddit-search.sh",
     "skill/run-reddit-threads.sh",
-    "skill/run-twitter.sh",
+    "skill/run-twitter-cycle.sh",
     "skill/run-linkedin.sh",
     "skill/run-moltbook.sh",
     "skill/run-github.sh",
