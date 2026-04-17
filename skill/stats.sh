@@ -5,13 +5,69 @@
 #   Step 3: X/Twitter stats via Claude + Playwright (browser required)
 #   Step 4: LinkedIn stats via Claude + Playwright (browser required)
 # Called by launchd every 6 hours.
+#
+# Args (any order):
+#   --platform <reddit|twitter|linkedin|moltbook>  Run only the steps for one platform.
+#   --quiet                                        Minimal Python output.
+# If --platform is omitted, all steps run (backward-compatible default).
 
 set -uo pipefail
 
 REPO_DIR="$HOME/social-autoposter"
 SKILL_FILE="$REPO_DIR/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"
-QUIET="${1:-}"
+
+# Parse args (support --platform <name> and --quiet in any order).
+QUIET=""
+PLATFORM=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --platform)
+            PLATFORM="${2:-}"
+            shift 2
+            ;;
+        --platform=*)
+            PLATFORM="${1#--platform=}"
+            shift
+            ;;
+        --quiet)
+            QUIET="--quiet"
+            shift
+            ;;
+        *)
+            # Unknown arg: ignore (keeps backward compatibility with callers).
+            shift
+            ;;
+    esac
+done
+
+# Validate --platform if provided.
+case "$PLATFORM" in
+    ""|reddit|twitter|linkedin|moltbook)
+        ;;
+    *)
+        echo "stats.sh: invalid --platform '$PLATFORM' (expected reddit, twitter, linkedin, or moltbook)" >&2
+        exit 2
+        ;;
+esac
+
+# Decide which steps to run.
+# No --platform means "all" (legacy behavior).
+if [ -z "$PLATFORM" ]; then
+    RUN_STEP1=1; RUN_STEP2=1; RUN_STEP3=1; RUN_STEP4=1
+else
+    # Step 1 is cheap Python API work. update_stats.py does not accept a
+    # generic --platform flag (only --twitter-only), so we run it for every
+    # platform and narrow it with --twitter-only when the platform is twitter.
+    RUN_STEP1=1
+    RUN_STEP2=0; RUN_STEP3=0; RUN_STEP4=0
+    case "$PLATFORM" in
+        reddit)   RUN_STEP2=1 ;;
+        twitter)  RUN_STEP3=1 ;;
+        linkedin) RUN_STEP4=1 ;;
+        moltbook) ;;  # API-only, covered by Step 1.
+    esac
+fi
 
 # Load secrets (MOLTBOOK_API_KEY, DATABASE_URL, etc.)
 # shellcheck source=/dev/null
@@ -23,26 +79,39 @@ LOGFILE="$LOG_DIR/stats-$(date +%Y-%m-%d_%H%M%S).log"
 log() { echo "[$(date +%H:%M:%S)] $*" >> "$LOGFILE"; echo "[$(date +%H:%M:%S)] $*"; }
 
 log "=== Stats Pipeline Run: $(date) ==="
+if [ -n "$PLATFORM" ]; then
+    log "Platform filter: $PLATFORM (step1=$RUN_STEP1 step2=$RUN_STEP2 step3=$RUN_STEP3 step4=$RUN_STEP4)"
+else
+    log "Platform filter: (none, running all steps)"
+fi
 
 # ═══════════════════════════════════════════════════════
 # STEP 1: API stats (upvotes, comments, deleted/removed)
 # ═══════════════════════════════════════════════════════
-log "Step 1: API stats (Python)"
-if [ "$QUIET" = "--quiet" ]; then
-    python3 "$REPO_DIR/scripts/update_stats.py" --quiet >> "$LOGFILE" 2>&1
+if [ "$RUN_STEP1" -eq 1 ]; then
+    # Narrow the Python call when the caller asked for twitter only.
+    # update_stats.py supports --twitter-only but not a generic --platform,
+    # so for reddit/linkedin/moltbook/none we let it run its default pass.
+    STEP1_ARGS=()
+    [ "$QUIET" = "--quiet" ] && STEP1_ARGS+=("--quiet")
+    [ "$PLATFORM" = "twitter" ] && STEP1_ARGS+=("--twitter-only")
+
+    log "Step 1: API stats (Python) ${STEP1_ARGS[*]:-}"
+    python3 "$REPO_DIR/scripts/update_stats.py" "${STEP1_ARGS[@]}" >> "$LOGFILE" 2>&1
+    STEP1_EXIT=$?
+    if [ "$STEP1_EXIT" -ne 0 ]; then
+        log "Step 1: FAILED (exit $STEP1_EXIT), continuing to next step"
+    else
+        log "Step 1: Done"
+    fi
 else
-    python3 "$REPO_DIR/scripts/update_stats.py" >> "$LOGFILE" 2>&1
-fi
-STEP1_EXIT=$?
-if [ "$STEP1_EXIT" -ne 0 ]; then
-    log "Step 1: FAILED (exit $STEP1_EXIT) — continuing to Step 2"
-else
-    log "Step 1: Done"
+    log "Step 1: SKIPPED (platform=$PLATFORM)"
 fi
 
 # ═══════════════════════════════════════════════════════
 # STEP 2: Reddit view counts (browser required)
 # ═══════════════════════════════════════════════════════
+if [ "$RUN_STEP2" -eq 1 ]; then
 log "Step 2: Reddit view counts (Claude + Playwright)"
 
 REDDIT_USERNAME=$(python3 -c "import json; print(json.load(open('$REPO_DIR/config.json'))['accounts']['reddit']['username'])" 2>/dev/null || echo "")
@@ -145,28 +214,36 @@ STEP2_EOF
         log "Step 2: Done"
     fi
 else
-    log "Step 2: SKIPPED — no Reddit username in config.json"
+    log "Step 2: SKIPPED, no Reddit username in config.json"
+fi
+else
+    log "Step 2: SKIPPED (platform=$PLATFORM)"
 fi
 
 # ═══════════════════════════════════════════════════════
-# STEP 3: X/Twitter stats (API via fxtwitter — no browser needed)
+# STEP 3: X/Twitter stats (API via fxtwitter, no browser needed)
 # ═══════════════════════════════════════════════════════
-log "Step 3: X/Twitter stats (API via fxtwitter)"
-if [ "$QUIET" = "--quiet" ]; then
-    python3 "$REPO_DIR/scripts/update_stats.py" --twitter-only --quiet >> "$LOGFILE" 2>&1
+if [ "$RUN_STEP3" -eq 1 ]; then
+    log "Step 3: X/Twitter stats (API via fxtwitter)"
+    if [ "$QUIET" = "--quiet" ]; then
+        python3 "$REPO_DIR/scripts/update_stats.py" --twitter-only --quiet >> "$LOGFILE" 2>&1
+    else
+        python3 "$REPO_DIR/scripts/update_stats.py" --twitter-only >> "$LOGFILE" 2>&1
+    fi
+    STEP3_EXIT=$?
+    if [ "$STEP3_EXIT" -ne 0 ]; then
+        log "Step 3: FAILED (exit $STEP3_EXIT)"
+    else
+        log "Step 3: Done"
+    fi
 else
-    python3 "$REPO_DIR/scripts/update_stats.py" --twitter-only >> "$LOGFILE" 2>&1
-fi
-STEP3_EXIT=$?
-if [ "$STEP3_EXIT" -ne 0 ]; then
-    log "Step 3: FAILED (exit $STEP3_EXIT)"
-else
-    log "Step 3: Done"
+    log "Step 3: SKIPPED (platform=$PLATFORM)"
 fi
 
 # ═══════════════════════════════════════════════════════
 # STEP 4: LinkedIn stats (browser required)
 # ═══════════════════════════════════════════════════════
+if [ "$RUN_STEP4" -eq 1 ]; then
 log "Step 4: LinkedIn stats (Claude + Playwright)"
 
 LINKEDIN_POSTS=$(psql "$DATABASE_URL" -t -A -c "
@@ -320,7 +397,10 @@ STEP4_EOF
         log "Step 4: Done"
     fi
 else
-    log "Step 4: SKIPPED — no LinkedIn posts need stats update ($LINKEDIN_POSTS found)"
+    log "Step 4: SKIPPED, no LinkedIn posts need stats update ($LINKEDIN_POSTS found)"
+fi
+else
+    log "Step 4: SKIPPED (platform=$PLATFORM)"
 fi
 
 log "=== Stats Pipeline complete: $(date) ==="
