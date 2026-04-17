@@ -9,8 +9,7 @@ Rules:
   threads.external_floor_days).
 - Entry filter: skip any subreddit where this account has posted an original
   thread (thread_url == our_url) within that sub's floor window.
-- Also skip any subreddit listed in subreddit_bans (both 'banned' and
-  'skip_threads' groups).
+- Also skip any subreddit listed in subreddit_bans.thread_blocked.
 - Among eligible candidates, prefer own_community if present. Otherwise, weight
   projects by config weight.
 
@@ -48,18 +47,20 @@ def norm_sub(s):
     return s.lower()
 
 
-def flatten_banned(config):
-    """Flatten all subreddit_bans groups (banned + skip_threads).
+def load_thread_blocked_subs(config):
+    """Load subreddits where we cannot create new threads.
 
-    For original threads we block everything: true bans and strategic skips.
+    Reads subreddit_bans.thread_blocked. For the thread-creation pipeline
+    only — the comment pipeline uses subreddit_bans.comment_blocked via
+    reddit_tools._load_comment_blocked_subs().
     """
     bans = config.get("subreddit_bans") or {}
     out = set()
     if isinstance(bans, dict):
-        for group in bans.values():
-            for s in group or []:
-                out.add(norm_sub(s))
+        for s in bans.get("thread_blocked") or []:
+            out.add(norm_sub(s))
     elif isinstance(bans, list):
+        # Legacy flat-list form — treat as thread_blocked.
         for s in bans:
             out.add(norm_sub(s))
     return out
@@ -93,7 +94,7 @@ def recent_posts_by_sub(max_days):
 def build_candidates(config):
     recent = recent_posts_by_sub(max_days=max(
         DEFAULT_OWN_FLOOR_DAYS, DEFAULT_EXTERNAL_FLOOR_DAYS, 14))
-    banned = flatten_banned(config)
+    thread_blocked = load_thread_blocked_subs(config)
     candidates = []
     for p in config.get("projects", []):
         t = p.get("threads") or {}
@@ -110,20 +111,20 @@ def build_candidates(config):
                 sub_display = own
                 own_floor = DEFAULT_OWN_FLOOR_DAYS
             slug = norm_sub(sub_display)
-            if sub_display and slug not in banned:
+            if sub_display and slug not in thread_blocked:
                 last = recent.get(slug)
                 if last is None or last >= own_floor:
                     candidates.append((p, sub_display, True, own_floor, last))
         # External subs
         for sub in t.get("external_subreddits") or []:
             slug = norm_sub(sub)
-            if slug in banned:
+            if slug in thread_blocked:
                 continue
             last = recent.get(slug)
             if last is not None and last < ext_floor:
                 continue
             candidates.append((p, sub, False, ext_floor, last))
-    return candidates, recent, banned
+    return candidates, recent, thread_blocked
 
 
 def pick(candidates):
