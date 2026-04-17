@@ -88,6 +88,76 @@ function isJobLoaded(label) {
   } catch { return false; }
 }
 
+// Batched snapshot: one launchctl list, one ps -ax, one log readdir.
+// Every per-request helper reads from this instead of forking its own
+// subprocess. Cuts /api/status from ~35s to <1s by replacing ~70
+// execSync forks with 3.
+function buildBatchSnapshot() {
+  const loadedLabels = new Set();
+  try {
+    const out = execSync('launchctl list', { stdio: 'pipe', maxBuffer: 8 * 1024 * 1024 }).toString();
+    // Format: "PID\tStatus\tLabel\n". Skip header.
+    for (const line of out.split('\n').slice(1)) {
+      const parts = line.split('\t');
+      if (parts.length >= 3 && parts[2].startsWith('com.m13v.social-')) {
+        loadedLabels.add(parts[2]);
+      }
+    }
+  } catch {}
+
+  // One ps -ax scan bucketed by script path. Matches scripts in
+  // social-autoposter/skill/ and /scripts/ — the only paths getJobPids and
+  // getPidsForScriptPath ever query. Bucketing is by substring match on
+  // scriptPath, which mirrors pgrep -f semantics.
+  const pidsByScript = new Map();
+  const allSocialPids = [];
+  try {
+    const out = execSync('ps -axo pid=,command=', { stdio: 'pipe', maxBuffer: 16 * 1024 * 1024 }).toString();
+    for (const line of out.split('\n')) {
+      const m = line.match(/^\s*(\d+)\s+(.*)$/);
+      if (!m) continue;
+      const pid = parseInt(m[1], 10);
+      const cmd = m[2];
+      if (cmd.includes('/social-autoposter/')) {
+        allSocialPids.push({ pid, cmd });
+      }
+    }
+  } catch {}
+
+  const logFiles = (() => {
+    try { return fs.readdirSync(LOG_DIR); } catch { return []; }
+  })();
+
+  return { loadedLabels, allSocialPids, pidsByScript, logFiles };
+}
+
+function pidsForScriptFromSnapshot(snap, scriptPath) {
+  if (!scriptPath) return [];
+  if (snap.pidsByScript.has(scriptPath)) return snap.pidsByScript.get(scriptPath);
+  const hits = [];
+  for (const { pid, cmd } of snap.allSocialPids) {
+    if (cmd.includes(scriptPath)) hits.push(pid);
+  }
+  snap.pidsByScript.set(scriptPath, hits);
+  return hits;
+}
+
+function lastLogFromSnapshot(snap, job) {
+  const logPrefix = job.logPrefix;
+  const matches = snap.logFiles.filter(f => {
+    if (!f.endsWith('.log')) return false;
+    if (f.startsWith('launchd-')) return false;
+    if (logPrefix) return f.startsWith(logPrefix);
+    return /^\d{4}-\d{2}-\d{2}_/.test(f);
+  }).sort().reverse();
+  if (!matches.length) return { file: null, time: null };
+  const fname = matches[0];
+  const timeStr = logPrefix ? fname.replace(logPrefix, '').replace('.log', '') : fname.replace('.log', '');
+  const m = timeStr.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})/);
+  const time = m ? new Date(m[1], m[2]-1, m[3], m[4], m[5], m[6]).toISOString() : null;
+  return { file: fname, time };
+}
+
 // launchctl load/unload exit 0 even on failure (e.g. "Unload failed: 5:
 // Input/output error" when the job is already unloaded, or bootstrap-domain
 // mismatches on modern macOS). Use spawnSync so we capture stderr regardless
@@ -377,13 +447,15 @@ function handleApi(req, res) {
 
   // GET /api/status
   if (p === '/api/status' && req.method === 'GET') {
+    const snap = buildBatchSnapshot();
     const jobs = JOBS.map(job => {
       const plistPath = path.join(LAUNCHD_DIR, job.plist);
-      const loaded = isJobLoaded(job.label);
-      const pids = getJobPids(job.script);
+      const loaded = snap.loadedLabels.has(job.label);
+      const scriptPath = path.join(DEST, 'skill', job.script);
+      const pids = pidsForScriptFromSnapshot(snap, scriptPath);
       const running = pids.length > 0;
       const interval = getPlistInterval(plistPath);
-      const lastLog = getLastLog(job);
+      const lastLog = lastLogFromSnapshot(snap, job);
       // status: 'running' (process active), 'scheduled' (loaded, waiting), 'stopped' (not loaded)
       const status = running ? 'running' : loaded ? 'scheduled' : 'stopped';
       return {
@@ -410,13 +482,13 @@ function handleApi(req, res) {
     const otherJobs = discovered
       .filter(d => !matrixLabels.has(d.label))
       .map(d => {
-        const loaded = isJobLoaded(d.label);
-        const pids = getPidsForScriptPath(d.scriptPath);
+        const loaded = snap.loadedLabels.has(d.label);
+        const pids = pidsForScriptFromSnapshot(snap, d.scriptPath);
         const running = pids.length > 0;
         const status = running ? 'running' : loaded ? 'scheduled' : 'stopped';
         const scriptBasename = d.scriptPath ? path.basename(d.scriptPath) : null;
         const logPrefix = scriptBasename ? scriptBasename.replace(/\.(sh|py|js)$/, '-') : null;
-        const lastLog = logPrefix ? getLastLog({ logPrefix }) : { file: null, time: null };
+        const lastLog = logPrefix ? lastLogFromSnapshot(snap, { logPrefix }) : { file: null, time: null };
         // Prefer repo plist for schedule; fall back to installed
         let plistPath = path.join(LAUNCHD_DIR, d.plist);
         if (!fs.existsSync(plistPath)) plistPath = getLaunchAgentPath(d.plist);
@@ -438,7 +510,9 @@ function handleApi(req, res) {
       .sort((a, b) => a.name.localeCompare(b.name));
 
     const pending = psql("SELECT COUNT(*) FROM replies WHERE status='pending'");
-    return json(res, { jobs, otherJobs, pendingReplies: pending ? parseInt(pending, 10) : null, paused: isPaused() });
+    const allDiscovered = discovered;
+    const paused = allDiscovered.length > 0 && allDiscovered.every(j => !snap.loadedLabels.has(j.label));
+    return json(res, { jobs, otherJobs, pendingReplies: pending ? parseInt(pending, 10) : null, paused });
   }
 
   // POST /api/pause
