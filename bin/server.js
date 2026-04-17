@@ -5,7 +5,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync, spawn } = require('child_process');
+const { execSync, spawn, spawnSync } = require('child_process');
 
 const DEST = path.join(os.homedir(), 'social-autoposter');
 const LOG_DIR = path.join(DEST, 'skill', 'logs');
@@ -69,6 +69,17 @@ function isJobLoaded(label) {
     execSync(`launchctl list ${label}`, { stdio: 'pipe' });
     return true;
   } catch { return false; }
+}
+
+// launchctl load/unload exit 0 even on failure (e.g. "Unload failed: 5:
+// Input/output error" when the job is already unloaded, or bootstrap-domain
+// mismatches on modern macOS). Use spawnSync so we capture stderr regardless
+// of exit code and can detect the silent-failure case.
+function runLaunchctl(action, agentLink) {
+  const r = spawnSync('launchctl', [action, agentLink], { encoding: 'utf8' });
+  const stderr = (r.stderr || '').trim();
+  const ok = r.status === 0 && !/failed/i.test(stderr);
+  return { ok, stderr, status: r.status };
 }
 
 function getJobPids(script) {
@@ -433,10 +444,13 @@ function handleApi(req, res) {
     if (!job) return json(res, { error: 'Unknown job' }, 404);
     const plistSrc = path.join(LAUNCHD_DIR, job.plist);
     const agentLink = getLaunchAgentPath(job.plist);
-    const loaded = isJobLoaded(label);
+    const wasLoaded = isJobLoaded(label);
+    const intent = !wasLoaded;
+    let stderr = '';
     try {
-      if (loaded) {
-        execSync(`launchctl unload "${agentLink}"`, { stdio: 'pipe' });
+      if (wasLoaded) {
+        const r = runLaunchctl('unload', agentLink);
+        stderr = r.stderr;
         // Only unlink symlinks. Real-file installed plists (e.g. daily-report)
         // must be preserved so the job can be toggled back on.
         try {
@@ -449,12 +463,20 @@ function handleApi(req, res) {
           if (!fs.existsSync(plistSrc)) return json(res, { error: 'No plist source' }, 404);
           fs.symlinkSync(plistSrc, agentLink);
         }
-        execSync(`launchctl load "${agentLink}"`, { stdio: 'pipe' });
+        const r = runLaunchctl('load', agentLink);
+        stderr = r.stderr;
       }
-      return json(res, { loaded: !loaded });
     } catch (e) {
       return json(res, { error: e.message }, 500);
     }
+    // Re-check actual state; launchctl may exit 0 while the action silently failed.
+    const nowLoaded = isJobLoaded(label);
+    const payload = { loaded: nowLoaded };
+    if (nowLoaded !== intent) {
+      payload.error = stderr || `launchctl ${wasLoaded ? 'unload' : 'load'} reported success but state did not change`;
+      return json(res, payload, 500);
+    }
+    return json(res, payload);
   }
 
   // POST /api/jobs/:label/run
@@ -1351,8 +1373,13 @@ async function togglePause() {
 
 async function toggleJob(label) {
   try {
-    await fetch('/api/jobs/' + encodeURIComponent(label) + '/toggle', { method: 'POST' });
-    toast('Job toggled');
+    const res = await fetch('/api/jobs/' + encodeURIComponent(label) + '/toggle', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.error) {
+      toast('Toggle failed: ' + (data.error || ('HTTP ' + res.status)), true);
+    } else {
+      toast(data.loaded ? 'Scheduled' : 'Unloaded');
+    }
     loadStatus();
   } catch(e) { toast('Error: ' + e.message, true); }
 }
