@@ -242,6 +242,8 @@ def main():
     parser.add_argument("--limit", type=int, default=50, help="Max mentions to fetch")
     parser.add_argument("--view", type=str, default=None, help="Octolens view name (default: For you)")
     parser.add_argument("--mark-skipped", action="store_true", help="Mark already-posted as skipped in DB")
+    parser.add_argument("--platform", type=str, default=None, choices=["reddit", "twitter", "linkedin"],
+                        help="Filter candidates to a single platform (reddit, twitter, linkedin)")
     args = parser.parse_args()
 
     if not args.from_db and not args.from_api:
@@ -262,9 +264,16 @@ def main():
 
     candidates = mentions_to_candidates(mentions, already_posted)
 
+    # Filter by platform if requested. Octolens returns `source` values like
+    # "reddit", "reddit_comment" (normalized to "reddit" above), "twitter",
+    # "linkedin".
+    if args.platform:
+        candidates = [c for c in candidates if c.get("platform") == args.platform]
+
     # Output as JSON matching find_threads.py format
     output = {
         "source": "octolens",
+        "platform": args.platform or "all",
         "total_mentions": len(mentions),
         "candidates": candidates,
         "already_posted_count": len(mentions) - len(candidates),
