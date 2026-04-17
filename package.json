@@ -7,7 +7,8 @@
   },
   "scripts": {
     "start": "node bin/server.js",
-    "dev": "node --watch bin/server.js"
+    "dev": "node --watch bin/server.js",
+    "test": "node test/platform.test.js && node test/launchd-golden.test.js"
   },
   "files": [
     "bin/",
