@@ -241,6 +241,18 @@ function getLaunchAgentPath(plistFile) {
   return path.join(os.homedir(), 'Library', 'LaunchAgents', plistFile);
 }
 
+// 5s TTL cache so /api/status polling (typically every 1-2s) doesn't spawn
+// a psql subprocess on every hit. Stale-by-5s is fine for the pending-reply
+// counter since it only affects the dashboard badge.
+let _pendingCache = { at: 0, value: null };
+function cachedPendingReplies() {
+  const now = Date.now();
+  if (now - _pendingCache.at < 5000) return _pendingCache.value;
+  const raw = psql("SELECT COUNT(*) FROM replies WHERE status='pending'");
+  _pendingCache = { at: now, value: raw ? parseInt(raw, 10) : null };
+  return _pendingCache.value;
+}
+
 // Parse label and script path from a launchd plist XML blob.
 // Returns { label, scriptPath } where scriptPath is the first entry in
 // ProgramArguments that looks like a script (.sh/.py/.js), or Program if set.
@@ -509,10 +521,10 @@ function handleApi(req, res) {
       })
       .sort((a, b) => a.name.localeCompare(b.name));
 
-    const pending = psql("SELECT COUNT(*) FROM replies WHERE status='pending'");
+    const pending = cachedPendingReplies();
     const allDiscovered = discovered;
     const paused = allDiscovered.length > 0 && allDiscovered.every(j => !snap.loadedLabels.has(j.label));
-    return json(res, { jobs, otherJobs, pendingReplies: pending ? parseInt(pending, 10) : null, paused });
+    return json(res, { jobs, otherJobs, pendingReplies: pending, paused });
   }
 
   // POST /api/pause
