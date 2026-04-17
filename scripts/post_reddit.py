@@ -34,34 +34,77 @@ PREFLIGHT_WAIT_BUDGET_SECONDS = 180
 from engagement_styles import VALID_STYLES, get_styles_prompt, get_content_rules
 
 
+def _apply_rate_limit_policy(remaining, reset_seconds, source, budget_seconds):
+    """Given current quota, decide: proceed (True), wait then proceed, or skip (False)."""
+    if remaining > 2 or reset_seconds <= 0:
+        return True
+    if reset_seconds > budget_seconds:
+        print(f"[post_reddit] Reddit rate-limited ({source}), reset in "
+              f"{int(reset_seconds)}s (> {budget_seconds}s budget). Skipping run.")
+        return False
+    wait = int(reset_seconds) + 3
+    print(f"[post_reddit] Reddit rate-limited ({source}), waiting {wait}s "
+          f"for reset before spawning Claude...")
+    time.sleep(wait)
+    return True
+
+
+def _probe_reddit_quota():
+    """One cheap request to Reddit to learn the live quota.
+
+    Updates RATELIMIT_FILE so downstream reddit_tools.py calls share the
+    fresh state. Returns (remaining, reset_seconds) or None on network error.
+    """
+    import urllib.request
+    import urllib.error
+    url = "https://old.reddit.com/r/popular.json?limit=1"
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=10)
+        remaining = float(resp.headers.get("X-Ratelimit-Remaining", 100))
+        reset = float(resp.headers.get("X-Ratelimit-Reset", 0))
+        with open(RATELIMIT_FILE, "w") as f:
+            json.dump({"remaining": remaining, "reset_at": time.time() + reset}, f)
+        return remaining, reset
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            reset = float(e.headers.get("X-Ratelimit-Reset", 60))
+            with open(RATELIMIT_FILE, "w") as f:
+                json.dump({"remaining": 0, "reset_at": time.time() + reset}, f)
+            return 0.0, reset
+        return None
+    except Exception:
+        return None
+
+
 def preflight_rate_limit(budget_seconds=PREFLIGHT_WAIT_BUDGET_SECONDS):
     """Block or bail before spawning Claude if Reddit search is throttled.
 
-    reddit_tools.py shares quota state via RATELIMIT_FILE. When quota is
-    exhausted, every search invocation raises RateLimitedError immediately
-    (MAX_INLINE_WAIT_SECONDS=15), so Claude runs 5 failed searches in ~30s
-    and exits posted=0 having burned ~$0.44. Waiting one reset window here
-    (typically <3 min) reclaims the run.
+    Strategy:
+      1. Cheap probe to Reddit to read live X-Ratelimit-Remaining headers.
+         This catches the case where the shared state file is stale but the
+         server still throttles us (10-min rolling window).
+      2. Fall back to the cached state file if the probe network-fails.
+    A $0.44 Claude spawn with 5 rate-limited searches is the cost we're
+    avoiding; a single probe request is ~300ms.
     """
+    probe = _probe_reddit_quota()
+    if probe is not None:
+        remaining, reset = probe
+        print(f"[post_reddit] Reddit quota probe: remaining={remaining:.0f} "
+              f"reset_in={int(reset)}s")
+        return _apply_rate_limit_policy(remaining, reset, "probe", budget_seconds)
     try:
         with open(RATELIMIT_FILE) as f:
             rl = json.load(f)
     except Exception:
         return True
-    remaining = rl.get("remaining", 100)
-    reset_at = rl.get("reset_at", 0)
-    wait = int(reset_at - time.time())
-    if remaining > 2 or wait <= 0:
-        return True
-    if wait > budget_seconds:
-        print(f"[post_reddit] Reddit rate-limited, reset in {wait}s "
-              f"(> {budget_seconds}s budget). Skipping run.")
-        return False
-    wait += 3
-    print(f"[post_reddit] Reddit rate-limited, waiting {wait}s for reset "
-          f"before spawning Claude...")
-    time.sleep(wait)
-    return True
+    wait = int(rl.get("reset_at", 0) - time.time())
+    return _apply_rate_limit_policy(
+        rl.get("remaining", 100), wait, "cached", budget_seconds,
+    )
 
 
 def mark_subreddit_restricted(thread_url: str) -> None:
