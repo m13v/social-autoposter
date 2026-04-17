@@ -28,8 +28,40 @@ CONFIG_PATH = os.path.join(REPO_DIR, "config.json")
 API_KEY_KEYCHAIN_SERVICE = "Anthropic API Key Fazm"
 REDDIT_BROWSER = os.path.join(REPO_DIR, "scripts", "reddit_browser.py")
 REDDIT_TOOLS = os.path.join(REPO_DIR, "scripts", "reddit_tools.py")
+RATELIMIT_FILE = "/tmp/reddit_ratelimit.json"
+PREFLIGHT_WAIT_BUDGET_SECONDS = 180
 
 from engagement_styles import VALID_STYLES, get_styles_prompt, get_content_rules
+
+
+def preflight_rate_limit(budget_seconds=PREFLIGHT_WAIT_BUDGET_SECONDS):
+    """Block or bail before spawning Claude if Reddit search is throttled.
+
+    reddit_tools.py shares quota state via RATELIMIT_FILE. When quota is
+    exhausted, every search invocation raises RateLimitedError immediately
+    (MAX_INLINE_WAIT_SECONDS=15), so Claude runs 5 failed searches in ~30s
+    and exits posted=0 having burned ~$0.44. Waiting one reset window here
+    (typically <3 min) reclaims the run.
+    """
+    try:
+        with open(RATELIMIT_FILE) as f:
+            rl = json.load(f)
+    except Exception:
+        return True
+    remaining = rl.get("remaining", 100)
+    reset_at = rl.get("reset_at", 0)
+    wait = int(reset_at - time.time())
+    if remaining > 2 or wait <= 0:
+        return True
+    if wait > budget_seconds:
+        print(f"[post_reddit] Reddit rate-limited, reset in {wait}s "
+              f"(> {budget_seconds}s budget). Skipping run.")
+        return False
+    wait += 3
+    print(f"[post_reddit] Reddit rate-limited, waiting {wait}s for reset "
+          f"before spawning Claude...")
+    time.sleep(wait)
+    return True
 
 
 def mark_subreddit_restricted(thread_url: str) -> None:
@@ -418,6 +450,15 @@ def main():
         print(f"Prompt length: {len(prompt)} chars")
         print(prompt)
         print("=== END DRY RUN ===")
+        return
+
+    if not preflight_rate_limit():
+        subprocess.run([
+            "python3", os.path.join(REPO_DIR, "scripts", "log_run.py"),
+            "--script", "post_reddit",
+            "--posted", "0", "--skipped", "1", "--failed", "0",
+            "--cost", "0.0000", "--elapsed", "0",
+        ])
         return
 
     print(f"[post_reddit] Starting Claude session (limit={args.limit}, timeout={args.timeout}s)")
