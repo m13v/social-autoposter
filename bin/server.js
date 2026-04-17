@@ -594,15 +594,18 @@ function handleApi(req, res) {
     const job = findJob(label);
     if (!job) return json(res, { error: 'Unknown job' }, 404);
     const launchdPid = getLaunchdPid(label);
-    const pids = launchdPid ? [launchdPid] : [];
-    for (const pid of pids) {
-      try { process.kill(pid, 'SIGTERM'); } catch {}
-    }
+    const target = `gui/${process.getuid()}/${label}`;
+    // Ask launchd to SIGKILL the job. launchctl kill targets the PID launchd
+    // tracks, which survives exec in wrapper scripts. SIGKILL (not SIGTERM)
+    // because some scripts trap TERM (e.g. lock.sh's cleanup trap) and the
+    // trap fires but the outer bash keeps waiting on its child, so SIGTERM
+    // alone doesn't reliably end the job.
+    try { spawnSync('launchctl', ['kill', 'SIGKILL', target]); } catch {}
     if (job.scriptBasename) {
       const base = job.scriptBasename.replace(/\.(sh|py|js)$/, '');
       try { execSync(`pkill -f "claude.*${base}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
     }
-    return json(res, { stopped: true, killedPids: pids });
+    return json(res, { stopped: true, killedPids: launchdPid ? [launchdPid] : [] });
   }
 
   // POST /api/jobs/:label/interval
