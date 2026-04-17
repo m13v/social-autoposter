@@ -3,7 +3,7 @@
 
 Centralizes style taxonomy, platform-specific guidance, content rules,
 and prompt generation so every pipeline (post_reddit, engage_reddit,
-run-twitter, run-linkedin, engage-twitter, engage-linkedin) references
+run-twitter-cycle, run-linkedin, engage-twitter, engage-linkedin) references
 a single source of truth.
 
 Usage:
