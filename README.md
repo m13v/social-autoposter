@@ -86,7 +86,7 @@ The launchd schedules from `bin/cli.js`:
 | `com.m13v.social-stats` (`stats.sh`) | every 21600 s (6 h) |
 | `com.m13v.social-engage` (`engage.sh`) | every 21600 s (6 h) |
 
-Per-platform plists in `launchd/` (twitter, reddit, linkedin, moltbook, github, octolens, audit, dm-replies, scan-replies, etc.) use either `StartInterval` or `StartCalendarInterval` for fixed wall-clock times. Activate them with:
+Per-platform plists in `launchd/` (twitter, reddit, linkedin, moltbook, github, octolens, audit, dm-replies, scan-reddit-replies, scan-moltbook-replies, etc.) use either `StartInterval` or `StartCalendarInterval` for fixed wall-clock times. Activate them with:
 
 ```bash
 ln -sf ~/social-autoposter/launchd/com.m13v.social-twitter.plist ~/Library/LaunchAgents/
