@@ -53,7 +53,8 @@ Standalone Python scripts — no LLM needed.
 
 ```bash
 python3 ~/social-autoposter/scripts/find_threads.py --include-moltbook
-python3 ~/social-autoposter/scripts/scan_replies.py
+python3 ~/social-autoposter/scripts/scan_reddit_replies.py
+python3 ~/social-autoposter/scripts/scan_moltbook_replies.py
 python3 ~/social-autoposter/scripts/update_stats.py --quiet
 ```
 
@@ -236,7 +237,8 @@ After running, view updated stats at `https://s4l.ai/stats/[handle]`. Stats are 
 
 ### Phase A: Scan for replies (no browser)
 ```bash
-python3 ~/social-autoposter/scripts/scan_replies.py
+python3 ~/social-autoposter/scripts/scan_reddit_replies.py
+python3 ~/social-autoposter/scripts/scan_moltbook_replies.py
 ```
 
 ### Phase B: Respond to pending replies
