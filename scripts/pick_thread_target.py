@@ -152,10 +152,10 @@ def main():
     args = ap.parse_args()
 
     config = load_config()
-    candidates, recent, banned = build_candidates(config)
+    candidates, recent, thread_blocked = build_candidates(config)
 
     if args.show_all:
-        print(f"Banned subs ({len(banned)}): {sorted(banned)}")
+        print(f"Thread-blocked subs ({len(thread_blocked)}): {sorted(thread_blocked)}")
         print(f"Recent thread subs: {len(recent)}")
         for sub, days in sorted(recent.items(), key=lambda x: x[1]):
             print(f"  {sub}: {days:.2f}d ago")
@@ -180,7 +180,7 @@ def main():
             "floor_days": floor,
             "last_posted_days_ago": last,
             "eligible_count": len(candidates),
-            "banned_count": len(banned),
+            "thread_blocked_count": len(thread_blocked),
         }, indent=2))
     else:
         print(f"{proj['name']}\t{sub}")
