@@ -1764,18 +1764,35 @@ function stopActivityAutoRefresh() {
   if (_activityTimer) { clearInterval(_activityTimer); _activityTimer = null; }
 }
 
-// Tabs
+// Tabs — switching is purely a CSS toggle, so it's instant. Data for each tab
+// is preloaded on init (see preloadTabs) and kept rendered while hidden, so
+// switching back shows cached content immediately while the active tab's
+// timer keeps it fresh.
+const _tabLoaded = { logs: false, activity: false, settings: false };
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.content').forEach(c => c.classList.add('hidden'));
     tab.classList.add('active');
-    document.getElementById('tab-' + tab.dataset.tab).classList.remove('hidden');
-    if (tab.dataset.tab === 'logs') { loadLogFiles(); startLogAutoRefresh(); }
-    else { stopLogAutoRefresh(); }
-    if (tab.dataset.tab === 'activity') { buildActivityFilters(); startActivityAutoRefresh(); }
-    else { stopActivityAutoRefresh(); }
-    if (tab.dataset.tab === 'settings') loadSettings();
+    const name = tab.dataset.tab;
+    document.getElementById('tab-' + name).classList.remove('hidden');
+    if (name === 'logs') {
+      if (!_tabLoaded.logs) { loadLogFiles(); _tabLoaded.logs = true; }
+      startLogAutoRefresh();
+    } else {
+      stopLogAutoRefresh();
+    }
+    if (name === 'activity') {
+      buildActivityFilters();
+      if (!_tabLoaded.activity) _tabLoaded.activity = true;
+      startActivityAutoRefresh();
+    } else {
+      stopActivityAutoRefresh();
+    }
+    if (name === 'settings' && !_tabLoaded.settings) {
+      loadSettings();
+      _tabLoaded.settings = true;
+    }
   });
 });
 
@@ -1787,6 +1804,16 @@ document.getElementById('save-settings').addEventListener('click', saveSettings)
 // Init
 loadStatus();
 setInterval(loadStatus, 5000);
+
+// Preload every tab so switching never blocks on a fetch. Each loader is
+// idempotent; the active tab's timer takes over for ongoing refreshes.
+(function preloadTabs() {
+  setTimeout(() => {
+    try { loadLogFiles(); _tabLoaded.logs = true; } catch {}
+    try { buildActivityFilters(); loadActivity(); _tabLoaded.activity = true; } catch {}
+    try { loadSettings(); _tabLoaded.settings = true; } catch {}
+  }, 100);
+})();
 </script>
 </body>
 </html>`;
