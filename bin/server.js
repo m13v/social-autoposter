@@ -1532,6 +1532,106 @@ async function saveSettings() {
   } catch(e) { toast('Error: ' + e.message, true); }
 }
 
+// Activity tab
+const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent'];
+const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent' };
+const ACTIVITY_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github'];
+let _activitySeen = new Set();
+let _activityFirstLoad = true;
+let _activityTypeFilter = new Set(EVENT_TYPES);
+let _activityPlatformFilter = new Set(ACTIVITY_PLATFORMS);
+let _activityTimer = null;
+
+function buildActivityFilters() {
+  const tEl = document.getElementById('activity-type-filters');
+  const pEl = document.getElementById('activity-platform-filters');
+  if (!tEl || tEl.children.length) return;
+  tEl.innerHTML = EVENT_TYPES.map(t =>
+    '<span class="activity-chip ev-' + t + ' active" data-type="' + t + '">' + EVENT_LABELS[t] + '</span>'
+  ).join('');
+  pEl.innerHTML = ACTIVITY_PLATFORMS.map(p =>
+    '<span class="activity-chip active" data-platform="' + p + '">' + p + '</span>'
+  ).join('');
+  tEl.querySelectorAll('[data-type]').forEach(el => {
+    el.addEventListener('click', () => {
+      const t = el.dataset.type;
+      if (_activityTypeFilter.has(t)) { _activityTypeFilter.delete(t); el.classList.remove('active'); }
+      else { _activityTypeFilter.add(t); el.classList.add('active'); }
+      renderActivity(_lastActivityEvents || []);
+    });
+  });
+  pEl.querySelectorAll('[data-platform]').forEach(el => {
+    el.addEventListener('click', () => {
+      const p = el.dataset.platform;
+      if (_activityPlatformFilter.has(p)) { _activityPlatformFilter.delete(p); el.classList.remove('active'); }
+      else { _activityPlatformFilter.add(p); el.classList.add('active'); }
+      renderActivity(_lastActivityEvents || []);
+    });
+  });
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+let _lastActivityEvents = [];
+function renderActivity(events) {
+  _lastActivityEvents = events;
+  const body = document.getElementById('activity-body');
+  if (!body) return;
+  const filtered = events.filter(e =>
+    _activityTypeFilter.has(e.type) && _activityPlatformFilter.has((e.platform || '').toLowerCase())
+  );
+  document.getElementById('activity-count').textContent =
+    filtered.length + ' of ' + events.length + ' events';
+  if (!filtered.length) {
+    body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#6b7280;padding:40px;">No matching events</td></tr>';
+    return;
+  }
+  const rows = filtered.map(e => {
+    const isNew = !_activityFirstLoad && !_activitySeen.has(e.key);
+    const linkHtml = e.link
+      ? '<a class="activity-link" href="' + escapeHtml(e.link) + '" target="_blank" rel="noopener" title="Open">&rarr;</a>'
+      : '';
+    const timeAbs = e.occurred_at ? new Date(e.occurred_at).toLocaleString() : '';
+    return '<tr' + (isNew ? ' class="activity-row-new"' : '') + ' data-key="' + escapeHtml(e.key) + '">' +
+      '<td class="activity-time" title="' + escapeHtml(timeAbs) + '">' + escapeHtml(relTime(e.occurred_at)) + '</td>' +
+      '<td><span class="ev-pill ev-' + escapeHtml(e.type) + '">' + escapeHtml(EVENT_LABELS[e.type] || e.type) + '</span></td>' +
+      '<td class="activity-platform">' + escapeHtml(e.platform || '') + '</td>' +
+      '<td class="activity-actor">' + escapeHtml(e.actor || '') + '</td>' +
+      '<td class="activity-summary">' + escapeHtml(e.summary || '') + '</td>' +
+      '<td class="activity-detail">' + escapeHtml(e.detail || '') + '</td>' +
+      '<td>' + linkHtml + '</td>' +
+    '</tr>';
+  }).join('');
+  body.innerHTML = rows;
+  events.forEach(e => _activitySeen.add(e.key));
+  _activityFirstLoad = false;
+}
+
+async function loadActivity() {
+  try {
+    const res = await fetch('/api/activity');
+    const data = await res.json();
+    renderActivity(data.events || []);
+    const el = document.getElementById('activity-status-text');
+    if (el) el.textContent = 'live';
+  } catch (e) {
+    const el = document.getElementById('activity-status-text');
+    if (el) el.textContent = 'error';
+  }
+}
+
+function startActivityAutoRefresh() {
+  if (_activityTimer) return;
+  loadActivity();
+  _activityTimer = setInterval(loadActivity, 5000);
+}
+function stopActivityAutoRefresh() {
+  if (_activityTimer) { clearInterval(_activityTimer); _activityTimer = null; }
+}
+
 // Tabs
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -1541,6 +1641,8 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.getElementById('tab-' + tab.dataset.tab).classList.remove('hidden');
     if (tab.dataset.tab === 'logs') { loadLogFiles(); startLogAutoRefresh(); }
     else { stopLogAutoRefresh(); }
+    if (tab.dataset.tab === 'activity') { buildActivityFilters(); startActivityAutoRefresh(); }
+    else { stopActivityAutoRefresh(); }
     if (tab.dataset.tab === 'settings') loadSettings();
   });
 });
