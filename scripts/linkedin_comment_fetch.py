@@ -20,41 +20,41 @@ import linkedin_browser as lb
 
 
 JS_EXTRACTOR = r"""
-(targetUrn) => {
-  const out = { target_urn: targetUrn, found: false, author: null, content: null,
-                strategy: null };
-
-  // LinkedIn marks each comment with: componentkey="replaceableComment_<URN>"
-  const key = 'replaceableComment_' + targetUrn;
-  const escaped = key.replace(/"/g, '\\"');
-  const host = document.querySelector(`[componentkey="${escaped}"]`);
-  if (!host) return out;
-
-  // Walk down inside the host to find the author line and the body text.
-  // LinkedIn nests the content a few levels; grab the deepest non-trivial text
-  // block that isn't the author name or a timestamp/"Author" badge.
-  const textNodes = [];
-  const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT, null);
-  let n;
-  while ((n = walker.nextNode())) {
-    const t = (n.nodeValue || '').trim();
-    if (t) textNodes.push(t);
-  }
-
-  // Drop obvious UI chrome
+() => {
+  // LinkedIn renders each comment with: componentkey="replaceableComment_<URN>"
+  // Each URN appears on multiple elements; dedupe by URN, keep the outermost.
+  const all = Array.from(document.querySelectorAll('[componentkey^="replaceableComment_urn:li:comment:"]'));
+  const seen = new Set();
+  const comments = [];
   const chrome = new Set(['Like','Reply','Love','Insightful','Support','Funny','Celebrate',
                           'Curious','Author','•','·','…more','See translation','more']);
-  const cleaned = textNodes.filter(t => !chrome.has(t) && !/^\d+[wdhms]$/i.test(t) &&
-                                        !/^(\d+\s)?(Like|Reply|reaction|replies?)$/i.test(t));
+  const agoRe = /^\d+[wdhms]$/i;
+  const reactRe = /^(\d+\s)?(Like|Reply|reaction|replies?)$/i;
 
-  // Author is typically the first meaningful block; body is the longest.
-  out.author = cleaned[0] || null;
-  let body = '';
-  for (const t of cleaned.slice(1)) if (t.length > body.length) body = t;
-  out.content = body || null;
-  out.found = !!body;
-  out.strategy = 'componentkey';
-  return out;
+  for (const el of all) {
+    const key = el.getAttribute('componentkey') || '';
+    const urn = key.replace(/^replaceableComment_/, '');
+    if (seen.has(urn)) continue;
+    // Prefer the outermost element for this URN; skip if this is nested inside
+    // another componentkey for the same URN.
+    const outer = el.closest(`[componentkey="${key.replace(/"/g,'\\"')}"]`);
+    if (outer !== el) continue;
+    seen.add(urn);
+
+    const textNodes = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    let n;
+    while ((n = walker.nextNode())) {
+      const t = (n.nodeValue || '').trim();
+      if (t) textNodes.push(t);
+    }
+    const cleaned = textNodes.filter(t => !chrome.has(t) && !agoRe.test(t) && !reactRe.test(t));
+    const author = cleaned[0] || null;
+    let body = '';
+    for (const t of cleaned.slice(1)) if (t.length > body.length) body = t;
+    comments.push({ urn, author, content: body || null });
+  }
+  return { comments, total: comments.length };
 }
 """
 
