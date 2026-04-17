@@ -22,91 +22,38 @@ import linkedin_browser as lb
 JS_EXTRACTOR = r"""
 (targetUrn) => {
   const out = { target_urn: targetUrn, found: false, author: null, content: null,
-                tried: [], total_comments_on_page: 0 };
+                strategy: null };
 
-  // Strategy 1: data-id attribute match (most reliable when present)
-  const all = Array.from(document.querySelectorAll('[data-id]'));
-  out.total_comments_on_page = all.filter(e => (e.getAttribute('data-id')||'').includes('urn:li:comment')).length;
+  // LinkedIn marks each comment with: componentkey="replaceableComment_<URN>"
+  const key = 'replaceableComment_' + targetUrn;
+  const escaped = key.replace(/"/g, '\\"');
+  const host = document.querySelector(`[componentkey="${escaped}"]`);
+  if (!host) return out;
 
-  const exact = all.find(e => (e.getAttribute('data-id') || '') === targetUrn);
-  if (exact) {
-    out.tried.push('data-id-exact');
-    const nameEl = exact.querySelector(
-      '.comments-comment-meta__description-title, .comments-post-meta__name-text, ' +
-      '[class*="comments-post-meta__name"], [class*="comments-comment-meta__description-title"]'
-    );
-    const bodyEl = exact.querySelector(
-      '.comments-comment-item__main-content, [class*="comment-item__main-content"], ' +
-      '.update-components-text, [class*="comments-comment-item"] .feed-shared-text'
-    );
-    if (bodyEl) {
-      out.found = true;
-      out.author = nameEl ? nameEl.innerText.trim() : null;
-      out.content = bodyEl.innerText.trim();
-      return out;
-    }
+  // Walk down inside the host to find the author line and the body text.
+  // LinkedIn nests the content a few levels; grab the deepest non-trivial text
+  // block that isn't the author name or a timestamp/"Author" badge.
+  const textNodes = [];
+  const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT, null);
+  let n;
+  while ((n = walker.nextNode())) {
+    const t = (n.nodeValue || '').trim();
+    if (t) textNodes.push(t);
   }
 
-  // Strategy 2: any element whose data-id *contains* the urn substring
-  const partial = all.find(e => (e.getAttribute('data-id') || '').includes(targetUrn.replace(/^urn:li:comment:/,'')));
-  if (partial) {
-    out.tried.push('data-id-partial');
-    const bodyEl = partial.querySelector(
-      '.comments-comment-item__main-content, [class*="comment-item__main-content"], ' +
-      '.update-components-text'
-    );
-    const nameEl = partial.querySelector(
-      '.comments-comment-meta__description-title, [class*="comments-post-meta__name"]'
-    );
-    if (bodyEl) {
-      out.found = true;
-      out.author = nameEl ? nameEl.innerText.trim() : null;
-      out.content = bodyEl.innerText.trim();
-      return out;
-    }
-  }
+  // Drop obvious UI chrome
+  const chrome = new Set(['Like','Reply','Love','Insightful','Support','Funny','Celebrate',
+                          'Curious','Author','•','·','…more','See translation','more']);
+  const cleaned = textNodes.filter(t => !chrome.has(t) && !/^\d+[wdhms]$/i.test(t) &&
+                                        !/^(\d+\s)?(Like|Reply|reaction|replies?)$/i.test(t));
 
-  // Strategy 3: HTML substring — find the URN in the raw HTML, walk up to
-  // the nearest comment container, then extract its text.
-  const rawHtml = document.body.innerHTML;
-  const idx = rawHtml.indexOf(targetUrn);
-  if (idx >= 0) {
-    out.tried.push('html-substring');
-    // Re-query the DOM for any element referencing the URN via attribute
-    const refs = Array.from(document.querySelectorAll('*')).filter(e => {
-      const attrs = e.getAttributeNames();
-      return attrs.some(a => {
-        const v = e.getAttribute(a) || '';
-        return v.includes(targetUrn);
-      });
-    });
-    for (const ref of refs) {
-      // Walk up to a comment container
-      let container = ref;
-      for (let i = 0; i < 10 && container; i++) {
-        if (container.matches && container.matches(
-          'article.comments-comment-entity, [class*="comments-comment-item"]'
-        )) break;
-        container = container.parentElement;
-      }
-      if (container) {
-        const bodyEl = container.querySelector(
-          '.comments-comment-item__main-content, [class*="comment-item__main-content"], ' +
-          '.update-components-text'
-        );
-        const nameEl = container.querySelector(
-          '.comments-comment-meta__description-title, [class*="comments-post-meta__name"]'
-        );
-        if (bodyEl) {
-          out.found = true;
-          out.author = nameEl ? nameEl.innerText.trim() : null;
-          out.content = bodyEl.innerText.trim();
-          return out;
-        }
-      }
-    }
-  }
-
+  // Author is typically the first meaningful block; body is the longest.
+  out.author = cleaned[0] || null;
+  let body = '';
+  for (const t of cleaned.slice(1)) if (t.length > body.length) body = t;
+  out.content = body || null;
+  out.found = !!body;
+  out.strategy = 'componentkey';
   return out;
 }
 """
