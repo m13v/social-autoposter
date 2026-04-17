@@ -50,7 +50,9 @@ class RateLimitedError(Exception):
 
 # Maximum time a single tool invocation is allowed to wait for rate limit to clear.
 # Longer waits are returned as errors so Claude can skip and try something else.
-MAX_INLINE_WAIT_SECONDS = 15
+# 90s stays under Claude's default 120s bash timeout while absorbing the common
+# short-reset case (resets are usually 10-60s after a single burst).
+MAX_INLINE_WAIT_SECONDS = 90
 
 
 def _wait_if_needed():
