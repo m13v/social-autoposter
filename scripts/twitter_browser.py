@@ -814,6 +814,112 @@ def send_dm(thread_url, message):
                 browser.close()
 
 
+def discover_notifications(scroll_count=8):
+    """Scrape mentions from https://x.com/notifications/mentions.
+
+    Scrolls the mentions tab and extracts each tweet as a mention record.
+    No API cost (uses the logged-in session via CDP).
+
+    Returns: {"notifications": [...], "total": N} or {"error": "..."}
+    """
+    print(f"[twitter_browser] discover_notifications called (scroll_count={scroll_count})", file=sys.stderr)
+    from playwright.sync_api import sync_playwright
+
+    EXTRACTOR_JS = r"""() => {
+      const out = [];
+      for (const article of document.querySelectorAll('article[data-testid="tweet"]')) {
+        try {
+          let handle = '';
+          let displayName = '';
+          for (const link of article.querySelectorAll('a[role="link"]')) {
+            const href = link.getAttribute('href');
+            if (href && href.startsWith('/') && !href.includes('/status/') && !href.includes('/i/') && href.length > 1 && href.split('/').length === 2) {
+              handle = href.replace('/', '');
+              const nameEl = link.querySelector('span');
+              if (nameEl) displayName = nameEl.textContent || '';
+              break;
+            }
+          }
+          const tweetText = article.querySelector('[data-testid="tweetText"]');
+          const text = tweetText ? tweetText.textContent : '';
+          const timeEl = article.querySelector('time');
+          const timeParent = timeEl ? timeEl.closest('a') : null;
+          const tweetHref = timeParent ? timeParent.getAttribute('href') : '';
+          const tweetUrl = tweetHref ? ('https://x.com' + tweetHref) : '';
+          const datetime = timeEl ? timeEl.getAttribute('datetime') : '';
+          const idMatch = tweetHref ? tweetHref.match(/\/status\/(\d+)/) : null;
+          const tweetId = idMatch ? idMatch[1] : '';
+          let replies=0, retweets=0, likes=0, views=0, bookmarks=0;
+          for (const btn of article.querySelectorAll('[role="group"] button, [role="group"] a')) {
+            const al = btn.getAttribute('aria-label') || '';
+            let m;
+            if (m=al.match(/([\d,]+)\s*repl/i)) replies=parseInt(m[1].replace(/,/g,''));
+            if (m=al.match(/([\d,]+)\s*repost/i)) retweets=parseInt(m[1].replace(/,/g,''));
+            if (m=al.match(/([\d,]+)\s*like/i)) likes=parseInt(m[1].replace(/,/g,''));
+            if (m=al.match(/([\d,]+)\s*view/i)) views=parseInt(m[1].replace(/,/g,''));
+            if (m=al.match(/([\d,]+)\s*bookmark/i)) bookmarks=parseInt(m[1].replace(/,/g,''));
+          }
+          // Detect reply-to target (if tweet is a reply, there's a "Replying to" block)
+          let replyingTo = '';
+          const socialContext = article.querySelector('[data-testid="socialContext"]');
+          const ariaLabel = article.getAttribute('aria-label') || '';
+          for (const span of article.querySelectorAll('a[href^="/"]')) {
+            const href = span.getAttribute('href') || '';
+            if (href.includes('/status/') && span.textContent && span.textContent.trim().startsWith('@')) {
+              replyingTo = span.textContent.trim().replace(/^@/, '');
+              break;
+            }
+          }
+          if (tweetId && handle) {
+            out.push({
+              tweet_id: tweetId,
+              handle: handle,
+              display_name: displayName.trim(),
+              text: (text || '').substring(0, 1000),
+              tweet_url: tweetUrl,
+              datetime: datetime,
+              replies: replies, retweets: retweets, likes: likes, views: views, bookmarks: bookmarks,
+              replying_to: replyingTo
+            });
+          }
+        } catch(e) {}
+      }
+      return out;
+    }"""
+
+    with sync_playwright() as p:
+        browser, page, is_cdp = get_browser_and_page(p)
+        try:
+            page.goto("https://x.com/notifications/mentions", wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
+
+            seen = set()
+            all_tweets = []
+            for i in range(scroll_count):
+                try:
+                    new_tweets = page.evaluate(EXTRACTOR_JS)
+                except Exception as e:
+                    print(f"[notifications] extractor error on scroll {i}: {e}", file=sys.stderr)
+                    new_tweets = []
+                added = 0
+                for t in new_tweets:
+                    tid = t.get('tweet_id')
+                    if tid and tid not in seen:
+                        seen.add(tid)
+                        all_tweets.append(t)
+                        added += 1
+                print(f"[notifications] scroll {i+1}/{scroll_count}: +{added} new, total {len(all_tweets)}", file=sys.stderr)
+                page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
+                page.wait_for_timeout(1500)
+                _refresh_browser_lock()
+
+            return {"notifications": all_tweets, "total": len(all_tweets)}
+        finally:
+            if not is_cdp:
+                page.close()
+                browser.close()
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -880,6 +986,17 @@ def main():
             )
             sys.exit(1)
         result = send_dm(sys.argv[2], sys.argv[3])
+        print(json.dumps(result, indent=2))
+
+    elif cmd == "notifications":
+        scroll_count = 8
+        if len(sys.argv) >= 3:
+            try:
+                scroll_count = int(sys.argv[2])
+            except ValueError:
+                print(f"notifications: scroll_count must be int, got {sys.argv[2]!r}", file=sys.stderr)
+                sys.exit(1)
+        result = discover_notifications(scroll_count=scroll_count)
         print(json.dumps(result, indent=2))
 
     else:
