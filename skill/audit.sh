@@ -68,72 +68,72 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════
-# STEP 3: LinkedIn audit (Python CDP — no LLM tokens)
+# STEP 3: LinkedIn audit (Claude-driven via linkedin-agent MCP)
+# Small batch, one-post-at-a-time, no /voyager/api/, no scripted bulk scrape.
+# See CLAUDE.md "LinkedIn: flagged patterns to avoid" for why.
 # ═══════════════════════════════════════════════════════
 LINKEDIN_COUNT=$(psql "$DATABASE_URL" -t -A -c "
     SELECT COUNT(*) FROM posts
     WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
       AND our_url LIKE '%linkedin.com/feed/update/%';" 2>/dev/null || echo "0")
 
+# Prefer posts that haven't been checked recently, cap at 15 per run to stay under the anti-bot radar
+LINKEDIN_BATCH_LIMIT=15
 if [ "$LINKEDIN_COUNT" -gt 0 ]; then
-    log "Step 3: LinkedIn audit — $LINKEDIN_COUNT active LinkedIn posts to check (Python CDP)"
+    LINKEDIN_BATCH=$(psql "$DATABASE_URL" -t -A -c "
+        SELECT json_agg(q) FROM (
+            SELECT id, our_url as url
+            FROM posts
+            WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
+              AND our_url LIKE '%linkedin.com/feed/update/%'
+            ORDER BY status_checked_at NULLS FIRST, id
+            LIMIT $LINKEDIN_BATCH_LIMIT
+        ) q;" 2>/dev/null)
 
-    # Process in batches of 30
-    OFFSET=0
-    TOTAL_CHECKED=0
-    TOTAL_DELETED=0
+    log "Step 3: LinkedIn audit (Claude-driven), batch up to $LINKEDIN_BATCH_LIMIT posts"
 
-    while true; do
-        BATCH_JSON=$(psql "$DATABASE_URL" -t -A -c "
-            SELECT json_agg(q) FROM (
-                SELECT id, our_url as url
-                FROM posts
-                WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
-                  AND our_url LIKE '%linkedin.com/feed/update/%'
-                ORDER BY id
-                LIMIT 30 OFFSET $OFFSET
-            ) q;" 2>/dev/null)
+    LINKEDIN_AUDIT_PROMPT=$(mktemp)
+    MCP_CONFIG_AUDIT="$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json"
+    cat > "$LINKEDIN_AUDIT_PROMPT" <<PROMPT_EOF
+You are the Social Autoposter LinkedIn audit bot.
 
-        [ "$BATCH_JSON" = "" ] || [ "$BATCH_JSON" = "null" ] && break
+CRITICAL - Browser agent rule: ONLY use mcp__linkedin-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
+CRITICAL: Do NOT call /voyager/api/ endpoints, do NOT fetch() against linkedin.com. Use only UI navigation (browser_navigate, browser_snapshot, browser_run_code).
+CRITICAL: If a tool call is blocked, times out, or you see a login/captcha/checkpoint, STOP immediately and print SESSION_INVALID. Do not re-login.
 
-        AUDIT_TMPFILE=$(mktemp)
-        python3 "$REPO_DIR/scripts/linkedin_browser.py" audit-batch "$BATCH_JSON" > "$AUDIT_TMPFILE" 2>/dev/null
+## Task: audit the engagement counts and status of these LinkedIn posts
 
-        if [ $? -eq 0 ] && [ -s "$AUDIT_TMPFILE" ]; then
-            DATABASE_URL="$DATABASE_URL" python3 - "$AUDIT_TMPFILE" <<'PYEOF' 2>&1 | tee -a "$LOG_FILE"
-import json, os, sys, psycopg2
+Posts to audit:
+$LINKEDIN_BATCH
 
-with open(sys.argv[1]) as f:
-    results = json.load(f)
-conn = psycopg2.connect(os.environ['DATABASE_URL'])
-cur = conn.cursor()
-deleted = 0
-for r in results:
-    if r.get('status') == 'deleted':
-        cur.execute('UPDATE posts SET status=%s, status_checked_at=NOW() WHERE id=%s', ('deleted', r['id']))
-        deleted += 1
-    elif r.get('status') != 'error':
-        cur.execute('UPDATE posts SET upvotes=%s, comments_count=%s, views=%s, engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s',
-            (r.get('reactions', 0), r.get('comments', 0), r.get('views', 0), r['id']))
-conn.commit()
-cur.close()
-conn.close()
-print(f'Batch: {len(results)} checked, {deleted} deleted')
-PYEOF
-            rm -f "$AUDIT_TMPFILE"
-        else
-            rm -f "$AUDIT_TMPFILE"
-        fi
+For EACH post (one at a time, with a 3-5 second pause between posts):
 
-        BATCH_SIZE=$(echo "$BATCH_JSON" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
-        TOTAL_CHECKED=$((TOTAL_CHECKED + BATCH_SIZE))
-        [ "$BATCH_SIZE" -lt 30 ] && break
-        OFFSET=$((OFFSET + 30))
-    done
+1. mcp__linkedin-agent__browser_navigate to the post URL.
+2. Wait for the page to load, then browser_snapshot once.
+3. Determine status:
+   - If the page shows "This post is no longer available", "content unavailable", or a 404, status = "deleted".
+   - Otherwise status = "active" and extract engagement numbers from the DOM (reactions, comments, views/impressions). Best-effort integers, 0 if not visible.
+4. Update the DB via psql (one UPDATE per post, not a batch fetch):
+   \`\`\`bash
+   source ~/social-autoposter/.env
+   # For active posts:
+   psql "\$DATABASE_URL" -c "UPDATE posts SET upvotes=REACTIONS, comments_count=COMMENTS, views=VIEWS, engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=POST_ID;"
+   # For deleted posts:
+   psql "\$DATABASE_URL" -c "UPDATE posts SET status='deleted', status_checked_at=NOW() WHERE id=POST_ID;"
+   \`\`\`
+5. Do NOT open comment threads, do NOT expand "See more" repeatedly, do NOT scroll hunt for every reaction. Read what's visible after the first snapshot and move on.
 
-    log "Step 3: Done — $TOTAL_CHECKED posts audited"
+When done, print a one-line summary: N checked, N deleted, N errors.
+PROMPT_EOF
+
+    if [ "$LINKEDIN_BATCH" != "null" ] && [ -n "$LINKEDIN_BATCH" ]; then
+        gtimeout 1800 claude --strict-mcp-config --mcp-config "$MCP_CONFIG_AUDIT" -p "$(cat "$LINKEDIN_AUDIT_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Step 3 claude exited with code $?"
+    else
+        log "Step 3: nothing to audit this cycle"
+    fi
+    rm -f "$LINKEDIN_AUDIT_PROMPT"
 else
-    log "Step 3: SKIPPED — no active LinkedIn posts to audit"
+    log "Step 3: SKIPPED (no active LinkedIn posts to audit)"
 fi
 
 # ═══════════════════════════════════════════════════════
