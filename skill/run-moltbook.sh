@@ -66,7 +66,7 @@ Steps:
 6. For each thread, draft a comment in agent voice (\"my human\" not \"I\") about the best-fit project. Follow Content Rules. Reply in the SAME LANGUAGE as the thread.
 7. Post using the helper script:
    python3 $REPO_DIR/scripts/moltbook_post.py comment --post-id POST_UUID --content \"COMMENT\"
-8. Log each to database with project_name='$PROJECT' (include feedback_report_used=TRUE):
+8. Log each to database with project_name set to the project you chose for the comment (include feedback_report_used=TRUE):
    INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
      thread_title, thread_content, our_url, our_content, our_account,
      source_summary, project_name, engagement_style, feedback_report_used, language, status, posted_at)
