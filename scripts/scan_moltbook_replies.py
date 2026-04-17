@@ -9,54 +9,29 @@ Usage:
 Requires MOLTBOOK_API_KEY in ~/social-autoposter/.env.
 """
 
-import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.request
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
 from reply_insert import insert_reply as _insert_reply
+from moltbook_tools import (
+    fetch_moltbook_json,
+    HttpNotFoundError,
+    MoltbookRateLimitedError,
+)
 
 MIN_WORDS = 5
+
+# Pace between per-post fetches to stay well under Moltbook's server-side limits
+# and to share the quota with concurrent callers (stats, find_threads, poster).
+PER_POST_DELAY_SECONDS = 1.0
 
 
 def word_count(text):
     return len(text.split()) if text else 0
-
-
-class HttpNotFoundError(Exception):
-    pass
-
-
-def fetch_json(url, headers=None, user_agent="social-autoposter/1.0", retries=3):
-    import time
-    hdrs = {"User-Agent": user_agent}
-    if headers:
-        hdrs.update(headers)
-    req = urllib.request.Request(url, headers=hdrs)
-    for attempt in range(retries):
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return json.loads(resp.read())
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                print(f"  404 not found: {url}")
-                raise HttpNotFoundError(url)
-            if e.code == 429 and attempt < retries - 1:
-                wait = 30 * (attempt + 1)
-                print(f"  429 rate-limited, waiting {wait}s... ({url})")
-                time.sleep(wait)
-                continue
-            print(f"  ERROR fetching {url}: {e}")
-            return None
-        except HttpNotFoundError:
-            raise
-        except Exception as e:
-            print(f"  ERROR fetching {url}: {e}")
-            return None
 
 
 class MoltbookReplyScanner:
@@ -140,16 +115,21 @@ class MoltbookReplyScanner:
                 continue
 
             try:
-                data = fetch_json(
+                data = fetch_moltbook_json(
                     f"https://www.moltbook.com/api/v1/posts/{post_uuid}",
-                    headers={"Authorization": f"Bearer {api_key}"},
+                    api_key=api_key,
                 )
             except HttpNotFoundError:
                 self._mark_deleted(post_id)
+                time.sleep(PER_POST_DELAY_SECONDS)
                 continue
+            except MoltbookRateLimitedError as e:
+                print(f"  Stopping scan: Moltbook rate-limited for {int(e.reset_seconds)}s")
+                break
 
             if not data or not data.get("success"):
                 self.errors += 1
+                time.sleep(PER_POST_DELAY_SECONDS)
                 continue
 
             # Reset deletion counter on successful fetch
@@ -174,6 +154,8 @@ class MoltbookReplyScanner:
                 self.insert_reply(post_id, comment_id, author, content, comment_url,
                                   moltbook_post_uuid=post_uuid)
                 print(f"  NEW: [{post_id}] {author}: {content[:80]}...")
+
+            time.sleep(PER_POST_DELAY_SECONDS)
 
         if skipped_no_uuid:
             print(f"  Skipped {skipped_no_uuid} Moltbook posts (no full UUID available)")
