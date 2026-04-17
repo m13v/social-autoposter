@@ -1,0 +1,60 @@
+'use strict';
+
+const assert = require('assert');
+const platform = require('../bin/platform');
+
+function test(name, fn) {
+  try {
+    fn();
+    console.log(`ok   ${name}`);
+  } catch (e) {
+    console.error(`FAIL ${name}: ${e.message}`);
+    process.exitCode = 1;
+  }
+}
+
+test('detect returns a known platform on this host', () => {
+  const p = platform.detect();
+  assert(['darwin', 'linux', 'win32'].includes(p), `unexpected: ${p}`);
+});
+
+test('scheduler maps darwin -> launchd', () => {
+  assert.strictEqual(platform.scheduler('darwin'), 'launchd');
+});
+
+test('scheduler maps linux -> systemd', () => {
+  assert.strictEqual(platform.scheduler('linux'), 'systemd');
+});
+
+test('statMtimeCmd darwin uses -f %m', () => {
+  assert.deepStrictEqual(platform.statMtimeCmd('darwin'), ['stat', '-f', '%m']);
+});
+
+test('statMtimeCmd linux uses -c %Y', () => {
+  assert.deepStrictEqual(platform.statMtimeCmd('linux'), ['stat', '-c', '%Y']);
+});
+
+test('agentsDir darwin -> ~/Library/LaunchAgents', () => {
+  const d = platform.agentsDir('darwin', '/Users/t');
+  assert.strictEqual(d, '/Users/t/Library/LaunchAgents');
+});
+
+test('agentsDir linux -> ~/.config/systemd/user', () => {
+  const d = platform.agentsDir('linux', '/home/t');
+  assert.strictEqual(d, '/home/t/.config/systemd/user');
+});
+
+test('notifier darwin -> osascript', () => {
+  assert.strictEqual(platform.notifier('darwin'), 'osascript');
+});
+
+test('notifier linux -> notify-send', () => {
+  assert.strictEqual(platform.notifier('linux'), 'notify-send');
+});
+
+test('launchdPath includes nodeBin first', () => {
+  const p = platform.launchdPath('/opt/nvm/node/bin');
+  assert(p.startsWith('/opt/nvm/node/bin:'), `unexpected: ${p}`);
+  assert(p.includes('/usr/bin'));
+  assert(p.includes('/bin'));
+});
