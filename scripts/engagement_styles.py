@@ -91,45 +91,124 @@ VALID_STYLES = set(STYLES.keys())
 # Reply/engagement pipelines add recommendation
 REPLY_STYLES = VALID_STYLES | {"recommendation"}
 
-# ── Platform-specific weighting ─────────────────────────────────────
+# ── Platform-specific policy overlay ────────────────────────────────
+#
+# Tier assignment (dominant / secondary / rare) is DB-driven — see
+# get_dynamic_tiers() below. This dict only stores static policy that
+# is not a performance judgment:
+#   - `never`: tone/brand constraints (e.g. no snark on LinkedIn). Even
+#     if the data showed high upvotes, we still do not want this style.
+#   - `note`: per-platform tone/length hint shown at the top of the
+#     styles prompt.
 
-PLATFORM_WEIGHTS = {
+PLATFORM_POLICY = {
     "reddit": {
-        "dominant": ["contrarian", "storyteller", "snarky_oneliner"],
-        "secondary": ["critic", "pattern_recognizer", "data_point_drop"],
-        "rare": [],
         "never": ["curious_probe"],
         "note": "Short wins. 1 punchy sentence or 4-5 of real substance. Start with 'I' or 'my'. Match style to subreddit culture.",
     },
     "twitter": {
-        "dominant": ["snarky_oneliner", "critic", "data_point_drop"],
-        "secondary": ["contrarian", "pattern_recognizer"],
-        "rare": ["storyteller", "curious_probe"],
         "never": [],
         "note": "Brevity wins. Direct product mentions OK (unlike Reddit). 1-2 sentences max.",
     },
     "linkedin": {
-        "dominant": ["storyteller", "pattern_recognizer", "critic"],
-        "secondary": ["curious_probe", "data_point_drop", "contrarian"],
-        "rare": [],
         "never": ["snarky_oneliner"],
         "note": "Professional but human. Softer critic framing. No snark. 2-4 sentences.",
     },
     "github": {
-        "dominant": ["critic", "pattern_recognizer", "data_point_drop"],
-        "secondary": ["curious_probe", "storyteller"],
-        "rare": ["contrarian"],
         "never": ["snarky_oneliner"],
         "note": "Technical and specific. Lead with the pain, then the fix. 400-600 chars.",
     },
     "moltbook": {
-        "dominant": ["storyteller", "pattern_recognizer", "critic"],
-        "secondary": ["curious_probe", "contrarian", "data_point_drop"],
-        "rare": ["snarky_oneliner"],
         "never": [],
         "note": "Agent voice ('my human'). Conversational but substantive. 2-4 sentences.",
     },
 }
+
+# Minimum sample size before we trust a style's avg_upvotes for tiering.
+# Below this, the style is treated as "explore" (secondary).
+MIN_SAMPLE_SIZE = 5
+
+
+def _fetch_style_stats(platform):
+    """Query posts table for avg_upvotes per engagement_style on this platform.
+
+    Returns a dict: {style_name: {"n": int, "avg_up": float}}.
+    Returns {} on any DB error (cold start / DB unavailable / psycopg2 missing).
+    """
+    try:
+        import os
+        import sys as _sys
+        _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import db as dbmod
+        dbmod.load_env()
+        conn = dbmod.get_conn()
+        cur = conn.execute(
+            "SELECT engagement_style, COUNT(*) AS n, "
+            "AVG(COALESCE(upvotes,0))::float AS avg_up "
+            "FROM posts "
+            "WHERE status='active' AND engagement_style IS NOT NULL "
+            "AND our_content IS NOT NULL AND LENGTH(our_content) >= 30 "
+            "AND upvotes IS NOT NULL AND platform = %s "
+            "GROUP BY engagement_style",
+            [platform],
+        )
+        rows = cur.fetchall()
+        conn.close()
+        return {r[0]: {"n": int(r[1]), "avg_up": float(r[2])} for r in rows}
+    except Exception:
+        return {}
+
+
+def get_dynamic_tiers(platform, context="posting"):
+    """Rank styles for `platform` by avg_upvotes from the posts table.
+
+    Returns (dominant, secondary, rare) tuple of style-name lists.
+
+    Policy:
+      - Styles in PLATFORM_POLICY[platform].never are excluded entirely.
+      - Styles with N < MIN_SAMPLE_SIZE are placed in `secondary` (explore),
+        regardless of their noisy avg_up.
+      - Styles with N >= MIN_SAMPLE_SIZE are sorted by avg_up DESC and split:
+          top third  -> dominant
+          middle     -> secondary
+          bottom third (or single worst) -> rare
+      - Any style with zero samples (never logged yet) is added to
+        `secondary` so the LLM still explores it.
+      - Cold start (no data at all): every non-never style becomes secondary.
+    """
+    never = set(PLATFORM_POLICY.get(platform, {}).get("never", []))
+    candidate_styles = [s for s in STYLES.keys() if s not in never]
+
+    stats = _fetch_style_stats(platform)
+
+    trusted = []  # (style, avg_up) with N >= MIN_SAMPLE_SIZE
+    explore = []  # styles with N < MIN_SAMPLE_SIZE (incl. zero samples)
+
+    for style in candidate_styles:
+        s = stats.get(style)
+        if s and s["n"] >= MIN_SAMPLE_SIZE:
+            trusted.append((style, s["avg_up"]))
+        else:
+            explore.append(style)
+
+    trusted.sort(key=lambda x: x[1], reverse=True)
+
+    if not trusted:
+        # Cold start: no trusted performance data for this platform yet.
+        return [], explore, []
+
+    # Split trusted into thirds. Small lists (1-2 items) go entirely to dominant.
+    t = len(trusted)
+    if t <= 2:
+        dominant = [s for s, _ in trusted]
+        rare = []
+    else:
+        third = max(1, t // 3)
+        dominant = [s for s, _ in trusted[:third]]
+        rare = [s for s, _ in trusted[-third:]]
+    secondary = [s for s, _ in trusted if s not in dominant and s not in rare]
+    secondary = secondary + explore  # untrusted styles always explore
+    return dominant, secondary, rare
 
 
 # ── Prompt generators ───────────────────────────────────────────────
