@@ -52,7 +52,7 @@ Automated engagement on relevant open-source issues. Separate launchd schedules 
 - `scan_reddit_replies.py`: Scans Reddit API for new replies to existing posts and to our previous replies (BFS). No browser needed.
 - `scan_moltbook_replies.py`: Scans Moltbook API for new replies to existing posts. No browser needed.
 - `scan_twitter_mentions_browser.py`: Processes Twitter mentions scraped by `twitter_browser.py notifications` (no API cost).
-- `scan_linkedin_notifications.py`: Browser-based LinkedIn notification scanning.
+- LinkedIn notifications: Claude-driven via `mcp__linkedin-agent__` MCP inside `skill/engage-linkedin.sh` (no standalone Python helper).
 - Replies inserted to the `replies` table as "pending" for AI-drafted responses.
 - Reply drafting follows the same voice rules as original comments. Casual, conversational, expanding the topic.
 
@@ -95,12 +95,12 @@ Neon Postgres (serverless) via `DATABASE_URL` in `.env`. Core tables:
 Standalone scripts with no LLM dependency (pure API calls and database operations):
 - `db.py`: Shared database connection module using psycopg2
 - `find_threads.py`, `octolens_threads.py`: Thread discovery
-- `scan_reddit_replies.py`, `scan_moltbook_replies.py`, `scan_twitter_mentions_browser.py`, `scan_linkedin_notifications.py`: Reply detection
+- `scan_reddit_replies.py`, `scan_moltbook_replies.py`, `scan_twitter_mentions_browser.py`: Reply detection (LinkedIn reply detection is Claude-driven inside the shell pipeline)
 - `update_stats.py`, `top_performers.py`, `project_stats.py`: Analytics
 - `scan_dm_candidates.py`, `batch_send_dms.py`, `dm_conversation.py`: DM pipeline
 - `pick_project.py`: Weighted project selection based on daily post distribution
 - `phase_d_edit.py`, `phase_d_resolve.py`: Link editing optimization
-- Platform-specific helpers: `reddit_browser.py`, `twitter_browser.py`, `linkedin_browser.py`, `moltbook_post.py`
+- Platform-specific helpers: `reddit_browser.py`, `twitter_browser.py`, `moltbook_post.py` (LinkedIn goes through `linkedin_api.py` OAuth + the `mcp__linkedin-agent__` MCP, not a Python CDP helper)
 
 ### Shell Orchestration (`skill/`)
 Per-platform shell scripts that Claude Code invokes:
