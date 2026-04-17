@@ -21,7 +21,7 @@ const JOB_TYPES = ['Post', 'Engage', 'Stats', 'Audit', 'Octolens'];
 
 const JOBS = [
   // Post row
-  { label: 'com.m13v.social-reddit', name: 'Reddit', type: 'Post', platform: 'Reddit', script: 'run-reddit.sh', logPrefix: 'run-reddit-', plist: 'com.m13v.social-reddit.plist' },
+  { label: 'com.m13v.social-reddit-search', name: 'Reddit', type: 'Post', platform: 'Reddit', script: 'run-reddit-search.sh', logPrefix: 'run-reddit-search-', plist: 'com.m13v.social-reddit-search.plist' },
   { label: 'com.m13v.social-twitter', name: 'Twitter', type: 'Post', platform: 'Twitter', script: 'run-twitter.sh', logPrefix: 'run-twitter-', plist: 'com.m13v.social-twitter.plist' },
   { label: 'com.m13v.social-linkedin', name: 'LinkedIn', type: 'Post', platform: 'LinkedIn', script: 'run-linkedin.sh', logPrefix: 'run-linkedin-', plist: 'com.m13v.social-linkedin.plist' },
   { label: 'com.m13v.social-moltbook', name: 'MoltBook', type: 'Post', platform: 'MoltBook', script: 'run-moltbook.sh', logPrefix: 'run-moltbook-', plist: 'com.m13v.social-moltbook.plist' },

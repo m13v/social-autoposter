@@ -15,8 +15,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-CONFIG="$ROOT_DIR/config.json"
 LOCK_FILE="$SCRIPT_DIR/.locks/cron_seo.lock"
 LOG_FILE="$SCRIPT_DIR/logs/cron_seo.log"
 DB="python3 $SCRIPT_DIR/db_helpers.py"
@@ -39,31 +37,8 @@ echo "$$" > "$LOCK_FILE"
 trap 'rm -f "$LOCK_FILE"' EXIT
 
 # --- Pick product by weighted random ---
-# Eligible = any project with a landing_pages.repo that exists on disk.
-# The unified generator (generate_page.py) handles the rest.
-PRODUCT=$(python3 -c "
-import json, random, os
-
-with open('$CONFIG') as f:
-    config = json.load(f)
-
-eligible = []
-for p in config.get('projects', []):
-    repo = p.get('landing_pages', {}).get('repo', '')
-    if not repo:
-        continue
-    repo_path = os.path.expanduser(repo)
-    if not os.path.isdir(repo_path):
-        continue
-    eligible.append((p['name'], p.get('weight', 1)))
-
-if not eligible:
-    print('NONE')
-else:
-    names, weights = zip(*eligible)
-    chosen = random.choices(names, weights=weights, k=1)[0]
-    print(chosen)
-")
+# Shared logic in seo/select_product.py (single source of truth for both pipelines).
+PRODUCT=$(python3 "$SCRIPT_DIR/select_product.py")
 
 if [ "$PRODUCT" = "NONE" ]; then
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) No eligible products found" >> "$LOG_FILE"

@@ -13,8 +13,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-CONFIG="$ROOT_DIR/config.json"
 LOCK_FILE="$SCRIPT_DIR/.locks/cron_gsc.lock"
 LOG_FILE="$SCRIPT_DIR/logs/cron_gsc.log"
 
@@ -35,28 +33,8 @@ echo "$$" > "$LOCK_FILE"
 trap 'rm -f "$LOCK_FILE"' EXIT
 
 # --- Pick product by weighted random (only those with gsc_property) ---
-PRODUCT=$(python3 -c "
-import json, random, os
-
-with open('$CONFIG') as f:
-    config = json.load(f)
-
-eligible = []
-for p in config.get('projects', []):
-    lp = p.get('landing_pages', {})
-    if not lp.get('gsc_property'):
-        continue
-    repo = lp.get('repo', '')
-    if not repo or not os.path.isdir(os.path.expanduser(repo)):
-        continue
-    eligible.append((p['name'], p.get('weight', 1)))
-
-if not eligible:
-    print('NONE')
-else:
-    names, weights = zip(*eligible)
-    print(random.choices(names, weights=weights, k=1)[0])
-")
+# Shared logic in seo/select_product.py (single source of truth for both pipelines).
+PRODUCT=$(python3 "$SCRIPT_DIR/select_product.py" --require-gsc)
 
 if [ "$PRODUCT" = "NONE" ]; then
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) No eligible products with gsc_property configured" >> "$LOG_FILE"

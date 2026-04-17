@@ -13,6 +13,7 @@ Reads config.json for defaults if flags are omitted.
 import argparse
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -22,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
+from reddit_tools import RateLimitedError, _wait_if_needed, _write_ratelimit
 
 STALENESS_DAYS = 30
 MIN_WORDS = 5
@@ -79,6 +81,50 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0", retries=3)
         except Exception as e:
             print(f"  ERROR fetching {url}: {e}")
             return None
+
+
+def fetch_reddit_json(url, user_agent="social-autoposter/1.0"):
+    # Shares /tmp/reddit_ratelimit.json with reddit_tools; raises RateLimitedError
+    # when reset > 15s so callers can skip instead of hammering.
+    _wait_if_needed()
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
+    delay = 4
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                remaining = float(resp.headers.get("X-Ratelimit-Remaining", 100))
+                reset = float(resp.headers.get("X-Ratelimit-Reset", 0))
+                _write_ratelimit(remaining, reset)
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                print(f"  404 not found: {url}")
+                raise HttpNotFoundError(url)
+            if e.code == 429:
+                reset = float(e.headers.get("X-Ratelimit-Reset", 60))
+                _write_ratelimit(0, reset)
+                if reset > 15:
+                    raise RateLimitedError(reset)
+                wait = int(reset) + 2
+                print(f"  429 rate-limited, waiting {wait}s... ({url})")
+                time.sleep(wait)
+                continue
+            if attempt < 2:
+                time.sleep(delay)
+                delay = min(delay * 2, 30)
+                continue
+            print(f"  ERROR fetching {url}: {e}")
+            return None
+        except HttpNotFoundError:
+            raise
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(delay)
+                delay = min(delay * 2, 30)
+                continue
+            print(f"  ERROR fetching {url}: {e}")
+            return None
+    return None
 
 
 class ReplyScanner:
@@ -213,7 +259,15 @@ class ReplyScanner:
             "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL AND our_url != '' AND our_url LIKE 'http%%'"
         ).fetchall()
 
+        # Shuffle so a rate-limit short-circuit mid-run doesn't always starve the
+        # same tail of posts; next run's shuffle picks a different starting set.
+        posts = list(posts)
+        random.shuffle(posts)
+        print(f"  Scanning {len(posts)} active reddit posts (shuffled order)")
+
         skipped = 0
+        consecutive_errors = 0
+        stopped_early = False
         for post in posts:
             post_id = post["id"]
             our_url = post["our_url"]
@@ -236,13 +290,24 @@ class ReplyScanner:
                 # The BFS scan below handles replies to our own replies at any depth.
                 json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
                 try:
-                    data = fetch_json(json_url, user_agent=self.user_agent)
+                    data = fetch_reddit_json(json_url, user_agent=self.user_agent)
                 except HttpNotFoundError:
                     self.errors += 1
+                    consecutive_errors = 0
                     continue
+                except RateLimitedError as e:
+                    print(f"  Rate limited ({int(e.reset_seconds)}s), stopping reddit scan")
+                    stopped_early = True
+                    break
                 if not data or not isinstance(data, list) or len(data) < 2:
                     self.errors += 1
+                    consecutive_errors += 1
+                    if consecutive_errors >= 3:
+                        print(f"  {consecutive_errors} consecutive fetch failures, stopping reddit scan")
+                        stopped_early = True
+                        break
                     continue
+                consecutive_errors = 0
 
                 children = data[1].get("data", {}).get("children", [])
                 if children:
@@ -252,13 +317,24 @@ class ReplyScanner:
                 # Comment on someone else's thread: fetch our comment URL and scan replies to it
                 json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
                 try:
-                    data = fetch_json(json_url, user_agent=self.user_agent)
+                    data = fetch_reddit_json(json_url, user_agent=self.user_agent)
                 except HttpNotFoundError:
                     self.errors += 1
+                    consecutive_errors = 0
                     continue
+                except RateLimitedError as e:
+                    print(f"  Rate limited ({int(e.reset_seconds)}s), stopping reddit scan")
+                    stopped_early = True
+                    break
                 if not data or not isinstance(data, list) or len(data) < 2:
                     self.errors += 1
+                    consecutive_errors += 1
+                    if consecutive_errors >= 3:
+                        print(f"  {consecutive_errors} consecutive fetch failures, stopping reddit scan")
+                        stopped_early = True
+                        break
                     continue
+                consecutive_errors = 0
 
                 children = data[1].get("data", {}).get("children", [])
                 if not children:
@@ -285,6 +361,10 @@ class ReplyScanner:
         if skipped:
             print(f"  Skipped {skipped} stable posts (2+ scans with no new replies, older than 3 days)")
 
+        if stopped_early:
+            print("  Skipping BFS scan of replies-to-replies due to rate limit / errors")
+            return
+
         # Scan replies to our previous replies (infinite depth BFS)
         print("\nScanning replies to our previous replies...")
         replied_rows = self.db.execute(
@@ -292,20 +372,30 @@ class ReplyScanner:
             "FROM replies WHERE status='replied' AND our_reply_url IS NOT NULL",
         ).fetchall()
 
-        for row in replied_rows:
-            if row["platform"] != "reddit":
-                continue
-            # Skip non-URL values like 'posted' that would crash urllib
-            our_reply_url = row["our_reply_url"] or ""
-            if not our_reply_url.startswith("http"):
-                continue
+        reddit_rows = [r for r in replied_rows if r["platform"] == "reddit"
+                       and (r["our_reply_url"] or "").startswith("http")]
+        random.shuffle(reddit_rows)
+        print(f"  Scanning {len(reddit_rows)} replied reddit rows (shuffled order)")
+
+        consecutive_errors_bfs = 0
+        for row in reddit_rows:
+            our_reply_url = row["our_reply_url"]
             json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_reply_url).rstrip("/") + ".json"
             try:
-                data = fetch_json(json_url, user_agent=self.user_agent)
+                data = fetch_reddit_json(json_url, user_agent=self.user_agent)
             except HttpNotFoundError:
+                consecutive_errors_bfs = 0
                 continue
+            except RateLimitedError as e:
+                print(f"  Rate limited ({int(e.reset_seconds)}s), stopping BFS scan")
+                break
             if not data or not isinstance(data, list) or len(data) < 2:
+                consecutive_errors_bfs += 1
+                if consecutive_errors_bfs >= 3:
+                    print(f"  {consecutive_errors_bfs} consecutive fetch failures, stopping BFS scan")
+                    break
                 continue
+            consecutive_errors_bfs = 0
 
             children = data[1].get("data", {}).get("children", [])
             if not children:

@@ -269,49 +269,36 @@ CRITICAL: If a browser call times out, wait 30s and retry up to 3 times." 2>&1)
 # Parse structured output and log results
 echo "$CLAUDE_OUTPUT" | tee -a "$LOG_FILE"
 
-# Extract fields from JSON output for the summary line
-PERMALINK=$(/usr/bin/python3 -c "
+# Extract structured_output from the JSON envelope.
+# claude -p --output-format json wraps results as: {"structured_output": {...}, "result": "...", ...}
+PARSED=$(/usr/bin/python3 -c "
 import json,sys
 try:
     d = json.loads(sys.stdin.read())
-    r = d.get('result', d)  # handle wrapped or unwrapped
-    print(r.get('permalink') or 'null')
-except: print('PARSE_ERROR')
+    so = d.get('structured_output') or d
+    print(json.dumps(so))
+except Exception as e:
+    print(json.dumps({'_parse_error': str(e)}))
 " <<< "$CLAUDE_OUTPUT" 2>/dev/null)
 
-TITLE=$(/usr/bin/python3 -c "
-import json,sys
-try:
-    d = json.loads(sys.stdin.read())
-    r = d.get('result', d)
-    print(r.get('title',''))
-except: print('PARSE_ERROR')
-" <<< "$CLAUDE_OUTPUT" 2>/dev/null)
-
-ABORT_REASON=$(/usr/bin/python3 -c "
-import json,sys
-try:
-    d = json.loads(sys.stdin.read())
-    r = d.get('result', d)
-    print(r.get('abort_reason') or '')
-except: print('PARSE_ERROR')
-" <<< "$CLAUDE_OUTPUT" 2>/dev/null)
+PERMALINK=$(/usr/bin/python3 -c "import json,sys; r=json.loads(sys.stdin.read()); print(r.get('permalink') or 'null')" <<< "$PARSED" 2>/dev/null)
+TITLE=$(/usr/bin/python3 -c "import json,sys; r=json.loads(sys.stdin.read()); print(r.get('title',''))" <<< "$PARSED" 2>/dev/null)
+ABORT_REASON=$(/usr/bin/python3 -c "import json,sys; r=json.loads(sys.stdin.read()); print(r.get('abort_reason') or '')" <<< "$PARSED" 2>/dev/null)
 
 # Log step compliance summary
 /usr/bin/python3 -c "
 import json,sys
-try:
-    d = json.loads(sys.stdin.read())
-    r = d.get('result', d)
+r = json.loads(sys.stdin.read())
+if '_parse_error' in r:
+    print(f'Step compliance: PARSE ERROR ({r[\"_parse_error\"]})')
+else:
     files = r.get('research_files_read', [])
     browsed = r.get('subreddit_browsed', False)
     hot = r.get('hot_threads_seen', [])
     rules = r.get('rules_checked', False)
     style = r.get('engagement_style', '?')
     print(f'Step compliance: research={len(files)} files, browsed={browsed}, hot_threads={len(hot)}, rules_checked={rules}, style={style}')
-except Exception as e:
-    print(f'Step compliance: PARSE ERROR ({e})')
-" <<< "$CLAUDE_OUTPUT" 2>/dev/null | tee -a "$LOG_FILE"
+" <<< "$PARSED" 2>/dev/null | tee -a "$LOG_FILE"
 
 if [ "$PERMALINK" != "null" ] && [ "$PERMALINK" != "PARSE_ERROR" ]; then
   echo "POSTED: $PERMALINK | $TITLE" | tee -a "$LOG_FILE"

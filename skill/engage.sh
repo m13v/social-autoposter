@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # engage.sh — Reply engagement loop
-# Phase A: Python script scans for new replies (runs in background)
 # Phase B: Claude drafts and posts replies via Playwright/API (batched, 50 at a time)
 # Phase C: Cleanup
 # Phase D: Edit high-performing posts (>2 upvotes, 6h+ old) with a project link
+# Phase E: DM engagement
+# Reply discovery runs separately via run-scan-replies.sh (launchd: com.m13v.social-scan-replies).
 # Called by launchd every 2 hours (7200s interval).
 
 set -euo pipefail
@@ -29,12 +30,9 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 
 log "=== Engagement Loop Run: $(date) ==="
 
-# ═══════════════════════════════════════════════════════
-# PHASE A: Scan for replies (runs in BACKGROUND)
-# ═══════════════════════════════════════════════════════
-log "Phase A: Scanning for replies (background)..."
-(PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_replies.py" 2>&1 || true) | tee -a "$LOG_FILE" &
-SCAN_PID=$!
+# Reply discovery (scan_replies.py) now runs on its own launchd schedule
+# (com.m13v.social-scan-replies, twice/day). engage.sh only processes replies
+# already written to the DB. This removes contention on the Reddit rate limit.
 
 # ═══════════════════════════════════════════════════════
 # PHASE D: Edit high-performing posts with project link
@@ -113,9 +111,6 @@ PROMPT_EOF
 else
     log "Phase D: No posts eligible for link edit"
 fi
-
-# Give the scanner a head start to find new replies
-sleep 15
 
 # ═══════════════════════════════════════════════════════
 # PHASE B: X/Twitter discovery + all reply engagement
@@ -303,12 +298,6 @@ PROMPT_BODY
     fi
     log "Batch $BATCH_NUM complete: $PENDING_COUNT -> $NEW_PENDING pending"
 done
-
-# Wait for scanner to finish if still running
-if kill -0 "$SCAN_PID" 2>/dev/null; then
-    log "Waiting for Phase A scanner to finish..."
-    wait "$SCAN_PID" || true
-fi
 
 # ═══════════════════════════════════════════════════════
 # PHASE E: Reddit DM engagement (continue conversations via Chat)
