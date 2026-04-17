@@ -907,6 +907,72 @@ const HTML = `<!DOCTYPE html>
   .reply-platform { color: #6b7280; font-size: 11px; text-transform: uppercase; }
   .reply-text { color: #d4d4d4; margin-top: 2px; }
   .hidden { display: none; }
+
+  /* Activity tab */
+  .activity-controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .activity-filter-group { display: flex; gap: 6px; flex-wrap: wrap; }
+  .activity-chip {
+    padding: 4px 10px; border-radius: 999px; font-size: 12px; cursor: pointer;
+    border: 1px solid #333; background: #171717; color: #a3a3a3;
+    transition: all 0.15s; user-select: none;
+  }
+  .activity-chip:hover { border-color: #525252; color: #e5e5e5; }
+  .activity-chip.active { background: #262626; border-color: #525252; color: #e5e5e5; }
+  .activity-chip.active.ev-posted   { background: #064e3b; border-color: #10b981; color: #6ee7b7; }
+  .activity-chip.active.ev-replied  { background: #0c4a6e; border-color: #0ea5e9; color: #7dd3fc; }
+  .activity-chip.active.ev-skipped  { background: #422006; border-color: #d97706; color: #fbbf24; }
+  .activity-chip.active.ev-mention  { background: #1f1f1f; border-color: #737373; color: #d4d4d4; }
+  .activity-chip.active.ev-dm_sent  { background: #3b0764; border-color: #a855f7; color: #d8b4fe; }
+
+  .activity-status { display: flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: #22d3ee; }
+  .activity-live-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: #22d3ee;
+    box-shadow: 0 0 8px #22d3ee;
+    animation: activityHeartbeat 1.4s ease-in-out infinite;
+  }
+  @keyframes activityHeartbeat {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.5; transform: scale(0.7); }
+  }
+
+  .activity-wrapper { overflow-x: auto; }
+  .activity-table { width: 100%; border-collapse: collapse; background: #171717; border: 1px solid #262626; border-radius: 12px; overflow: hidden; }
+  .activity-table th {
+    text-align: left; padding: 10px 14px; font-size: 11px; font-weight: 500;
+    color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em;
+    border-bottom: 1px solid #262626; background: #0f0f0f;
+  }
+  .activity-table td {
+    padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #1f1f1f;
+    vertical-align: top; color: #d4d4d4;
+  }
+  .activity-table tr:last-child td { border-bottom: none; }
+  .activity-table tr:hover td { background: #1c1c1c; }
+  .activity-time { color: #6b7280; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .activity-platform { color: #a3a3a3; font-size: 12px; text-transform: lowercase; }
+  .activity-actor { color: #e5e5e5; font-size: 12px; font-weight: 500; word-break: break-all; }
+  .activity-summary { color: #d4d4d4; line-height: 1.4; }
+  .activity-detail { color: #737373; font-size: 11px; font-family: 'SF Mono', monospace; word-break: break-word; }
+  .activity-link { color: #60a5fa; text-decoration: none; font-size: 14px; opacity: 0.7; }
+  .activity-link:hover { opacity: 1; }
+
+  .ev-pill {
+    display: inline-block; padding: 2px 8px; border-radius: 6px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: lowercase;
+  }
+  .ev-pill.ev-posted  { background: #064e3b; color: #6ee7b7; }
+  .ev-pill.ev-replied { background: #0c4a6e; color: #7dd3fc; }
+  .ev-pill.ev-skipped { background: #422006; color: #fbbf24; }
+  .ev-pill.ev-mention { background: #262626; color: #d4d4d4; }
+  .ev-pill.ev-dm_sent { background: #3b0764; color: #d8b4fe; }
+
+  .activity-row-new { animation: activityRowFlash 2.6s ease-out; }
+  @keyframes activityRowFlash {
+    0%   { background: rgba(34, 211, 238, 0.22); box-shadow: inset 3px 0 0 #22d3ee; }
+    60%  { background: rgba(34, 211, 238, 0.08); box-shadow: inset 3px 0 0 #22d3ee; }
+    100% { background: transparent; box-shadow: inset 3px 0 0 transparent; }
+  }
+
   @media (max-width: 600px) { .cards { grid-template-columns: 1fr; } .content { padding: 16px; } }
 </style>
 </head>
@@ -922,6 +988,7 @@ const HTML = `<!DOCTYPE html>
 
 <div class="tabs">
   <div class="tab active" data-tab="status">Status</div>
+  <div class="tab" data-tab="activity">Activity</div>
   <div class="tab" data-tab="logs">Logs</div>
   <div class="tab" data-tab="settings">Settings</div>
 </div>
@@ -946,6 +1013,36 @@ const HTML = `<!DOCTYPE html>
   </div>
   <div id="other-jobs-section" style="margin-top: 24px;"></div>
   <div id="pending-section" style="margin-top: 16px;"></div>
+</div>
+
+<div class="content hidden" id="tab-activity">
+  <div class="activity-controls">
+    <div class="activity-filter-group" id="activity-type-filters"></div>
+    <div class="activity-filter-group" id="activity-platform-filters"></div>
+    <div class="activity-status">
+      <span class="activity-live-dot"></span>
+      <span id="activity-status-text">live</span>
+      <span id="activity-count" style="color:#6b7280;margin-left:8px;"></span>
+    </div>
+  </div>
+  <div class="activity-wrapper">
+    <table class="activity-table">
+      <thead>
+        <tr>
+          <th style="width:90px;">Time</th>
+          <th style="width:110px;">Event</th>
+          <th style="width:90px;">Platform</th>
+          <th style="width:140px;">Actor</th>
+          <th>What</th>
+          <th style="width:140px;">Detail</th>
+          <th style="width:40px;"></th>
+        </tr>
+      </thead>
+      <tbody id="activity-body">
+        <tr><td colspan="7" style="text-align:center;color:#6b7280;padding:40px;">Loading&hellip;</td></tr>
+      </tbody>
+    </table>
+  </div>
 </div>
 
 <div class="content hidden" id="tab-logs">
