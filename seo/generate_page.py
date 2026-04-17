@@ -727,6 +727,8 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
         content_type = "guide"
 
     product_cfg = load_product_config(product)
+    # Normalize to canonical name from config so DB writes never diverge by casing
+    product = product_cfg["name"]
     repo_path = os.path.expanduser(
         product_cfg.get("landing_pages", {}).get("repo", "")
     )

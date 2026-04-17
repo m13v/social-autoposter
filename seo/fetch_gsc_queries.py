@@ -172,22 +172,25 @@ def main():
         print(f"[fetch_gsc_queries] ERROR: product '{args.product}' not found in config.json")
         sys.exit(1)
 
+    # Normalize to canonical name from config so DB writes never diverge by casing
+    product = product_cfg["name"]
+
     gsc_property = product_cfg.get("landing_pages", {}).get("gsc_property")
     if not gsc_property:
-        print(f"[fetch_gsc_queries] ERROR: no gsc_property configured for {args.product}")
+        print(f"[fetch_gsc_queries] ERROR: no gsc_property configured for {product}")
         sys.exit(1)
 
     brand_terms = product_cfg.get("landing_pages", {}).get("brand_terms", [])
 
-    print(f"[fetch_gsc_queries] Fetching last {PERIOD_DAYS} days of queries for {args.product} ({gsc_property})")
+    print(f"[fetch_gsc_queries] Fetching last {PERIOD_DAYS} days of queries for {product} ({gsc_property})")
     rows = fetch_gsc_rows(gsc_property)
     print(f"[fetch_gsc_queries] API returned {len(rows)} queries")
 
-    added, updated = upsert(args.product, rows, brand_terms, dry_run=args.dry_run)
+    added, updated = upsert(product, rows, brand_terms, dry_run=args.dry_run)
     if not args.dry_run:
         print(f"[fetch_gsc_queries] added={added} updated={updated} total={len(rows)}")
 
-    print_summary(args.product, dry_run=args.dry_run)
+    print_summary(product, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

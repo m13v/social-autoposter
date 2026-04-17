@@ -40,9 +40,23 @@ fi
 echo "$$" > "$LOCK_FILE"
 trap 'rm -f "$LOCK_FILE"' EXIT
 
+# --- Reap stuck rows (orphans from killed runs) ---
+python3 "$SCRIPT_DIR/reap_stuck.py" >> "$LOG_FILE" 2>&1 || true
+
 # --- Pick product by weighted random ---
-# Shared logic in seo/select_product.py (single source of truth for both pipelines).
-PRODUCT=$(python3 "$SCRIPT_DIR/select_product.py")
+# Prefer products with pending-to-generate work (score>=1.5), then fall back
+# to products with unscored work (scoring pass). If neither exists, fall
+# back to any repo-present product (lets DataForSEO refresh fire for stale queues).
+PRODUCT=$(python3 "$SCRIPT_DIR/select_product.py" --mode serp-generate)
+PICK_MODE="serp-generate"
+if [ "$PRODUCT" = "NONE" ]; then
+    PRODUCT=$(python3 "$SCRIPT_DIR/select_product.py" --mode serp-score)
+    PICK_MODE="serp-score"
+fi
+if [ "$PRODUCT" = "NONE" ]; then
+    PRODUCT=$(python3 "$SCRIPT_DIR/select_product.py")
+    PICK_MODE="any"
+fi
 
 if [ "$PRODUCT" = "NONE" ]; then
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) No eligible products found" >> "$LOG_FILE"
@@ -51,7 +65,7 @@ fi
 
 PRODUCT_LOWER=$(echo "$PRODUCT" | tr '[:upper:]' '[:lower:]')
 
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Selected product: $PRODUCT (weighted random)" >> "$LOG_FILE"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Selected product: $PRODUCT (mode=$PICK_MODE)" >> "$LOG_FILE"
 
 # --- Refresh keywords if stale (>24h since last DataForSEO fetch) ---
 REFRESH_FILE="$REFRESH_DIR/$PRODUCT_LOWER"

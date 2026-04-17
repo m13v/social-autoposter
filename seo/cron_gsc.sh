@@ -36,16 +36,25 @@ fi
 echo "$$" > "$LOCK_FILE"
 trap 'rm -f "$LOCK_FILE"' EXIT
 
-# --- Pick product by weighted random (only those with gsc_property) ---
-# Shared logic in seo/select_product.py (single source of truth for both pipelines).
-PRODUCT=$(python3 "$SCRIPT_DIR/select_product.py" --require-gsc)
+# --- Reap stuck rows (orphans from killed runs) ---
+python3 "$SCRIPT_DIR/reap_stuck.py" >> "$LOG_FILE" 2>&1 || true
+
+# --- Pick product by weighted random ---
+# Prefer products that actually have pending GSC queries >= impression threshold;
+# fall back to any gsc-configured product (so we still refresh their GSC data).
+PRODUCT=$(python3 "$SCRIPT_DIR/select_product.py" --mode gsc)
+PICK_MODE="gsc-has-pending"
+if [ "$PRODUCT" = "NONE" ]; then
+    PRODUCT=$(python3 "$SCRIPT_DIR/select_product.py" --require-gsc)
+    PICK_MODE="gsc-configured"
+fi
 
 if [ "$PRODUCT" = "NONE" ]; then
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) No eligible products with gsc_property configured" >> "$LOG_FILE"
     exit 0
 fi
 
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Selected product: $PRODUCT" >> "$LOG_FILE"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Selected product: $PRODUCT (mode=$PICK_MODE)" >> "$LOG_FILE"
 
 "$SCRIPT_DIR/run_gsc_pipeline.sh" "$PRODUCT" >> "$LOG_FILE" 2>&1
 
