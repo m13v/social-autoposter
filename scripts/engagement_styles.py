@@ -216,26 +216,32 @@ def get_dynamic_tiers(platform, context="posting"):
 def get_styles_prompt(platform, context="posting"):
     """Generate the engagement styles prompt block for a given platform.
 
+    Tiers (dominant / secondary / rare) are pulled from live DB stats via
+    get_dynamic_tiers(). Only `never` and `note` come from static policy.
+
     Args:
-        platform: "reddit", "twitter", or "linkedin"
+        platform: "reddit", "twitter", "linkedin", "github", "moltbook"
         context: "posting" (new posts) or "replying" (engagement replies)
 
     Returns:
         Multi-line string to embed in a prompt.
     """
-    weights = PLATFORM_WEIGHTS.get(platform, PLATFORM_WEIGHTS["reddit"])
-    never_styles = set(weights.get("never", []))
+    policy = PLATFORM_POLICY.get(platform, PLATFORM_POLICY["reddit"])
+    never_styles = set(policy.get("never", []))
+
+    dominant_list, secondary_list, rare_list = get_dynamic_tiers(platform, context)
+    dominant = [s for s in dominant_list if s not in never_styles]
+    secondary = [s for s in secondary_list if s not in never_styles]
+    rare = [s for s in rare_list if s not in never_styles]
 
     lines = []
     lines.append("## Engagement styles (CRITICAL: pick the best style for each thread/post)")
     lines.append("")
-    lines.append(f"Match your style to the conversation. {weights['note']}")
+    lines.append(f"Match your style to the conversation. {policy['note']}")
     lines.append("")
-
-    # Group styles by tier so the LLM biases toward dominant styles
-    dominant = set(weights.get("dominant", []))
-    secondary = set(weights.get("secondary", []))
-    rare = set(weights.get("rare", []))
+    lines.append("Tiers below are ranked by live average upvotes from past posts on this platform. "
+                 "Styles without enough data are listed as secondary so they still get tested.")
+    lines.append("")
 
     def format_style(name, style):
         result = []
@@ -250,23 +256,26 @@ def get_styles_prompt(platform, context="posting"):
         result.append("")
         return result
 
-    lines.append("### PRIMARY styles (use these ~60% of the time):")
-    for name, style in STYLES.items():
-        if name in dominant and name not in never_styles:
-            lines.extend(format_style(name, style))
+    if dominant:
+        lines.append("### PRIMARY styles (top performers by avg upvotes — use these ~60% of the time):")
+        for name in dominant:
+            if name in STYLES:
+                lines.extend(format_style(name, STYLES[name]))
 
-    lines.append("### SECONDARY styles (use these ~30% of the time):")
-    for name, style in STYLES.items():
-        if name in secondary and name not in never_styles:
-            lines.extend(format_style(name, style))
+    if secondary:
+        lines.append("### SECONDARY styles (mid performers or untested — use these ~30% of the time):")
+        for name in secondary:
+            if name in STYLES:
+                lines.extend(format_style(name, STYLES[name]))
 
-    if rare - never_styles:
-        lines.append("### RARE styles (use sparingly, ~10% of the time):")
-        for name, style in STYLES.items():
-            if name in rare and name not in never_styles:
-                lines.extend(format_style(name, style))
+    if rare:
+        lines.append("### RARE styles (lowest avg upvotes — use sparingly, ~10% of the time):")
+        for name in rare:
+            if name in STYLES:
+                lines.extend(format_style(name, STYLES[name]))
 
-    # Add recommendation style for reply contexts
+    # Add recommendation style for reply contexts (tier-independent; governed by
+    # the Tier 1/2/3 link strategy in the surrounding prompt, not by performance data).
     if context == "replying":
         lines.append("**recommendation**: Recommend a project from config casually. MAX 20% of replies.")
         lines.append("")
