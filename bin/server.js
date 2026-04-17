@@ -1176,15 +1176,13 @@ function renderToggle(label, loaded) {
 
 function renderCell(job) {
   if (!job) return '<td><span class="matrix-cell-empty">-</span></td>';
+  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
   const runStopBtn = job.running
     ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
     : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
-  const runningBadge = job.running
-    ? '<span class="badge running" data-field="status">Running</span>'
-    : '<span data-field="status" style="display:none"></span>';
 
   return '<td data-job="' + job.label + '"><div class="matrix-cell">' +
-    runningBadge +
+    '<span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span>' +
     '<div class="cell-actions">' + renderToggle(job.label, job.loaded) + runStopBtn + '</div>' +
   '</div></td>';
 }
@@ -1226,11 +1224,9 @@ function buildMatrix(jobs) {
 }
 
 function updateCell(td, job) {
+  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
   const badge = td.querySelector('[data-field="status"]');
-  if (badge) {
-    if (job.running) { badge.textContent = 'Running'; badge.className = 'badge running'; badge.style.display = ''; }
-    else { badge.textContent = ''; badge.style.display = 'none'; }
-  }
+  if (badge) { badge.textContent = statusLabel; badge.className = 'badge ' + job.status; }
   const toggleInput = td.querySelector('[data-field="toggle"] input');
   if (toggleInput && toggleInput.checked !== !!job.loaded) toggleInput.checked = !!job.loaded;
   const actions = td.querySelector('.cell-actions');
@@ -1244,17 +1240,15 @@ function updateCell(td, job) {
 }
 
 function renderOtherJobRow(job) {
+  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
   const runStopBtn = job.running
     ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
     : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
-  const runningBadge = job.running
-    ? '<span class="badge running" data-field="status">Running</span>'
-    : '<span data-field="status" style="display:none"></span>';
   return '<tr data-other-job="' + job.label + '">' +
     '<td style="text-align:left;padding-left:16px;">' + job.name + '</td>' +
     '<td style="color:#6b7280;font-size:12px;">' + (job.schedule || '--') + '</td>' +
     '<td style="color:#6b7280;font-size:12px;" data-field="lastrun">' + relTime(job.lastRun) + '</td>' +
-    '<td>' + runningBadge + '</td>' +
+    '<td><span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span></td>' +
     '<td><div class="cell-actions" style="justify-content:center;">' + renderToggle(job.label, job.loaded) + runStopBtn + '</div></td>' +
   '</tr>';
 }
@@ -1279,10 +1273,8 @@ function updateOtherJobsInPlace(jobs) {
     const tr = document.querySelector('[data-other-job="' + job.label + '"]');
     if (!tr) return false;
     const badge = tr.querySelector('[data-field="status"]');
-    if (badge) {
-      if (job.running) { badge.textContent = 'Running'; badge.className = 'badge running'; badge.style.display = ''; }
-      else { badge.textContent = ''; badge.style.display = 'none'; }
-    }
+    const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
+    if (badge) { badge.textContent = statusLabel; badge.className = 'badge ' + job.status; }
     const lastrun = tr.querySelector('[data-field="lastrun"]');
     if (lastrun) lastrun.textContent = relTime(job.lastRun);
     const toggleInput = tr.querySelector('[data-field="toggle"] input');
