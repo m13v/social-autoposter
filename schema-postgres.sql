@@ -37,6 +37,7 @@ ALTER TABLE posts ADD COLUMN IF NOT EXISTS link_edit_content TEXT;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS scan_no_change_count INTEGER DEFAULT 0;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS project_name TEXT;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS feedback_report_used BOOLEAN DEFAULT FALSE;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS engagement_style TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_posts_platform ON posts(platform);
 
@@ -111,6 +112,7 @@ CREATE TABLE IF NOT EXISTS replies (
 
 -- Add columns to existing deployments (safe to re-run)
 ALTER TABLE replies ADD COLUMN IF NOT EXISTS processing_at TIMESTAMP;
+ALTER TABLE replies ADD COLUMN IF NOT EXISTS engagement_style TEXT;
 ALTER TABLE replies ADD CONSTRAINT IF NOT EXISTS replies_platform_comment_id_unique UNIQUE (platform, their_comment_id);
 
 CREATE TABLE IF NOT EXISTS dms (
