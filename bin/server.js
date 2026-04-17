@@ -1278,20 +1278,21 @@ function updateOtherJobsInPlace(jobs) {
     const tr = document.querySelector('[data-other-job="' + job.label + '"]');
     if (!tr) return false;
     const badge = tr.querySelector('[data-field="status"]');
-    const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
-    if (badge) { badge.textContent = statusLabel; badge.className = 'badge ' + job.status; }
+    if (badge) {
+      if (job.running) { badge.textContent = 'Running'; badge.className = 'badge running'; badge.style.display = ''; }
+      else { badge.textContent = ''; badge.style.display = 'none'; }
+    }
     const lastrun = tr.querySelector('[data-field="lastrun"]');
     if (lastrun) lastrun.textContent = relTime(job.lastRun);
-    // Swap run/stop and on/off buttons when loaded/running state changes
+    const toggleInput = tr.querySelector('[data-field="toggle"] input');
+    if (toggleInput && toggleInput.checked !== !!job.loaded) toggleInput.checked = !!job.loaded;
     const actions = tr.querySelector('.cell-actions');
     if (actions) {
       const runStopBtn = job.running
         ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
         : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
-      const toggleBtn = job.loaded
-        ? '<button class="btn danger" onclick="toggleJob(\\'' + job.label + '\\')">Off</button>'
-        : '<button class="btn primary" onclick="toggleJob(\\'' + job.label + '\\')">On</button>';
-      actions.innerHTML = runStopBtn + toggleBtn;
+      const currentBtn = actions.querySelector('.btn');
+      if (currentBtn) currentBtn.outerHTML = runStopBtn;
     }
   }
   return true;
