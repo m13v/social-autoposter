@@ -70,7 +70,6 @@ Claude decides WHAT (pick project, write text). Scripts execute HOW (navigate, c
 
 | Script | Platform | Action |
 |--------|----------|--------|
-| `scan_linkedin_notifications.js` | LinkedIn | Read notifications via internal API |
 | `edit_linkedin_comment.js` | LinkedIn | Append text to our comment |
 | `scan_reddit_chat.js` | Reddit | Scan chat sidebar for conversations with unread indicators |
 | `scrape_reddit_views.js` | Reddit | Scroll profile page and extract post view counts |
