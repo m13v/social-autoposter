@@ -10,7 +10,6 @@
     "scripts/*.py",
     "schema-postgres.sql",
     "config.example.json",
-    ".env.example",
     "SKILL.md",
     "skill/run-reddit-search.sh",
     "skill/run-reddit-threads.sh",

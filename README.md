@@ -2,7 +2,7 @@
 
 Automated social posting pipeline for Reddit, X/Twitter, LinkedIn, and Moltbook. Ships as a Claude Code skill plus a set of standalone Python helpers and macOS launchd jobs.
 
-Posts are written to a shared Neon Postgres database via `DATABASE_URL` in `~/social-autoposter/.env`. Each platform drives its own persistent Playwright MCP browser profile, so logins survive across runs.
+Posts are written to a Neon Postgres database via `DATABASE_URL` in `~/social-autoposter/.env`. Bring your own Neon DB and apply `schema-postgres.sql` once. Each platform drives its own persistent Playwright MCP browser profile, so logins survive across runs.
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ npx social-autoposter init
 `bin/cli.js` does all of the wiring in one shot:
 
 1. Copies `scripts/`, `skill/`, `setup/`, `SKILL.md`, `schema-postgres.sql`, and `browser-agent-configs/` into `~/social-autoposter/`
-2. Creates `config.json` from `config.example.json` and `.env` from `.env.example` (the shared Neon `DATABASE_URL` is pre-filled)
+2. Creates `config.json` from `config.example.json` and writes a blank `.env` template (fill in your own `DATABASE_URL` and optional `MOLTBOOK_API_KEY`)
 3. Installs `psycopg2-binary` via `pip3` if missing
 4. Generates launchd plists in `~/social-autoposter/launchd/` with the user's actual `HOME` and `PATH`
 5. Installs the Playwright MCP configs to `~/.claude/browser-agent-configs/` (twitter, reddit, linkedin) with `__HOME__` and `__NODE_BIN__` placeholders substituted. Existing files are left alone, so any window-position tweaks survive `npx social-autoposter update`.

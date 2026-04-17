@@ -15,12 +15,24 @@ const COPY_TARGETS = [
   'scripts',
   'schema-postgres.sql',
   'config.example.json',
-  '.env.example',
   'SKILL.md',
   'skill',
   'setup',
   'browser-agent-configs',
 ];
+
+const ENV_TEMPLATE = `# social-autoposter environment variables
+# Fill in your values below.
+
+# Moltbook API key (required for Moltbook posting/scanning)
+# Get it from: https://www.moltbook.com/settings/api
+MOLTBOOK_API_KEY=
+
+# Neon Postgres connection string. Bring your own Neon DB — apply schema with:
+#   psql "$DATABASE_URL" -f schema-postgres.sql
+# Format: postgresql://<user>:<password>@<host>/<db>?sslmode=require
+DATABASE_URL=
+`;
 
 // Never overwrite these user files during update
 const USER_FILES = new Set(['config.json', '.env', 'SKILL.md']);
@@ -187,11 +199,12 @@ function init() {
     console.log('  config.json exists — skipping');
   }
 
-  // .env — only if it doesn't exist
+  // .env — only if it doesn't exist. Written from an in-package template so
+  // the NPM tarball no longer ships a credential-bearing .env.example file.
   const envDest = path.join(DEST, '.env');
   if (!fs.existsSync(envDest)) {
-    fs.copyFileSync(path.join(PKG_ROOT, '.env.example'), envDest);
-    console.log('  created .env from template');
+    fs.writeFileSync(envDest, ENV_TEMPLATE);
+    console.log('  created .env from template (fill in DATABASE_URL and MOLTBOOK_API_KEY)');
   } else {
     console.log('  .env exists — skipping');
   }
