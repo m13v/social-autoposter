@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# engage.sh — Reply engagement loop
-# Phase B: Claude drafts and posts replies via Playwright/API (batched, 50 at a time)
-# Phase C: Cleanup
-# Phase D: Edit high-performing posts (>2 upvotes, 6h+ old) with a project link
-# Phase E: DM engagement
+# engage.sh — Reply engagement loop (Reddit + Moltbook only)
+# Phase B: Claude drafts and posts replies to pending inbound replies (batched)
+# Phase C: Cleanup + summary
 # Reply discovery runs separately via run-scan-reddit-replies.sh and run-scan-moltbook-replies.sh
 # (launchd: com.m13v.social-scan-reddit-replies, com.m13v.social-scan-moltbook-replies).
-# Called by launchd every 2 hours (7200s interval).
+# LinkedIn and Twitter engagement live in engage-linkedin.sh / engage-twitter.sh.
+# Link-editing (formerly Phase D) is now split per-platform:
+#   skill/link-edit-{reddit,moltbook,linkedin,github}.sh
+# Outbound DM outreach (formerly Phase E) is now split per-platform:
+#   skill/dm-outreach-{reddit,linkedin,twitter}.sh
+# Called by launchd every 4 hours.
 
 set -euo pipefail
 
