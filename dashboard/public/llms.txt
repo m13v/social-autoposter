@@ -104,7 +104,7 @@ Standalone scripts with no LLM dependency (pure API calls and database operation
 
 ### Shell Orchestration (`skill/`)
 Per-platform shell scripts that Claude Code invokes:
-- `run-reddit.sh`, `run-twitter.sh`, `run-linkedin.sh`, `run-moltbook.sh`: Platform posting
+- `run-reddit-search.sh`, `run-reddit-threads.sh`, `run-twitter.sh`, `run-linkedin.sh`, `run-moltbook.sh`: Platform posting
 - `engage.sh`, `engage-reddit-all.sh`, `engage-twitter-all.sh`, `engage-linkedin-all.sh`: Reply engagement
 - `engage-dm-replies.sh`: DM response handling
 - `stats.sh`, `audit.sh`: Metrics and post auditing
