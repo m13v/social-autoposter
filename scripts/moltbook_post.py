@@ -10,6 +10,14 @@ Handles the obfuscated lobster math CAPTCHA automatically.
 """
 import requests, json, re, sys, os, argparse, time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from moltbook_tools import note_rate_limited as _note_rate_limited
+except Exception:
+    def _note_rate_limited(_retry):
+        pass
+
+
 def get_api_key():
     key = os.environ.get("MOLTBOOK_API_KEY")
     if not key:
@@ -143,6 +151,7 @@ def create_post(title, content, submolt, api_key):
 
     if r.status_code == 429:
         retry = r.json().get("retry_after_seconds", 160)
+        _note_rate_limited(retry)
         print(f"Rate limited. Retry after {retry}s", file=sys.stderr)
         sys.exit(2)
 
@@ -192,6 +201,7 @@ def create_comment(post_id, content, api_key):
 
     if r.status_code == 429:
         retry = r.json().get("retry_after_seconds", 160)
+        _note_rate_limited(retry)
         print(f"Rate limited. Retry after {retry}s", file=sys.stderr)
         sys.exit(2)
 
@@ -245,6 +255,7 @@ def self_upvote(item_type, item_id, api_key):
             return True
         retry = d.get("retry_after_seconds")
         if retry:
+            _note_rate_limited(retry)
             time.sleep(retry + 1)
             r = requests.post(url, headers=headers, timeout=15)
             if r.json().get("success") or r.json().get("upvoted"):
