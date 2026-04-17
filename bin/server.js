@@ -1005,7 +1005,6 @@ const HTML = `<!DOCTYPE html>
         <tr>
           <th class="row-header"></th>
           <th class="freq-header">Freq</th>
-          <th>Overall</th>
           <th>Reddit</th>
           <th>Twitter</th>
           <th>LinkedIn</th>
