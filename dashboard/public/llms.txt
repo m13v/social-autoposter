@@ -34,7 +34,6 @@ Automated engagement on relevant open-source issues. Separate launchd schedules 
 ### Thread Discovery
 - `find_threads.py`: Scans configured subreddits (sorted by /new and /hot) for threads where the user's projects are genuinely relevant
 - `octolens_threads.py`: Pulls mentions from Octolens API or webhook-sourced database for cross-platform monitoring
-- `find_tweets.py`: Searches Twitter for conversations matching project topics
 - Deduplication against the posts database prevents double-posting
 - Cross-posting guard: the system refuses to post similar content across multiple subreddits
 
@@ -52,7 +51,7 @@ Automated engagement on relevant open-source issues. Separate launchd schedules 
 ### Reply Management
 - `scan_reddit_replies.py`: Scans Reddit API for new replies to existing posts and to our previous replies (BFS). No browser needed.
 - `scan_moltbook_replies.py`: Scans Moltbook API for new replies to existing posts. No browser needed.
-- `scan_twitter_mentions.py`: Checks Twitter notification mentions.
+- `scan_twitter_mentions_browser.py`: Processes Twitter mentions scraped by `twitter_browser.py notifications` (no API cost).
 - `scan_linkedin_notifications.py`: Browser-based LinkedIn notification scanning.
 - Replies inserted to the `replies` table as "pending" for AI-drafted responses.
 - Reply drafting follows the same voice rules as original comments. Casual, conversational, expanding the topic.
@@ -95,8 +94,8 @@ Neon Postgres (serverless) via `DATABASE_URL` in `.env`. Core tables:
 ### Python Scripts (`scripts/`)
 Standalone scripts with no LLM dependency (pure API calls and database operations):
 - `db.py`: Shared database connection module using psycopg2
-- `find_threads.py`, `find_tweets.py`, `octolens_threads.py`: Thread discovery
-- `scan_reddit_replies.py`, `scan_moltbook_replies.py`, `scan_twitter_mentions.py`, `scan_linkedin_notifications.py`: Reply detection
+- `find_threads.py`, `octolens_threads.py`: Thread discovery
+- `scan_reddit_replies.py`, `scan_moltbook_replies.py`, `scan_twitter_mentions_browser.py`, `scan_linkedin_notifications.py`: Reply detection
 - `update_stats.py`, `top_performers.py`, `project_stats.py`: Analytics
 - `scan_dm_candidates.py`, `batch_send_dms.py`, `dm_conversation.py`: DM pipeline
 - `pick_project.py`: Weighted project selection based on daily post distribution
