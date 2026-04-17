@@ -113,8 +113,12 @@ def match_project(tweet_text, search_topic, config):
     return None
 
 
-def upsert_candidates(tweets, config):
-    """Score and upsert tweet candidates into DB."""
+def upsert_candidates(tweets, config, batch_id=None):
+    """Score and upsert tweet candidates into DB.
+
+    If batch_id is provided, also populates T0 engagement columns and tags
+    the row with batch_id so Phase 2 of the cycle can re-poll only this batch.
+    """
     conn = dbmod.get_conn()
 
     # Get already-posted thread URLs for dedup
