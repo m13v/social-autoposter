@@ -180,8 +180,11 @@ def upsert_candidates(tweets, config, batch_id=None):
                     (tweet_url, author_handle, author_followers, tweet_text,
                      tweet_posted_at, likes, retweets, replies, views, bookmarks,
                      engagement_velocity, retweet_ratio, virality_score,
-                     search_topic, matched_project, status, discovered_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', NOW())
+                     search_topic, matched_project, status, discovered_at,
+                     likes_t0, retweets_t0, replies_t0, views_t0, bookmarks_t0,
+                     batch_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', NOW(),
+                        %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (tweet_url) DO UPDATE SET
                     likes = EXCLUDED.likes,
                     retweets = EXCLUDED.retweets,
@@ -191,7 +194,13 @@ def upsert_candidates(tweets, config, batch_id=None):
                     engagement_velocity = EXCLUDED.engagement_velocity,
                     retweet_ratio = EXCLUDED.retweet_ratio,
                     virality_score = EXCLUDED.virality_score,
-                    author_followers = EXCLUDED.author_followers
+                    author_followers = EXCLUDED.author_followers,
+                    likes_t0 = COALESCE(twitter_candidates.likes_t0, EXCLUDED.likes_t0),
+                    retweets_t0 = COALESCE(twitter_candidates.retweets_t0, EXCLUDED.retweets_t0),
+                    replies_t0 = COALESCE(twitter_candidates.replies_t0, EXCLUDED.replies_t0),
+                    views_t0 = COALESCE(twitter_candidates.views_t0, EXCLUDED.views_t0),
+                    bookmarks_t0 = COALESCE(twitter_candidates.bookmarks_t0, EXCLUDED.bookmarks_t0),
+                    batch_id = COALESCE(EXCLUDED.batch_id, twitter_candidates.batch_id)
                 """,
                 [
                     url,
@@ -209,6 +218,12 @@ def upsert_candidates(tweets, config, batch_id=None):
                     score,
                     tweet.get("search_topic", ""),
                     project,
+                    tweet.get("likes", 0) if batch_id else None,
+                    tweet.get("retweets", 0) if batch_id else None,
+                    tweet.get("replies", 0) if batch_id else None,
+                    tweet.get("views", 0) if batch_id else None,
+                    tweet.get("bookmarks", 0) if batch_id else None,
+                    batch_id,
                 ],
             )
             inserted += 1
@@ -243,6 +258,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--file", help="Read tweets from JSON file instead of stdin")
     parser.add_argument("--expire-only", action="store_true", help="Only expire/prune, no scoring")
+    parser.add_argument("--batch-id", help="Tag these candidates with a batch id and populate T0 columns")
     args = parser.parse_args()
 
     config_path = os.path.expanduser("~/social-autoposter/config.json")
@@ -277,7 +293,7 @@ def main():
     if not isinstance(tweets, list):
         tweets = [tweets]
 
-    upsert_candidates(tweets, config)
+    upsert_candidates(tweets, config, batch_id=args.batch_id)
 
 
 if __name__ == "__main__":
