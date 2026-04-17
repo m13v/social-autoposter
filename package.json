@@ -5,6 +5,10 @@
   "bin": {
     "social-autoposter": "bin/cli.js"
   },
+  "scripts": {
+    "start": "node bin/server.js",
+    "dev": "node --watch bin/server.js"
+  },
   "files": [
     "bin/",
     "scripts/*.py",
