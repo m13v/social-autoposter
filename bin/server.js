@@ -32,8 +32,11 @@ const JOBS = [
   { label: 'com.m13v.social-engage-twitter', name: 'Engage Twitter', type: 'Engage', platform: 'Twitter', script: 'engage-twitter.sh', logPrefix: 'engage-twitter-', plist: 'com.m13v.social-engage-twitter.plist' },
   { label: 'com.m13v.social-engage-linkedin', name: 'Engage LinkedIn', type: 'Engage', platform: 'LinkedIn', script: 'engage-linkedin.sh', logPrefix: 'engage-linkedin-', plist: 'com.m13v.social-engage-linkedin.plist' },
   { label: 'com.m13v.social-github-engage', name: 'GitHub Engage', type: 'Engage', platform: 'GitHub', script: 'github-engage.sh', logPrefix: 'github-engage-', plist: 'com.m13v.social-github-engage.plist' },
-  // Stats row (single job covers all platforms)
-  { label: 'com.m13v.social-stats', name: 'Stats', type: 'Stats', platform: 'all', script: 'stats.sh', logPrefix: 'stats-', plist: 'com.m13v.social-stats.plist' },
+  // Stats row
+  { label: 'com.m13v.social-stats-reddit', name: 'Stats Reddit', type: 'Stats', platform: 'Reddit', script: 'stats-reddit.sh', logPrefix: 'stats-reddit-', plist: 'com.m13v.social-stats-reddit.plist' },
+  { label: 'com.m13v.social-stats-twitter', name: 'Stats Twitter', type: 'Stats', platform: 'Twitter', script: 'stats-twitter.sh', logPrefix: 'stats-twitter-', plist: 'com.m13v.social-stats-twitter.plist' },
+  { label: 'com.m13v.social-stats-linkedin', name: 'Stats LinkedIn', type: 'Stats', platform: 'LinkedIn', script: 'stats-linkedin.sh', logPrefix: 'stats-linkedin-', plist: 'com.m13v.social-stats-linkedin.plist' },
+  { label: 'com.m13v.social-stats-moltbook', name: 'Stats MoltBook', type: 'Stats', platform: 'MoltBook', script: 'stats-moltbook.sh', logPrefix: 'stats-moltbook-', plist: 'com.m13v.social-stats-moltbook.plist' },
   // Audit row
   { label: 'com.m13v.social-audit', name: 'Audit', type: 'Audit', platform: 'all', script: 'audit.sh', logPrefix: 'audit-', plist: 'com.m13v.social-audit.plist' },
   // Octolens row
@@ -784,6 +787,19 @@ function handleApi(req, res) {
       count: count ? parseInt(count, 10) : 0,
       mentions: recent ? JSON.parse(recent) : [],
     });
+  }
+
+  // GET /api/activity - unified recent-events feed across posts, replies, mentions, dms
+  if (p === '/api/activity' && req.method === 'GET') {
+    const q = "SELECT json_agg(row_to_json(r)) FROM (" +
+      "SELECT * FROM (SELECT posted_at AS occurred_at, 'posted' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, engagement_style AS detail, our_url AS link, ('p' || id) AS key FROM posts WHERE posted_at IS NOT NULL ORDER BY posted_at DESC LIMIT 40) x1 " +
+      "UNION ALL SELECT * FROM (SELECT replied_at, 'replied', platform, their_author, COALESCE(LEFT(our_reply_content, 140), LEFT(their_content, 140)), engagement_style, our_reply_url, ('r' || id) FROM replies WHERE status='replied' AND replied_at IS NOT NULL ORDER BY replied_at DESC LIMIT 40) x2 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(processing_at, discovered_at), 'skipped', platform, their_author, LEFT(their_content, 140), skip_reason, their_comment_url, ('s' || id) FROM replies WHERE status='skipped' ORDER BY COALESCE(processing_at, discovered_at) DESC LIMIT 40) x3 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id) FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 40) x4 " +
+      "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || id) FROM dms WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 40) x5 " +
+      "ORDER BY 1 DESC LIMIT 100) r";
+    const rows = psql(q);
+    return json(res, { events: rows && rows !== '' ? (JSON.parse(rows) || []) : [] });
   }
 
   return json(res, { error: 'Not found' }, 404);
