@@ -207,7 +207,7 @@ Links are added later by a separate pipeline (Phase D) after the comment earns e
 ## CRITICAL OUTPUT FORMAT
 You MUST output each draft as a raw JSON object on its own line. No commentary before or after. Example:
 
-{{"action": "post", "thread_url": "https://github.com/owner/repo/issues/123", "text": "full comment body here", "thread_author": "alice", "thread_title": "Issue title", "engagement_style": "critic", "project_name": "Fazm", "language": "en"}}
+{{"action": "post", "thread_url": "https://github.com/owner/repo/issues/123", "text": "full comment body here", "thread_author": "alice", "thread_title": "Issue title", "engagement_style": "critic", "project_name": "fazm", "language": "en"}}
 
 Rules for the JSON:
 - `text`: the full comment body (400-600 chars, NO links, NO em dashes). Reply in the SAME LANGUAGE as the issue.
