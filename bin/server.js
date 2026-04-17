@@ -568,29 +568,21 @@ function handleApi(req, res) {
     const label = decodeURIComponent(runMatch[1]);
     const job = findJob(label);
     if (!job) return json(res, { error: 'Unknown job' }, 404);
-    // Spawn exactly what the plist would run. Works for .sh, .py, .js without
-    // needing to hardcode an interpreter.
-    let plistPath = path.join(LAUNCHD_DIR, job.plist);
-    if (!fs.existsSync(plistPath)) plistPath = getLaunchAgentPath(job.plist);
+    // Route through launchd so the run is tracked by the same mechanism that
+    // reports status. Spawning the script directly creates a process launchd
+    // doesn't know about, which means /api/status (which reads launchd's PID)
+    // would never show it as running.
     try {
-      const xml = fs.readFileSync(plistPath, 'utf8');
-      let cmd = null;
-      let args = [];
-      const argsM = xml.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
-      if (argsM) {
-        const parts = [...argsM[1].matchAll(/<string>([^<]+)<\/string>/g)].map(m => m[1]);
-        if (parts.length) { cmd = parts[0]; args = parts.slice(1); }
+      if (!isJobLoaded(label)) {
+        return json(res, { error: 'Job not loaded; cannot kickstart' }, 400);
       }
-      if (!cmd) {
-        const progM = xml.match(/<key>Program<\/key>\s*<string>([^<]+)<\/string>/);
-        if (progM) cmd = progM[1];
+      const target = `gui/${process.getuid()}/${label}`;
+      const r = spawnSync('launchctl', ['kickstart', '-p', target], { encoding: 'utf8' });
+      if (r.status !== 0) {
+        return json(res, { error: (r.stderr || r.stdout || 'kickstart failed').trim() }, 500);
       }
-      if (!cmd) return json(res, { error: 'No executable in plist' }, 500);
-      const jobEnv = { ...process.env, ...loadEnv(), HOME: os.homedir() };
-      delete jobEnv.CLAUDECODE;
-      const child = spawn(cmd, args, { detached: true, stdio: 'ignore', env: jobEnv });
-      child.unref();
-      return json(res, { started: true, pid: child.pid });
+      const pid = parseInt((r.stdout || '').trim(), 10);
+      return json(res, { started: true, pid: isNaN(pid) ? null : pid });
     } catch (e) {
       return json(res, { error: e.message }, 500);
     }
