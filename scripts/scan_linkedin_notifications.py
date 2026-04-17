@@ -124,6 +124,8 @@ def process_notifications(notifications, conn, config):
         "no_comment_urn": 0,
     }
 
+    import linkedin_comment_fetch as lcf
+
     for notif in notifications:
         comment_urn = notif.get("commentUrn", "")
         author_name = notif.get("authorName", "")
@@ -134,6 +136,14 @@ def process_notifications(notifications, conn, config):
         headline = notif.get("headline", "")
         profile_url = notif.get("profileUrl", "")
         notif_type = notif.get("type", "")
+
+        # If Voyager payload lacked the real comment body, try a live page fetch
+        # before falling back to the meaningless headline.
+        if not comment_text and comment_urn and activity_id:
+            live = lcf.fetch_live_content(activity_id, comment_urn, target_author=author_name)
+            if live:
+                comment_text = live
+                print(f"  live-fetched body for {author_name} ({len(live)} chars)")
 
         # Skip if no comment URN (can't track it)
         if not comment_urn:
