@@ -894,6 +894,16 @@ const HTML = `<!DOCTYPE html>
   }
   .badge.scheduled { background: #064e3b; color: #6ee7b7; }
   .badge.stopped { background: #292524; color: #a3a3a3; }
+  .toggle-switch { position: relative; display: inline-block; width: 40px; height: 22px; cursor: pointer; flex-shrink: 0; }
+  .toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .toggle-slider { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #3f3f46; border: 1px solid #52525b; border-radius: 22px; transition: background 0.15s, border-color 0.15s; }
+  .toggle-slider::before { content: ''; position: absolute; height: 16px; width: 16px; left: 2px; top: 2px; background: #e5e5e5; border-radius: 50%; transition: transform 0.15s, background 0.15s; box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
+  .toggle-switch input:checked + .toggle-slider { background: #10b981; border-color: #10b981; }
+  .toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); background: #ffffff; }
+  .toggle-switch:hover .toggle-slider { filter: brightness(1.15); }
+  .toggle-switch input:disabled + .toggle-slider { opacity: 0.5; cursor: not-allowed; }
+  .toggle-label { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: #6b7280; margin-left: 6px; }
+  .toggle-label.on { color: #10b981; }
   @keyframes runningPulse {
     0%   { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.75), 0 0 10px rgba(14, 165, 233, 0.55); transform: scale(1); }
     60%  { box-shadow: 0 0 0 10px rgba(34, 211, 238, 0), 0 0 18px rgba(34, 211, 238, 0.85); transform: scale(1.05); }
@@ -1156,19 +1166,25 @@ let _initialized = false;
 const PLATFORMS = ['Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
 const JOB_TYPES = ['Post', 'Engage', 'Stats', 'Audit', 'Octolens'];
 
+function renderToggle(label, loaded) {
+  return '<label class="toggle-switch" data-field="toggle" title="' + (loaded ? 'On — click to disable' : 'Off — click to enable') + '">' +
+    '<input type="checkbox"' + (loaded ? ' checked' : '') + ' onchange="toggleJob(\\'' + label + '\\')">' +
+    '<span class="toggle-slider"></span>' +
+  '</label>';
+}
+
 function renderCell(job) {
   if (!job) return '<td><span class="matrix-cell-empty">-</span></td>';
-  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
   const runStopBtn = job.running
     ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
     : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
-  const toggleBtn = job.loaded
-    ? '<button class="btn danger" onclick="toggleJob(\\'' + job.label + '\\')">Off</button>'
-    : '<button class="btn primary" onclick="toggleJob(\\'' + job.label + '\\')">On</button>';
+  const runningBadge = job.running
+    ? '<span class="badge running" data-field="status">Running</span>'
+    : '<span data-field="status" style="display:none"></span>';
 
   return '<td data-job="' + job.label + '"><div class="matrix-cell">' +
-    '<span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span>' +
-    '<div class="cell-actions">' + runStopBtn + toggleBtn + '</div>' +
+    runningBadge +
+    '<div class="cell-actions">' + renderToggle(job.label, job.loaded) + runStopBtn + '</div>' +
   '</div></td>';
 }
 
@@ -1209,25 +1225,36 @@ function buildMatrix(jobs) {
 }
 
 function updateCell(td, job) {
-  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
   const badge = td.querySelector('[data-field="status"]');
-  if (badge) { badge.textContent = statusLabel; badge.className = 'badge ' + job.status; }
+  if (badge) {
+    if (job.running) { badge.textContent = 'Running'; badge.className = 'badge running'; badge.style.display = ''; }
+    else { badge.textContent = ''; badge.style.display = 'none'; }
+  }
+  const toggleInput = td.querySelector('[data-field="toggle"] input');
+  if (toggleInput && toggleInput.checked !== !!job.loaded) toggleInput.checked = !!job.loaded;
+  const actions = td.querySelector('.cell-actions');
+  if (actions) {
+    const runStopBtn = job.running
+      ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
+      : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
+    const currentBtn = actions.querySelector('.btn');
+    if (currentBtn) currentBtn.outerHTML = runStopBtn;
+  }
 }
 
 function renderOtherJobRow(job) {
-  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
   const runStopBtn = job.running
     ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
     : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
-  const toggleBtn = job.loaded
-    ? '<button class="btn danger" onclick="toggleJob(\\'' + job.label + '\\')">Off</button>'
-    : '<button class="btn primary" onclick="toggleJob(\\'' + job.label + '\\')">On</button>';
+  const runningBadge = job.running
+    ? '<span class="badge running" data-field="status">Running</span>'
+    : '<span data-field="status" style="display:none"></span>';
   return '<tr data-other-job="' + job.label + '">' +
     '<td style="text-align:left;padding-left:16px;">' + job.name + '</td>' +
     '<td style="color:#6b7280;font-size:12px;">' + (job.schedule || '--') + '</td>' +
     '<td style="color:#6b7280;font-size:12px;" data-field="lastrun">' + relTime(job.lastRun) + '</td>' +
-    '<td><span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span></td>' +
-    '<td><div class="cell-actions" style="justify-content:center;">' + runStopBtn + toggleBtn + '</div></td>' +
+    '<td>' + runningBadge + '</td>' +
+    '<td><div class="cell-actions" style="justify-content:center;">' + renderToggle(job.label, job.loaded) + runStopBtn + '</div></td>' +
   '</tr>';
 }
 
