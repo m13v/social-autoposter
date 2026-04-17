@@ -88,6 +88,9 @@ else
     source "$REPO_DIR/skill/styles.sh"
     STYLES_BLOCK=$(generate_styles_block twitter replying)
 
+    # Top performers feedback report (platform-wide)
+    TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter 2>/dev/null || echo "(top performers report unavailable)")
+
     PHASE_B_PROMPT=$(mktemp)
     cat > "$PHASE_B_PROMPT" <<PROMPT_EOF
 You are the Social Autoposter Twitter/X engagement bot.
@@ -112,6 +115,9 @@ CRITICAL: If the CDP script fails, retry up to 3 times with 30 seconds between a
 - **Tier 1 (default):** No link. Genuine engagement, expand topic.
 - **Tier 2 (natural mention):** Conversation touches a topic matching a project in config. Recommend it casually as a tool you've come across.
 - **Tier 3 (direct ask):** They ask for link/tool/source. Give it immediately.
+
+## FEEDBACK FROM PAST PERFORMANCE (use this to write better replies):
+$TOP_REPORT
 
 $STYLES_BLOCK
 
