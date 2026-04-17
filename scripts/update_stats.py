@@ -20,6 +20,11 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
+from moltbook_tools import (
+    fetch_moltbook_json,
+    HttpNotFoundError as MoltbookNotFoundError,
+    MoltbookRateLimitedError,
+)
 
 CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
 
@@ -310,9 +315,11 @@ def update_moltbook(db, api_key, quiet=False):
 
     total = updated = deleted = errors = 0
     results = []
-    headers = {"Authorization": f"Bearer {api_key}"}
+    rate_limited = False
 
     for post in posts:
+        if rate_limited:
+            break
         total += 1
         post_id, our_url, thread_url = post[0], post[1], post[2]
 
@@ -370,11 +377,16 @@ def update_moltbook(db, api_key, quiet=False):
         if is_comment:
             # Fetch comment-specific stats via comments endpoint
             try:
-                data = fetch_json(
+                data = fetch_moltbook_json(
                     f"https://www.moltbook.com/api/v1/posts/{post_uuid}/comments?sort=new&limit=100",
-                    headers=headers,
+                    api_key=api_key,
                 )
-            except HttpNotFoundError:
+            except MoltbookRateLimitedError as e:
+                if not quiet:
+                    print(f"Moltbook rate-limited for {int(e.reset_seconds)}s, stopping scan", flush=True)
+                rate_limited = True
+                continue
+            except MoltbookNotFoundError:
                 # Post deleted on Moltbook - use detection counter
                 row = db.execute(
                     "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
@@ -479,11 +491,16 @@ def update_moltbook(db, api_key, quiet=False):
         else:
             # Original post - fetch post-level stats
             try:
-                data = fetch_json(
+                data = fetch_moltbook_json(
                     f"https://www.moltbook.com/api/v1/posts/{post_uuid}",
-                    headers=headers,
+                    api_key=api_key,
                 )
-            except HttpNotFoundError:
+            except MoltbookRateLimitedError as e:
+                if not quiet:
+                    print(f"Moltbook rate-limited for {int(e.reset_seconds)}s, stopping scan", flush=True)
+                rate_limited = True
+                continue
+            except MoltbookNotFoundError:
                 # Post deleted on Moltbook - use detection counter
                 row = db.execute(
                     "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
