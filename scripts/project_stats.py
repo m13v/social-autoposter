@@ -203,7 +203,7 @@ def get_project_domains(project):
 
 def get_client_slug(project_name):
     """Map project name to cal_bookings client_slug."""
-    return {"Cyrano": "cyrano", "PieLine": "pieline", "Fazm": "fazm", "S4L": "s4l"}.get(project_name)
+    return {"Cyrano": "cyrano", "PieLine": "pieline", "fazm": "fazm", "S4L": "s4l"}.get(project_name)
 
 
 def print_project_report(name, post_stats, platforms, posthog, bookings, quiet=False):
@@ -276,7 +276,7 @@ def main():
     conn = dbmod.get_conn()
 
     projects_with_stats = [
-        "Fazm", "Cyrano", "PieLine", "Terminator", "S4L",
+        "fazm", "Cyrano", "PieLine", "Terminator", "S4L",
         "macOS MCP", "Vipassana", "WhatsApp MCP", "AI Browser Profile", "macOS Session Replay",
     ]
 
