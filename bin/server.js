@@ -824,6 +824,7 @@ function handleApi(req, res) {
       "UNION ALL SELECT * FROM (SELECT COALESCE(processing_at, discovered_at), 'skipped', platform, their_author, LEFT(their_content, 140), skip_reason, their_comment_url, ('s' || id) FROM replies WHERE status='skipped' ORDER BY COALESCE(processing_at, discovered_at) DESC LIMIT 40) x3 " +
       "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id) FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 40) x4 " +
       "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || id) FROM dms WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 40) x5 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published', 'seo', product, keyword, slug, page_url, ('k' || id) FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 40) x6 " +
       "ORDER BY 1 DESC LIMIT 100) r";
     const rows = psql(q);
     return json(res, { events: rows && rows !== '' ? (JSON.parse(rows) || []) : [] });
@@ -950,6 +951,7 @@ const HTML = `<!DOCTYPE html>
   .activity-chip.active.ev-skipped  { background: #422006; border-color: #d97706; color: #fbbf24; }
   .activity-chip.active.ev-mention  { background: #1f1f1f; border-color: #737373; color: #d4d4d4; }
   .activity-chip.active.ev-dm_sent  { background: #3b0764; border-color: #a855f7; color: #d8b4fe; }
+  .activity-chip.active.ev-page_published { background: #422006; border-color: #f59e0b; color: #fcd34d; }
 
   .activity-status { display: flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: #22d3ee; }
   .activity-live-dot {
@@ -992,6 +994,7 @@ const HTML = `<!DOCTYPE html>
   .ev-pill.ev-skipped { background: #422006; color: #fbbf24; }
   .ev-pill.ev-mention { background: #262626; color: #d4d4d4; }
   .ev-pill.ev-dm_sent { background: #3b0764; color: #d8b4fe; }
+  .ev-pill.ev-page_published { background: #422006; color: #fcd34d; border: 1px solid #f59e0b; }
 
   .activity-row-new { animation: activityRowFlash 2.6s ease-out; }
   @keyframes activityRowFlash {
@@ -1564,9 +1567,9 @@ async function saveSettings() {
 }
 
 // Activity tab
-const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent'];
-const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent' };
-const ACTIVITY_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github'];
+const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'page_published'];
+const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', page_published: 'page published' };
+const ACTIVITY_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github', 'seo'];
 let _activitySeen = new Set();
 let _activityFirstLoad = true;
 let _activityTypeFilter = new Set(EVENT_TYPES);
