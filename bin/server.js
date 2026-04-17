@@ -13,7 +13,6 @@ const LAUNCHD_DIR = path.join(DEST, 'launchd');
 const CONFIG_FILE = path.join(DEST, 'config.json');
 const ENV_FILE = path.join(DEST, '.env');
 const PORT = parseInt(process.env.PORT || '3141', 10);
-const SERVER_STARTED_AT = Date.now();
 
 // Matrix: rows = job types, columns = platforms
 // Each cell is a job (or null if that combo doesn't exist)
@@ -1785,24 +1784,6 @@ document.getElementById('save-settings').addEventListener('click', saveSettings)
 // Init
 loadStatus();
 setInterval(loadStatus, 5000);
-
-// Dev auto-reload: SSE stream carries server startedAt; if it changes, the
-// server restarted (e.g. --watch picked up a file edit) and we refresh.
-(function devReload() {
-  let knownStartedAt = null;
-  function connect() {
-    const es = new EventSource('/api/_reload-stream');
-    es.onmessage = (e) => {
-      try {
-        const d = JSON.parse(e.data);
-        if (knownStartedAt == null) { knownStartedAt = d.startedAt; return; }
-        if (d.startedAt !== knownStartedAt) location.reload();
-      } catch {}
-    };
-    es.onerror = () => { es.close(); setTimeout(connect, 500); };
-  }
-  connect();
-})();
 </script>
 </body>
 </html>`;
@@ -1819,15 +1800,6 @@ const server = http.createServer((req, res) => {
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(HTML);
-  } else if (req.url === '/api/_reload-stream') {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    });
-    res.write('data: ' + JSON.stringify({ startedAt: SERVER_STARTED_AT }) + '\n\n');
-    const keepalive = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, 15000);
-    req.on('close', () => clearInterval(keepalive));
   } else if (req.url.startsWith('/api/')) {
     handleApi(req, res);
   } else {
