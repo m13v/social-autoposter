@@ -144,12 +144,16 @@ def batch_fetch_info(thing_ids, user_agent=USER_AGENT):
     return results
 
 
-def _load_blocked_subreddits():
-    """Load subreddits where the account is truly banned (cannot comment).
+def _load_comment_blocked_subs():
+    """Load subreddits where we cannot post comments.
 
-    Only loads subreddit_bans.banned, not skip_threads. The comment pipeline
-    can still find threads in subs where we strategically skip original
-    threads but can still comment.
+    Reads subreddit_bans.comment_blocked plus exclusions.subreddits. Used by
+    search/fetch so the comment-drafting agent never sees these subs as
+    candidates in the first place.
+
+    subreddit_bans.thread_blocked is NOT read here — a sub can block new
+    thread creation while still allowing comments, so it must not leak into
+    the comment pipeline.
     """
     try:
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
@@ -158,7 +162,7 @@ def _load_blocked_subreddits():
         blocked = set()
         bans = config.get("subreddit_bans") or {}
         if isinstance(bans, dict):
-            for s in bans.get("banned") or []:
+            for s in bans.get("comment_blocked") or []:
                 blocked.add(s.lower())
         blocked.update(s.lower() for s in config.get("exclusions", {}).get("subreddits", []))
         return blocked
@@ -239,7 +243,7 @@ def cmd_search(args):
     already_posted = {row[0] for row in cur.fetchall()}
     conn.close()
 
-    blocked_subs = _load_blocked_subreddits()
+    blocked_subs = _load_comment_blocked_subs()
 
     # Determine subreddit scoping
     target_subs = None
@@ -259,7 +263,7 @@ def cmd_fetch(args):
     import re as _re
     sub_match = _re.search(r'/r/([^/]+)', args.url)
     if sub_match:
-        blocked = _load_blocked_subreddits()
+        blocked = _load_comment_blocked_subs()
         if sub_match.group(1).lower() in blocked:
             print(json.dumps({"error": "subreddit_blocked", "subreddit": sub_match.group(1)}))
             return
