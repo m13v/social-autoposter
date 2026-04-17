@@ -493,11 +493,12 @@ If the CDP script returns {ok:false} (Reddit Chat SPA may not render via CDP), f
 2. Type the reply in the message input
 3. Press Enter to send
 
-**LinkedIn Messages** (Python CDP script, no browser MCP needed):
-\`\`\`bash
-cd ~/social-autoposter && python3 scripts/linkedin_browser.py send-dm "THREAD_URL" "YOUR_REPLY_TEXT"
-\`\`\`
-Returns JSON with {ok: true, thread_url, verified} on success.
+**LinkedIn Messages** (mcp__linkedin-agent__* tools ONLY, no Python CDP, no /voyager/api/):
+1. mcp__linkedin-agent__browser_navigate to THREAD_URL.
+2. browser_snapshot. If you see login, captcha, or checkpoint, STOP and print SESSION_INVALID. Do not attempt to re-login.
+3. Find the message input by aria-label (typically "Write a message"). Use mcp__linkedin-agent__browser_type to enter YOUR_REPLY_TEXT.
+4. Click the Send button (aria-label "Send", role=button) via mcp__linkedin-agent__browser_click. Do NOT press Enter to send (Enter inserts newline in LinkedIn's contenteditable).
+5. browser_snapshot and confirm the message appears in the thread as the newest outbound bubble. If not visible, mark this convo as failed (do not retry more than once per run).
 
 **X/Twitter DMs** (Python CDP script, no browser MCP needed):
 \`\`\`bash
