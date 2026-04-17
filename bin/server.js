@@ -88,39 +88,31 @@ function isJobLoaded(label) {
   } catch { return false; }
 }
 
-// Batched snapshot: one launchctl list, one ps -ax, one log readdir.
-// Every per-request helper reads from this instead of forking its own
-// subprocess. Cuts /api/status from ~35s to <1s by replacing ~70
-// execSync forks with 3.
+// Batched snapshot: one launchctl list + one log readdir. Every per-request
+// helper reads from this instead of forking its own subprocess.
+//
+// Running-status detection uses launchd's own PID for the job (column 1 of
+// `launchctl list`), NOT a ps/pgrep scan. The pgrep-by-script-path approach
+// breaks for wrapper scripts that `exec` into a shared script (e.g.
+// octolens-reddit.sh -> octolens.sh --platform reddit): after exec the PID is
+// preserved but the command line no longer contains the wrapper's path, so
+// pgrep -f misses it. launchd tracks by fork, not argv, so its PID survives
+// exec and correctly reflects whether the job is alive.
 function buildBatchSnapshot() {
   const loadedLabels = new Set();
+  const pidByLabel = new Map();
   try {
     const out = execSync('launchctl list', { stdio: 'pipe', maxBuffer: 8 * 1024 * 1024 }).toString();
-    // Format: "PID\tStatus\tLabel\n". Skip header.
+    // Format: "PID\tStatus\tLabel\n". PID is "-" when the job is loaded but
+    // not currently running. Skip header.
     for (const line of out.split('\n').slice(1)) {
       const parts = line.split('\t');
-      if (parts.length >= 3 && parts[2].startsWith('com.m13v.social-')) {
-        loadedLabels.add(parts[2]);
-      }
-    }
-  } catch {}
-
-  // One ps -ax scan bucketed by script path. Matches scripts in
-  // social-autoposter/skill/ and /scripts/ — the only paths getJobPids and
-  // getPidsForScriptPath ever query. Bucketing is by substring match on
-  // scriptPath, which mirrors pgrep -f semantics.
-  const pidsByScript = new Map();
-  const allSocialPids = [];
-  try {
-    const out = execSync('ps -axo pid=,command=', { stdio: 'pipe', maxBuffer: 16 * 1024 * 1024 }).toString();
-    for (const line of out.split('\n')) {
-      const m = line.match(/^\s*(\d+)\s+(.*)$/);
-      if (!m) continue;
-      const pid = parseInt(m[1], 10);
-      const cmd = m[2];
-      if (cmd.includes('/social-autoposter/')) {
-        allSocialPids.push({ pid, cmd });
-      }
+      if (parts.length < 3) continue;
+      const label = parts[2];
+      if (!label.startsWith('com.m13v.social-')) continue;
+      loadedLabels.add(label);
+      const pid = parseInt(parts[0], 10);
+      if (!isNaN(pid)) pidByLabel.set(label, pid);
     }
   } catch {}
 
@@ -128,18 +120,12 @@ function buildBatchSnapshot() {
     try { return fs.readdirSync(LOG_DIR); } catch { return []; }
   })();
 
-  return { loadedLabels, allSocialPids, pidsByScript, logFiles };
+  return { loadedLabels, pidByLabel, logFiles };
 }
 
-function pidsForScriptFromSnapshot(snap, scriptPath) {
-  if (!scriptPath) return [];
-  if (snap.pidsByScript.has(scriptPath)) return snap.pidsByScript.get(scriptPath);
-  const hits = [];
-  for (const { pid, cmd } of snap.allSocialPids) {
-    if (cmd.includes(scriptPath)) hits.push(pid);
-  }
-  snap.pidsByScript.set(scriptPath, hits);
-  return hits;
+function pidsForLabelFromSnapshot(snap, label) {
+  const pid = snap.pidByLabel.get(label);
+  return pid ? [pid] : [];
 }
 
 function lastLogFromSnapshot(snap, job) {
@@ -167,14 +153,6 @@ function runLaunchctl(action, agentLink) {
   const stderr = (r.stderr || '').trim();
   const ok = r.status === 0 && !/failed/i.test(stderr);
   return { ok, stderr, status: r.status };
-}
-
-function getJobPids(script) {
-  try {
-    const scriptPath = path.join(DEST, 'skill', script);
-    const out = execSync(`pgrep -f "${scriptPath}"`, { stdio: 'pipe' }).toString().trim();
-    return out.length > 0 ? out.split('\n').map(p => parseInt(p, 10)) : [];
-  } catch { return []; }
 }
 
 function getPlistInterval(plistPath) {
@@ -369,12 +347,15 @@ function deriveName(label) {
     .join(' ');
 }
 
-function getPidsForScriptPath(scriptPath) {
-  if (!scriptPath) return [];
+// Returns the PID launchd currently tracks for a given job label, or null if
+// the job is loaded-but-idle or not loaded. Uses `launchctl list <label>`,
+// which survives `exec` in wrapper scripts (pgrep -f does not).
+function getLaunchdPid(label) {
   try {
-    const out = execSync(`pgrep -f "${scriptPath}"`, { stdio: 'pipe' }).toString().trim();
-    return out.length > 0 ? out.split('\n').map(p => parseInt(p, 10)).filter(n => !isNaN(n)) : [];
-  } catch { return []; }
+    const out = execSync(`launchctl list ${label}`, { stdio: 'pipe' }).toString();
+    const m = out.match(/"PID"\s*=\s*(\d+);/);
+    return m ? parseInt(m[1], 10) : null;
+  } catch { return null; }
 }
 
 // Returns a display string for a plist's schedule, handling both StartInterval
@@ -463,8 +444,7 @@ function handleApi(req, res) {
     const jobs = JOBS.map(job => {
       const plistPath = path.join(LAUNCHD_DIR, job.plist);
       const loaded = snap.loadedLabels.has(job.label);
-      const scriptPath = path.join(DEST, 'skill', job.script);
-      const pids = pidsForScriptFromSnapshot(snap, scriptPath);
+      const pids = pidsForLabelFromSnapshot(snap, job.label);
       const running = pids.length > 0;
       const interval = getPlistInterval(plistPath);
       const lastLog = lastLogFromSnapshot(snap, job);
@@ -495,7 +475,7 @@ function handleApi(req, res) {
       .filter(d => !matrixLabels.has(d.label))
       .map(d => {
         const loaded = snap.loadedLabels.has(d.label);
-        const pids = pidsForScriptFromSnapshot(snap, d.scriptPath);
+        const pids = pidsForLabelFromSnapshot(snap, d.label);
         const running = pids.length > 0;
         const status = running ? 'running' : loaded ? 'scheduled' : 'stopped';
         const scriptBasename = d.scriptPath ? path.basename(d.scriptPath) : null;
@@ -622,7 +602,8 @@ function handleApi(req, res) {
     const label = decodeURIComponent(stopMatch[1]);
     const job = findJob(label);
     if (!job) return json(res, { error: 'Unknown job' }, 404);
-    const pids = getPidsForScriptPath(job.scriptPath);
+    const launchdPid = getLaunchdPid(label);
+    const pids = launchdPid ? [launchdPid] : [];
     for (const pid of pids) {
       try { process.kill(pid, 'SIGTERM'); } catch {}
     }
