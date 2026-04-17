@@ -97,25 +97,48 @@ def _match_author(comment_author, target_author):
     return t_first and (t_first in c or c in t_first)
 
 
-def fetch_comments(url, settle_ms=5000):
+def fetch_comments(url, target_urn=None, settle_ms=4000, max_expand_rounds=6):
+    """Load page and aggressively expand comments until the target URN appears
+    (or we run out of expansion rounds)."""
     from playwright.sync_api import sync_playwright
+
+    expand_js = r"""() => {
+      const btns = Array.from(document.querySelectorAll('button, a[role="button"]'));
+      const labels = /(show|load|see)\s+(more|all|previous|next|earlier)|view\s+(all|more)\s+(repl|comment)|more\s+comments|\d+\s+more\s+(comment|repl)/i;
+      let clicked = 0;
+      for (const b of btns) {
+        const t = (b.innerText||'').trim();
+        if (t && labels.test(t)) { try { b.click(); clicked++; } catch(e){} }
+      }
+      return clicked;
+    }"""
+
+    has_target_js = r"""(targetUrn) => {
+      if (!targetUrn) return false;
+      const key = 'replaceableComment_' + targetUrn;
+      return !!document.querySelector(`[componentkey="${key.replace(/"/g,'\\"')}"]`);
+    }"""
 
     with sync_playwright() as p:
         browser, page, is_cdp = lb.get_browser_and_page(p)
         try:
             page.goto(url, wait_until="domcontentloaded")
             page.wait_for_timeout(settle_ms)
-            try:
-                page.evaluate("window.scrollBy(0, 1200)")
-                page.wait_for_timeout(1500)
-                # expand collapsed reply threads when visible
-                page.evaluate(r"""() => {
-                  const btns = Array.from(document.querySelectorAll('button'));
-                  for (const b of btns) if (/show|load|view.*repl/i.test(b.innerText||'')) b.click();
-                }""")
-                page.wait_for_timeout(2000)
-            except Exception:
-                pass
+            for _ in range(max_expand_rounds):
+                try:
+                    page.evaluate("window.scrollBy(0, 2000)")
+                    page.wait_for_timeout(800)
+                    clicked = page.evaluate(expand_js)
+                    if clicked:
+                        page.wait_for_timeout(1800)
+                except Exception:
+                    pass
+                if target_urn:
+                    try:
+                        if page.evaluate(has_target_js, target_urn):
+                            break
+                    except Exception:
+                        pass
             return page.evaluate(JS_EXTRACTOR)
         finally:
             if not is_cdp:
@@ -144,12 +167,13 @@ def pick_reply(comments, target_author):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: linkedin_comment_fetch.py <comment_url> [target_author]", file=sys.stderr)
+        print("Usage: linkedin_comment_fetch.py <comment_url> [target_author] [target_urn]", file=sys.stderr)
         sys.exit(2)
     url = sys.argv[1]
     target = sys.argv[2] if len(sys.argv) > 2 else None
-    page_data = fetch_comments(url)
-    result = {"url": url, "target_author": target, "all": page_data}
+    target_urn = sys.argv[3] if len(sys.argv) > 3 else None
+    page_data = fetch_comments(url, target_urn=target_urn)
+    result = {"url": url, "target_author": target, "target_urn": target_urn, "all": page_data}
     if target:
         result["picked"] = pick_reply(page_data.get("comments", []), target)
     print(json.dumps(result, indent=2, ensure_ascii=False))
