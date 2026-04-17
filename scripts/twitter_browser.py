@@ -99,10 +99,18 @@ def find_twitter_cdp_port():
 
 
 _LOCK_SESSION_ID = f"python:{os.getpid()}"
+_LOCK_INHERITED = False
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
 def _release_browser_lock():
-    """Release the lock if we hold it."""
+    """Release the lock if we hold it.
+
+    If we inherited the lock from a Claude session (UUID holder), leave it for
+    the hook/session-end handler to release — don't clobber the parent's lock.
+    """
+    if _LOCK_INHERITED:
+        return
     try:
         if os.path.exists(LOCK_FILE):
             with open(LOCK_FILE) as f:
@@ -119,21 +127,30 @@ atexit.register(_release_browser_lock)
 def _acquire_browser_lock():
     """Check if another session holds the Twitter browser lock, then acquire it.
 
-    Raises SystemExit if the lock is held by another session.
-    Writes our own lock so MCP agents know the profile is in use.
+    Claude Code does not export session_id to subprocesses, so we can't directly
+    match our parent session. But the PreToolUse hook (twitter-agent-lock.sh)
+    enforces one Claude UUID owner at a time: any other Claude session would
+    have been blocked before it could reach this script via Bash. So if the
+    current lock is held by a UUID-style id, it must be our parent — inherit
+    it instead of failing. Only python:PID holders represent a real conflict.
     """
+    global _LOCK_SESSION_ID, _LOCK_INHERITED
     if os.path.exists(LOCK_FILE):
         try:
             with open(LOCK_FILE) as f:
                 lock = json.load(f)
             age = time.time() - lock.get("timestamp", 0)
+            holder = lock.get("session_id", "")
             if age < LOCK_EXPIRY:
-                holder = lock.get("session_id", "unknown")
-                print(json.dumps({
-                    "success": False,
-                    "error": f"Twitter browser is locked by session {holder} ({int(age)}s ago). Skipping."
-                }))
-                sys.exit(1)
+                if _UUID_RE.match(holder or ""):
+                    _LOCK_SESSION_ID = holder
+                    _LOCK_INHERITED = True
+                else:
+                    print(json.dumps({
+                        "success": False,
+                        "error": f"Twitter browser is locked by session {holder} ({int(age)}s ago). Skipping."
+                    }))
+                    sys.exit(1)
         except (json.JSONDecodeError, OSError):
             pass
     with open(LOCK_FILE, "w") as f:
