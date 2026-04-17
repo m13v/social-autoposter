@@ -63,7 +63,7 @@ launchd  ──▶  skill/run-{platform}.sh  ──▶  claude -p  --strict-mcp-
                        │                                                       │
                        │                                                       └──▶  ~/.claude/browser-profiles/{platform}/  (persistent userDataDir)
                        │
-                       ├──▶  scripts/find_{tweets,threads}.py  (no browser, API + DB dedup)
+                       ├──▶  scripts/find_threads.py, top_twitter_queries.py  (no browser, API + DB dedup)
                        ├──▶  scripts/pick_project.py            (weighted project rotation)
                        ├──▶  scripts/top_performers.py          (feedback report from past stats)
                        └──▶  Neon Postgres                      (DATABASE_URL in .env)

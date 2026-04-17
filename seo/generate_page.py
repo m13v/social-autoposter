@@ -5,8 +5,9 @@ Unified SEO page generator.
 Called by run_serp_pipeline.sh (discovery) and run_gsc_pipeline.sh (proven demand).
 Also usable directly for manual/adhoc triggers. Future pipelines just call generate().
 
-Design: no templates. Creative brief prompt + dynamic component discovery from the
-target repo. Claude decides structure, angle, and content. The generator enforces
+Design: no templates. Creative brief prompt + dynamic palette loaded from
+`@m13v/seo-components`'s registry.json (in the consumer repo's node_modules).
+Claude decides structure, angle, and content. The generator enforces
 observability (stream-json tool capture) and verification (commit lands on
 origin/main, live URL 200) before marking state done.
 
@@ -34,6 +35,13 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent
 CONFIG_PATH = ROOT_DIR / "config.json"
+
+# Dev-mode fallback path for the seo-components registry. In production the
+# generator reads the registry from the consumer repo's node_modules copy of
+# @m13v/seo-components. If that file is missing (e.g. the consumer hasn't
+# upgraded yet) we fall back to the local source checkout so local dev keeps
+# working. Hard error only if both are missing.
+LOCAL_SEO_COMPONENTS_REGISTRY = Path.home() / "seo-components" / "registry.json"
 
 # Load .env so DATABASE_URL is available when we import db_helpers
 ENV_PATH = ROOT_DIR / ".env"
@@ -141,6 +149,121 @@ def format_source_block(sources: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+def load_component_registry(repo_path: str) -> dict:
+    """Load registry.json that describes the @m13v/seo-components palette.
+
+    The registry is the single source of truth for which components exist and
+    how they are described to Claude. It ships inside the npm package at
+    `node_modules/@m13v/seo-components/registry.json`. Fall back to the local
+    seo-components checkout during development.
+    """
+    candidates = [
+        Path(repo_path) / "node_modules" / "@m13v" / "seo-components" / "registry.json",
+        LOCAL_SEO_COMPONENTS_REGISTRY,
+    ]
+    for p in candidates:
+        if p.is_file():
+            with open(p) as f:
+                return json.load(f)
+    tried = "\n  ".join(str(p) for p in candidates)
+    raise SystemExit(
+        "registry.json not found for @m13v/seo-components. Tried:\n"
+        f"  {tried}\n"
+        "Upgrade @m13v/seo-components to >= 0.10.0 in the consumer repo, or "
+        "ensure the local source checkout has a registry.json."
+    )
+
+
+def _components_in_group(registry: dict, group_key: str) -> list[dict]:
+    return [c for c in registry.get("components", []) if c.get("group") == group_key]
+
+
+def _components_with_quota_tag(registry: dict, tag: str) -> list[dict]:
+    out = []
+    for c in registry.get("components", []):
+        if tag in (c.get("quotaTags") or []):
+            out.append(c)
+    return out
+
+
+def _quota_names(registry: dict, tag: str) -> list[str]:
+    """Expand quota-tagged components into the specific React component names.
+
+    An entry like 'AnimatedMetric / MetricsRow' ships a `componentNames` list
+    so each underlying component gets enumerated in the quota line.
+    """
+    names: list[str] = []
+    for c in _components_with_quota_tag(registry, tag):
+        for n in c.get("componentNames") or [c["name"]]:
+            if n not in names:
+                names.append(n)
+    return names
+
+
+def render_palette(registry: dict) -> str:
+    """Render the '### Available components' block from the registry."""
+    lines: list[str] = []
+    header = registry.get("header", "### Available components")
+    lines.append(header)
+    lines.append("")
+
+    for group in registry.get("groups", []):
+        items = _components_in_group(registry, group["key"])
+        mode = group.get("renderMode", "list")
+        heading = group["heading"]
+
+        if mode == "inline":
+            names = ", ".join(c["name"] for c in items)
+            trailing = group.get("trailingNote", "")
+            trailing_part = f", {trailing}" if trailing else ""
+            lines.append(f"{heading}: {names}{trailing_part}")
+            lines.append("")
+        else:
+            lines.append(heading)
+            for c in items:
+                sig = c.get("signature", "").strip()
+                desc = c.get("description", "").strip()
+                sig_part = f" {sig}" if sig else ""
+                sep = " — " if desc else ""
+                lines.append(f"- `{c['name']}`{sig_part}{sep}{desc}")
+            lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_quotas(registry: dict) -> str:
+    """Render the '### Mandatory component diversity' block with dynamic names.
+
+    Rule text is policy and stays in this generator. Only the component name
+    lists are pulled from the registry, so adding a new magic-ui component with
+    `quotaTags: ['magic-mandatory']` will extend the quota automatically.
+    """
+    video_names = ", ".join(f"`{n}`" for n in _quota_names(registry, "video-mandatory"))
+    magic_names = ", ".join(f"`{n}`" for n in _quota_names(registry, "magic-mandatory"))
+    visual_rich_names = ", ".join(_quota_names(registry, "visual-rich-mandatory"))
+
+    return f"""### Mandatory component diversity (non-negotiable)
+
+A page that only uses code blocks, diagrams, and tables is not rich enough. Every page MUST satisfy ALL of the following quotas, distinct components only:
+
+1. **At least ONE "video-style" component**, from this group: {video_names}.
+   - Prefer `RemotionClip` for the hero / concept intro (it literally renders a Remotion composition live). Use `MotionSequence` if you want a longer narrative with visual frames. If you cannot think of what to put in it, use `RemotionClip` with the product name as the title, a one-line subtitle, and 4-5 captions that capture the angle.
+
+2. **At least TWO Magic UI style components**, from this group: {magic_names}.
+   - `ShimmerButton` counts toward this quota only if it is the primary CTA, not decoration.
+   - `GradientText` counts only if it wraps a meaningful word or phrase in a heading, not an entire paragraph.
+   - `Marquee` is an excellent fit for "works with" or "trusted by" strips, integration logos, or feature chip rows.
+   - `AnimatedBeam` fits any "inputs → system → outputs" story. If your angle involves the product receiving, processing, and returning something, this is almost always a win.
+   - `OrbitingCircles` fits ecosystem / integrations stories.
+   - `NumberTicker` should appear inside any metric section that uses concrete numbers.
+   - `BackgroundGrid` should wrap the hero section or a high-signal callout.
+
+3. **At least THREE components total** from the "Visual content" and "Rich layout and animation" groups ({visual_rich_names}).
+
+A page that satisfies (3) but not (1) and (2) is incomplete. If your angle genuinely does not want a video component, you still need one — use `RemotionClip` for the hero intro or `MotionSequence` to open the page. This is a hard requirement, not a suggestion.
+"""
+
+
 def build_prompt(product: str, keyword: str, slug: str, trigger: str,
                  product_cfg: dict, source_block: str,
                  content_type: str = "guide") -> str:
@@ -163,6 +286,10 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
     primary_path = ct["path_candidates"][0].format(slug=slug)
     example_dirs_str = ", ".join(f"`{repo}/{d}`" for d in ct["example_dirs"])
     page_url = f"{website.rstrip('/')}{route_prefix}{slug}"
+
+    registry = load_component_registry(repo)
+    palette_block = render_palette(registry)
+    quotas_block = render_quotas(registry)
 
     type_context = {
         "guide": "This is a general guide/explainer page. You have the most creative freedom here — the angle, section shape, and length are all yours.",
@@ -223,54 +350,7 @@ If you cannot fill in all four lines with specific non-generic answers, stop and
 
 You are working in an existing website repo with a shared SEO component library (`@seo/components`). Import everything from `@seo/components`. If the repo also has local components (e.g. in `@/components/`), you may use those too.
 
-### Available components
-
-**Trust signals** (required, see below): Breadcrumbs, ArticleMeta, ProofBand, FaqSection, JSON-LD helpers (articleSchema, breadcrumbListSchema, faqPageSchema, howToSchema).
-
-**⭐ Video + motion graphics (MANDATORY — pick at least one):**
-- `RemotionClip` (title, subtitle?, captions[], accent?, durationInFrames?) — real Remotion-powered video clip rendered live in the browser via `@remotion/player`. Uses the built-in `ConceptReveal` composition: a gradient background, animated title/subtitle, and a stack of captions that spring in one by one. **This is the single highest-signal component in this library.** Use for concept intros, product pitches, or angle-defining hero animations. Max 4-6 captions per clip.
-- `MotionSequence` (title?, frames[], defaultDuration?, loop?) — timeline animation powered by framer-motion. Plays through a list of frames automatically when scrolled into view, each frame has a duration, title, body, and optional `visual` React node. Feels like an embedded explainer video without adding a video file. Use for "watch it work" concept animations or step-by-step conceptual walkthroughs.
-- `LottiePlayer` (animationData or src) — Lottie JSON player using `lottie-react`. Use when you have a production-grade motion graphic exported from LottieFiles. Only use if you will create the JSON file in `public/` yourself.
-
-**⭐ Magic UI style high-signal components (MANDATORY — pick at least TWO):**
-- `AnimatedBeam` (from[], hub, to[], title?) — Magic UI style animated beam diagram with a central hub connecting sources on the left to destinations on the right. Glowing teal beams travel along each connection. Use for "pipeline," "integration," or "how data flows" visualizations. **Almost always a good fit if the product receives, processes, and returns something.**
-- `OrbitingCircles` (center, items[], radius?, duration?, reverse?) — central element with smaller items revolving around it on a dashed orbit ring. Use for ecosystem / integrations / "works with everything" showcases.
-- `Marquee` (children, speed?, reverse?, pauseOnHover?, fade?) — infinite horizontal marquee. Wrap logos, testimonials, feature pills, or mini metric cards. Edges fade softly. Pauses on hover. Use for "trusted by," "works with," or a chip row of competitor names.
-- `NumberTicker` (value, decimals?, prefix?, suffix?) — spring-animated number that counts up from 0 when it scrolls into view. Use inside any metric section. Example: `<NumberTicker value={94} suffix="%" />`.
-- `ShimmerButton` (children, href?) — premium pill CTA button with a continuous diagonal light shimmer sweeping across it. Use as the hero CTA.
-- `GradientText` (children, variant?, animate?) — inline gradient text treatment for hero headings. Cyan → teal gradient, optionally animated. Wraps a meaningful word or phrase.
-- `BackgroundGrid` (children, pattern?, glow?) — Vercel/Linear style wrapper with a subtle dot or line grid background and a soft radial teal glow. Wrap hero sections, standout callouts, or anchor-fact blocks.
-- `MorphingText` (texts[]) — cycles through an array of strings with blur/opacity morph transitions. Use for hero headings that rotate through benefit phrases or product capabilities.
-- `Particles` (color?, quantity?, size?) — canvas-based floating particle background that follows the mouse cursor. Use as a background layer inside a `BackgroundGrid` or standalone hero wrapper.
-- `ShineBorder` (children, color?, borderWidth?, duration?) — wrapper with an animated rotating radial-gradient border (shine effect). Use around key callout cards, pricing, or feature highlights for a premium look.
-- `TextShimmer` (children, duration?, spread?) — inline text with a sweeping teal shimmer highlight. Use for a single standout phrase, stat, or brand name.
-- `TypingAnimation` (text, duration?) — typewriter effect that reveals text character by character. Use for terminal-style headings, command examples, or "what you can build" intros.
-
-**Visual content** (pick at least 3 distinct from here + Rich layout, as below):
-- `AnimatedCodeBlock` (code, language?, filename?, typingSpeed?) — syntax-highlighted code with typing animation. Use when showing real code, config, or CLI commands from the product.
-- `TerminalOutput` (lines[], title?) — terminal session with command/output/success/error lines. Use when showing what happens when you run something.
-- `FlowDiagram` (title, steps[]) — visual step-by-step flow with arrows. Use when explaining a process or architecture.
-- `SequenceDiagram` (title, actors[], messages[]) — SVG sequence diagram with lifelines. Use when showing how components communicate.
-- `CodeComparison` (leftCode, rightCode, leftLabel, rightLabel, title?) — side-by-side before/after. Use when showing what the product replaces or simplifies.
-- `AnimatedChecklist` (title, items[]) — animated checklist with checkmarks. Use for feature lists or requirement breakdowns.
-- `AnimatedMetric` / `MetricsRow` (metrics[]) — animated number counters. Use when you have real metrics (boot time, build count, response time).
-- `InlineTestimonial` (quote, name, role?, stars?) — testimonial card. Use when you can reference a real user or credible source.
-- `ComparisonTable` (productName, competitorName, rows[]) — feature comparison grid. Use for versus/alternative pages.
-- `ProofBanner` (quote, source?, metric) — compact proof with large metric. Use for a standout stat mid-page.
-- `AnimatedSection` (delay?) — scroll-triggered fade-in wrapper. Use to stagger content reveals.
-
-**Rich layout and animation components:**
-- `BentoGrid` (cards[]) — bento grid layout with varying card sizes (1x1, 2x1, 1x2, 2x2). Cards have title, description, optional accent color and custom content. Use for feature overviews, capability showcases, or "what you get" sections. Do NOT pass decorative emoji as the card icon.
-- `BeforeAfter` (before, after, title?) — animated tab toggle between "before" and "after" states. Each side has content text and highlight bullets (red X marks for before, green checks for after). Use for workflow comparisons, migration stories, or problem/solution sections.
-- `AnimatedDemo` (title, steps[], code?) — animated product demo that auto-plays through steps. Shows a dark "screen" with step content, progress bar, and step indicators. Optional collapsible code panel showing "How to build this." Use for walkthroughs, feature demos, or "watch it work" sections.
-- `GlowCard` (children) — card with mouse-tracking glow effect (like Linear/Stripe). Glow follows cursor on hover. Use as a wrapper around feature highlights or key content blocks for premium feel.
-- `ParallaxSection` (children, background?, intensity?) — section with parallax scrolling effect. Background moves at a different speed than foreground content. Use for hero-style visual breaks between content sections.
-- `StepTimeline` (title?, steps[]) — vertical timeline with animated line drawing and staggered step reveals. Each step has a numbered dot, title, description, and optional detail panel. Use for processes, setup guides, or "how it works" narratives.
-
-**CTAs:**
-- `InlineCta` (heading, body, linkText?, href?) — inline CTA block with PostHog tracking.
-- `StickyBottomCta` (description, buttonLabel, href) — fixed bottom bar that appears on scroll. Use instead of (or alongside) InlineCta for variety.
-
+{palette_block}
 ### Differentiation rule
 
 **Do NOT clone the structure of existing pages.** Read one existing page in {example_dirs_str} ONLY to understand the import syntax and color conventions. Do NOT copy its section ordering, component selection, or layout pattern.
@@ -284,26 +364,7 @@ Each page must feel editorially distinct. Pick visual components that match YOUR
 
 You must use at least 3 visual content components (not counting trust signals). Using only prose sections with no visual components is a failure.
 
-### Mandatory component diversity (non-negotiable)
-
-A page that only uses code blocks, diagrams, and tables is not rich enough. Every page MUST satisfy ALL of the following quotas, distinct components only:
-
-1. **At least ONE "video-style" component**, from this group: `RemotionClip`, `MotionSequence`.
-   - Prefer `RemotionClip` for the hero / concept intro (it literally renders a Remotion composition live). Use `MotionSequence` if you want a longer narrative with visual frames. If you cannot think of what to put in it, use `RemotionClip` with the product name as the title, a one-line subtitle, and 4-5 captions that capture the angle.
-
-2. **At least TWO Magic UI style components**, from this group: `Marquee`, `AnimatedBeam`, `OrbitingCircles`, `NumberTicker`, `ShimmerButton`, `GradientText`, `BackgroundGrid`.
-   - `ShimmerButton` counts toward this quota only if it is the primary CTA, not decoration.
-   - `GradientText` counts only if it wraps a meaningful word or phrase in a heading, not an entire paragraph.
-   - `Marquee` is an excellent fit for "works with" or "trusted by" strips, integration logos, or feature chip rows.
-   - `AnimatedBeam` fits any "inputs → system → outputs" story. If your angle involves the product receiving, processing, and returning something, this is almost always a win.
-   - `OrbitingCircles` fits ecosystem / integrations stories.
-   - `NumberTicker` should appear inside any metric section that uses concrete numbers.
-   - `BackgroundGrid` should wrap the hero section or a high-signal callout.
-
-3. **At least THREE components total** from the "Visual content" and "Rich layout and animation" groups (FlowDiagram, SequenceDiagram, CodeComparison, AnimatedChecklist, AnimatedMetric, MetricsRow, AnimatedCodeBlock, TerminalOutput, BentoGrid, BeforeAfter, AnimatedDemo, GlowCard, ParallaxSection, StepTimeline, InlineTestimonial, ComparisonTable, ProofBanner).
-
-A page that satisfies (3) but not (1) and (2) is incomplete. If your angle genuinely does not want a video component, you still need one — use `RemotionClip` for the hero intro or `MotionSequence` to open the page. This is a hard requirement, not a suggestion.
-
+{quotas_block}
 ### Lottie
 
 If you reference a Lottie animation via `LottiePlayer`, you MUST also create the JSON file at a real path in `public/` (e.g. `public/lottie/<slug>-hero.json`). Do not reference a Lottie path that does not exist. If you cannot produce a real Lottie JSON, skip it.
