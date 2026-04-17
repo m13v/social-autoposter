@@ -195,7 +195,9 @@ python3 "$REPO_DIR/scripts/fetch_twitter_t1.py" --batch-id "$BATCH_ID" 2>&1 | te
 
 # --- Phase 2b: Claude reads top 5 by delta, posts top 3 ---------------------
 CANDIDATES=$(psql "$DATABASE_URL" -t -A -F '|' -c "
-    SELECT id, tweet_url, author_handle, tweet_text, virality_score,
+    SELECT id, tweet_url, author_handle,
+           REPLACE(REPLACE(COALESCE(tweet_text, ''), E'\n', ' '), E'\r', ' '),
+           virality_score,
            COALESCE(delta_score, 0), matched_project, search_topic,
            likes_t1, retweets_t1, replies_t1, views_t1, author_followers,
            EXTRACT(EPOCH FROM (NOW() - tweet_posted_at))/3600
@@ -211,7 +213,7 @@ if [ -z "$CANDIDATES" ]; then
     exit 0
 fi
 
-CANDIDATE_COUNT=$(echo "$CANDIDATES" | wc -l | tr -d ' ')
+CANDIDATE_COUNT=$(printf '%s\n' "$CANDIDATES" | grep -c '^[0-9]')
 log "Top $CANDIDATE_COUNT candidates by delta selected for post review."
 
 CANDIDATE_BLOCK=""
