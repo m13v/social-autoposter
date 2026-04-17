@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# link-edit-github.sh — Edit existing GitHub issue comments to append a project link.
+# Uses the gh CLI (no browser needed). GitHub has no upvote system, so eligibility
+# is based on our comment being posted 6h+ ago (engagement = a reply in the issue thread).
+# Called by launchd (com.m13v.social-link-edit-github) every 6 hours.
+
+set -euo pipefail
+
+# Platform lock: wait up to 45min for any previous link-edit-github run, then skip
+source "$(dirname "$0")/lock.sh"
+acquire_lock "link-edit-github" 2700
+
+# Load secrets
+# shellcheck source=/dev/null
+[ -f "$HOME/social-autoposter/.env" ] && source "$HOME/social-autoposter/.env"
+
+REPO_DIR="$HOME/social-autoposter"
+SKILL_FILE="$REPO_DIR/SKILL.md"
+LOG_DIR="$REPO_DIR/skill/logs"
+
+if [ -z "${DATABASE_URL:-}" ]; then
+    echo "ERROR: DATABASE_URL not set in ~/social-autoposter/.env"
+    exit 1
+fi
+
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/link-edit-github-$(date +%Y-%m-%d_%H%M%S).log"
+
+log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
+
+RUN_START=$(date +%s)
+log "=== GitHub Link Edit Run: $(date) ==="
+
+EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
+    SELECT json_agg(q) FROM (
+        SELECT id, platform, our_url, our_content, thread_title, thread_url, upvotes, project_name
+        FROM posts
+        WHERE status='active'
+          AND platform='github'
+          AND posted_at < NOW() - INTERVAL '6 hours'
+          AND link_edited_at IS NULL
+          AND our_url IS NOT NULL
+        ORDER BY posted_at ASC
+    ) q;" 2>/dev/null || echo "")
+
+if [ "$EDITABLE" = "null" ] || [ -z "$EDITABLE" ]; then
+    log "No GitHub posts eligible for link edit"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "link_edit_github" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed $(( $(date +%s) - RUN_START ))
+    exit 0
+fi
+
+EDITABLE_COUNT=$(echo "$EDITABLE" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
+log "GitHub: $EDITABLE_COUNT posts eligible for link edit"
+
+PROMPT_FILE=$(mktemp)
+cat > "$PROMPT_FILE" <<PROMPT_EOF
+You are the Social Autoposter GitHub link-edit bot.
+
+Read $SKILL_FILE for the full workflow. Execute the GitHub link-edit phase only. GitHub edits are done via the gh CLI (no browser). GitHub has no upvote system; engagement = someone replied to our comment in the issue thread.
+
+GitHub posts eligible for editing:
+$EDITABLE
+
+Process ALL of them. For each post:
+1. Read ~/social-autoposter/config.json to get the projects list.
+2. Pick the project whose topics are the CLOSEST match to thread_title + our_content. Check the project_name column first; if set, use that project directly. Otherwise match by topics. Be generous: if the thread touches agents, automation, desktop, memory, or anything related to the project descriptions, it's a match. If truly nothing fits, mark it skipped (see step 9) and move on. Frame it as recommending a cool tool you've come across, NOT as something you built.
+3. If the matched project has a landing_pages config (with repo, base_url):
+   a. Think about what SEO-optimized guide page would fit this specific thread naturally. Consider the thread's audience, their pain points, industry jargon, and what they'd actually find useful. The page should NOT feel like a landing page; it should feel like a genuine 1000-2000 word guide or resource.
+   b. cd into the project repo (landing_pages.repo)
+   c. Look at existing pages under src/app/t/ to understand the site's style, layout components (Navbar, Footer), and theme
+   d. Create a NEW standalone page as src/app/t/{seo-friendly-slug}/page.tsx; this is a real Next.js page with its own Metadata export, not a JSON entry. Include:
+      - Proper <Metadata> with title, description, openGraph, twitter tags
+      - Reuse the site's Navbar and Footer components (import or inline them)
+      - Use the CTAButton component from @/components/cta-button for ALL call-to-action buttons (it tracks clicks in PostHog automatically). Import: import { CTAButton } from "@/components/cta-button";
+      - A full article-style page: hero headline, table of contents, 5-7 content sections, comparison tables with real numbers, bullet lists with specific data points, and a CTA section at the bottom
+      - The content must be 1000-2000 words. Pull real context from the project's config (pricing, features, proof_points, competitive_positioning) and from web research to make it concrete and authoritative
+      - Naturally mention the product as ONE solution among the options discussed; don't make the whole page a sales pitch
+   e. git add the new page && git commit -m "Add guide: SHORT_DESCRIPTION" && git push
+   f. Wait ~35s for Vercel deploy, then curl -sI {base_url}/t/{slug} to verify HTTP 200
+   g. Use THAT page URL in the link edit. If deploy fails, fall back to the project's website URL.
+   If no landing_pages config: use website if available, otherwise github.
+4. Write 1 sentence + project link (GitHub peer tone): "fwiw we have an implementation of this - URL"
+5. Extract OWNER/REPO from thread_url. Extract COMMENT_ID from our_url; if not directly available, use gh api to find our comment on that issue.
+6. Edit the existing comment (append the new line to the existing content) using gh:
+   gh api repos/OWNER/REPO/issues/comments/COMMENT_ID -X PATCH -f body="EXISTING_CONTENT
+
+   fwiw we have an implementation of this - URL"
+7. After each successful edit, update the DB:
+   psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='LINK_TEXT' WHERE id=POST_ID"
+8. COMMITMENT GUARDRAILS (never violate these):
+   - NEVER suggest, offer, or agree to calls, meetings, demos, or video chats.
+   - NEVER promise to share links, files, or resources you don't have right now. Only share links from config.json projects (plus any new landing page you just deployed).
+   - NEVER offer to DM or send anything outside the comment.
+   - NEVER make time-bound promises.
+9. If a post is SKIPPED (no project match, comment not found, issue locked, 404, bad URL), ALWAYS mark it so it won't be retried:
+   psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='SKIPPED: REASON' WHERE id=POST_ID"
+PROMPT_EOF
+
+gtimeout 1800 claude -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: GitHub link-edit claude exited with code $?"
+rm -f "$PROMPT_FILE"
+
+EDITED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE platform='github' AND link_edited_at IS NOT NULL;" 2>/dev/null || echo "0")
+log "GitHub link-edit complete. Total github posts edited (all-time): $EDITED"
+
+RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+python3 "$REPO_DIR/scripts/log_run.py" --script "link_edit_github" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
+
+find "$LOG_DIR" -name "link-edit-github-*.log" -mtime +7 -delete 2>/dev/null || true
+
+log "=== GitHub link-edit complete: $(date) ==="
