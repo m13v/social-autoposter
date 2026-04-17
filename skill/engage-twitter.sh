@@ -40,8 +40,14 @@ EXCLUDED_TWITTER=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.j
 # ═══════════════════════════════════════════════════════
 # PHASE A: Discover new replies/mentions from Twitter notifications
 # ═══════════════════════════════════════════════════════
-log "Phase A: Scanning Twitter mentions via API (no browser needed)..."
-python3 "$REPO_DIR/scripts/scan_twitter_mentions.py" --max 100 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase A scan_twitter_mentions.py exited with code $?"
+log "Phase A: Scanning Twitter mentions via browser (no API cost)..."
+NOTIFS_JSON=$(mktemp -t twitter_notifs.XXXXXX.json)
+python3 "$REPO_DIR/scripts/twitter_browser.py" notifications 8 > "$NOTIFS_JSON" 2>>"$LOG_FILE" \
+    || log "WARNING: twitter_browser.py notifications failed"
+python3 "$REPO_DIR/scripts/scan_twitter_mentions_browser.py" --json-file "$NOTIFS_JSON" 2>&1 \
+    | tee -a "$LOG_FILE" \
+    || log "WARNING: Phase A scan_twitter_mentions_browser.py exited with code $?"
+rm -f "$NOTIFS_JSON"
 
 # ═══════════════════════════════════════════════════════
 # PHASE B: Respond to pending Twitter replies
