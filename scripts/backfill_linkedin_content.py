@@ -36,10 +36,10 @@ def main():
         url = row[3] if isinstance(row, (list, tuple)) else row["their_comment_url"]
         old = row[4] if isinstance(row, (list, tuple)) else row["their_content"]
 
-        m = re.search(r"urn:li:activity:(\d+)", urn or "")
+        m = re.search(r"urn:li:(?:activity|ugcPost):(\d+)", urn or "")
         activity_id = m.group(1) if m else None
         if not activity_id:
-            m = re.search(r"activity[:%]3A(\d+)", url or "")
+            m = re.search(r"(?:activity|ugcPost)[:%]3A(\d+)", url or "")
             activity_id = m.group(1) if m else None
 
         if not activity_id or not urn:
