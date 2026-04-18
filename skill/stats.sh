@@ -203,10 +203,11 @@ Step 7: Close the browser tab (mcp__reddit-agent__browser_tabs action 'close', N
 Done. Report totals. Do NOT read any other files. Do NOT deviate from these steps.
 STEP2_EOF
     # Inject actual values
-    sed -i '' "s|REDDIT_USERNAME_PLACEHOLDER|$REDDIT_USERNAME|g" "$STEP2_PROMPT"
-    sed -i '' "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP2_PROMPT"
+    sed -i.bak "s|REDDIT_USERNAME_PLACEHOLDER|$REDDIT_USERNAME|g" "$STEP2_PROMPT"
+    sed -i.bak "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP2_PROMPT"
+    rm -f "${STEP2_PROMPT}.bak"
 
-    gtimeout 1200 claude -p "$(cat "$STEP2_PROMPT")" >> "$LOGFILE" 2>&1
+    gtimeout 1200 "$REPO_DIR/scripts/run_claude.sh" "stats-step2" -p "$(cat "$STEP2_PROMPT")" >> "$LOGFILE" 2>&1
     STEP2_EXIT=$?
     rm -f "$STEP2_PROMPT"
     if [ "$STEP2_EXIT" -eq 124 ]; then
@@ -385,11 +386,12 @@ Step 5: Close the browser tab (mcp__linkedin-agent__browser_tabs action 'close',
 Done. Report totals (found vs not-found). Do NOT read any other files. Do NOT deviate from these steps.
 STEP4_EOF
     LINKEDIN_NAME=$(python3 -c "import json; print(json.load(open('$REPO_DIR/config.json'))['accounts']['linkedin']['name'])" 2>/dev/null || echo "Matthew Diakonov")
-    sed -i '' "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP4_PROMPT"
-    sed -i '' "s|LINKEDIN_NAME_PLACEHOLDER|$LINKEDIN_NAME|g" "$STEP4_PROMPT"
-    sed -i '' "s|LINKEDIN_NAME_JS_PLACEHOLDER|$LINKEDIN_NAME|g" "$STEP4_PROMPT"
+    sed -i.bak "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP4_PROMPT"
+    sed -i.bak "s|LINKEDIN_NAME_PLACEHOLDER|$LINKEDIN_NAME|g" "$STEP4_PROMPT"
+    sed -i.bak "s|LINKEDIN_NAME_JS_PLACEHOLDER|$LINKEDIN_NAME|g" "$STEP4_PROMPT"
+    rm -f "${STEP4_PROMPT}.bak"
 
-    gtimeout 1800 claude -p "$(cat "$STEP4_PROMPT")" >> "$LOGFILE" 2>&1
+    gtimeout 1800 "$REPO_DIR/scripts/run_claude.sh" "stats-step4" -p "$(cat "$STEP4_PROMPT")" >> "$LOGFILE" 2>&1
     STEP4_EXIT=$?
     rm -f "$STEP4_PROMPT"
     if [ "$STEP4_EXIT" -eq 124 ]; then
