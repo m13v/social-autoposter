@@ -112,6 +112,26 @@ def classify_content_type(keyword: str) -> str:
     return "guide"
 
 
+def detect_consumer_theme(repo_path: str) -> str:
+    """Return 'dark' or 'light' based on the consumer repo's root layout."""
+    if not repo_path:
+        return "light"
+    candidates = [
+        Path(repo_path) / "src" / "app" / "layout.tsx",
+        Path(repo_path) / "app" / "layout.tsx",
+        Path(repo_path) / "src" / "app" / "(main)" / "layout.tsx",
+    ]
+    for p in candidates:
+        try:
+            content = p.read_text()
+        except (FileNotFoundError, OSError):
+            continue
+        if 'data-theme="dark"' in content or 'className="dark"' in content:
+            return "dark"
+        return "light"
+    return "light"
+
+
 def load_product_config(product: str) -> dict:
     with open(CONFIG_PATH) as f:
         cfg = json.load(f)
@@ -291,6 +311,7 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
     registry = load_component_registry(repo)
     palette_block = render_palette(registry)
     quotas_block = render_quotas(registry)
+    consumer_theme = detect_consumer_theme(repo)
 
     type_context = {
         "guide": "This is a general guide/explainer page. You have the most creative freedom here — the angle, section shape, and length are all yours.",
@@ -372,9 +393,28 @@ If you reference a Lottie animation via `LottiePlayer`, you MUST also create the
 
 ### Color palette (mandatory)
 
+CONSUMER THEME DETECTED: {consumer_theme}. The consumer site's root layout uses a {consumer_theme}-mode global, so your page MUST match. Using the wrong theme renders the article body as a contrasting slab between the navbar and footer.
+
+{'''DARK theme palette (use these exact classes, do NOT use the light palette below):
+
+- Article wrapper: `<article className="min-h-screen">` (no explicit bg; let the site-wide dark root show through). Never `bg-white`.
+- Headings: `text-zinc-100` (NOT text-zinc-900).
+- Body text: `text-zinc-400`. Muted/lede: `text-zinc-500`.
+- Primary pill: `bg-teal-900/30 text-teal-300`. Secondary pill: `bg-zinc-800/60 text-zinc-300`. Outline pill: `bg-transparent border border-zinc-800 text-zinc-300`.
+- Section bands: `bg-zinc-950/40 border-y border-zinc-800/60`.
+- Tinted boxes: `bg-teal-500/10 border border-teal-500/30`.
+- Inline code: `bg-zinc-900 border border-zinc-800 text-teal-300 font-mono`.
+- Dividers/borders: `border-zinc-800/60` (NOT border-zinc-200).
+- Links: `text-teal-300` (NOT text-teal-600). Accent gradients for CTAs: `from-cyan-500 to-teal-500` still works.
+- CTA button: `bg-teal-500 text-zinc-950 hover:bg-teal-400 font-semibold`.
+
+NEVER emit on a dark consumer: bg-white (solid), bg-zinc-50, bg-zinc-100, text-zinc-900, text-zinc-700, text-zinc-600, text-teal-700, text-teal-600, border-zinc-200, bg-teal-50. Translucent overlays like `bg-white/5` and `bg-black/30` are fine.
+
+NEVER use violet, indigo, or purple anywhere.''' if consumer_theme == 'dark' else '''LIGHT theme palette:
+
 bg-white base, text-zinc-900 for headings, text-zinc-500/text-gray-600 for secondary text. Accent colors: `from-cyan-500 to-teal-500` gradient for CTAs, `text-teal-600` for links, `bg-teal-50 text-teal-700` for badges/pills, `bg-teal-50 border-teal-200` for tinted boxes. NEVER use violet, indigo, or purple anywhere.
 
-Do NOT use Tailwind semantic theme tokens like `text-foreground`, `text-muted`, `bg-card`, `bg-background`, `bg-surface-light`, `border-border`, `border-white/5`. Those tokens are not wired for light pages and will render invisibly. Use explicit classes like `text-zinc-900`, `text-zinc-500`, `bg-white`, `bg-zinc-50`, `border-zinc-200`.
+Do NOT use Tailwind semantic theme tokens like `text-foreground`, `text-muted`, `bg-card`, `bg-background`, `bg-surface-light`, `border-border`, `border-white/5`. Those tokens are not wired for light pages and will render invisibly. Use explicit classes like `text-zinc-900`, `text-zinc-500`, `bg-white`, `bg-zinc-50`, `border-zinc-200`.'''}
 
 {"" if not accent_hex else f'''### Product accent color override
 
