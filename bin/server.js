@@ -1138,8 +1138,7 @@ const HTML = `<!DOCTYPE html>
 
 <div class="content hidden" id="tab-activity">
   <div class="activity-controls">
-    <div class="activity-filter-group" id="activity-type-filters"></div>
-    <div class="activity-filter-group" id="activity-platform-filters"></div>
+    <input type="text" id="activity-search" placeholder="Search all fields&hellip;" class="activity-search" />
     <div class="activity-status">
       <span class="activity-live-dot"></span>
       <span id="activity-status-text">live</span>
@@ -1150,10 +1149,27 @@ const HTML = `<!DOCTYPE html>
     <table class="activity-table">
       <thead>
         <tr>
-          <th style="width:140px;">Event</th>
-          <th style="width:200px;">Project</th>
-          <th>What</th>
+          <th style="width:170px;" class="activity-sortable" data-sort="occurred_at">
+            <span class="activity-header-label">Event <span class="activity-sort-arrow" data-sort-arrow="occurred_at"></span></span>
+          </th>
+          <th style="width:220px;" class="activity-sortable" data-sort="project">
+            <span class="activity-header-label">Project <span class="activity-sort-arrow" data-sort-arrow="project"></span></span>
+          </th>
+          <th class="activity-sortable" data-sort="summary">
+            <span class="activity-header-label">What <span class="activity-sort-arrow" data-sort-arrow="summary"></span></span>
+          </th>
           <th style="width:40px;"></th>
+        </tr>
+        <tr class="activity-filter-row">
+          <th>
+            <div class="activity-filter-stack">
+              <div class="activity-filter-group" id="activity-type-filters"></div>
+              <div class="activity-filter-group" id="activity-platform-filters"></div>
+            </div>
+          </th>
+          <th><input type="text" id="activity-filter-project" placeholder="filter project/detail&hellip;" class="activity-col-filter" /></th>
+          <th><input type="text" id="activity-filter-summary" placeholder="filter what&hellip;" class="activity-col-filter" /></th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="activity-body">
@@ -1161,6 +1177,7 @@ const HTML = `<!DOCTYPE html>
       </tbody>
     </table>
   </div>
+  <div class="activity-pagination" id="activity-pagination"></div>
 </div>
 
 <div class="content hidden" id="tab-logs">
