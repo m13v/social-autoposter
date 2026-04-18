@@ -1068,9 +1068,10 @@ const HTML = `<!DOCTYPE html>
   .activity-event-cell { display: flex; flex-direction: column; gap: 4px; white-space: nowrap; }
   .activity-time { color: #6b7280; font-size: 12px; font-variant-numeric: tabular-nums; }
   .activity-platform { color: #a3a3a3; font-size: 12px; text-transform: lowercase; }
-  .activity-project { color: #a3a3a3; font-size: 12px; word-break: break-all; }
-  .activity-summary { color: #d4d4d4; line-height: 1.4; }
+  .activity-project-cell { display: flex; flex-direction: column; gap: 3px; }
+  .activity-project { color: #e5e5e5; font-size: 13px; font-weight: 500; word-break: break-all; }
   .activity-detail { color: #737373; font-size: 11px; font-family: 'SF Mono', monospace; word-break: break-word; }
+  .activity-summary { color: #d4d4d4; line-height: 1.4; }
   .activity-link { color: #60a5fa; text-decoration: none; font-size: 14px; opacity: 0.7; }
   .activity-link:hover { opacity: 1; }
 
@@ -1148,15 +1149,13 @@ const HTML = `<!DOCTYPE html>
       <thead>
         <tr>
           <th style="width:140px;">Event</th>
-          <th style="width:90px;">Platform</th>
-          <th style="width:120px;">Project</th>
+          <th style="width:200px;">Project</th>
           <th>What</th>
-          <th style="width:280px;">Detail</th>
           <th style="width:40px;"></th>
         </tr>
       </thead>
       <tbody id="activity-body">
-        <tr><td colspan="6" style="text-align:center;color:#6b7280;padding:40px;">Loading&hellip;</td></tr>
+        <tr><td colspan="4" style="text-align:center;color:#6b7280;padding:40px;">Loading&hellip;</td></tr>
       </tbody>
     </table>
   </div>
@@ -1718,7 +1717,7 @@ function renderActivity(events) {
   document.getElementById('activity-count').textContent =
     filtered.length + ' of ' + events.length + ' events';
   if (!filtered.length) {
-    body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#6b7280;padding:40px;">No matching events</td></tr>';
+    body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#6b7280;padding:40px;">No matching events</td></tr>';
     return;
   }
   const rows = filtered.map(e => {
@@ -1727,17 +1726,24 @@ function renderActivity(events) {
       ? '<a class="activity-link" href="' + escapeHtml(e.link) + '" target="_blank" rel="noopener" title="Open">&rarr;</a>'
       : '';
     const timeAbs = e.occurred_at ? new Date(e.occurred_at).toLocaleString() : '';
+    const detailHtml = e.detail
+      ? '<span class="activity-detail">(' + escapeHtml(e.detail) + ')</span>'
+      : '';
     return '<tr' + (isNew ? ' class="activity-row-new"' : '') + ' data-key="' + escapeHtml(e.key) + '">' +
       '<td title="' + escapeHtml(timeAbs) + '">' +
         '<div class="activity-event-cell">' +
           '<span class="activity-time">' + escapeHtml(relTime(e.occurred_at)) + '</span>' +
           '<span class="ev-pill ev-' + escapeHtml(e.type) + '">' + escapeHtml(EVENT_LABELS[e.type] || e.type) + '</span>' +
+          '<span class="activity-platform">' + escapeHtml(e.platform || '') + '</span>' +
         '</div>' +
       '</td>' +
-      '<td class="activity-platform">' + escapeHtml(e.platform || '') + '</td>' +
-      '<td class="activity-project">' + escapeHtml(e.project || '') + '</td>' +
+      '<td>' +
+        '<div class="activity-project-cell">' +
+          '<span class="activity-project">' + escapeHtml(e.project || '') + '</span>' +
+          detailHtml +
+        '</div>' +
+      '</td>' +
       '<td class="activity-summary">' + escapeHtml(e.summary || '') + '</td>' +
-      '<td class="activity-detail">' + escapeHtml(e.detail || '') + '</td>' +
       '<td>' + linkHtml + '</td>' +
     '</tr>';
   }).join('');
