@@ -6,6 +6,9 @@ const fs = require('fs');
 const os = require('os');
 const { spawnSync } = require('child_process');
 
+const platform = require('./platform');
+const scheduler = require('./scheduler');
+
 const DEST = path.join(os.homedir(), 'social-autoposter');
 const PKG_ROOT = path.join(__dirname, '..');
 const HOME = os.homedir();
@@ -102,12 +105,8 @@ function installBrowserAgentConfigs() {
 }
 
 function generatePlists() {
-  // Detect PATH for launchd (include node, homebrew, system)
   const nodeBin = path.dirname(process.execPath);
-  const pathDirs = new Set([nodeBin, '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']);
-  const launchdPath = [...pathDirs].join(':');
-
-  const plists = [
+  const jobs = [
     {
       file: 'com.m13v.social-stats.plist',
       label: 'com.m13v.social-stats',
@@ -128,42 +127,12 @@ function generatePlists() {
     },
   ];
 
-  const launchdDir = path.join(DEST, 'launchd');
-  fs.mkdirSync(launchdDir, { recursive: true });
-
-  for (const p of plists) {
-    const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-\t<key>Label</key>
-\t<string>${p.label}</string>
-\t<key>ProgramArguments</key>
-\t<array>
-\t\t<string>/bin/bash</string>
-\t\t<string>${p.script}</string>
-\t</array>
-\t<key>StartInterval</key>
-\t<integer>${p.interval}</integer>
-\t<key>StandardOutPath</key>
-\t<string>${p.stdoutLog}</string>
-\t<key>StandardErrorPath</key>
-\t<string>${p.stderrLog}</string>
-\t<key>EnvironmentVariables</key>
-\t<dict>
-\t\t<key>PATH</key>
-\t\t<string>${launchdPath}</string>
-\t\t<key>HOME</key>
-\t\t<string>${HOME}</string>
-\t</dict>
-\t<key>RunAtLoad</key>
-\t<${p.runAtLoad}/>
-</dict>
-</plist>
-`;
-    fs.writeFileSync(path.join(launchdDir, p.file), xml);
-  }
-  console.log('  generated launchd plists with correct paths');
+  const driver = scheduler.driverFor();
+  const env = driver.defaultEnv({ home: HOME, nodeBin });
+  const kind = platform.scheduler();
+  const outDir = path.join(DEST, kind === 'systemd' ? 'systemd' : 'launchd');
+  driver.generate({ jobs, outDir, env });
+  console.log(`  generated ${kind} units at ${outDir}`);
 }
 
 function init() {
