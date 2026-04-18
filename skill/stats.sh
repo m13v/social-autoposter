@@ -13,6 +13,14 @@
 
 set -uo pipefail
 
+# Portable platform helpers (defines gtimeout shim for Linux). This is sourced
+# early so the `gtimeout` function is available. Note: platform.sh exports a
+# variable also named PLATFORM (darwin/linux), which stats.sh's arg parser
+# immediately overwrites with the social-platform name below; that is fine
+# because stats.sh never calls stat_mtime/platform_notify after arg parsing.
+# shellcheck source=/dev/null
+source "$(dirname "${BASH_SOURCE[0]}")/lib/platform.sh"
+
 REPO_DIR="$HOME/social-autoposter"
 SKILL_FILE="$REPO_DIR/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"

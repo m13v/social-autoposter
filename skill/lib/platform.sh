@@ -34,4 +34,15 @@ platform_notify() {
   esac
 }
 
+# Portable `gtimeout`: on macOS with Homebrew coreutils the binary is named
+# gtimeout; on Linux GNU coreutils ships it as `timeout`. Define a function
+# so every script can call `gtimeout <secs> <cmd>` regardless of platform.
+if ! command -v gtimeout >/dev/null 2>&1; then
+  if command -v timeout >/dev/null 2>&1; then
+    gtimeout() { timeout "$@"; }
+  else
+    gtimeout() { "$@"; }  # last-resort no-op wrapper
+  fi
+fi
+
 export PLATFORM

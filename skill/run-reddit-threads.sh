@@ -51,9 +51,10 @@ print(c.get('accounts',{}).get('reddit',{}).get('username','Deep_Ad1959'))
 
 # Build full per-project context block (JSON-driven so prompt stays compact)
 export PROJECT_ENV="$PROJECT"
+export CONFIG_PATH="$CONFIG_FILE"
 CONTEXT_BLOCK=$(/usr/bin/python3 <<'PYEOF'
 import json, datetime, os
-CONFIG = '/Users/matthewdi/social-autoposter/config.json'
+CONFIG = os.environ['CONFIG_PATH']
 name = os.environ['PROJECT_ENV']
 c = json.load(open(CONFIG))
 proj = next((p for p in c['projects'] if p['name'] == name), None)
@@ -170,7 +171,10 @@ fi
 # This is how we enforce step compliance programmatically.
 RESULT_SCHEMA='{"type":"object","properties":{"research_files_read":{"type":"array","items":{"type":"string"},"description":"Absolute paths of source files actually read during research step"},"subreddit_browsed":{"type":"boolean","description":"Whether you navigated to the subreddit hot page and read threads"},"hot_threads_seen":{"type":"array","items":{"type":"string"},"description":"Titles of 3-5 hot threads you read on the subreddit"},"topic_angle":{"type":"string","description":"The topic angle chosen from the list"},"engagement_style":{"type":"string","description":"The engagement style chosen"},"title":{"type":"string","description":"The exact post title submitted"},"body":{"type":"string","description":"The exact post body submitted"},"permalink":{"type":["string","null"],"description":"The Reddit permalink after successful submission, or null if aborted"},"rules_checked":{"type":"boolean","description":"Whether you checked subreddit rules"},"flair_applied":{"type":["string","null"],"description":"Flair text applied, or null if none"},"abort_reason":{"type":["string","null"],"description":"Reason for aborting, or null if posted successfully"},"source_summary":{"type":"string","description":"Rich source summary: (a) topic angle and why, (b) source files read, (c) specific details used"}},"required":["research_files_read","subreddit_browsed","hot_threads_seen","topic_angle","engagement_style","title","body","permalink","rules_checked","flair_applied","abort_reason","source_summary"]}'
 
-CLAUDE_OUTPUT=$(claude -p --output-format json --json-schema "$RESULT_SCHEMA" "You are posting an ORIGINAL thread to ${SUBREDDIT} for the ${PROJECT} project as u/${POST_ACCOUNT}.
+# Pre-generate session id so the prompt's inline INSERT can stamp it.
+export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
+
+CLAUDE_OUTPUT=$("$REPO_DIR/scripts/run_claude.sh" "run-reddit-threads" -p --output-format json --json-schema "$RESULT_SCHEMA" "You are posting an ORIGINAL thread to ${SUBREDDIT} for the ${PROJECT} project as u/${POST_ACCOUNT}.
 
 ## Config & Rules
 Read $SKILL_FILE for content rules and anti-AI-detection checklist.
@@ -254,10 +258,10 @@ ${TOP_POSTS}
 7. LOG to database. IMPORTANT: The source_summary in your JSON output IS what gets logged. Make it rich:
    INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
      thread_title, thread_content, our_url, our_content, our_account,
-     source_summary, project_name, engagement_style, feedback_report_used, status, posted_at)
+     source_summary, project_name, engagement_style, feedback_report_used, status, posted_at, claude_session_id)
    VALUES ('reddit', PERMALINK, '${POST_ACCOUNT}', '${POST_ACCOUNT}',
      TITLE, BODY, PERMALINK, BODY, '${POST_ACCOUNT}',
-     SOURCE_SUMMARY, '${PROJECT}', 'STYLE_YOU_CHOSE', TRUE, 'active', NOW());
+     SOURCE_SUMMARY, '${PROJECT}', 'STYLE_YOU_CHOSE', TRUE, 'active', NOW(), '${CLAUDE_SESSION_ID}'::uuid);
 
 8. Return your structured JSON output. Every field in the schema is required. Fill permalink with the actual URL if posted, or null if aborted.
 

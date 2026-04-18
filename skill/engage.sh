@@ -17,6 +17,10 @@ set -euo pipefail
 # shellcheck source=/dev/null
 [ -f "$HOME/social-autoposter/.env" ] && source "$HOME/social-autoposter/.env"
 
+# Portable platform helpers (gtimeout, stat_mtime, platform_notify)
+# shellcheck source=/dev/null
+source "$(dirname "${BASH_SOURCE[0]}")/lib/platform.sh"
+
 REPO_DIR="$HOME/social-autoposter"
 SKILL_FILE="$REPO_DIR/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"
@@ -225,7 +229,7 @@ CRITICAL: ALL Reddit browser calls MUST use mcp__reddit-agent__* tools (e.g. mcp
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_BODY
 
-    gtimeout 5400 claude -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B batch $BATCH_NUM claude exited with code $?"
+    gtimeout 5400 "$REPO_DIR/scripts/run_claude.sh" "engage-reddit-phaseB" -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B batch $BATCH_NUM claude exited with code $?"
     rm -f "$PHASE_B_PROMPT"
 
     # Check if we actually made progress (avoid infinite loop)
