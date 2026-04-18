@@ -897,12 +897,12 @@ function handleApi(req, res) {
   // GET /api/activity - unified recent-events feed across posts, replies, mentions, dms
   if (p === '/api/activity' && req.method === 'GET') {
     const q = "SELECT json_agg(row_to_json(r)) FROM (" +
-      "SELECT * FROM (SELECT posted_at AS occurred_at, 'posted' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, engagement_style AS detail, our_url AS link, ('p' || id) AS key, project_name AS project FROM posts WHERE posted_at IS NOT NULL ORDER BY posted_at DESC LIMIT 40) x1 " +
-      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 140), LEFT(r2.their_content, 140)), r2.engagement_style, r2.our_reply_url, ('r' || r2.id), p.project_name FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 40) x2 " +
-      "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 40) x3 " +
-      "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 40) x4 " +
-      "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || id), NULL::text FROM dms WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 40) x5 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published', 'seo', product, keyword, slug, page_url, ('k' || id), product FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 40) x6 " +
+      "SELECT * FROM (SELECT posted_at AS occurred_at, 'posted' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, engagement_style AS detail, our_url AS link, ('p' || id) AS key, project_name AS project FROM posts WHERE posted_at IS NOT NULL ORDER BY posted_at DESC LIMIT 150) x1 " +
+      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 140), LEFT(r2.their_content, 140)), r2.engagement_style, r2.our_reply_url, ('r' || r2.id), p.project_name FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 150) x2 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 150) x3 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
+      "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || id), NULL::text FROM dms WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published', 'seo', product, keyword, slug, page_url, ('k' || id), product FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x6 " +
       "ORDER BY 1 DESC LIMIT 100) r";
     const rows = psql(q);
     return json(res, { events: rows && rows !== '' ? (JSON.parse(rows) || []) : [] });
@@ -1088,6 +1088,44 @@ const HTML = `<!DOCTYPE html>
   .ev-pill.ev-dm_sent { background: #3b0764; color: #d8b4fe; }
   .ev-pill.ev-page_published { background: #422006; color: #fcd34d; border: 1px solid #f59e0b; }
 
+  .activity-search {
+    flex: 1; min-width: 220px; max-width: 420px; background: #0f0f0f; border: 1px solid #262626;
+    border-radius: 8px; padding: 7px 12px; font-size: 13px; color: #e5e5e5; outline: none;
+    transition: border-color 0.15s;
+  }
+  .activity-search:focus { border-color: #525252; }
+  .activity-search::placeholder { color: #525252; }
+  .activity-sortable { cursor: pointer; user-select: none; }
+  .activity-sortable:hover .activity-header-label { color: #e5e5e5; }
+  .activity-header-label { display: inline-flex; align-items: center; gap: 4px; }
+  .activity-sort-arrow { font-size: 10px; color: #525252; min-width: 8px; }
+  .activity-sort-arrow.active { color: #d4d4d4; }
+  .activity-filter-row th {
+    padding: 6px 14px; background: #0a0a0a; border-bottom: 1px solid #262626;
+    text-transform: none; letter-spacing: 0; font-weight: 400;
+  }
+  .activity-filter-stack { display: flex; flex-direction: column; gap: 4px; }
+  .activity-filter-stack .activity-filter-group { gap: 4px; }
+  .activity-col-filter {
+    width: 100%; background: #0f0f0f; border: 1px solid #262626; border-radius: 6px;
+    padding: 5px 8px; font-size: 12px; color: #e5e5e5; outline: none;
+  }
+  .activity-col-filter:focus { border-color: #525252; }
+  .activity-col-filter::placeholder { color: #525252; }
+  .activity-pagination {
+    display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+    margin-top: 12px; font-size: 12px; color: #a3a3a3;
+  }
+  .activity-pagination .pager-btn {
+    background: #171717; border: 1px solid #262626; color: #e5e5e5;
+    padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px;
+  }
+  .activity-pagination .pager-btn:hover:not(:disabled) { border-color: #525252; }
+  .activity-pagination .pager-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .activity-pagination select {
+    background: #171717; border: 1px solid #262626; color: #e5e5e5;
+    padding: 3px 6px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  }
   .activity-row-new { animation: activityRowFlash 2.6s ease-out; }
   @keyframes activityRowFlash {
     0%   { background: rgba(34, 211, 238, 0.22); box-shadow: inset 3px 0 0 #22d3ee; }
@@ -1690,7 +1728,15 @@ let _activitySeen = new Set();
 let _activityFirstLoad = true;
 let _activityTypeFilter = new Set(EVENT_TYPES);
 let _activityPlatformFilter = new Set(ACTIVITY_PLATFORMS);
+let _activitySearch = '';
+let _activityFilterProject = '';
+let _activityFilterSummary = '';
+let _activitySortField = 'occurred_at';
+let _activitySortDir = 'desc';
+let _activityPage = 0;
+let _activityPageSize = 25;
 let _activityTimer = null;
+let _activityControlsWired = false;
 
 function buildActivityFilters() {
   const tEl = document.getElementById('activity-type-filters');
@@ -1700,13 +1746,14 @@ function buildActivityFilters() {
     '<span class="activity-chip ev-' + t + ' active" data-type="' + t + '">' + EVENT_LABELS[t] + '</span>'
   ).join('');
   pEl.innerHTML = ACTIVITY_PLATFORMS.map(p =>
-    '<span class="activity-chip active" data-platform="' + p + '">' + p + '</span>'
+    '<span class="activity-chip active" data-platform="' + p + '" title="' + p + '">' + (PLATFORM_ICONS[p] || p) + '</span>'
   ).join('');
   tEl.querySelectorAll('[data-type]').forEach(el => {
     el.addEventListener('click', () => {
       const t = el.dataset.type;
       if (_activityTypeFilter.has(t)) { _activityTypeFilter.delete(t); el.classList.remove('active'); }
       else { _activityTypeFilter.add(t); el.classList.add('active'); }
+      _activityPage = 0;
       renderActivity(_lastActivityEvents || []);
     });
   });
@@ -1715,9 +1762,84 @@ function buildActivityFilters() {
       const p = el.dataset.platform;
       if (_activityPlatformFilter.has(p)) { _activityPlatformFilter.delete(p); el.classList.remove('active'); }
       else { _activityPlatformFilter.add(p); el.classList.add('active'); }
+      _activityPage = 0;
       renderActivity(_lastActivityEvents || []);
     });
   });
+  if (!_activityControlsWired) {
+    _activityControlsWired = true;
+    const search = document.getElementById('activity-search');
+    if (search) search.addEventListener('input', () => { _activitySearch = search.value.trim().toLowerCase(); _activityPage = 0; renderActivity(_lastActivityEvents || []); });
+    const fp = document.getElementById('activity-filter-project');
+    if (fp) fp.addEventListener('input', () => { _activityFilterProject = fp.value.trim().toLowerCase(); _activityPage = 0; renderActivity(_lastActivityEvents || []); });
+    const fs = document.getElementById('activity-filter-summary');
+    if (fs) fs.addEventListener('input', () => { _activityFilterSummary = fs.value.trim().toLowerCase(); _activityPage = 0; renderActivity(_lastActivityEvents || []); });
+    document.querySelectorAll('.activity-sortable').forEach(el => {
+      el.addEventListener('click', () => {
+        const field = el.dataset.sort;
+        if (_activitySortField === field) _activitySortDir = _activitySortDir === 'asc' ? 'desc' : 'asc';
+        else { _activitySortField = field; _activitySortDir = field === 'occurred_at' ? 'desc' : 'asc'; }
+        _activityPage = 0;
+        renderActivity(_lastActivityEvents || []);
+      });
+    });
+  }
+}
+
+function activityMatchesSearch(e, q) {
+  if (!q) return true;
+  const hay = [e.type, e.platform, e.project, e.detail, e.summary, e.link, e.actor, e.occurred_at]
+    .map(v => String(v || '').toLowerCase()).join(' | ');
+  return hay.indexOf(q) !== -1;
+}
+
+function sortActivity(events, field, dir) {
+  const mult = dir === 'asc' ? 1 : -1;
+  return events.slice().sort((a, b) => {
+    let av = a[field], bv = b[field];
+    if (field === 'occurred_at') { av = av ? new Date(av).getTime() : 0; bv = bv ? new Date(bv).getTime() : 0; }
+    else { av = String(av == null ? '' : av).toLowerCase(); bv = String(bv == null ? '' : bv).toLowerCase(); }
+    if (av < bv) return -1 * mult;
+    if (av > bv) return 1 * mult;
+    return 0;
+  });
+}
+
+function renderSortArrows() {
+  document.querySelectorAll('.activity-sort-arrow').forEach(el => {
+    const field = el.dataset.sortArrow;
+    if (field === _activitySortField) {
+      el.textContent = _activitySortDir === 'asc' ? '▲' : '▼';
+      el.classList.add('active');
+    } else {
+      el.textContent = '↕';
+      el.classList.remove('active');
+    }
+  });
+}
+
+function renderPagination(totalFiltered) {
+  const el = document.getElementById('activity-pagination');
+  if (!el) return;
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / _activityPageSize));
+  if (_activityPage >= totalPages) _activityPage = totalPages - 1;
+  if (_activityPage < 0) _activityPage = 0;
+  const from = totalFiltered === 0 ? 0 : _activityPage * _activityPageSize + 1;
+  const to = Math.min(totalFiltered, (_activityPage + 1) * _activityPageSize);
+  el.innerHTML =
+    '<span>Rows per page:</span>' +
+    '<select id="activity-page-size">' +
+      [10, 25, 50, 100].map(n => '<option value="' + n + '"' + (n === _activityPageSize ? ' selected' : '') + '>' + n + '</option>').join('') +
+    '</select>' +
+    '<span>' + from + '-' + to + ' of ' + totalFiltered + '</span>' +
+    '<button class="pager-btn" id="activity-prev"' + (_activityPage <= 0 ? ' disabled' : '') + '>Prev</button>' +
+    '<button class="pager-btn" id="activity-next"' + (_activityPage >= totalPages - 1 ? ' disabled' : '') + '>Next</button>';
+  const ps = document.getElementById('activity-page-size');
+  if (ps) ps.addEventListener('change', () => { _activityPageSize = parseInt(ps.value, 10) || 25; _activityPage = 0; renderActivity(_lastActivityEvents || []); });
+  const prev = document.getElementById('activity-prev');
+  if (prev) prev.addEventListener('click', () => { _activityPage -= 1; renderActivity(_lastActivityEvents || []); });
+  const next = document.getElementById('activity-next');
+  if (next) next.addEventListener('click', () => { _activityPage += 1; renderActivity(_lastActivityEvents || []); });
 }
 
 function escapeHtml(s) {
@@ -1744,16 +1866,31 @@ function renderActivity(events) {
   _lastActivityEvents = events;
   const body = document.getElementById('activity-body');
   if (!body) return;
-  const filtered = events.filter(e =>
-    _activityTypeFilter.has(e.type) && _activityPlatformFilter.has((e.platform || '').toLowerCase())
-  );
+  renderSortArrows();
+  const filtered = events.filter(e => {
+    if (!_activityTypeFilter.has(e.type)) return false;
+    if (!_activityPlatformFilter.has((e.platform || '').toLowerCase())) return false;
+    if (_activityFilterProject) {
+      const hay = (String(e.project || '') + ' ' + String(e.detail || '')).toLowerCase();
+      if (hay.indexOf(_activityFilterProject) === -1) return false;
+    }
+    if (_activityFilterSummary) {
+      if (String(e.summary || '').toLowerCase().indexOf(_activityFilterSummary) === -1) return false;
+    }
+    if (!activityMatchesSearch(e, _activitySearch)) return false;
+    return true;
+  });
+  const sorted = sortActivity(filtered, _activitySortField, _activitySortDir);
+  const start = _activityPage * _activityPageSize;
+  const page = sorted.slice(start, start + _activityPageSize);
   document.getElementById('activity-count').textContent =
-    filtered.length + ' of ' + events.length + ' events';
-  if (!filtered.length) {
+    sorted.length + ' of ' + events.length + ' events';
+  renderPagination(sorted.length);
+  if (!page.length) {
     body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#6b7280;padding:40px;">No matching events</td></tr>';
     return;
   }
-  const rows = filtered.map(e => {
+  const rows = page.map(e => {
     const isNew = !_activityFirstLoad && !_activitySeen.has(e.key);
     const linkHtml = e.link
       ? '<a class="activity-link" href="' + escapeHtml(e.link) + '" target="_blank" rel="noopener" title="Open">&rarr;</a>'
