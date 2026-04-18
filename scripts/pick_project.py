@@ -68,6 +68,8 @@ def pick_project(config, platform=None, exclude=None):
         weighted = [p for p in weighted if p.get(platform_topic_key)]
 
     if not weighted:
+        if exclude:
+            return None
         return random.choice(projects)
 
     total_weight = sum(p["weight"] for p in weighted)
