@@ -279,6 +279,7 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
         "serp": "This keyword came from SERP discovery. It has SERP gap and the product fits the commercial intent.",
         "gsc": "This query is already driving impressions to the site in Google Search Console. Real users are searching for this. Capture the demand.",
         "manual": "This is an adhoc trigger. Treat the keyword as worth building.",
+        "reddit": "This page is being created to drop into a high-performing Reddit thread. Match the thread audience's vocabulary and pain points; the page should genuinely help someone who landed on it from a Reddit comment.",
     }.get(trigger, "")
 
     ct = CONTENT_TYPES.get(content_type, CONTENT_TYPES["guide"])
@@ -821,7 +822,7 @@ def main() -> int:
     ap.add_argument("--product", required=True)
     ap.add_argument("--keyword", required=True)
     ap.add_argument("--slug", required=True)
-    ap.add_argument("--trigger", choices=["serp", "gsc", "manual"], default="manual")
+    ap.add_argument("--trigger", choices=["serp", "gsc", "manual", "reddit"], default="manual")
     ap.add_argument("--content-type", choices=list(CONTENT_TYPES.keys()), default=None,
                     help="Override the regex classifier. Default: auto-classify from keyword.")
     args = ap.parse_args()
