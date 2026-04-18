@@ -1750,7 +1750,7 @@ function renderActivity(events) {
         '<div class="activity-event-cell">' +
           '<span class="activity-time">' + escapeHtml(relTime(e.occurred_at)) + '</span>' +
           '<span class="ev-pill ev-' + escapeHtml(e.type) + '">' + escapeHtml(EVENT_LABELS[e.type] || e.type) + '</span>' +
-          '<span class="activity-platform">' + escapeHtml(e.platform || '') + '</span>' +
+          platformIconHtml(e.platform) +
         '</div>' +
       '</td>' +
       '<td>' +
