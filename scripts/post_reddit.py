@@ -468,18 +468,8 @@ def parse_post_decisions(output):
     return decisions
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Reddit posting orchestrator")
-    parser.add_argument("--dry-run", action="store_true", help="Print prompt without executing")
-    parser.add_argument("--limit", type=int, default=3, help="Max comments to post (default: 3)")
-    parser.add_argument("--timeout", type=int, default=3600, help="Timeout for Claude session")
-    parser.add_argument("--project", default=None, help="Override project selection")
-    args = parser.parse_args()
-
-    config = load_config()
-    reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "Deep_Ad1959")
-
-    # Pick project
+def run_one_iteration(args, config, reddit_username, already_picked):
+    """Run one pick->draft->post cycle. Returns (posted, failed, cost, project_name or None)."""
     if args.project:
         project = None
         for p in config.get("projects", []):
@@ -488,64 +478,39 @@ def main():
                 break
         if not project:
             print(f"[post_reddit] ERROR: project '{args.project}' not found")
-            sys.exit(1)
+            return 0, 0, 0.0, None
     else:
-        project = pick_project("reddit")
+        project = pick_project("reddit", exclude=already_picked)
         if not project:
-            print("[post_reddit] ERROR: could not pick project")
-            sys.exit(1)
+            print(f"[post_reddit] No eligible project left (already picked: {already_picked})")
+            return 0, 0, 0.0, None
 
     project_name = project.get("name", "general")
     print(f"[post_reddit] Project: {project_name}")
 
-    # Get context
     top_report = get_top_performers(project_name)
     recent_comments = get_recent_comments()
-
-    # Build prompt
     prompt = build_prompt(project, config, args.limit, top_report, recent_comments)
 
     if args.dry_run:
-        print(f"=== DRY RUN ===")
+        print(f"=== DRY RUN (project={project_name}) ===")
         print(f"Prompt length: {len(prompt)} chars")
         print(prompt)
         print("=== END DRY RUN ===")
-        return
-
-    if not preflight_rate_limit():
-        subprocess.run([
-            "python3", os.path.join(REPO_DIR, "scripts", "log_run.py"),
-            "--script", "post_reddit",
-            "--posted", "0", "--skipped", "1", "--failed", "0",
-            "--cost", "0.0000", "--elapsed", "0",
-        ])
-        return
+        return 0, 0, 0.0, project_name
 
     print(f"[post_reddit] Starting Claude session (limit={args.limit}, timeout={args.timeout}s)")
     start = time.time()
-
-    # Phase 1: Claude searches and drafts (no MCP, no browser)
     ok, output, usage = run_claude(prompt, timeout=args.timeout)
     claude_elapsed = time.time() - start
-
-    print(f"[post_reddit] Claude finished in {claude_elapsed:.0f}s "
-          f"(${usage['cost_usd']:.4f})")
+    print(f"[post_reddit] Claude finished in {claude_elapsed:.0f}s (${usage['cost_usd']:.4f})")
 
     if not ok:
         print(f"[post_reddit] Claude FAILED: {output[:300]}")
-        subprocess.run([
-            "python3", os.path.join(REPO_DIR, "scripts", "log_run.py"),
-            "--script", "post_reddit",
-            "--posted", "0", "--skipped", "0", "--failed", "1",
-            "--cost", f"{usage['cost_usd']:.4f}",
-            "--elapsed", f"{claude_elapsed:.0f}",
-        ])
-        sys.exit(1)
+        return 0, 1, usage["cost_usd"], project_name
 
-    # Phase 2: Parse Claude's decisions and post via CDP
     decisions = parse_post_decisions(output)
     print(f"[post_reddit] Claude drafted {len(decisions)} post(s)")
-
     if not decisions:
         print(f"[post_reddit] No valid post decisions found in output:")
         for line in output.strip().split("\n")[-10:]:
@@ -565,17 +530,13 @@ def main():
             print(f"[post_reddit] unknown style '{engagement_style}', clearing")
             engagement_style = None
 
-        target = reply_to_url or thread_url
-        print(f"[post_reddit] Posting {i + 1}/{len(decisions)}: "
-              f"{thread_title[:50]}...")
-
+        print(f"[post_reddit] Posting {i + 1}/{len(decisions)}: {thread_title[:50]}...")
         result = post_via_cdp(thread_url, reply_to_url, text)
 
         if result.get("ok"):
             if result.get("already_replied"):
                 print(f"[post_reddit] DEDUP: already posted in this thread")
                 continue
-
             permalink = result.get("permalink", "")
             if not permalink or not permalink.startswith("http"):
                 print(f"[post_reddit] SKIPPED LOG: no valid permalink captured (got: {permalink!r})")
@@ -593,23 +554,72 @@ def main():
             if err == "subreddit_restricted":
                 mark_comment_blocked(thread_url)
 
-        time.sleep(180)  # 3 min gap between posts to avoid spam detection
+        if i < len(decisions) - 1:
+            time.sleep(180)  # 3 min gap between posts within a single Claude session
 
-    total_elapsed = time.time() - start
+    return posted, failed, usage["cost_usd"], project_name
 
-    print(f"\n[post_reddit] === SUMMARY ===")
-    print(f"[post_reddit] elapsed={total_elapsed:.0f}s posted={posted} failed={failed}")
-    print(f"[post_reddit] Tokens: input={usage['input_tokens']} output={usage['output_tokens']} "
-          f"cache_read={usage['cache_read']} cache_create={usage['cache_create']}")
-    print(f"[post_reddit] Cost: ${usage['cost_usd']:.4f}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Reddit posting orchestrator")
+    parser.add_argument("--dry-run", action="store_true", help="Print prompt without executing")
+    parser.add_argument("--limit", type=int, default=3, help="Max comments per Claude session (default: 3)")
+    parser.add_argument("--iterations", type=int, default=1,
+                        help="Sequential pick->draft->post cycles per run (default: 1). "
+                             "Each iteration picks a different project.")
+    parser.add_argument("--timeout", type=int, default=3600, help="Timeout for Claude session")
+    parser.add_argument("--project", default=None, help="Override project selection (forces iterations=1)")
+    args = parser.parse_args()
+
+    if args.project and args.iterations > 1:
+        print(f"[post_reddit] --project set, forcing iterations=1")
+        args.iterations = 1
+
+    config = load_config()
+    reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "Deep_Ad1959")
+
+    run_start = time.time()
+    total_posted = 0
+    total_failed = 0
+    total_skipped = 0
+    total_cost = 0.0
+    already_picked = []
+
+    for iteration in range(args.iterations):
+        print(f"\n[post_reddit] === iteration {iteration + 1}/{args.iterations} ===")
+
+        if not preflight_rate_limit():
+            total_skipped += args.iterations - iteration
+            print(f"[post_reddit] rate-limited, skipping remaining {args.iterations - iteration} iteration(s)")
+            break
+
+        posted, failed, cost, project_name = run_one_iteration(
+            args, config, reddit_username, already_picked,
+        )
+        total_posted += posted
+        total_failed += failed
+        total_cost += cost
+        if project_name:
+            already_picked.append(project_name)
+        elif args.project is None:
+            # Couldn't pick a project (all excluded or pick failure) — stop looping
+            total_skipped += args.iterations - iteration
+            break
+
+    total_elapsed = time.time() - run_start
+
+    print(f"\n[post_reddit] === RUN SUMMARY ===")
+    print(f"[post_reddit] iterations={args.iterations} projects={already_picked}")
+    print(f"[post_reddit] posted={total_posted} failed={total_failed} skipped={total_skipped} "
+          f"elapsed={total_elapsed:.0f}s cost=${total_cost:.4f}")
 
     subprocess.run([
         "python3", os.path.join(REPO_DIR, "scripts", "log_run.py"),
         "--script", "post_reddit",
-        "--posted", str(posted),
-        "--skipped", "0",
-        "--failed", str(failed),
-        "--cost", f"{usage['cost_usd']:.4f}",
+        "--posted", str(total_posted),
+        "--skipped", str(total_skipped),
+        "--failed", str(total_failed),
+        "--cost", f"{total_cost:.4f}",
         "--elapsed", f"{total_elapsed:.0f}",
     ])
 
