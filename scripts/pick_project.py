@@ -47,13 +47,16 @@ def get_posts_today_by_project(platform=None):
     return {row[0]: row[1] for row in rows}
 
 
-def pick_project(config, platform=None):
+def pick_project(config, platform=None, exclude=None):
     """Pick the most underrepresented project based on weights.
 
     Returns the project dict from config.json.
     """
     projects = config.get("projects", [])
     weighted = [p for p in projects if p.get("weight", 0) > 0]
+    if exclude:
+        excluded = {n.lower() for n in exclude}
+        weighted = [p for p in weighted if p.get("name", "").lower() not in excluded]
 
     # Filter by platform compatibility — skip projects that have no topics for this platform
     platform_topic_key = {
@@ -99,7 +102,12 @@ def main():
     parser.add_argument("--project", default=None, help="Select a specific project by name")
     parser.add_argument("--show-weights", action="store_true", help="Show all projects and their current distribution")
     parser.add_argument("--distribution", action="store_true", help="Show compact distribution for LLM prompts")
+    parser.add_argument("--exclude", default=None, help="Comma-separated project names to exclude from picking")
     args = parser.parse_args()
+
+    exclude = None
+    if args.exclude:
+        exclude = [n.strip() for n in args.exclude.split(",") if n.strip()]
 
     config = load_config()
 
@@ -143,7 +151,10 @@ def main():
             print(f"Unknown project: {args.project}", file=sys.stderr)
             sys.exit(1)
     else:
-        project = pick_project(config, args.platform)
+        project = pick_project(config, args.platform, exclude=exclude)
+        if project is None:
+            print("No eligible project (all excluded)", file=sys.stderr)
+            sys.exit(2)
 
     if args.json:
         print(json.dumps(project, indent=2))
