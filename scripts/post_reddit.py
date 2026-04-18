@@ -153,13 +153,13 @@ def get_api_key():
     return None
 
 
-def pick_project(platform="reddit"):
+def pick_project(platform="reddit", exclude=None):
     try:
-        result = subprocess.run(
-            ["python3", os.path.join(REPO_DIR, "scripts", "pick_project.py"),
-             "--platform", platform, "--json"],
-            capture_output=True, text=True, timeout=15,
-        )
+        cmd = ["python3", os.path.join(REPO_DIR, "scripts", "pick_project.py"),
+               "--platform", platform, "--json"]
+        if exclude:
+            cmd.extend(["--exclude", ",".join(exclude)])
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if result.returncode == 0 and result.stdout.strip():
             return json.loads(result.stdout.strip())
     except Exception:
