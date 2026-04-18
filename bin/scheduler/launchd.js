@@ -2,7 +2,11 @@
 
 const path = require('path');
 const fs = require('fs');
+const { execSync, spawnSync } = require('child_process');
 const platform = require('../platform');
+
+const UNIT_PREFIX = 'com.m13v.social-';
+const UNIT_SUFFIX = '.plist';
 
 function renderPlist(job, env) {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -55,4 +59,198 @@ function defaultEnv({ home, nodeBin }) {
   };
 }
 
-module.exports = { renderPlist, generate, defaultEnv };
+// ─────────────────────────── Control plane ───────────────────────────
+
+function list() {
+  const loadedLabels = new Set();
+  const pidByLabel = new Map();
+  try {
+    const out = execSync('launchctl list', { stdio: 'pipe', maxBuffer: 8 * 1024 * 1024 }).toString();
+    for (const line of out.split('\n').slice(1)) {
+      const parts = line.split('\t');
+      if (parts.length < 3) continue;
+      const label = parts[2];
+      if (!label.startsWith(UNIT_PREFIX)) continue;
+      loadedLabels.add(label);
+      const pid = parseInt(parts[0], 10);
+      if (!isNaN(pid)) pidByLabel.set(label, pid);
+    }
+  } catch {}
+  return { loadedLabels, pidByLabel };
+}
+
+function isLoaded(label) {
+  try {
+    execSync(`launchctl list ${label}`, { stdio: 'pipe' });
+    return true;
+  } catch { return false; }
+}
+
+function pidFor(label) {
+  try {
+    const out = execSync(`launchctl list ${label}`, { stdio: 'pipe' }).toString();
+    const m = out.match(/"PID"\s*=\s*(\d+);/);
+    return m ? parseInt(m[1], 10) : null;
+  } catch { return null; }
+}
+
+// launchctl load/unload exit 0 even on failure (e.g. "Unload failed: 5:
+// Input/output error" when already unloaded). Use spawnSync so we capture
+// stderr and detect silent-failure cases.
+function load(unitPath) {
+  const r = spawnSync('launchctl', ['load', unitPath], { encoding: 'utf8' });
+  const stderr = (r.stderr || '').trim();
+  return { ok: r.status === 0 && !/failed/i.test(stderr), stderr, status: r.status };
+}
+
+function unload(_label, unitPath) {
+  const r = spawnSync('launchctl', ['unload', unitPath], { encoding: 'utf8' });
+  const stderr = (r.stderr || '').trim();
+  return { ok: r.status === 0 && !/failed/i.test(stderr), stderr, status: r.status };
+}
+
+function kickstart(label) {
+  const target = `gui/${process.getuid()}/${label}`;
+  const r = spawnSync('launchctl', ['kickstart', '-p', target], { encoding: 'utf8' });
+  const pid = parseInt((r.stdout || '').trim(), 10);
+  return {
+    ok: r.status === 0,
+    stderr: (r.stderr || r.stdout || '').trim(),
+    pid: isNaN(pid) ? null : pid,
+  };
+}
+
+function killJob(label) {
+  const target = `gui/${process.getuid()}/${label}`;
+  const r = spawnSync('launchctl', ['kill', 'SIGKILL', target], { encoding: 'utf8' });
+  return { ok: r.status === 0, stderr: (r.stderr || '').trim() };
+}
+
+// Install a unit file into the user's agents dir (via symlink, matching the
+// existing setup flow). Creates the dir if missing.
+function install(unitSrc, agentsDir) {
+  fs.mkdirSync(agentsDir, { recursive: true });
+  const linkPath = path.join(agentsDir, path.basename(unitSrc));
+  if (!fs.existsSync(linkPath)) {
+    try { fs.symlinkSync(unitSrc, linkPath); } catch { return null; }
+  }
+  return linkPath;
+}
+
+function unitFileName(jobFile) {
+  // jobFile is e.g. "com.m13v.social-stats.plist"; launchd needs the plist path.
+  return jobFile;
+}
+
+// Discover every social-autoposter job from plist files in either the repo's
+// launchd/ dir or the user's LaunchAgents dir. Returns [{label, unitFile, scriptPath}].
+function discoverJobs({ repoUnitDir, agentsDir }) {
+  const byLabel = new Map();
+  const scan = (dir) => {
+    try {
+      const files = fs.readdirSync(dir).filter(f =>
+        f.startsWith(UNIT_PREFIX) && f.endsWith(UNIT_SUFFIX)
+      );
+      for (const f of files) {
+        try {
+          const body = fs.readFileSync(path.join(dir, f), 'utf8');
+          const { label, scriptPath } = parseUnit(body);
+          if (!label) continue;
+          if (!byLabel.has(label)) {
+            byLabel.set(label, { label, unitFile: f, scriptPath });
+          }
+        } catch {}
+      }
+    } catch {}
+  };
+  scan(repoUnitDir);
+  scan(agentsDir);
+  return [...byLabel.values()];
+}
+
+function parseUnit(xml) {
+  const labelM = xml.match(/<key>Label<\/key>\s*<string>([^<]+)<\/string>/);
+  const label = labelM ? labelM[1] : null;
+  let scriptPath = null;
+  const argsM = xml.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
+  if (argsM) {
+    const strings = [...argsM[1].matchAll(/<string>([^<]+)<\/string>/g)].map(m => m[1]);
+    scriptPath = strings.find(s => /\.(sh|py|js)$/.test(s)) || null;
+  }
+  if (!scriptPath) {
+    const progM = xml.match(/<key>Program<\/key>\s*<string>([^<]+)<\/string>/);
+    if (progM) scriptPath = progM[1];
+  }
+  return { label, scriptPath };
+}
+
+// Returns interval in seconds, or null if calendar-based / unsettable.
+function scheduleFromUnit(xml) {
+  try {
+    const si = xml.match(/<key>StartInterval<\/key>\s*<integer>(\d+)<\/integer>/);
+    if (si) return { intervalSecs: parseInt(si[1], 10), kind: 'simple' };
+    let entries = null;
+    const arrM = xml.match(/<key>StartCalendarInterval<\/key>\s*<array>([\s\S]*?)<\/array>/);
+    if (arrM) {
+      entries = [...arrM[1].matchAll(/<dict>([\s\S]*?)<\/dict>/g)].map(m => m[1]);
+    } else {
+      const dictM = xml.match(/<key>StartCalendarInterval<\/key>\s*<dict>([\s\S]*?)<\/dict>/);
+      if (dictM) entries = [dictM[1]];
+    }
+    if (!entries || !entries.length) return { intervalSecs: null, kind: null };
+    const dayMins = [];
+    let minuteOnlyCount = 0;
+    for (const body of entries) {
+      const h = body.match(/<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/);
+      const m = body.match(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/);
+      if (h) dayMins.push(parseInt(h[1], 10) * 60 + (m ? parseInt(m[1], 10) : 0));
+      else if (m) minuteOnlyCount++;
+    }
+    if (minuteOnlyCount > 0 && dayMins.length === 0) {
+      return { intervalSecs: Math.round(3600 / minuteOnlyCount), kind: 'calendar' };
+    }
+    if (dayMins.length === 1) return { intervalSecs: 86400, kind: 'calendar' };
+    if (dayMins.length > 1) {
+      dayMins.sort((a, b) => a - b);
+      let minGap = Infinity;
+      for (let i = 1; i < dayMins.length; i++) {
+        minGap = Math.min(minGap, dayMins[i] - dayMins[i - 1]);
+      }
+      minGap = Math.min(minGap, 1440 - dayMins[dayMins.length - 1] + dayMins[0]);
+      return { intervalSecs: minGap * 60, kind: 'calendar' };
+    }
+    return { intervalSecs: null, kind: null };
+  } catch { return { intervalSecs: null, kind: null }; }
+}
+
+// In-place edit StartInterval on a plist. Returns true if updated, false if
+// the unit uses a calendar schedule (not settable here).
+function updateInterval(unitPath, seconds) {
+  const xml = fs.readFileSync(unitPath, 'utf8');
+  if (!/<key>StartInterval<\/key>/.test(xml)) return false;
+  const next = xml.replace(
+    /(<key>StartInterval<\/key>\s*<integer>)\d+(<\/integer>)/,
+    `$1${seconds}$2`
+  );
+  fs.writeFileSync(unitPath, next);
+  return true;
+}
+
+module.exports = {
+  renderPlist,
+  generate,
+  defaultEnv,
+  list,
+  isLoaded,
+  pidFor,
+  load,
+  unload,
+  kickstart,
+  killJob,
+  install,
+  unitFileName,
+  discoverJobs,
+  parseUnit,
+  scheduleFromUnit,
+  updateInterval,
+};

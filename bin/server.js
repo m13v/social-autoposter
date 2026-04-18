@@ -6,13 +6,26 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execSync, spawn, spawnSync } = require('child_process');
+const platform = require('./platform');
+const scheduler = require('./scheduler');
 
 const DEST = path.join(os.homedir(), 'social-autoposter');
 const LOG_DIR = path.join(DEST, 'skill', 'logs');
-const LAUNCHD_DIR = path.join(DEST, 'launchd');
+const SCHED_KIND = platform.scheduler();
+const UNIT_DIR = path.join(DEST, SCHED_KIND === 'systemd' ? 'systemd' : 'launchd');
+const AGENT_DIR = platform.agentsDir();
+const driver = scheduler.driverFor();
 const CONFIG_FILE = path.join(DEST, 'config.json');
 const ENV_FILE = path.join(DEST, '.env');
 const PORT = parseInt(process.env.PORT || '3141', 10);
+
+function unitSrcPath(job) {
+  return path.join(UNIT_DIR, driver.unitFileName(job.plist));
+}
+
+function agentPath(job) {
+  return path.join(AGENT_DIR, driver.unitFileName(job.plist));
+}
 
 // Matrix: rows = job types, columns = platforms
 // Each cell is a job (or null if that combo doesn't exist)
@@ -81,10 +94,7 @@ function json(res, obj, status = 200) {
 }
 
 function isJobLoaded(label) {
-  try {
-    execSync(`launchctl list ${label}`, { stdio: 'pipe' });
-    return true;
-  } catch { return false; }
+  return driver.isLoaded(label);
 }
 
 // Batched snapshot: one launchctl list + one log readdir. Every per-request
@@ -97,29 +107,21 @@ function isJobLoaded(label) {
 // preserved but the command line no longer contains the wrapper's path, so
 // pgrep -f misses it. launchd tracks by fork, not argv, so its PID survives
 // exec and correctly reflects whether the job is alive.
+let _batchSnapshotCache = { at: 0, value: null };
 function buildBatchSnapshot() {
-  const loadedLabels = new Set();
-  const pidByLabel = new Map();
-  try {
-    const out = execSync('launchctl list', { stdio: 'pipe', maxBuffer: 8 * 1024 * 1024 }).toString();
-    // Format: "PID\tStatus\tLabel\n". PID is "-" when the job is loaded but
-    // not currently running. Skip header.
-    for (const line of out.split('\n').slice(1)) {
-      const parts = line.split('\t');
-      if (parts.length < 3) continue;
-      const label = parts[2];
-      if (!label.startsWith('com.m13v.social-')) continue;
-      loadedLabels.add(label);
-      const pid = parseInt(parts[0], 10);
-      if (!isNaN(pid)) pidByLabel.set(label, pid);
-    }
-  } catch {}
+  const now = Date.now();
+  if (_batchSnapshotCache.value && now - _batchSnapshotCache.at < 2000) {
+    return _batchSnapshotCache.value;
+  }
+  const { loadedLabels, pidByLabel } = driver.list();
 
   const logFiles = (() => {
     try { return fs.readdirSync(LOG_DIR); } catch { return []; }
   })();
 
-  return { loadedLabels, pidByLabel, logFiles };
+  const snap = { loadedLabels, pidByLabel, logFiles };
+  _batchSnapshotCache = { at: now, value: snap };
+  return snap;
 }
 
 function pidsForLabelFromSnapshot(snap, label) {
@@ -143,22 +145,11 @@ function lastLogFromSnapshot(snap, job) {
   return { file: fname, time };
 }
 
-// launchctl load/unload exit 0 even on failure (e.g. "Unload failed: 5:
-// Input/output error" when the job is already unloaded, or bootstrap-domain
-// mismatches on modern macOS). Use spawnSync so we capture stderr regardless
-// of exit code and can detect the silent-failure case.
-function runLaunchctl(action, agentLink) {
-  const r = spawnSync('launchctl', [action, agentLink], { encoding: 'utf8' });
-  const stderr = (r.stderr || '').trim();
-  const ok = r.status === 0 && !/failed/i.test(stderr);
-  return { ok, stderr, status: r.status };
-}
-
-function getPlistInterval(plistPath) {
+function getPlistInterval(unitPath) {
   try {
-    const xml = fs.readFileSync(plistPath, 'utf8');
-    const m = xml.match(/<key>StartInterval<\/key>\s*<integer>(\d+)<\/integer>/);
-    return m ? parseInt(m[1], 10) : null;
+    const text = fs.readFileSync(unitPath, 'utf8');
+    const { intervalSecs } = driver.scheduleFromUnit(text);
+    return intervalSecs;
   } catch { return null; }
 }
 
@@ -214,14 +205,20 @@ function psql(query) {
   } catch { return null; }
 }
 
-function getLaunchAgentPath(plistFile) {
-  return path.join(os.homedir(), 'Library', 'LaunchAgents', plistFile);
+function getLaunchAgentPath(unitFile) {
+  return path.join(AGENT_DIR, driver.unitFileName(unitFile));
 }
 
 // 5s TTL cache so /api/status polling (typically every 1-2s) doesn't spawn
 // a psql subprocess on every hit. Stale-by-5s is fine for the pending-reply
 // counter since it only affects the dashboard badge.
 let _pendingCache = { at: 0, value: null };
+let _statusCache = { at: 0, value: null };
+const activityStatsCache = new Map();
+function invalidateStatusCache() {
+  _statusCache = { at: 0, value: null };
+  _batchSnapshotCache = { at: 0, value: null };
+}
 function cachedPendingReplies() {
   const now = Date.now();
   if (now - _pendingCache.at < 5000) return _pendingCache.value;
@@ -230,52 +227,21 @@ function cachedPendingReplies() {
   return _pendingCache.value;
 }
 
-// Parse label and script path from a launchd plist XML blob.
-// Returns { label, scriptPath } where scriptPath is the first entry in
-// ProgramArguments that looks like a script (.sh/.py/.js), or Program if set.
-function parsePlist(xml) {
-  const labelM = xml.match(/<key>Label<\/key>\s*<string>([^<]+)<\/string>/);
-  const label = labelM ? labelM[1] : null;
-  let scriptPath = null;
-  const argsM = xml.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
-  if (argsM) {
-    const strings = [...argsM[1].matchAll(/<string>([^<]+)<\/string>/g)].map(m => m[1]);
-    scriptPath = strings.find(s => /\.(sh|py|js)$/.test(s)) || null;
-  }
-  if (!scriptPath) {
-    const progM = xml.match(/<key>Program<\/key>\s*<string>([^<]+)<\/string>/);
-    if (progM) scriptPath = progM[1];
-  }
-  return { label, scriptPath };
-}
-
-// Discover every social-autoposter launchd job from plist files.
-// Scans the repo's launchd/ dir plus ~/Library/LaunchAgents/ and merges by
-// label so we catch jobs installed without a repo copy (e.g. hand-installed).
-// This is the single source of truth for global pause/resume so any new
-// plist is covered automatically without touching the JOBS array.
+// Discover every social-autoposter scheduled job by scanning the repo's unit
+// dir plus the user's agent dir and merging by label, so hand-installed jobs
+// without a repo copy are covered. Field name `plist` is preserved for
+// backwards compat with the rest of server.js; on Linux this holds the
+// timer file name.
 function discoverLaunchdJobs() {
-  const byLabel = new Map();
-  const scan = (dir) => {
-    try {
-      const files = fs.readdirSync(dir).filter(f =>
-        f.startsWith('com.m13v.social-') && f.endsWith('.plist')
-      );
-      for (const f of files) {
-        try {
-          const xml = fs.readFileSync(path.join(dir, f), 'utf8');
-          const { label, scriptPath } = parsePlist(xml);
-          if (!label) continue;
-          if (!byLabel.has(label)) {
-            byLabel.set(label, { label, plist: f, scriptPath });
-          }
-        } catch {}
-      }
-    } catch {}
-  };
-  scan(LAUNCHD_DIR);
-  scan(path.join(os.homedir(), 'Library', 'LaunchAgents'));
-  return [...byLabel.values()];
+  const discovered = driver.discoverJobs({
+    repoUnitDir: UNIT_DIR,
+    agentsDir: AGENT_DIR,
+  });
+  return discovered.map(d => ({
+    label: d.label,
+    plist: d.unitFile,
+    scriptPath: d.scriptPath,
+  }));
 }
 
 function isPaused() {
@@ -290,7 +256,7 @@ function pauseAll() {
   for (const job of all) {
     const agentLink = getLaunchAgentPath(job.plist);
     if (isJobLoaded(job.label)) {
-      try { execSync(`launchctl unload "${agentLink}"`, { stdio: 'pipe' }); } catch {}
+      try { driver.unload(job.label, agentLink); } catch {}
     }
     if (job.scriptPath) {
       try {
@@ -315,26 +281,23 @@ function pauseAll() {
 }
 
 function resumeAll() {
-  const agentDir = path.join(os.homedir(), 'Library', 'LaunchAgents');
-  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(AGENT_DIR, { recursive: true });
   const all = discoverLaunchdJobs();
   for (const job of all) {
     if (isJobLoaded(job.label)) continue;
     const agentLink = getLaunchAgentPath(job.plist);
-    const plistSrc = path.join(LAUNCHD_DIR, job.plist);
+    const unitSrc = path.join(UNIT_DIR, driver.unitFileName(job.plist));
     let loadPath = null;
     if (fs.existsSync(agentLink)) {
       // Already installed (real file or symlink) — load as-is so in-place
-      // edits to the installed plist are preserved.
+      // edits to the installed unit are preserved.
       loadPath = agentLink;
-    } else if (fs.existsSync(plistSrc)) {
-      try {
-        fs.symlinkSync(plistSrc, agentLink);
-        loadPath = agentLink;
-      } catch {}
+    } else if (fs.existsSync(unitSrc)) {
+      const linked = driver.install(unitSrc, AGENT_DIR);
+      if (linked) loadPath = agentLink;
     }
     if (loadPath) {
-      try { execSync(`launchctl load "${loadPath}"`, { stdio: 'pipe' }); } catch {}
+      try { driver.load(loadPath); } catch {}
     }
   }
 }
@@ -346,54 +309,26 @@ function deriveName(label) {
     .join(' ');
 }
 
-// Returns the PID launchd currently tracks for a given job label, or null if
-// the job is loaded-but-idle or not loaded. Uses `launchctl list <label>`,
-// which survives `exec` in wrapper scripts (pgrep -f does not).
+// Returns the scheduler-tracked PID for a given job label, or null if the
+// job is loaded-but-idle or not loaded. Uses the driver (launchctl/systemctl)
+// rather than pgrep so it survives `exec` in wrapper scripts.
 function getLaunchdPid(label) {
-  try {
-    const out = execSync(`launchctl list ${label}`, { stdio: 'pipe' }).toString();
-    const m = out.match(/"PID"\s*=\s*(\d+);/);
-    return m ? parseInt(m[1], 10) : null;
-  } catch { return null; }
+  return driver.pidFor(label);
 }
 
-// Returns a display string for a plist's schedule, handling both StartInterval
-// (numeric seconds) and StartCalendarInterval (hour/minute cron). Returns null
-// if neither is present.
-function getPlistSchedule(plistPath) {
+// Returns a display string for a unit's schedule (e.g. "every 2h"). Returns
+// null when the unit uses a calendar schedule that can't be expressed as a
+// simple interval (for which we'd need driver-specific pretty-printing).
+function getPlistSchedule(unitPath) {
   try {
-    const xml = fs.readFileSync(plistPath, 'utf8');
-    const si = xml.match(/<key>StartInterval<\/key>\s*<integer>(\d+)<\/integer>/);
-    if (si) {
-      const secs = parseInt(si[1], 10);
-      if (secs % 3600 === 0) return `every ${secs / 3600}h`;
-      if (secs % 60 === 0) return `every ${secs / 60}m`;
-      return `every ${secs}s`;
-    }
-    // StartCalendarInterval can be either a single <dict> or an <array> of
-    // <dict>s. Match each shape explicitly so nested <key> tags inside the
-    // inner dicts don't break a generic capture.
-    let entries = null;
-    const arrM = xml.match(/<key>StartCalendarInterval<\/key>\s*<array>([\s\S]*?)<\/array>/);
-    if (arrM) {
-      entries = [...arrM[1].matchAll(/<dict>([\s\S]*?)<\/dict>/g)].map(m => m[1]);
-    } else {
-      const dictM = xml.match(/<key>StartCalendarInterval<\/key>\s*<dict>([\s\S]*?)<\/dict>/);
-      if (dictM) entries = [dictM[1]];
-    }
-    if (!entries || !entries.length) return null;
-    const parts = entries.map(body => {
-      const h = body.match(/<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/);
-      const m = body.match(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/);
-      if (h && m) return `${h[1].padStart(2, '0')}:${m[1].padStart(2, '0')}`;
-      if (h) return `${h[1].padStart(2, '0')}:00`;
-      if (m) return `:${m[1].padStart(2, '0')}`;
-      return null;
-    }).filter(Boolean);
-    if (!parts.length) return null;
-    // Collapse long lists: show first 3 then "+N more"
-    if (parts.length <= 4) return parts.join(', ');
-    return parts.slice(0, 3).join(', ') + ` +${parts.length - 3} more`;
+    const text = fs.readFileSync(unitPath, 'utf8');
+    const { intervalSecs, kind } = driver.scheduleFromUnit(text);
+    if (intervalSecs == null) return null;
+    const secs = intervalSecs;
+    if (secs % 3600 === 0) return `every ${secs / 3600}h`;
+    if (secs % 60 === 0) return `every ${secs / 60}m`;
+    if (kind === 'calendar') return `every ${secs}s (cal)`;
+    return `every ${secs}s`;
   } catch { return null; }
 }
 
@@ -439,9 +374,12 @@ function handleApi(req, res) {
 
   // GET /api/status
   if (p === '/api/status' && req.method === 'GET') {
+    if (_statusCache.value && Date.now() - _statusCache.at < 1500) {
+      return json(res, _statusCache.value);
+    }
     const snap = buildBatchSnapshot();
     const jobs = JOBS.map(job => {
-      const plistPath = path.join(LAUNCHD_DIR, job.plist);
+      const plistPath = unitSrcPath(job);
       const loaded = snap.loadedLabels.has(job.label);
       const pids = pidsForLabelFromSnapshot(snap, job.label);
       const running = pids.length > 0;
@@ -480,8 +418,8 @@ function handleApi(req, res) {
         const scriptBasename = d.scriptPath ? path.basename(d.scriptPath) : null;
         const logPrefix = scriptBasename ? scriptBasename.replace(/\.(sh|py|js)$/, '-') : null;
         const lastLog = logPrefix ? lastLogFromSnapshot(snap, { logPrefix }) : { file: null, time: null };
-        // Prefer repo plist for schedule; fall back to installed
-        let plistPath = path.join(LAUNCHD_DIR, d.plist);
+        // Prefer repo unit file for schedule; fall back to installed
+        let plistPath = path.join(UNIT_DIR, driver.unitFileName(d.plist));
         if (!fs.existsSync(plistPath)) plistPath = getLaunchAgentPath(d.plist);
         const schedule = getPlistSchedule(plistPath);
         return {
@@ -503,18 +441,22 @@ function handleApi(req, res) {
     const pending = cachedPendingReplies();
     const allDiscovered = discovered;
     const paused = allDiscovered.length > 0 && allDiscovered.every(j => !snap.loadedLabels.has(j.label));
-    return json(res, { jobs, otherJobs, pendingReplies: pending, paused });
+    const payload = { jobs, otherJobs, pendingReplies: pending, paused };
+    _statusCache = { at: Date.now(), value: payload };
+    return json(res, payload);
   }
 
   // POST /api/pause
   if (p === '/api/pause' && req.method === 'POST') {
     const killed = pauseAll();
+    invalidateStatusCache();
     return json(res, { paused: true, killedPids: killed });
   }
 
   // POST /api/resume
   if (p === '/api/resume' && req.method === 'POST') {
     resumeAll();
+    invalidateStatusCache();
     return json(res, { paused: false });
   }
 
@@ -524,16 +466,16 @@ function handleApi(req, res) {
     const label = decodeURIComponent(toggleMatch[1]);
     const job = findJob(label);
     if (!job) return json(res, { error: 'Unknown job' }, 404);
-    const plistSrc = path.join(LAUNCHD_DIR, job.plist);
+    const unitSrc = path.join(UNIT_DIR, driver.unitFileName(job.plist));
     const agentLink = getLaunchAgentPath(job.plist);
     const wasLoaded = isJobLoaded(label);
     const intent = !wasLoaded;
     let stderr = '';
     try {
       if (wasLoaded) {
-        const r = runLaunchctl('unload', agentLink);
+        const r = driver.unload(label, agentLink);
         stderr = r.stderr;
-        // Only unlink symlinks. Real-file installed plists (e.g. daily-report)
+        // Only unlink symlinks. Real-file installed units (e.g. daily-report)
         // must be preserved so the job can be toggled back on.
         try {
           const st = fs.lstatSync(agentLink);
@@ -542,20 +484,21 @@ function handleApi(req, res) {
       } else {
         fs.mkdirSync(path.dirname(agentLink), { recursive: true });
         if (!fs.existsSync(agentLink)) {
-          if (!fs.existsSync(plistSrc)) return json(res, { error: 'No plist source' }, 404);
-          fs.symlinkSync(plistSrc, agentLink);
+          if (!fs.existsSync(unitSrc)) return json(res, { error: 'No unit source' }, 404);
+          driver.install(unitSrc, AGENT_DIR);
         }
-        const r = runLaunchctl('load', agentLink);
+        const r = driver.load(agentLink);
         stderr = r.stderr;
       }
     } catch (e) {
       return json(res, { error: e.message }, 500);
     }
-    // Re-check actual state; launchctl may exit 0 while the action silently failed.
+    // Re-check actual state; the scheduler CLI may exit 0 while silently failing.
     const nowLoaded = isJobLoaded(label);
+    invalidateStatusCache();
     const payload = { loaded: nowLoaded };
     if (nowLoaded !== intent) {
-      payload.error = stderr || `launchctl ${wasLoaded ? 'unload' : 'load'} reported success but state did not change`;
+      payload.error = stderr || `${wasLoaded ? 'unload' : 'load'} reported success but state did not change`;
       return json(res, payload, 500);
     }
     return json(res, payload);
@@ -575,13 +518,12 @@ function handleApi(req, res) {
       if (!isJobLoaded(label)) {
         return json(res, { error: 'Job not loaded; cannot kickstart' }, 400);
       }
-      const target = `gui/${process.getuid()}/${label}`;
-      const r = spawnSync('launchctl', ['kickstart', '-p', target], { encoding: 'utf8' });
-      if (r.status !== 0) {
-        return json(res, { error: (r.stderr || r.stdout || 'kickstart failed').trim() }, 500);
+      const r = driver.kickstart(label);
+      if (!r.ok) {
+        return json(res, { error: r.stderr || 'kickstart failed' }, 500);
       }
-      const pid = parseInt((r.stdout || '').trim(), 10);
-      return json(res, { started: true, pid: isNaN(pid) ? null : pid });
+      invalidateStatusCache();
+      return json(res, { started: true, pid: r.pid });
     } catch (e) {
       return json(res, { error: e.message }, 500);
     }
@@ -594,13 +536,10 @@ function handleApi(req, res) {
     const job = findJob(label);
     if (!job) return json(res, { error: 'Unknown job' }, 404);
     const launchdPid = getLaunchdPid(label);
-    const target = `gui/${process.getuid()}/${label}`;
-    // Ask launchd to SIGKILL the job. launchctl kill targets the PID launchd
-    // tracks, which survives exec in wrapper scripts. SIGKILL (not SIGTERM)
-    // because some scripts trap TERM (e.g. lock.sh's cleanup trap) and the
-    // trap fires but the outer bash keeps waiting on its child, so SIGTERM
-    // alone doesn't reliably end the job.
-    try { spawnSync('launchctl', ['kill', 'SIGKILL', target]); } catch {}
+    // SIGKILL (not SIGTERM) because some scripts trap TERM (e.g. lock.sh's
+    // cleanup trap) and the trap fires but the outer bash keeps waiting on
+    // its child, so SIGTERM alone doesn't reliably end the job.
+    try { driver.killJob(label); } catch {}
     if (job.scriptBasename) {
       const base = job.scriptBasename.replace(/\.(sh|py|js)$/, '');
       try { execSync(`pkill -f "claude.*${base}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
@@ -616,27 +555,22 @@ function handleApi(req, res) {
       const label = decodeURIComponent(intervalMatch[1]);
       const job = findJob(label);
       if (!job) return json(res, { error: 'Unknown job' }, 404);
-      // Prefer editing the repo plist so git tracks the change; fall back to
+      // Prefer editing the repo unit so git tracks the change; fall back to
       // the installed file if the repo doesn't have a copy.
-      let plistPath = path.join(LAUNCHD_DIR, job.plist);
-      if (!fs.existsSync(plistPath)) plistPath = getLaunchAgentPath(job.plist);
-      let xml;
-      try { xml = fs.readFileSync(plistPath, 'utf8'); }
+      let unitPath = path.join(UNIT_DIR, driver.unitFileName(job.plist));
+      if (!fs.existsSync(unitPath)) unitPath = getLaunchAgentPath(job.plist);
+      let ok;
+      try { ok = driver.updateInterval(unitPath, interval); }
       catch (e) { return json(res, { error: e.message }, 500); }
-      if (!/<key>StartInterval<\/key>/.test(xml)) {
-        return json(res, { error: 'Job uses StartCalendarInterval; interval not settable here' }, 400);
+      if (!ok) {
+        return json(res, { error: 'Job uses a calendar schedule; interval not settable here' }, 400);
       }
-      xml = xml.replace(
-        /(<key>StartInterval<\/key>\s*<integer>)\d+(<\/integer>)/,
-        `$1${interval}$2`
-      );
-      fs.writeFileSync(plistPath, xml);
       // Reload if currently loaded so the new interval takes effect
       const agentLink = getLaunchAgentPath(job.plist);
       if (isJobLoaded(label)) {
         try {
-          execSync(`launchctl unload "${agentLink}"`, { stdio: 'pipe' });
-          execSync(`launchctl load "${agentLink}"`, { stdio: 'pipe' });
+          driver.unload(label, agentLink);
+          driver.load(agentLink);
         } catch {}
       }
       return json(res, { interval });
@@ -653,22 +587,21 @@ function handleApi(req, res) {
       if (!phaseJobs.length) return json(res, { error: 'Unknown phase' }, 404);
       const results = [];
       for (const job of phaseJobs) {
-        const plistPath = path.join(LAUNCHD_DIR, job.plist);
+        const unitPath = path.join(UNIT_DIR, driver.unitFileName(job.plist));
         try {
-          let xml = fs.readFileSync(plistPath, 'utf8');
-          xml = xml.replace(
-            /(<key>StartInterval<\/key>\s*<integer>)\d+(<\/integer>)/,
-            `$1${interval}$2`
-          );
-          fs.writeFileSync(plistPath, xml);
+          const ok = driver.updateInterval(unitPath, interval);
+          if (!ok) {
+            results.push({ label: job.label, error: 'calendar schedule; not settable' });
+            continue;
+          }
           // Reload if currently loaded
           const agentLink = getLaunchAgentPath(job.plist);
           if (isJobLoaded(job.label)) {
             try {
-              execSync(`launchctl unload "${agentLink}"`, { stdio: 'pipe' });
+              driver.unload(job.label, agentLink);
               try { fs.unlinkSync(agentLink); } catch {}
-              fs.symlinkSync(plistPath, agentLink);
-              execSync(`launchctl load "${agentLink}"`, { stdio: 'pipe' });
+              driver.install(unitPath, AGENT_DIR);
+              driver.load(agentLink);
             } catch {}
           }
           results.push({ label: job.label, interval });
@@ -895,19 +828,65 @@ function handleApi(req, res) {
   }
 
   // GET /api/activity - unified recent-events feed across posts, replies, mentions, dms
+  // cost_usd: a Claude session typically produces N activity rows; we split the
+  // session's total cost evenly across them so the sum across the feed matches
+  // what was actually spent. Sources without a session_id (mentions, SEO) project NULL.
   if (p === '/api/activity' && req.method === 'GET') {
-    const q = "SELECT json_agg(row_to_json(r)) FROM (" +
-      "SELECT * FROM (SELECT posted_at AS occurred_at, 'posted' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, engagement_style AS detail, our_url AS link, ('p' || id) AS key, project_name AS project FROM posts WHERE posted_at IS NOT NULL ORDER BY posted_at DESC LIMIT 150) x1 " +
-      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 140), LEFT(r2.their_content, 140)), r2.engagement_style, r2.our_reply_url, ('r' || r2.id), p.project_name FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 150) x2 " +
-      "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 150) x3 " +
-      "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
-      "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || id), NULL::text FROM dms WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || id), product FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') <> 'reddit' ORDER BY completed_at DESC LIMIT 150) x6 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || id), product FROM gsc_queries WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || id), product FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
+    const q = "WITH src AS (" +
+        "SELECT claude_session_id FROM posts WHERE claude_session_id IS NOT NULL AND posted_at IS NOT NULL " +
+        "UNION ALL SELECT claude_session_id FROM replies WHERE claude_session_id IS NOT NULL AND status IN ('replied','skipped') " +
+        "UNION ALL SELECT claude_session_id FROM dms WHERE claude_session_id IS NOT NULL AND status='sent' AND sent_at IS NOT NULL " +
+        "UNION ALL SELECT m.claude_session_id FROM dm_messages m WHERE m.claude_session_id IS NOT NULL AND m.direction='outbound'" +
+      "), session_counts AS (" +
+        "SELECT claude_session_id, COUNT(*)::int AS rows_in_session FROM src GROUP BY claude_session_id" +
+      "), session_cost AS (" +
+        "SELECT cs.session_id, (cs.total_cost_usd / NULLIF(sc.rows_in_session, 0))::numeric(10,6) AS per_row_cost " +
+        "FROM claude_sessions cs JOIN session_counts sc ON sc.claude_session_id = cs.session_id" +
+      ") " +
+      "SELECT json_agg(row_to_json(r)) FROM (" +
+      "SELECT * FROM (SELECT posted_at AS occurred_at, 'posted' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, engagement_style AS detail, our_url AS link, ('p' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id WHERE posted_at IS NOT NULL ORDER BY posted_at DESC LIMIT 150) x1 " +
+      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 140), LEFT(r2.their_content, 140)), r2.engagement_style, r2.our_reply_url, ('r' || r2.id), p.project_name, sc.per_row_cost FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id LEFT JOIN session_cost sc ON sc.session_id = r2.claude_session_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 150) x2 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name, sc.per_row_cost FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id LEFT JOIN session_cost sc ON sc.session_id = r3.claude_session_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 150) x3 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text, NULL::numeric FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
+      "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || dms.id), NULL::text, sc.per_row_cost FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
+      "UNION ALL SELECT * FROM (SELECT m.message_at, 'dm_reply_sent', d.platform, d.their_author, LEFT(m.content, 140), NULL::text, d.chat_url, ('dr' || m.id), NULL::text, sc.per_row_cost FROM dm_messages m JOIN dms d ON d.id = m.dm_id LEFT JOIN session_cost sc ON sc.session_id = m.claude_session_id WHERE m.direction = 'outbound' AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction = 'inbound' AND m2.message_at < m.message_at) ORDER BY m.message_at DESC LIMIT 150) x5b " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || id), product, NULL::numeric FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') <> 'reddit' ORDER BY completed_at DESC LIMIT 150) x6 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || id), product, NULL::numeric FROM gsc_queries WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || id), product, NULL::numeric FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
       "ORDER BY 1 DESC LIMIT 500) r";
     const rows = psql(q);
     return json(res, { events: rows && rows !== '' ? (JSON.parse(rows) || []) : [] });
+  }
+
+  // GET /api/activity/stats - per-type, per-platform counts over a trailing window (default 24h)
+  if (p === '/api/activity/stats' && req.method === 'GET') {
+    const url = new URL(req.url, 'http://localhost');
+    const windowHours = Math.max(1, Math.min(720, parseInt(url.searchParams.get('hours') || '24', 10) || 24));
+    const cached = activityStatsCache.get(windowHours);
+    // 5-min TTL. The 9-way UNION runs via execSync(psql), blocking Node's
+    // event loop; caching prevents dashboard polling from stalling /api/status
+    // and /api/activity behind it. 24h counts barely shift in 5 minutes.
+    if (cached && Date.now() - cached.at < 300000) {
+      return json(res, { windowHours, rows: cached.value, cachedAt: cached.at });
+    }
+    const win = `INTERVAL '${windowHours} hours'`;
+    const norm = "CASE WHEN LOWER(pl) = 'x' THEN 'twitter' ELSE LOWER(pl) END";
+    const q = "SELECT json_agg(row_to_json(r)) FROM (" +
+      "SELECT type, " + norm + " AS platform, COUNT(*)::int AS count FROM (" +
+        "SELECT 'posted' AS type, platform AS pl FROM posts WHERE posted_at >= NOW() - " + win + " " +
+        "UNION ALL SELECT 'replied', platform FROM replies WHERE status='replied' AND replied_at >= NOW() - " + win + " " +
+        "UNION ALL SELECT 'skipped', platform FROM replies WHERE status='skipped' AND COALESCE(processing_at, discovered_at) >= NOW() - " + win + " " +
+        "UNION ALL SELECT 'mention', platform FROM octolens_mentions WHERE COALESCE(source_timestamp, received_at) >= NOW() - " + win + " " +
+        "UNION ALL SELECT 'dm_sent', platform FROM dms WHERE status='sent' AND sent_at >= NOW() - " + win + " " +
+        "UNION ALL SELECT 'dm_reply_sent', d.platform FROM dm_messages m JOIN dms d ON d.id = m.dm_id WHERE m.direction='outbound' AND m.message_at >= NOW() - " + win + " AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction='inbound' AND m2.message_at < m.message_at) " +
+        "UNION ALL SELECT 'page_published_serp', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND COALESCE(source, '') <> 'reddit' " +
+        "UNION ALL SELECT 'page_published_gsc', 'seo' FROM gsc_queries WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL " +
+        "UNION ALL SELECT 'page_published_reddit', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='reddit'" +
+      ") u GROUP BY type, platform ORDER BY type, platform) r";
+    const rows = psql(q);
+    const value = rows && rows !== '' ? (JSON.parse(rows) || []) : [];
+    activityStatsCache.set(windowHours, { at: Date.now(), value });
+    return json(res, { windowHours, rows: value });
   }
 
   return json(res, { error: 'Not found' }, 404);
@@ -928,13 +907,13 @@ const HTML = `<!DOCTYPE html>
   .header h1 { font-size: 20px; font-weight: 600; }
   .header .pending { background: #7c3aed; color: white; padding: 4px 12px; border-radius: 12px; font-size: 13px; }
   .tabs { display: flex; gap: 0; border-bottom: 1px solid #262626; padding: 0 24px; }
-  .tab { padding: 12px 20px; cursor: pointer; color: #a3a3a3; font-size: 14px; border-bottom: 2px solid transparent; transition: all 0.15s; }
+  .tab { padding: 12px 20px; cursor: pointer; color: #e5e5e5; font-size: 14px; border-bottom: 2px solid transparent; transition: all 0.15s; }
   .tab:hover { color: #e5e5e5; }
   .tab.active { color: #e5e5e5; border-bottom-color: #7c3aed; }
   .content { padding: 24px; }
   .matrix-wrapper { overflow-x: auto; }
   .matrix-table { width: 100%; border-collapse: collapse; background: #171717; border: 1px solid #262626; border-radius: 12px; overflow: hidden; }
-  .matrix-table th { text-align: center; padding: 12px 16px; font-size: 12px; font-weight: 500; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #262626; background: #0f0f0f; }
+  .matrix-table th { text-align: center; padding: 12px 16px; font-size: 12px; font-weight: 500; color: #e5e5e5; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #262626; background: #0f0f0f; }
   .matrix-table th.row-header { width: 90px; }
   .matrix-table th.freq-header { width: 90px; }
   .freq-cell { text-align: center; vertical-align: middle; background: #0f0f0f; }
@@ -945,7 +924,7 @@ const HTML = `<!DOCTYPE html>
   .matrix-cell { display: flex; flex-direction: column; align-items: center; gap: 6px; }
   .matrix-cell .badge { font-size: 11px; padding: 2px 8px; cursor: pointer; }
   .matrix-cell .badge:hover { filter: brightness(1.3); }
-  .matrix-cell .cell-info { font-size: 11px; color: #6b7280; }
+  .matrix-cell .cell-info { font-size: 11px; color: #e5e5e5; }
   .matrix-cell .cell-actions { display: flex; gap: 4px; margin-top: 2px; }
   .matrix-cell .cell-actions .btn { padding: 3px 8px; font-size: 11px; }
   .matrix-cell-empty { color: #333; font-size: 20px; }
@@ -973,7 +952,7 @@ const HTML = `<!DOCTYPE html>
     animation: runningDot 1.1s ease-in-out infinite;
   }
   .badge.scheduled { background: #064e3b; color: #6ee7b7; }
-  .badge.stopped { background: #292524; color: #a3a3a3; }
+  .badge.stopped { background: #292524; color: #e5e5e5; }
   .toggle-switch { position: relative; display: inline-block; width: 40px; height: 22px; cursor: pointer; flex-shrink: 0; }
   .toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
   .toggle-slider { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #3f3f46; border: 1px solid #52525b; border-radius: 22px; transition: background 0.15s, border-color 0.15s; }
@@ -982,7 +961,7 @@ const HTML = `<!DOCTYPE html>
   .toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); background: #ffffff; }
   .toggle-switch:hover .toggle-slider { filter: brightness(1.15); }
   .toggle-switch input:disabled + .toggle-slider { opacity: 0.5; cursor: not-allowed; }
-  .toggle-label { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: #6b7280; margin-left: 6px; }
+  .toggle-label { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: #e5e5e5; margin-left: 6px; }
   .toggle-label.on { color: #10b981; }
   @keyframes runningPulse {
     0%   { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.75), 0 0 10px rgba(14, 165, 233, 0.55); transform: scale(1); }
@@ -997,7 +976,7 @@ const HTML = `<!DOCTYPE html>
   .card { background: #171717; border: 1px solid #262626; border-radius: 12px; padding: 20px; }
   .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
   .card-title { font-size: 16px; font-weight: 600; }
-  .card-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 13px; color: #a3a3a3; }
+  .card-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 13px; color: #e5e5e5; }
   .card-row span:last-child { color: #e5e5e5; }
   .btn { padding: 8px 16px; border-radius: 8px; border: 1px solid #404040; background: #262626; color: #e5e5e5; cursor: pointer; font-size: 13px; transition: all 0.15s; }
   .btn:hover { background: #333; border-color: #525252; }
@@ -1009,11 +988,11 @@ const HTML = `<!DOCTYPE html>
   select { padding: 8px 12px; border-radius: 8px; border: 1px solid #404040; background: #262626; color: #e5e5e5; font-size: 13px; cursor: pointer; }
   .log-viewer { background: #0d0d0d; border: 1px solid #262626; border-radius: 12px; padding: 16px; margin-top: 16px; }
   .log-controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-  .log-content { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: 500px; overflow-y: auto; margin-top: 12px; color: #a3a3a3; padding: 12px; background: #0a0a0a; border-radius: 8px; }
+  .log-content { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: 500px; overflow-y: auto; margin-top: 12px; color: #e5e5e5; padding: 12px; background: #0a0a0a; border-radius: 8px; }
   .settings-section { margin-bottom: 24px; }
-  .settings-section h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: #a3a3a3; }
+  .settings-section h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: #e5e5e5; }
   .field { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
-  .field label { min-width: 140px; font-size: 13px; color: #a3a3a3; }
+  .field label { min-width: 140px; font-size: 13px; color: #e5e5e5; }
   .field input { flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid #404040; background: #171717; color: #e5e5e5; font-size: 13px; }
   .toast { position: fixed; bottom: 24px; right: 24px; background: #065f46; color: #6ee7b7; padding: 12px 20px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100; }
   .toast.show { opacity: 1; }
@@ -1022,8 +1001,8 @@ const HTML = `<!DOCTYPE html>
   .reply-item { padding: 8px 0; border-bottom: 1px solid #262626; font-size: 13px; }
   .reply-item:last-child { border-bottom: none; }
   .reply-author { color: #a78bfa; font-weight: 500; }
-  .reply-platform { color: #6b7280; font-size: 11px; text-transform: uppercase; }
-  .reply-text { color: #d4d4d4; margin-top: 2px; }
+  .reply-platform { color: #e5e5e5; font-size: 11px; text-transform: uppercase; }
+  .reply-text { color: #e5e5e5; margin-top: 2px; }
   .hidden { display: none; }
 
   /* Activity tab */
@@ -1031,7 +1010,7 @@ const HTML = `<!DOCTYPE html>
   .activity-filter-group { display: flex; gap: 6px; flex-wrap: wrap; }
   .activity-chip {
     padding: 4px 10px; border-radius: 999px; font-size: 12px; cursor: pointer;
-    border: 1px solid #333; background: #171717; color: #a3a3a3;
+    border: 1px solid #333; background: #171717; color: #e5e5e5;
     transition: all 0.15s; user-select: none;
   }
   .activity-chip:hover { border-color: #525252; color: #e5e5e5; }
@@ -1039,8 +1018,9 @@ const HTML = `<!DOCTYPE html>
   .activity-chip.active.ev-posted   { background: #064e3b; border-color: #10b981; color: #6ee7b7; }
   .activity-chip.active.ev-replied  { background: #0c4a6e; border-color: #0ea5e9; color: #7dd3fc; }
   .activity-chip.active.ev-skipped  { background: #422006; border-color: #d97706; color: #fbbf24; }
-  .activity-chip.active.ev-mention  { background: #1f1f1f; border-color: #737373; color: #d4d4d4; }
+  .activity-chip.active.ev-mention  { background: #1f1f1f; border-color: #737373; color: #e5e5e5; }
   .activity-chip.active.ev-dm_sent  { background: #3b0764; border-color: #a855f7; color: #d8b4fe; }
+  .activity-chip.active.ev-dm_reply_sent { background: #500724; border-color: #ec4899; color: #f9a8d4; }
   .activity-chip.active.ev-page_published_serp   { background: #422006; border-color: #f59e0b; color: #fcd34d; }
   .activity-chip.active.ev-page_published_gsc    { background: #134e4a; border-color: #14b8a6; color: #5eead4; }
   .activity-chip.active.ev-page_published_reddit { background: #7c2d12; border-color: #f97316; color: #fdba74; }
@@ -1060,24 +1040,27 @@ const HTML = `<!DOCTYPE html>
   .activity-table { width: 100%; border-collapse: collapse; background: #171717; border: 1px solid #262626; border-radius: 12px; overflow: hidden; }
   .activity-table th {
     text-align: left; padding: 10px 14px; font-size: 11px; font-weight: 500;
-    color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em;
+    color: #e5e5e5; text-transform: uppercase; letter-spacing: 0.05em;
     border-bottom: 1px solid #262626; background: #0f0f0f;
   }
   .activity-table td {
     padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #1f1f1f;
-    vertical-align: top; color: #d4d4d4;
+    vertical-align: top; color: #e5e5e5;
   }
   .activity-table tr:last-child td { border-bottom: none; }
   .activity-table tr:hover td { background: #1c1c1c; }
   .activity-event-cell { display: flex; flex-direction: column; gap: 4px; white-space: nowrap; }
-  .activity-time { color: #6b7280; font-size: 12px; font-variant-numeric: tabular-nums; }
-  .activity-platform { display: inline-flex; align-items: center; gap: 6px; color: #a3a3a3; font-size: 12px; text-transform: lowercase; }
+  .activity-time { color: #e5e5e5; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .activity-platform { display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: #e5e5e5; font-size: 24px; text-transform: lowercase; }
   .activity-platform svg { height: 1em; width: 1em; flex-shrink: 0; fill: currentColor; }
-  .activity-platform .plat-mono { display: inline-flex; align-items: center; justify-content: center; height: 1em; width: 1em; border-radius: 3px; background: #262626; color: #d4d4d4; font-size: 0.7em; font-weight: 700; letter-spacing: 0; line-height: 1; }
+  .activity-platform .plat-mono { display: inline-flex; align-items: center; justify-content: center; height: 1em; width: 1em; border-radius: 4px; background: #262626; color: #e5e5e5; font-size: 0.7em; font-weight: 700; letter-spacing: 0; line-height: 1; }
+  .activity-platform-cell { text-align: center; vertical-align: middle; }
+  .activity-summary-url { color: #60a5fa; text-decoration: none; word-break: break-all; }
+  .activity-summary-url:hover { text-decoration: underline; }
   .activity-project-cell { display: flex; flex-direction: column; gap: 3px; }
   .activity-project { color: #e5e5e5; font-size: 13px; font-weight: 500; word-break: break-all; }
-  .activity-detail { color: #737373; font-size: 11px; font-family: 'SF Mono', monospace; word-break: break-word; }
-  .activity-summary { color: #d4d4d4; line-height: 1.4; }
+  .activity-detail { color: #e5e5e5; font-size: 11px; font-family: 'SF Mono', monospace; word-break: break-word; }
+  .activity-summary { color: #e5e5e5; line-height: 1.4; }
   .activity-summary-link { color: #60a5fa; text-decoration: none; font-size: 12px; opacity: 0.7; }
   .activity-summary-link:hover { opacity: 1; text-decoration: underline; }
   .activity-link { color: #60a5fa; text-decoration: none; font-size: 14px; opacity: 0.7; }
@@ -1090,8 +1073,9 @@ const HTML = `<!DOCTYPE html>
   .ev-pill.ev-posted  { background: #064e3b; color: #6ee7b7; }
   .ev-pill.ev-replied { background: #0c4a6e; color: #7dd3fc; }
   .ev-pill.ev-skipped { background: #422006; color: #fbbf24; }
-  .ev-pill.ev-mention { background: #262626; color: #d4d4d4; }
+  .ev-pill.ev-mention { background: #262626; color: #e5e5e5; }
   .ev-pill.ev-dm_sent { background: #3b0764; color: #d8b4fe; }
+  .ev-pill.ev-dm_reply_sent { background: #500724; color: #f9a8d4; }
   .ev-pill.ev-page_published_serp   { background: #422006; color: #fcd34d; border: 1px solid #f59e0b; }
   .ev-pill.ev-page_published_gsc    { background: #134e4a; color: #5eead4; border: 1px solid #14b8a6; }
   .ev-pill.ev-page_published_reddit { background: #7c2d12; color: #fdba74; border: 1px solid #f97316; }
@@ -1107,13 +1091,39 @@ const HTML = `<!DOCTYPE html>
   .activity-sortable:hover .activity-header-label { color: #e5e5e5; }
   .activity-header-label { display: inline-flex; align-items: center; gap: 4px; }
   .activity-sort-arrow { font-size: 10px; color: #525252; min-width: 8px; }
-  .activity-sort-arrow.active { color: #d4d4d4; }
+  .activity-sort-arrow.active { color: #e5e5e5; }
   .activity-filter-row th {
     padding: 6px 14px; background: #0a0a0a; border-bottom: 1px solid #262626;
     text-transform: none; letter-spacing: 0; font-weight: 400;
   }
   .activity-filter-stack { display: flex; flex-direction: column; gap: 4px; }
   .activity-filter-stack .activity-filter-group { gap: 4px; }
+  .activity-filter-dropdown { position: relative; display: inline-block; }
+  .activity-filter-dropdown > summary {
+    list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    background: #0f0f0f; border: 1px solid #262626; border-radius: 6px;
+    padding: 5px 10px; font-size: 12px; color: #e5e5e5; user-select: none;
+  }
+  .activity-filter-dropdown > summary::-webkit-details-marker { display: none; }
+  .activity-filter-dropdown > summary::after {
+    content: '\u25BE'; font-size: 10px; color: #e5e5e5; margin-left: 2px;
+  }
+  .activity-filter-dropdown[open] > summary { border-color: #525252; color: #e5e5e5; }
+  .activity-filter-dropdown[open] > summary::after { color: #e5e5e5; }
+  .activity-filter-dropdown:hover > summary { border-color: #525252; }
+  .activity-filter-menu {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 20;
+    background: #171717; border: 1px solid #262626; border-radius: 8px;
+    padding: 8px; min-width: 180px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .activity-filter-menu .activity-filter-group { display: flex; flex-wrap: wrap; gap: 4px; }
+  .activity-filter-menu-actions { display: flex; gap: 4px; border-bottom: 1px solid #262626; padding-bottom: 6px; }
+  .activity-filter-menu-btn {
+    background: transparent; border: 1px solid #262626; color: #e5e5e5;
+    padding: 3px 8px; font-size: 11px; border-radius: 4px; cursor: pointer;
+  }
+  .activity-filter-menu-btn:hover { border-color: #525252; color: #e5e5e5; }
   .activity-col-filter {
     width: 100%; background: #0f0f0f; border: 1px solid #262626; border-radius: 6px;
     padding: 5px 8px; font-size: 12px; color: #e5e5e5; outline: none;
@@ -1122,7 +1132,7 @@ const HTML = `<!DOCTYPE html>
   .activity-col-filter::placeholder { color: #525252; }
   .activity-pagination {
     display: flex; align-items: center; justify-content: flex-end; gap: 10px;
-    margin-top: 12px; font-size: 12px; color: #a3a3a3;
+    margin-top: 12px; font-size: 12px; color: #e5e5e5;
   }
   .activity-pagination .pager-btn {
     background: #171717; border: 1px solid #262626; color: #e5e5e5;
@@ -1140,6 +1150,35 @@ const HTML = `<!DOCTYPE html>
     60%  { background: rgba(34, 211, 238, 0.08); box-shadow: inset 3px 0 0 #22d3ee; }
     100% { background: transparent; box-shadow: inset 3px 0 0 transparent; }
   }
+
+  /* Status tab: 24h activity stats */
+  .stats-wrapper { background: #171717; border: 1px solid #262626; border-radius: 12px; padding: 16px 20px; margin-bottom: 20px; }
+  .stats-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+  .stats-title { font-size: 13px; font-weight: 600; color: #e5e5e5; text-transform: uppercase; letter-spacing: 0.05em; }
+  .stats-total { font-size: 12px; color: #e5e5e5; font-variant-numeric: tabular-nums; }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+  .stat-card {
+    background: #0f0f0f; border: 1px solid #262626; border-radius: 10px; padding: 10px 12px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .stat-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .stat-card-label { font-size: 11px; color: #e5e5e5; text-transform: lowercase; letter-spacing: 0.02em; }
+  .stat-card-count { font-size: 22px; font-weight: 700; color: #e5e5e5; font-variant-numeric: tabular-nums; line-height: 1; }
+  .stat-card.zero .stat-card-count { color: #3f3f46; }
+  .stat-card.ev-posted              { border-left: 3px solid #10b981; }
+  .stat-card.ev-replied             { border-left: 3px solid #0ea5e9; }
+  .stat-card.ev-skipped             { border-left: 3px solid #d97706; }
+  .stat-card.ev-mention             { border-left: 3px solid #737373; }
+  .stat-card.ev-dm_sent             { border-left: 3px solid #a855f7; }
+  .stat-card.ev-dm_reply_sent       { border-left: 3px solid #ec4899; }
+  .stat-card.ev-page_published_serp   { border-left: 3px solid #f59e0b; }
+  .stat-card.ev-page_published_gsc    { border-left: 3px solid #14b8a6; }
+  .stat-card.ev-page_published_reddit { border-left: 3px solid #f97316; }
+  .stat-card-breakdown { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: #e5e5e5; }
+  .stat-plat { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+  .stat-plat svg { height: 11px; width: 11px; fill: currentColor; }
+  .stat-plat .plat-mono { height: 11px; width: 11px; border-radius: 2px; background: #262626; color: #e5e5e5; font-size: 9px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  .stat-plat-count { color: #e5e5e5; }
 
   @media (max-width: 600px) { .cards { grid-template-columns: 1fr; } .content { padding: 16px; } }
 </style>
@@ -1162,6 +1201,13 @@ const HTML = `<!DOCTYPE html>
 </div>
 
 <div class="content" id="tab-status">
+  <div class="stats-wrapper">
+    <div class="stats-header">
+      <span class="stats-title">Last 24 hours</span>
+      <span class="stats-total" id="stats-total"></span>
+    </div>
+    <div class="stats-grid" id="stats-grid"></div>
+  </div>
   <div class="matrix-wrapper">
     <table class="matrix-table">
       <thead>
@@ -1188,15 +1234,18 @@ const HTML = `<!DOCTYPE html>
     <div class="activity-status">
       <span class="activity-live-dot"></span>
       <span id="activity-status-text">live</span>
-      <span id="activity-count" style="color:#6b7280;margin-left:8px;"></span>
+      <span id="activity-count" style="color:#e5e5e5;margin-left:8px;"></span>
     </div>
   </div>
   <div class="activity-wrapper">
     <table class="activity-table">
       <thead>
         <tr>
-          <th style="width:170px;" class="activity-sortable" data-sort="occurred_at">
+          <th style="width:140px;" class="activity-sortable" data-sort="occurred_at">
             <span class="activity-header-label">Event <span class="activity-sort-arrow" data-sort-arrow="occurred_at"></span></span>
+          </th>
+          <th style="width:56px;" class="activity-sortable" data-sort="platform">
+            <span class="activity-header-label">Platform <span class="activity-sort-arrow" data-sort-arrow="platform"></span></span>
           </th>
           <th style="width:220px;" class="activity-sortable" data-sort="project">
             <span class="activity-header-label">Project <span class="activity-sort-arrow" data-sort-arrow="project"></span></span>
@@ -1204,14 +1253,34 @@ const HTML = `<!DOCTYPE html>
           <th class="activity-sortable" data-sort="summary">
             <span class="activity-header-label">What <span class="activity-sort-arrow" data-sort-arrow="summary"></span></span>
           </th>
-          <th style="width:40px;"></th>
+          <th style="width:90px;text-align:right;" class="activity-sortable" data-sort="cost_usd">
+            <span class="activity-header-label">Cost <span class="activity-sort-arrow" data-sort-arrow="cost_usd"></span></span>
+          </th>
         </tr>
         <tr class="activity-filter-row">
           <th>
-            <div class="activity-filter-stack">
-              <div class="activity-filter-group" id="activity-type-filters"></div>
-              <div class="activity-filter-group" id="activity-platform-filters"></div>
-            </div>
+            <details class="activity-filter-dropdown" id="activity-type-dropdown">
+              <summary><span id="activity-type-summary">all events</span></summary>
+              <div class="activity-filter-menu">
+                <div class="activity-filter-menu-actions">
+                  <button type="button" class="activity-filter-menu-btn" data-filter-action="type-all">all</button>
+                  <button type="button" class="activity-filter-menu-btn" data-filter-action="type-none">none</button>
+                </div>
+                <div class="activity-filter-group" id="activity-type-filters"></div>
+              </div>
+            </details>
+          </th>
+          <th>
+            <details class="activity-filter-dropdown" id="activity-platform-dropdown">
+              <summary><span id="activity-platform-summary">all</span></summary>
+              <div class="activity-filter-menu">
+                <div class="activity-filter-menu-actions">
+                  <button type="button" class="activity-filter-menu-btn" data-filter-action="platform-all">all</button>
+                  <button type="button" class="activity-filter-menu-btn" data-filter-action="platform-none">none</button>
+                </div>
+                <div class="activity-filter-group" id="activity-platform-filters"></div>
+              </div>
+            </details>
           </th>
           <th><input type="text" id="activity-filter-project" placeholder="filter project/detail&hellip;" class="activity-col-filter" /></th>
           <th><input type="text" id="activity-filter-summary" placeholder="filter what&hellip;" class="activity-col-filter" /></th>
@@ -1219,7 +1288,7 @@ const HTML = `<!DOCTYPE html>
         </tr>
       </thead>
       <tbody id="activity-body">
-        <tr><td colspan="4" style="text-align:center;color:#6b7280;padding:40px;">Loading&hellip;</td></tr>
+        <tr><td colspan="6" style="text-align:center;color:#e5e5e5;padding:40px;">Loading&hellip;</td></tr>
       </tbody>
     </table>
   </div>
@@ -1268,6 +1337,7 @@ const HTML = `<!DOCTYPE html>
 
 <script>
 const INTERVALS = [
+  { label: '5 min', value: 300 },
   { label: '30 min', value: 1800 },
   { label: '1 hour', value: 3600 },
   { label: '2 hours', value: 7200 },
@@ -1296,6 +1366,18 @@ function relTime(iso) {
   if (hrs < 24) return hrs + 'h ' + (mins % 60) + 'm ago';
   const days = Math.floor(hrs / 24);
   return days + 'd ago';
+}
+
+function nextRunTime(lastRunIso, intervalSecs) {
+  if (!intervalSecs) return '--';
+  if (!lastRunIso) return 'soon';
+  const diffMs = new Date(lastRunIso).getTime() + intervalSecs * 1000 - Date.now();
+  if (diffMs <= 0) return 'due now';
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'in <1m';
+  if (mins < 60) return 'in ' + mins + 'm';
+  const hrs = Math.floor(mins / 60);
+  return 'in ' + hrs + 'h ' + (mins % 60) + 'm';
 }
 
 function fmtInterval(secs) {
@@ -1328,6 +1410,18 @@ function renderCell(job) {
   '</div></td>';
 }
 
+function phaseInterval(rowJobs) {
+  const vals = rowJobs.map(j => j.interval).filter(v => typeof v === 'number' && v > 0);
+  if (!vals.length) return null;
+  const counts = new Map();
+  for (const v of vals) counts.set(v, (counts.get(v) || 0) + 1);
+  let best = null;
+  for (const [v, c] of counts) {
+    if (!best || c > best.c || (c === best.c && v < best.v)) best = { v, c };
+  }
+  return best.v;
+}
+
 function renderFreqCell(jobType, interval, jobs) {
   const intervalOptions = INTERVALS.map(i =>
     '<option value="' + i.value + '"' + (i.value === interval ? ' selected' : '') + '>' + i.label + '</option>'
@@ -1339,7 +1433,7 @@ function renderFreqCell(jobType, interval, jobs) {
     if (j.lastRun && (!latestRun || new Date(j.lastRun) > new Date(latestRun))) latestRun = j.lastRun;
   }
   return '<td class="freq-cell" data-freq="' + jobType + '">' +
-    '<div class="cell-info" data-field="freq-lastrun">' + relTime(latestRun) + '</div>' +
+    '<div class="cell-info" data-field="freq-lastrun">' + nextRunTime(latestRun, interval) + '</div>' +
     '<select onchange="setPhaseInterval(\\'' + jobType + '\\', this.value)">' + intervalOptions + '</select>' +
   '</td>';
 }
@@ -1351,7 +1445,7 @@ function buildMatrix(jobs) {
   let html = '';
   for (const jobType of JOB_TYPES) {
     const rowJobs = jobs.filter(j => j.type === jobType);
-    const interval = rowJobs.length ? rowJobs[0].interval : null;
+    const interval = phaseInterval(rowJobs);
 
     html += '<tr><td class="row-label">' + jobType + '</td>';
     html += renderFreqCell(jobType, interval, jobs);
@@ -1387,8 +1481,8 @@ function renderOtherJobRow(job) {
     : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
   return '<tr data-other-job="' + job.label + '">' +
     '<td style="text-align:left;padding-left:16px;">' + job.name + '</td>' +
-    '<td style="color:#6b7280;font-size:12px;">' + (job.schedule || '--') + '</td>' +
-    '<td style="color:#6b7280;font-size:12px;" data-field="lastrun">' + relTime(job.lastRun) + '</td>' +
+    '<td style="color:#e5e5e5;font-size:12px;">' + (job.schedule || '--') + '</td>' +
+    '<td style="color:#e5e5e5;font-size:12px;" data-field="lastrun">' + relTime(job.lastRun) + '</td>' +
     '<td><span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span></td>' +
     '<td><div class="cell-actions" style="justify-content:center;">' + renderToggle(job.label, job.loaded) + runStopBtn + '</div></td>' +
   '</tr>';
@@ -1441,8 +1535,13 @@ function updateFreqCells(jobs) {
     for (const j of rowJobs) {
       if (j.lastRun && (!latestRun || new Date(j.lastRun) > new Date(latestRun))) latestRun = j.lastRun;
     }
+    const interval = phaseInterval(rowJobs);
     const el = td.querySelector('[data-field="freq-lastrun"]');
-    if (el) el.textContent = relTime(latestRun);
+    if (el) el.textContent = nextRunTime(latestRun, interval);
+    const sel = td.querySelector('select');
+    if (sel && interval != null && String(sel.value) !== String(interval)) {
+      sel.value = String(interval);
+    }
   }
 }
 
@@ -1497,8 +1596,8 @@ async function loadStatus() {
 
       const statusBreakdown = (pending.statusCounts || [])
         .map(s => {
-          const colors = { pending: '#eab308', replied: '#22c55e', skipped: '#6b7280', error: '#ef4444' };
-          return '<span style="margin-right:16px;font-size:13px;"><span style="color:' + (colors[s.status] || '#a3a3a3') + ';">' + s.status + '</span> ' + s.count + '</span>';
+          const colors = { pending: '#eab308', replied: '#22c55e', skipped: '#e5e5e5', error: '#ef4444' };
+          return '<span style="margin-right:16px;font-size:13px;"><span style="color:' + (colors[s.status] || '#e5e5e5') + ';">' + s.status + '</span> ' + s.count + '</span>';
         }).join('');
 
       pendingSection.innerHTML = '<div class="card pending-card">' +
@@ -1729,8 +1828,8 @@ async function saveSettings() {
 }
 
 // Activity tab
-const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit'];
-const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)' };
+const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'dm_reply_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit'];
+const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', dm_reply_sent: 'dm reply', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)' };
 const ACTIVITY_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github', 'seo'];
 let _activitySeen = new Set();
 let _activityFirstLoad = true;
@@ -1745,6 +1844,19 @@ let _activityPage = 0;
 let _activityPageSize = 25;
 let _activityTimer = null;
 let _activityControlsWired = false;
+
+function updateTypeDropdownSummary() {
+  const el = document.getElementById('activity-type-summary');
+  if (!el) return;
+  const n = _activityTypeFilter.size, total = EVENT_TYPES.length;
+  el.textContent = n === total ? 'all events' : (n === 0 ? 'none' : n + ' of ' + total);
+}
+function updatePlatformDropdownSummary() {
+  const el = document.getElementById('activity-platform-summary');
+  if (!el) return;
+  const n = _activityPlatformFilter.size, total = ACTIVITY_PLATFORMS.length;
+  el.textContent = n === total ? 'all' : (n === 0 ? 'none' : n + ' of ' + total);
+}
 
 function buildActivityFilters() {
   const tEl = document.getElementById('activity-type-filters');
@@ -1762,6 +1874,7 @@ function buildActivityFilters() {
       if (_activityTypeFilter.has(t)) { _activityTypeFilter.delete(t); el.classList.remove('active'); }
       else { _activityTypeFilter.add(t); el.classList.add('active'); }
       _activityPage = 0;
+      updateTypeDropdownSummary();
       renderActivity(_lastActivityEvents || []);
     });
   });
@@ -1771,7 +1884,38 @@ function buildActivityFilters() {
       if (_activityPlatformFilter.has(p)) { _activityPlatformFilter.delete(p); el.classList.remove('active'); }
       else { _activityPlatformFilter.add(p); el.classList.add('active'); }
       _activityPage = 0;
+      updatePlatformDropdownSummary();
       renderActivity(_lastActivityEvents || []);
+    });
+  });
+  document.querySelectorAll('[data-filter-action]').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const a = btn.dataset.filterAction;
+      if (a === 'type-all') {
+        _activityTypeFilter = new Set(EVENT_TYPES);
+        tEl.querySelectorAll('[data-type]').forEach(c => c.classList.add('active'));
+      } else if (a === 'type-none') {
+        _activityTypeFilter = new Set();
+        tEl.querySelectorAll('[data-type]').forEach(c => c.classList.remove('active'));
+      } else if (a === 'platform-all') {
+        _activityPlatformFilter = new Set(ACTIVITY_PLATFORMS);
+        pEl.querySelectorAll('[data-platform]').forEach(c => c.classList.add('active'));
+      } else if (a === 'platform-none') {
+        _activityPlatformFilter = new Set();
+        pEl.querySelectorAll('[data-platform]').forEach(c => c.classList.remove('active'));
+      }
+      _activityPage = 0;
+      updateTypeDropdownSummary();
+      updatePlatformDropdownSummary();
+      renderActivity(_lastActivityEvents || []);
+    });
+  });
+  updateTypeDropdownSummary();
+  updatePlatformDropdownSummary();
+  document.addEventListener('click', (ev) => {
+    document.querySelectorAll('.activity-filter-dropdown[open]').forEach(d => {
+      if (!d.contains(ev.target)) d.removeAttribute('open');
     });
   });
   if (!_activityControlsWired) {
@@ -1806,11 +1950,20 @@ function sortActivity(events, field, dir) {
   return events.slice().sort((a, b) => {
     let av = a[field], bv = b[field];
     if (field === 'occurred_at') { av = av ? new Date(av).getTime() : 0; bv = bv ? new Date(bv).getTime() : 0; }
+    else if (field === 'cost_usd') { av = av == null ? -1 : Number(av); bv = bv == null ? -1 : Number(bv); }
     else { av = String(av == null ? '' : av).toLowerCase(); bv = String(bv == null ? '' : bv).toLowerCase(); }
     if (av < bv) return -1 * mult;
     if (av > bv) return 1 * mult;
     return 0;
   });
+}
+
+function fmtCost(c) {
+  if (c == null) return '';
+  const n = Number(c);
+  if (!isFinite(n)) return '';
+  if (n < 0.01) return '$' + n.toFixed(4);
+  return '$' + n.toFixed(2);
 }
 
 function renderSortArrows() {
@@ -1869,6 +2022,53 @@ function platformIconHtml(name) {
   return '<span class="activity-platform" title="' + key + '">' + icon + '</span>';
 }
 
+function renderActivityStats(payload) {
+  const grid = document.getElementById('stats-grid');
+  const totalEl = document.getElementById('stats-total');
+  if (!grid) return;
+  const rows = (payload && payload.rows) || [];
+  const hours = (payload && payload.windowHours) || 24;
+  const byType = {};
+  EVENT_TYPES.forEach(t => { byType[t] = { total: 0, platforms: {} }; });
+  let grandTotal = 0;
+  rows.forEach(r => {
+    const t = r.type;
+    const pKey = String(r.platform || '').toLowerCase() || 'unknown';
+    const n = Number(r.count) || 0;
+    if (!byType[t]) byType[t] = { total: 0, platforms: {} };
+    byType[t].total += n;
+    byType[t].platforms[pKey] = (byType[t].platforms[pKey] || 0) + n;
+    grandTotal += n;
+  });
+  if (totalEl) totalEl.textContent = grandTotal + ' events in last ' + hours + 'h';
+  grid.innerHTML = EVENT_TYPES.map(t => {
+    const bucket = byType[t];
+    const total = bucket.total;
+    const plats = Object.keys(bucket.platforms).sort((a, b) => bucket.platforms[b] - bucket.platforms[a]);
+    const platHtml = plats.length
+      ? plats.map(p => {
+          const icon = PLATFORM_ICONS[p] || '<span class="plat-mono">' + escapeHtml((p[0] || '?').toUpperCase()) + '</span>';
+          return '<span class="stat-plat" title="' + escapeHtml(p) + '">' + icon + '<span class="stat-plat-count">' + bucket.platforms[p] + '</span></span>';
+        }).join('')
+      : '<span style="color:#3f3f46;">\u2014</span>';
+    return '<div class="stat-card ev-' + escapeHtml(t) + (total === 0 ? ' zero' : '') + '">' +
+      '<div class="stat-card-head">' +
+        '<span class="stat-card-label">' + escapeHtml(EVENT_LABELS[t] || t) + '</span>' +
+        '<span class="stat-card-count">' + total + '</span>' +
+      '</div>' +
+      '<div class="stat-card-breakdown">' + platHtml + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function loadActivityStats() {
+  try {
+    const res = await fetch('/api/activity/stats?hours=24');
+    const data = await res.json();
+    renderActivityStats(data);
+  } catch {}
+}
+
 let _lastActivityEvents = [];
 function renderActivity(events) {
   _lastActivityEvents = events;
@@ -1895,39 +2095,35 @@ function renderActivity(events) {
     sorted.length + ' of ' + events.length + ' events';
   renderPagination(sorted.length);
   if (!page.length) {
-    body.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#6b7280;padding:40px;">No matching events</td></tr>';
+    body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#e5e5e5;padding:40px;">No matching events</td></tr>';
     return;
   }
   const rows = page.map(e => {
     const isNew = !_activityFirstLoad && !_activitySeen.has(e.key);
-    const linkHtml = e.link
-      ? '<a class="activity-link" href="' + escapeHtml(e.link) + '" target="_blank" rel="noopener" title="Open">&rarr;</a>'
-      : '';
     const timeAbs = e.occurred_at ? new Date(e.occurred_at).toLocaleString() : '';
-    const isPagePublished = e.type === 'page_published_serp' || e.type === 'page_published_gsc' || e.type === 'page_published_reddit';
     const detailHtml = e.detail
-      ? (isPagePublished && e.link
-          ? '<span class="activity-detail">[<a class="activity-link" href="' + escapeHtml(e.link) + '" target="_blank" rel="noopener">' + escapeHtml(e.detail) + '</a>]</span>'
-          : '<span class="activity-detail">(' + escapeHtml(e.detail) + ')</span>')
+      ? '<span class="activity-detail">(' + escapeHtml(e.detail) + ')</span>'
+      : '';
+    const summaryText = escapeHtml(e.summary || '');
+    const summaryLink = e.link
+      ? ' <a class="activity-summary-url" href="' + escapeHtml(e.link) + '" target="_blank" rel="noopener">' + escapeHtml(e.link) + '</a>'
       : '';
     return '<tr' + (isNew ? ' class="activity-row-new"' : '') + ' data-key="' + escapeHtml(e.key) + '">' +
       '<td title="' + escapeHtml(timeAbs) + '">' +
         '<div class="activity-event-cell">' +
           '<span class="activity-time">' + escapeHtml(relTime(e.occurred_at)) + '</span>' +
           '<span class="ev-pill ev-' + escapeHtml(e.type) + '">' + escapeHtml(EVENT_LABELS[e.type] || e.type) + '</span>' +
-          platformIconHtml(e.platform) +
         '</div>' +
       '</td>' +
+      '<td class="activity-platform-cell">' + platformIconHtml(e.platform) + '</td>' +
       '<td>' +
         '<div class="activity-project-cell">' +
           '<span class="activity-project">' + escapeHtml(e.project || '') + '</span>' +
           detailHtml +
         '</div>' +
       '</td>' +
-      '<td class="activity-summary">' + escapeHtml(e.summary || '') +
-        (e.link ? ' (<a class="activity-summary-link" href="' + escapeHtml(e.link) + '" target="_blank" rel="noopener">link</a>)' : '') +
-      '</td>' +
-      '<td>' + linkHtml + '</td>' +
+      '<td class="activity-summary">' + summaryText + summaryLink + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;color:#a3a3a3;">' + fmtCost(e.cost_usd) + '</td>' +
     '</tr>';
   }).join('');
   body.innerHTML = rows;
@@ -1982,6 +2178,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     } else {
       stopActivityAutoRefresh();
     }
+    if (name === 'status') loadActivityStats();
     if (name === 'settings' && !_tabLoaded.settings) {
       loadSettings();
       _tabLoaded.settings = true;
@@ -1996,7 +2193,11 @@ document.getElementById('save-settings').addEventListener('click', saveSettings)
 
 // Init
 loadStatus();
+loadActivityStats();
 setInterval(loadStatus, 5000);
+// 5-min cadence matches the server-side cache TTL on /api/activity/stats,
+// so the panel re-renders in place without hammering the DB.
+setInterval(loadActivityStats, 300000);
 
 // Preload every tab so switching never blocks on a fetch. Each loader is
 // idempotent; the active tab's timer takes over for ongoing refreshes.
