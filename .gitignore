@@ -34,6 +34,7 @@ skill/SKILL.md
 /*.png
 /linkedin-e*.json
 /pranjal-*
+/video-*.webm
 
 # Emailbison runtime data
 emailbison/*.json
