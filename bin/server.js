@@ -1067,7 +1067,9 @@ const HTML = `<!DOCTYPE html>
   .activity-table tr:hover td { background: #1c1c1c; }
   .activity-event-cell { display: flex; flex-direction: column; gap: 4px; white-space: nowrap; }
   .activity-time { color: #6b7280; font-size: 12px; font-variant-numeric: tabular-nums; }
-  .activity-platform { color: #a3a3a3; font-size: 12px; text-transform: lowercase; }
+  .activity-platform { display: inline-flex; align-items: center; gap: 6px; color: #a3a3a3; font-size: 12px; text-transform: lowercase; }
+  .activity-platform svg { height: 1em; width: 1em; flex-shrink: 0; fill: currentColor; }
+  .activity-platform .plat-mono { display: inline-flex; align-items: center; justify-content: center; height: 1em; width: 1em; border-radius: 3px; background: #262626; color: #d4d4d4; font-size: 0.7em; font-weight: 700; letter-spacing: 0; line-height: 1; }
   .activity-project-cell { display: flex; flex-direction: column; gap: 3px; }
   .activity-project { color: #e5e5e5; font-size: 13px; font-weight: 500; word-break: break-all; }
   .activity-detail { color: #737373; font-size: 11px; font-family: 'SF Mono', monospace; word-break: break-word; }
@@ -1704,6 +1706,20 @@ function buildActivityFilters() {
 function escapeHtml(s) {
   if (s == null) return '';
   return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+const PLATFORM_ICONS = {
+  reddit:   '<svg viewBox="0 0 24 24" aria-label="reddit"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm6.436 13.158c.023.16.034.323.034.49 0 2.498-2.908 4.522-6.494 4.522-3.587 0-6.494-2.024-6.494-4.523 0-.167.011-.33.033-.489a1.44 1.44 0 01-.822-1.297 1.444 1.444 0 012.448-1.036 7.967 7.967 0 014.337-1.374l.82-3.865a.277.277 0 01.328-.215l2.69.57a1.004 1.004 0 011.813.068 1.005 1.005 0 01-1.813.875l-2.406-.51-.736 3.47a7.98 7.98 0 014.298 1.379 1.44 1.44 0 011.996.432c.35.56.2 1.29-.332 1.652-.02.013-.04.025-.06.037zM9.17 13.14a1.02 1.02 0 100-2.041 1.02 1.02 0 000 2.041zm6.69-1.02a1.02 1.02 0 10-2.04 0 1.02 1.02 0 002.04 0zm-1.01 3.32a.33.33 0 00-.467 0c-.56.56-1.63.605-1.944.605s-1.384-.046-1.944-.606a.33.33 0 00-.467.467c.887.887 2.587.957 2.411.957.176 0 1.524-.07 2.411-.957a.33.33 0 000-.466z"/></svg>',
+  twitter:  '<svg viewBox="0 0 24 24" aria-label="twitter"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>',
+  linkedin: '<svg viewBox="0 0 24 24" aria-label="linkedin"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.063 2.063 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>',
+  github:   '<svg viewBox="0 0 24 24" aria-label="github"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>',
+  moltbook: '<span class="plat-mono" aria-label="moltbook">M</span>',
+  seo:      '<svg viewBox="0 0 24 24" aria-label="seo"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 2c1.657 0 3 3.582 3 8s-1.343 8-3 8-3-3.582-3-8 1.343-8 3-8zm-6.708 5h13.416a7.99 7.99 0 010 6H5.292a7.99 7.99 0 010-6z"/></svg>',
+};
+function platformIconHtml(name) {
+  const key = String(name || '').toLowerCase();
+  const icon = PLATFORM_ICONS[key] || '<span class="plat-mono" aria-label="' + key + '">' + (key[0] || '?').toUpperCase() + '</span>';
+  return '<span class="activity-platform" title="' + key + '">' + icon + '</span>';
 }
 
 let _lastActivityEvents = [];
