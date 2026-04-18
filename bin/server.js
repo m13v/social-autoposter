@@ -902,8 +902,9 @@ function handleApi(req, res) {
       "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 150) x3 " +
       "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
       "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || id), NULL::text FROM dms WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || id), product FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x6 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || id), product FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') <> 'reddit' ORDER BY completed_at DESC LIMIT 150) x6 " +
       "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || id), product FROM gsc_queries WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || id), product FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
       "ORDER BY 1 DESC LIMIT 500) r";
     const rows = psql(q);
     return json(res, { events: rows && rows !== '' ? (JSON.parse(rows) || []) : [] });
@@ -1040,7 +1041,9 @@ const HTML = `<!DOCTYPE html>
   .activity-chip.active.ev-skipped  { background: #422006; border-color: #d97706; color: #fbbf24; }
   .activity-chip.active.ev-mention  { background: #1f1f1f; border-color: #737373; color: #d4d4d4; }
   .activity-chip.active.ev-dm_sent  { background: #3b0764; border-color: #a855f7; color: #d8b4fe; }
-  .activity-chip.active.ev-page_published { background: #422006; border-color: #f59e0b; color: #fcd34d; }
+  .activity-chip.active.ev-page_published_serp   { background: #422006; border-color: #f59e0b; color: #fcd34d; }
+  .activity-chip.active.ev-page_published_gsc    { background: #134e4a; border-color: #14b8a6; color: #5eead4; }
+  .activity-chip.active.ev-page_published_reddit { background: #7c2d12; border-color: #f97316; color: #fdba74; }
 
   .activity-status { display: flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: #22d3ee; }
   .activity-live-dot {
@@ -1087,7 +1090,9 @@ const HTML = `<!DOCTYPE html>
   .ev-pill.ev-skipped { background: #422006; color: #fbbf24; }
   .ev-pill.ev-mention { background: #262626; color: #d4d4d4; }
   .ev-pill.ev-dm_sent { background: #3b0764; color: #d8b4fe; }
-  .ev-pill.ev-page_published { background: #422006; color: #fcd34d; border: 1px solid #f59e0b; }
+  .ev-pill.ev-page_published_serp   { background: #422006; color: #fcd34d; border: 1px solid #f59e0b; }
+  .ev-pill.ev-page_published_gsc    { background: #134e4a; color: #5eead4; border: 1px solid #14b8a6; }
+  .ev-pill.ev-page_published_reddit { background: #7c2d12; color: #fdba74; border: 1px solid #f97316; }
 
   .activity-search {
     flex: 1; min-width: 220px; max-width: 420px; background: #0f0f0f; border: 1px solid #262626;
@@ -1722,8 +1727,8 @@ async function saveSettings() {
 }
 
 // Activity tab
-const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'page_published'];
-const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', page_published: 'page published' };
+const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit'];
+const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)' };
 const ACTIVITY_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github', 'seo'];
 let _activitySeen = new Set();
 let _activityFirstLoad = true;
