@@ -710,6 +710,35 @@ def update_state(trigger: str, product: str, keyword: str, status: str,
         conn.commit()
         cur.close()
         conn.close()
+    elif trigger == "reddit":
+        conn = db_helpers.get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO seo_keywords (product, keyword, slug, source, status) "
+            "VALUES (%s, %s, %s, 'reddit', %s) "
+            "ON CONFLICT (product, keyword) DO NOTHING",
+            (product, keyword, slug or "", status),
+        )
+        sets = ["status = %s", "updated_at = NOW()"]
+        vals: list = [status]
+        if page_url is not None:
+            sets.append("page_url = %s"); vals.append(page_url)
+        if slug is not None:
+            sets.append("slug = %s"); vals.append(slug)
+        if notes is not None:
+            sets.append("notes = %s"); vals.append(notes)
+        if content_type is not None:
+            sets.append("content_type = %s"); vals.append(content_type)
+        if status == "done":
+            sets.append("completed_at = NOW()")
+        vals.extend([product, keyword])
+        cur.execute(
+            f"UPDATE seo_keywords SET {', '.join(sets)} WHERE product = %s AND keyword = %s",
+            vals,
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
     elif trigger == "manual":
         pass  # caller manages state
 

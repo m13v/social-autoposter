@@ -1078,6 +1078,8 @@ const HTML = `<!DOCTYPE html>
   .activity-project { color: #e5e5e5; font-size: 13px; font-weight: 500; word-break: break-all; }
   .activity-detail { color: #737373; font-size: 11px; font-family: 'SF Mono', monospace; word-break: break-word; }
   .activity-summary { color: #d4d4d4; line-height: 1.4; }
+  .activity-summary-link { color: #60a5fa; text-decoration: none; font-size: 12px; opacity: 0.7; }
+  .activity-summary-link:hover { opacity: 1; text-decoration: underline; }
   .activity-link { color: #60a5fa; text-decoration: none; font-size: 14px; opacity: 0.7; }
   .activity-link:hover { opacity: 1; }
 
@@ -1922,7 +1924,9 @@ function renderActivity(events) {
           detailHtml +
         '</div>' +
       '</td>' +
-      '<td class="activity-summary">' + escapeHtml(e.summary || '') + '</td>' +
+      '<td class="activity-summary">' + escapeHtml(e.summary || '') +
+        (e.link ? ' (<a class="activity-summary-link" href="' + escapeHtml(e.link) + '" target="_blank" rel="noopener">link</a>)' : '') +
+      '</td>' +
       '<td>' + linkHtml + '</td>' +
     '</tr>';
   }).join('');
