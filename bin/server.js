@@ -1902,8 +1902,11 @@ function renderActivity(events) {
       ? '<a class="activity-link" href="' + escapeHtml(e.link) + '" target="_blank" rel="noopener" title="Open">&rarr;</a>'
       : '';
     const timeAbs = e.occurred_at ? new Date(e.occurred_at).toLocaleString() : '';
+    const isPagePublished = e.type === 'page_published_serp' || e.type === 'page_published_gsc' || e.type === 'page_published_reddit';
     const detailHtml = e.detail
-      ? '<span class="activity-detail">(' + escapeHtml(e.detail) + ')</span>'
+      ? (isPagePublished && e.link
+          ? '<span class="activity-detail">[<a class="activity-link" href="' + escapeHtml(e.link) + '" target="_blank" rel="noopener">' + escapeHtml(e.detail) + '</a>]</span>'
+          : '<span class="activity-detail">(' + escapeHtml(e.detail) + ')</span>')
       : '';
     return '<tr' + (isNew ? ' class="activity-row-new"' : '') + ' data-key="' + escapeHtml(e.key) + '">' +
       '<td title="' + escapeHtml(timeAbs) + '">' +
