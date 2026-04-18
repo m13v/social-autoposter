@@ -592,8 +592,7 @@ if [ "$FLAGGED_COUNT" -gt 0 ] 2>/dev/null; then
     log "ACTION REQUIRED: $FLAGGED_COUNT conversations flagged for human attention (escalation emails already sent per-DM)"
     log "Run: python3 ~/social-autoposter/scripts/dm_conversation.py show-flagged"
 
-    # macOS notification
-    osascript -e "display notification \"$FLAGGED_COUNT DM conversations need your attention\" with title \"Social DM Escalation\" sound name \"Glass\"" 2>/dev/null || true
+    platform_notify "Social DM Escalation" "$FLAGGED_COUNT DM conversations need your attention"
 fi
 
 # Delete old logs

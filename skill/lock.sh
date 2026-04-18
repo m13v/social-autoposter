@@ -1,6 +1,9 @@
 #!/bin/bash
-# Portable file locking for macOS (no flock needed)
+# Portable file locking (no flock needed)
 # Usage: source lock.sh; acquire_lock "platform-name" [timeout_seconds]
+
+# shellcheck source=lib/platform.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/platform.sh"
 
 acquire_lock() {
   local name="$1"
@@ -25,7 +28,7 @@ acquire_lock() {
     # Safety net: remove any lock older than 3 hours regardless
     if [ -d "$lock_dir" ]; then
       local lock_age
-      lock_age=$(( $(date +%s) - $(stat -f %m "$lock_dir" 2>/dev/null || echo "0") ))
+      lock_age=$(( $(date +%s) - $(stat_mtime "$lock_dir") ))
       if [ "$lock_age" -gt 10800 ]; then
         should_remove=true
       fi
