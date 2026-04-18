@@ -897,12 +897,12 @@ function handleApi(req, res) {
   // GET /api/activity - unified recent-events feed across posts, replies, mentions, dms
   if (p === '/api/activity' && req.method === 'GET') {
     const q = "SELECT json_agg(row_to_json(r)) FROM (" +
-      "SELECT * FROM (SELECT posted_at AS occurred_at, 'posted' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, engagement_style AS detail, our_url AS link, ('p' || id) AS key, project_name AS project, our_account AS our_account, thread_author AS target FROM posts WHERE posted_at IS NOT NULL ORDER BY posted_at DESC LIMIT 40) x1 " +
-      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 140), LEFT(r2.their_content, 140)), r2.engagement_style, r2.our_reply_url, ('r' || r2.id), p.project_name, p.our_account, r2.their_author FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 40) x2 " +
-      "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name, p.our_account, r3.their_author FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 40) x3 " +
-      "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text, NULL::text, author FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 40) x4 " +
-      "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || id), NULL::text, NULL::text, their_author FROM dms WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 40) x5 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published', 'seo', product, keyword, slug, page_url, ('k' || id), product, NULL::text, NULL::text FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 40) x6 " +
+      "SELECT * FROM (SELECT posted_at AS occurred_at, 'posted' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, engagement_style AS detail, our_url AS link, ('p' || id) AS key, project_name AS project FROM posts WHERE posted_at IS NOT NULL ORDER BY posted_at DESC LIMIT 40) x1 " +
+      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 140), LEFT(r2.their_content, 140)), r2.engagement_style, r2.our_reply_url, ('r' || r2.id), p.project_name FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 40) x2 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 40) x3 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 40) x4 " +
+      "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || id), NULL::text FROM dms WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 40) x5 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published', 'seo', product, keyword, slug, page_url, ('k' || id), product FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 40) x6 " +
       "ORDER BY 1 DESC LIMIT 100) r";
     const rows = psql(q);
     return json(res, { events: rows && rows !== '' ? (JSON.parse(rows) || []) : [] });
@@ -1152,15 +1152,13 @@ const HTML = `<!DOCTYPE html>
           <th style="width:140px;">Event</th>
           <th style="width:90px;">Platform</th>
           <th style="width:120px;">Project</th>
-          <th style="width:140px;">Account</th>
-          <th style="width:140px;">Target</th>
           <th>What</th>
-          <th style="width:140px;">Detail</th>
+          <th style="width:280px;">Detail</th>
           <th style="width:40px;"></th>
         </tr>
       </thead>
       <tbody id="activity-body">
-        <tr><td colspan="8" style="text-align:center;color:#6b7280;padding:40px;">Loading&hellip;</td></tr>
+        <tr><td colspan="6" style="text-align:center;color:#6b7280;padding:40px;">Loading&hellip;</td></tr>
       </tbody>
     </table>
   </div>

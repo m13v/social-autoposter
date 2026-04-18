@@ -95,36 +95,45 @@ def upsert(product, rows, brand_terms, dry_run=False):
         print(f"[fetch_gsc_queries] DRY RUN: would upsert {len(rows)} queries ({added} above threshold)")
         return len(rows), 0
 
+    from psycopg2.extras import execute_values
+
+    values = [
+        (
+            product,
+            row["keys"][0],
+            int(row["impressions"]),
+            int(row["clicks"]),
+            float(row.get("ctr", 0)),
+            float(row.get("position", 0)),
+            classify(row["keys"][0], brand_terms),
+        )
+        for row in rows
+    ]
+
+    if not values:
+        return 0, 0
+
     conn = get_conn()
     cur = conn.cursor()
 
-    added = updated = 0
-    for row in rows:
-        query_text = row["keys"][0]
-        impressions = int(row["impressions"])
-        clicks = int(row["clicks"])
-        ctr = float(row.get("ctr", 0))
-        position = float(row.get("position", 0))
-        status = classify(query_text, brand_terms)
-
-        # Upsert: on conflict only update metrics, preserve status/page linkage
-        cur.execute("""
-            INSERT INTO gsc_queries
-              (product, query, impressions, clicks, ctr, position, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (product, query) DO UPDATE SET
-              impressions = EXCLUDED.impressions,
-              clicks      = EXCLUDED.clicks,
-              ctr         = EXCLUDED.ctr,
-              position    = EXCLUDED.position,
-              last_seen   = NOW(),
-              updated_at  = NOW()
-        """, (product, query_text, impressions, clicks, ctr, position, status))
-
-        if cur.rowcount == 1 and cur.statusmessage == "INSERT 0 1":
-            added += 1
-        else:
-            updated += 1
+    # Single batched upsert. xmax=0 identifies freshly inserted rows;
+    # anything else is an existing row that got its metrics refreshed.
+    sql = """
+        INSERT INTO gsc_queries
+          (product, query, impressions, clicks, ctr, position, status)
+        VALUES %s
+        ON CONFLICT (product, query) DO UPDATE SET
+          impressions = EXCLUDED.impressions,
+          clicks      = EXCLUDED.clicks,
+          ctr         = EXCLUDED.ctr,
+          position    = EXCLUDED.position,
+          last_seen   = NOW(),
+          updated_at  = NOW()
+        RETURNING (xmax = 0) AS inserted
+    """
+    results = execute_values(cur, sql, values, page_size=1000, fetch=True)
+    added = sum(1 for r in results if r[0])
+    updated = len(results) - added
 
     conn.commit()
     cur.close()
