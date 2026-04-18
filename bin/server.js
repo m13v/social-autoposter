@@ -1069,8 +1069,6 @@ const HTML = `<!DOCTYPE html>
   .activity-time { color: #6b7280; font-size: 12px; font-variant-numeric: tabular-nums; }
   .activity-platform { color: #a3a3a3; font-size: 12px; text-transform: lowercase; }
   .activity-project { color: #a3a3a3; font-size: 12px; word-break: break-all; }
-  .activity-account { color: #e5e5e5; font-size: 12px; font-weight: 500; word-break: break-all; }
-  .activity-target { color: #a3a3a3; font-size: 12px; word-break: break-all; }
   .activity-summary { color: #d4d4d4; line-height: 1.4; }
   .activity-detail { color: #737373; font-size: 11px; font-family: 'SF Mono', monospace; word-break: break-word; }
   .activity-link { color: #60a5fa; text-decoration: none; font-size: 14px; opacity: 0.7; }
@@ -1720,7 +1718,7 @@ function renderActivity(events) {
   document.getElementById('activity-count').textContent =
     filtered.length + ' of ' + events.length + ' events';
   if (!filtered.length) {
-    body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#6b7280;padding:40px;">No matching events</td></tr>';
+    body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#6b7280;padding:40px;">No matching events</td></tr>';
     return;
   }
   const rows = filtered.map(e => {
@@ -1738,8 +1736,6 @@ function renderActivity(events) {
       '</td>' +
       '<td class="activity-platform">' + escapeHtml(e.platform || '') + '</td>' +
       '<td class="activity-project">' + escapeHtml(e.project || '') + '</td>' +
-      '<td class="activity-account">' + escapeHtml(e.our_account || '') + '</td>' +
-      '<td class="activity-target">' + escapeHtml(e.target || '') + '</td>' +
       '<td class="activity-summary">' + escapeHtml(e.summary || '') + '</td>' +
       '<td class="activity-detail">' + escapeHtml(e.detail || '') + '</td>' +
       '<td>' + linkHtml + '</td>' +
