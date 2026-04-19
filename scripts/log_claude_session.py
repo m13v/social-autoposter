@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Log a Claude Code session's cost into the claude_sessions table.
+
+Reads the session transcript at ~/.claude/projects/<encoded-cwd>/<session_id>.jsonl,
+sums per-model token usage from each assistant turn, applies a local pricing
+table to compute total cost, and inserts one row.
+
+Usage:
+    python3 scripts/log_claude_session.py \\
+        --session-id <uuid> \\
+        --script run-linkedin \\
+        [--started-at ISO8601] [--ended-at ISO8601]
+
+Designed to be called by run_claude.sh after `claude -p --session-id $UUID` exits.
+Idempotent: ON CONFLICT DO NOTHING on session_id.
+"""
+
+import argparse
+import glob
+import json
+import os
+import sys
+from datetime import datetime
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import db as dbmod
+
+PROJECTS_ROOT = os.path.expanduser("~/.claude/projects")
+
+
+def find_transcript(session_id: str):
+    """Locate the transcript .jsonl for a session id.
+
+    Claude Code writes transcripts under `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`.
+    The encoded-cwd depends on the working directory at invocation time:
+    interactive runs land under `-Users-matthewdi-social-autoposter`, but
+    launchd-fired runs (cwd=/) land under `-`. Glob across all project dirs.
+    """
+    matches = glob.glob(os.path.join(PROJECTS_ROOT, "*", f"{session_id}.jsonl"))
+    return matches[0] if matches else None
+
+# USD per 1M tokens. Cache_5m / cache_1h are the WRITE rates (Anthropic charges
+# a premium for caching writes); cache_read is the discounted re-read rate.
+# Fallback (unknown model) uses Opus rates so we never underestimate.
+PRICING = {
+    "opus":   {"input": 15.0, "output": 75.0, "cache_5m": 18.75, "cache_1h": 30.0, "cache_read": 1.5},
+    "sonnet": {"input": 3.0,  "output": 15.0, "cache_5m": 3.75,  "cache_1h": 6.0,  "cache_read": 0.3},
+    "haiku":  {"input": 1.0,  "output": 5.0,  "cache_5m": 1.25,  "cache_1h": 2.0,  "cache_read": 0.1},
+}
+
+
+def price_for_model(model_id: str) -> dict:
+    m = (model_id or "").lower()
+    if "opus" in m:
+        return PRICING["opus"]
+    if "sonnet" in m:
+        return PRICING["sonnet"]
+    if "haiku" in m:
+        return PRICING["haiku"]
+    return PRICING["opus"]
+
+
+def cost_from_usage(model: str, usage: dict) -> float:
+    p = price_for_model(model)
+    inp = usage.get("input_tokens", 0) or 0
+    out = usage.get("output_tokens", 0) or 0
+    cache_read = usage.get("cache_read_input_tokens", 0) or 0
+    cache_5m = (usage.get("cache_creation") or {}).get("ephemeral_5m_input_tokens", 0) or 0
+    cache_1h = (usage.get("cache_creation") or {}).get("ephemeral_1h_input_tokens", 0) or 0
+    if not (cache_5m or cache_1h):
+        cache_5m = usage.get("cache_creation_input_tokens", 0) or 0
+    return (
+        inp * p["input"]
+        + out * p["output"]
+        + cache_read * p["cache_read"]
+        + cache_5m * p["cache_5m"]
+        + cache_1h * p["cache_1h"]
+    ) / 1_000_000
+
+
+def parse_transcript(path: str):
+    if not os.path.exists(path):
+        return None
+
+    by_model = {}
+    totals = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
+    first_ts = None
+    last_ts = None
+
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            ts = ev.get("timestamp")
+            if ts:
+                first_ts = first_ts or ts
+                last_ts = ts
+
+            if ev.get("type") != "assistant":
+                continue
+            msg = ev.get("message") or {}
+            usage = msg.get("usage") or {}
+            model = msg.get("model") or "unknown"
+
+            entry = by_model.setdefault(model, {
+                "input_tokens": 0, "output_tokens": 0,
+                "cache_read_tokens": 0, "cache_creation_tokens": 0,
+                "cost_usd": 0.0,
+            })
+            inp = usage.get("input_tokens", 0) or 0
+            out = usage.get("output_tokens", 0) or 0
+            cr = usage.get("cache_read_input_tokens", 0) or 0
+            cc = usage.get("cache_creation_input_tokens", 0) or 0
+            entry["input_tokens"] += inp
+            entry["output_tokens"] += out
+            entry["cache_read_tokens"] += cr
+            entry["cache_creation_tokens"] += cc
+            entry["cost_usd"] += cost_from_usage(model, usage)
+
+            totals["input"] += inp
+            totals["output"] += out
+            totals["cache_read"] += cr
+            totals["cache_creation"] += cc
+
+    if not by_model:
+        return None
+
+    total_cost = sum(m["cost_usd"] for m in by_model.values())
+    return {
+        "by_model": by_model,
+        "totals": totals,
+        "total_cost_usd": total_cost,
+        "first_ts": first_ts,
+        "last_ts": last_ts,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--session-id", required=True)
+    parser.add_argument("--script", required=True)
+    parser.add_argument("--started-at", default=None,
+                        help="ISO8601 timestamp; falls back to first transcript ts")
+    parser.add_argument("--ended-at", default=None,
+                        help="ISO8601 timestamp; falls back to last transcript ts")
+    args = parser.parse_args()
+
+    transcript = find_transcript(args.session_id)
+    parsed = parse_transcript(transcript) if transcript else None
+
+    if parsed is None:
+        print(json.dumps({
+            "logged": False,
+            "reason": "no-transcript-or-empty",
+            "transcript": transcript,
+            "session_id": args.session_id,
+        }))
+        return
+
+    started = args.started_at or parsed["first_ts"]
+    ended = args.ended_at or parsed["last_ts"]
+    duration_ms = None
+    try:
+        if started and ended:
+            s = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            e = datetime.fromisoformat(ended.replace("Z", "+00:00"))
+            duration_ms = int((e - s).total_seconds() * 1000)
+    except (ValueError, AttributeError):
+        pass
+
+    dbmod.load_env()
+    conn = dbmod.get_conn()
+    conn.execute(
+        """INSERT INTO claude_sessions (
+            session_id, script, started_at, ended_at, duration_ms,
+            total_cost_usd, input_tokens, output_tokens,
+            cache_read_tokens, cache_creation_tokens, model_breakdown
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+        ON CONFLICT (session_id) DO UPDATE SET
+            ended_at = EXCLUDED.ended_at,
+            duration_ms = EXCLUDED.duration_ms,
+            total_cost_usd = EXCLUDED.total_cost_usd,
+            input_tokens = EXCLUDED.input_tokens,
+            output_tokens = EXCLUDED.output_tokens,
+            cache_read_tokens = EXCLUDED.cache_read_tokens,
+            cache_creation_tokens = EXCLUDED.cache_creation_tokens,
+            model_breakdown = EXCLUDED.model_breakdown
+        """,
+        [
+            args.session_id, args.script, started, ended, duration_ms,
+            round(parsed["total_cost_usd"], 6),
+            parsed["totals"]["input"], parsed["totals"]["output"],
+            parsed["totals"]["cache_read"], parsed["totals"]["cache_creation"],
+            json.dumps(parsed["by_model"]),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    print(json.dumps({
+        "logged": True,
+        "session_id": args.session_id,
+        "script": args.script,
+        "total_cost_usd": round(parsed["total_cost_usd"], 6),
+        "duration_ms": duration_ms,
+        "models": list(parsed["by_model"].keys()),
+    }))
+
+
+if __name__ == "__main__":
+    main()
