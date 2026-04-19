@@ -63,10 +63,10 @@ def update_views(db, scraped_data, quiet=False):
       - legacy list of {url, views}
       - legacy dict {url: views}
 
-    For thread rows (shreddit-post attrs present on profile page), score +
-    comments_count come in too and are written alongside views. This is the
-    cheap profile-scrape leg that sidesteps per-post API calls for the ~6%
-    of rows that are our own thread submissions.
+    Score sources on the profile page:
+      - Thread rows: <shreddit-post score="N" comment-count="N">
+      - Comment rows: <shreddit-comment-action-row score="N"> (no reply count)
+    Views are visible text on both row types.
     """
     # Normalise to list of dicts
     if isinstance(scraped_data, dict):
@@ -79,11 +79,11 @@ def update_views(db, scraped_data, quiet=False):
             elif isinstance(item, (list, tuple)) and len(item) >= 2:
                 normalised.append({"url": item[0], "views": item[1]})
 
-    # Build lookups by comment_id and post_id
     views_by_comment = {}
-    views_by_post = {}   # post_id -> max views
-    score_by_post = {}   # post_id -> score (from shreddit-post attrs, threads only)
-    cc_by_post = {}      # post_id -> comment-count attr
+    views_by_post = {}     # post_id -> max views (threads)
+    score_by_comment = {}  # comment_id -> score (comment rows)
+    score_by_post = {}     # post_id -> score (thread rows)
+    cc_by_post = {}        # post_id -> comment-count attr (thread rows)
 
     for item in normalised:
         url = item.get("url")
@@ -100,9 +100,12 @@ def update_views(db, scraped_data, quiet=False):
             if post_id:
                 if post_id not in views_by_post or views > views_by_post[post_id]:
                     views_by_post[post_id] = views
-        if post_id and score is not None:
-            score_by_post[post_id] = score
-        if post_id and cc is not None:
+        if score is not None:
+            if comment_id:
+                score_by_comment[comment_id] = score
+            elif post_id:
+                score_by_post[post_id] = score
+        if cc is not None and post_id and not comment_id:
             cc_by_post[post_id] = cc
 
     posts = db.execute(
@@ -111,6 +114,7 @@ def update_views(db, scraped_data, quiet=False):
     ).fetchall()
 
     matched = 0
+    matched_comment_score = 0
     matched_thread_stats = 0
     unmatched = 0
 
@@ -124,26 +128,25 @@ def update_views(db, scraped_data, quiet=False):
         elif post_id and post_id in views_by_post:
             views = views_by_post[post_id]
 
-        # Thread stats from shreddit-post attrs: only applied when our_url is a
-        # thread (no comment_id) — for comment rows, score belongs to the
-        # parent post, not our comment, so don't overwrite it.
-        thread_score = None
-        thread_cc = None
-        if comment_id is None and post_id:
-            thread_score = score_by_post.get(post_id)
-            thread_cc = cc_by_post.get(post_id)
+        score_val = None
+        cc_val = None
+        if comment_id:
+            score_val = score_by_comment.get(comment_id)
+        elif post_id:
+            score_val = score_by_post.get(post_id)
+            cc_val = cc_by_post.get(post_id)
 
         sets = []
         params = []
         if views is not None:
             sets.append("views=%s")
             params.append(views)
-        if thread_score is not None:
+        if score_val is not None:
             sets.append("upvotes=%s")
-            params.append(thread_score)
-        if thread_cc is not None:
+            params.append(score_val)
+        if cc_val is not None:
             sets.append("comments_count=%s")
-            params.append(thread_cc)
+            params.append(cc_val)
 
         if sets:
             sets.append("engagement_updated_at=NOW()")
@@ -153,7 +156,9 @@ def update_views(db, scraped_data, quiet=False):
                 params,
             )
             matched += 1
-            if thread_score is not None or thread_cc is not None:
+            if comment_id and score_val is not None:
+                matched_comment_score += 1
+            if comment_id is None and (score_val is not None or cc_val is not None):
                 matched_thread_stats += 1
         else:
             unmatched += 1
@@ -161,11 +166,13 @@ def update_views(db, scraped_data, quiet=False):
     db.commit()
     return {
         "matched": matched,
+        "matched_comment_score": matched_comment_score,
         "matched_thread_stats": matched_thread_stats,
         "unmatched": unmatched,
         "scraped_total": len(normalised),
         "with_views": len(views_by_comment) + len(views_by_post),
-        "with_score": len(score_by_post),
+        "with_score_comment": len(score_by_comment),
+        "with_score_thread": len(score_by_post),
         "with_comments_count": len(cc_by_post),
     }
 
