@@ -1423,14 +1423,13 @@ def scrape_views(username, max_scrolls=300):
     ]
 
     # Extract per-article: url (permalink), views (via visible text scan),
-    # and — for thread rows where shreddit-post exists — score + comment-count
-    # from SSR attrs. Comment rows (shreddit-profile-comment) have no such attrs
-    # so score/comments_count stay null and Step 1 still handles them via API.
+    # score + comment-count. Sources:
+    #   Thread rows: <shreddit-post> SSR attrs → score + comment-count
+    #   Comment rows: <shreddit-comment-action-row> nested in
+    #                 <shreddit-profile-comment> → score (no reply count)
     extract_js = """() => {
         const results = [];
         document.querySelectorAll("article").forEach(article => {
-            // Prefer permalink from <shreddit-post> when present; otherwise fall
-            // back to the first /comments/... anchor (covers comment rows).
             const post = article.querySelector("shreddit-post");
             let url = null;
             let score = null;
@@ -1447,6 +1446,17 @@ def scrape_views(username, max_scrolls=300):
                 if (cc !== null && cc !== "") {
                     const n = parseInt(cc, 10);
                     if (!Number.isNaN(n)) commentsCount = n;
+                }
+            } else {
+                const row = article.querySelector("shreddit-comment-action-row");
+                if (row) {
+                    const permalink = row.getAttribute("permalink");
+                    if (permalink) url = permalink;
+                    const s = row.getAttribute("score");
+                    if (s !== null && s !== "") {
+                        const n = parseInt(s, 10);
+                        if (!Number.isNaN(n)) score = n;
+                    }
                 }
             }
             if (!url) {
