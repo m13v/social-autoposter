@@ -6,8 +6,9 @@
 
 set -euo pipefail
 
-# Platform lock: wait up to 45min for any previous link-edit-linkedin run, then skip
+# Browser-profile lock first (shared with other linkedin pipelines), then pipeline lock.
 source "$(dirname "$0")/lock.sh"
+acquire_lock "linkedin-browser" 3600
 acquire_lock "link-edit-linkedin" 2700
 
 # Load secrets
@@ -95,7 +96,7 @@ Process ALL of them. For each post:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='SKIPPED: REASON' WHERE id=POST_ID"
 PROMPT_EOF
 
-gtimeout 2700 claude --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: LinkedIn link-edit claude exited with code $?"
+gtimeout 2700 "$REPO_DIR/scripts/run_claude.sh" "link-edit-linkedin" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: LinkedIn link-edit claude exited with code $?"
 rm -f "$PROMPT_FILE"
 
 EDITED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE platform='linkedin' AND link_edited_at IS NOT NULL;" 2>/dev/null || echo "0")
