@@ -32,7 +32,7 @@ TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform linkedin 2
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block linkedin posting)
 
-claude -p "You are the Social Autoposter.
+"$REPO_DIR/scripts/run_claude.sh" "run-linkedin" -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for account name.
