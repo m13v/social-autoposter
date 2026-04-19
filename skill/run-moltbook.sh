@@ -32,7 +32,10 @@ TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform moltbook 2
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block moltbook posting)
 
-claude -p "You are the Social Autoposter.
+# Pre-generate session id so the prompt's inline INSERT can stamp it.
+export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
+
+"$REPO_DIR/scripts/run_claude.sh" "run-moltbook" -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for the moltbook account.
@@ -69,9 +72,9 @@ Steps:
 8. Log each to database with project_name set to the project you chose for the comment (include feedback_report_used=TRUE):
    INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
      thread_title, thread_content, our_url, our_content, our_account,
-     source_summary, project_name, engagement_style, feedback_report_used, language, status, posted_at)
+     source_summary, project_name, engagement_style, feedback_report_used, language, status, posted_at, claude_session_id)
    VALUES ('moltbook', thread_url, 'various', 'various', title, '', our_url, content,
-     'matthew-autoposter', 'moltbook comment engagement', 'PROJECT_YOU_CHOSE', 'STYLE_YOU_CHOSE', TRUE, 'DETECTED_LANGUAGE', 'active', NOW())
+     'matthew-autoposter', 'moltbook comment engagement', 'PROJECT_YOU_CHOSE', 'STYLE_YOU_CHOSE', TRUE, 'DETECTED_LANGUAGE', 'active', NOW(), '$CLAUDE_SESSION_ID'::uuid)
    Use the 'url' field from the script JSON output for our_url.
 
 If the helper script reports rate limiting, wait the indicated seconds and retry. Max 3 retries per comment.
