@@ -85,16 +85,19 @@ def log_outbound(conn, dm_id, content, author=None):
     if not author:
         author = get_our_account(config, row["platform"])
 
+    claude_session_id = os.environ.get("CLAUDE_SESSION_ID") or None
+
     conn.execute("""
-        INSERT INTO dm_messages (dm_id, direction, author, content, message_at, logged_at)
-        VALUES (%s, 'outbound', %s, %s, NOW(), NOW())
-    """, (dm_id, author, content))
+        INSERT INTO dm_messages (dm_id, direction, author, content, message_at, logged_at, claude_session_id)
+        VALUES (%s, 'outbound', %s, %s, NOW(), NOW(), %s)
+    """, (dm_id, author, content, claude_session_id))
 
     conn.execute("""
         UPDATE dms SET last_message_at = NOW(), message_count = message_count + 1,
-                       conversation_status = 'active'
+                       conversation_status = 'active',
+                       claude_session_id = COALESCE(%s, claude_session_id)
         WHERE id = %s
-    """, (dm_id,))
+    """, (claude_session_id, dm_id))
     conn.commit()
     print(f"  Logged outbound to {row['their_author']} (DM #{dm_id})")
     return True
@@ -339,6 +342,12 @@ def set_status(conn, dm_id, status):
     print(f"  Set conversation_status={status} for DM #{dm_id}")
 
 
+def set_interest(conn, dm_id, interest):
+    conn.execute("UPDATE dms SET interest_level = %s WHERE id = %s", (interest, dm_id))
+    conn.commit()
+    print(f"  Set interest_level={interest} for DM #{dm_id}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="DM conversation tracker")
     sub = parser.add_subparsers(dest="command")
@@ -376,6 +385,11 @@ def main():
     p_status.add_argument("--status", required=True,
                           choices=["active", "needs_reply", "stale", "converted", "closed", "needs_human"])
 
+    p_interest = sub.add_parser("set-interest", help="Set prospect interest level for product/topic")
+    p_interest.add_argument("--dm-id", type=int, required=True)
+    p_interest.add_argument("--interest", required=True,
+                            choices=["no_response", "general_discussion", "cold", "warm", "hot", "declined", "not_our_prospect"])
+
     p_flag = sub.add_parser("flag-human", help="Flag conversation for human attention")
     p_flag.add_argument("--dm-id", type=int, required=True)
     p_flag.add_argument("--reason", required=True)
@@ -409,6 +423,8 @@ def main():
         set_tier(conn, args.dm_id, args.tier)
     elif args.command == "set-status":
         set_status(conn, args.dm_id, args.status)
+    elif args.command == "set-interest":
+        set_interest(conn, args.dm_id, args.interest)
     elif args.command == "flag-human":
         flag_human(conn, args.dm_id, args.reason)
     elif args.command == "show-flagged":
