@@ -380,7 +380,7 @@ def main():
                             cdp_out = subprocess.check_output(
                                 ["python3", os.path.join(REPO_DIR, "scripts", "reddit_browser.py"),
                                  "reply", reply["their_comment_url"], reply_text],
-                                text=True, timeout=60, stderr=subprocess.DEVNULL,
+                                text=True, timeout=120, stderr=subprocess.DEVNULL,
                             )
                             post_result = json.loads(cdp_out)
                             if post_result.get("ok"):
