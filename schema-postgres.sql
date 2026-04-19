@@ -38,8 +38,10 @@ ALTER TABLE posts ADD COLUMN IF NOT EXISTS scan_no_change_count INTEGER DEFAULT 
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS project_name TEXT;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS feedback_report_used BOOLEAN DEFAULT FALSE;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS engagement_style TEXT;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS resurrected_at TIMESTAMP;
 
 CREATE INDEX IF NOT EXISTS idx_posts_platform ON posts(platform);
+CREATE INDEX IF NOT EXISTS idx_posts_resurrected_at ON posts(resurrected_at) WHERE resurrected_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS threads (
     id SERIAL PRIMARY KEY,
@@ -140,6 +142,7 @@ ALTER TABLE dms ADD COLUMN IF NOT EXISTS conversation_status TEXT DEFAULT 'activ
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS tier INTEGER DEFAULT 1;
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS last_message_at TIMESTAMP;
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS message_count INTEGER DEFAULT 0;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS interest_level TEXT;  -- no_response | general_discussion | cold | warm | hot | declined | not_our_prospect
 
 -- dm_messages: every message in a DM conversation (ours and theirs)
 CREATE TABLE IF NOT EXISTS dm_messages (
@@ -164,4 +167,34 @@ CREATE TABLE IF NOT EXISTS thread_comments (
     engagement TEXT,
     discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- claude_sessions: one row per `claude -p` invocation in a runner script.
+-- Activity rows in posts/replies/dms reference session_id; cost is split
+-- evenly across all activities sharing the same session at query time.
+CREATE TABLE IF NOT EXISTS claude_sessions (
+    session_id UUID PRIMARY KEY,
+    script TEXT NOT NULL,
+    started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ended_at TIMESTAMP,
+    duration_ms BIGINT,
+    total_cost_usd NUMERIC(10, 6),
+    input_tokens BIGINT,
+    output_tokens BIGINT,
+    cache_read_tokens BIGINT,
+    cache_creation_tokens BIGINT,
+    model_breakdown JSONB,
+    logged_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_claude_sessions_started ON claude_sessions(started_at DESC);
+
+ALTER TABLE posts        ADD COLUMN IF NOT EXISTS claude_session_id UUID;
+ALTER TABLE replies      ADD COLUMN IF NOT EXISTS claude_session_id UUID;
+ALTER TABLE dms          ADD COLUMN IF NOT EXISTS claude_session_id UUID;
+ALTER TABLE dm_messages  ADD COLUMN IF NOT EXISTS claude_session_id UUID;
+
+CREATE INDEX IF NOT EXISTS idx_posts_claude_session       ON posts(claude_session_id)       WHERE claude_session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_replies_claude_session     ON replies(claude_session_id)     WHERE claude_session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_dms_claude_session         ON dms(claude_session_id)         WHERE claude_session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_dm_messages_claude_session ON dm_messages(claude_session_id) WHERE claude_session_id IS NOT NULL;
 
