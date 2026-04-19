@@ -36,7 +36,20 @@ esac
 # original "audit" lock name.
 LOCK_NAME="audit${PLATFORM:+-$PLATFORM}"
 
+# Browser-profile lock first (shared across pipelines using the same browser),
+# then the pipeline-specific lock. moltbook has no shared browser profile.
 source "$(dirname "$0")/lock.sh"
+case "${PLATFORM:-all}" in
+    linkedin) acquire_lock "linkedin-browser" 3600 ;;
+    reddit)   acquire_lock "reddit-browser" 3600 ;;
+    twitter|x) acquire_lock "twitter-browser" 3600 ;;
+    moltbook) ;;
+    all)
+        acquire_lock "linkedin-browser" 3600
+        acquire_lock "reddit-browser" 3600
+        acquire_lock "twitter-browser" 3600
+        ;;
+esac
 acquire_lock "$LOCK_NAME" 3600
 
 # Load secrets
