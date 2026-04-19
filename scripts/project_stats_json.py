@@ -270,12 +270,18 @@ def _windowed_post_engagement(conn, name, days):
     cur = conn.execute(
         "SELECT COALESCE(SUM(upvotes), 0), "
         "COALESCE(SUM(comments_count), 0), "
-        "COALESCE(SUM(views), 0) "
+        "COALESCE(SUM(views) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues')), 0), "
+        "COUNT(*) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues')) "
         "FROM posts WHERE project_name = %s AND posted_at >= NOW() - INTERVAL '" + str(days) + " days'",
         (name,),
     )
-    row = cur.fetchone() or (0, 0, 0)
-    return {"upvotes": int(row[0] or 0), "comments": int(row[1] or 0), "views": int(row[2] or 0)}
+    row = cur.fetchone() or (0, 0, 0, 0)
+    return {
+        "upvotes": int(row[0] or 0),
+        "comments": int(row[1] or 0),
+        "views": int(row[2] or 0),
+        "views_posts": int(row[3] or 0),
+    }
 
 
 def _seo_pages_count(conn, name, days):
@@ -332,6 +338,13 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
     ctr = (ctas / pvs * 100) if pvs else None
     conv = (real / ctas * 100) if ctas else None
 
+    email_signups = (posthog["email_signups"] if posthog else 0)
+    schedule_clicks = (posthog["schedule_clicks"] if posthog else 0)
+    # Canary: real traffic but zero tracked conversion events almost always
+    # means window.posthog was never wired up on the site (e.g. Fazm
+    # newsletter bug where signups worked but nothing fired to PostHog).
+    analytics_suspected_broken = (pvs >= 500) and ((email_signups + schedule_clicks) == 0)
+
     return {
         "name": name,
         "posts": {
@@ -346,7 +359,7 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
             # Window-scoped engagement: only posts created in the last `days`.
             "upvotes_recent": eng_recent["upvotes"],
             "comments_recent": eng_recent["comments"],
-            "views_recent": eng_recent["views"],
+            "views_recent": eng_recent["views"] if eng_recent["views_posts"] > 0 else None,
         },
         "seo": {"pages_recent": seo_pages_recent},
         "platforms": platforms,
@@ -355,12 +368,13 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
         "funnel": {
             "pageviews": pvs,
             "cta_clicks": ctas,
-            "email_signups": (posthog["email_signups"] if posthog else 0),
-            "schedule_clicks": (posthog["schedule_clicks"] if posthog else 0),
+            "email_signups": email_signups,
+            "schedule_clicks": schedule_clicks,
             "real_bookings": real,
             "ctr_pct": ctr,
             "conv_pct": conv,
         },
+        "analytics_suspected_broken": analytics_suspected_broken,
     }
 
 
