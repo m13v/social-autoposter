@@ -1,11 +1,19 @@
 #!/bin/bash
 #
 # GSC SEO Inbox cron orchestrator. Runs every 10 minutes.
-# Picks a product that has gsc_property configured in config.json,
-# then runs run_gsc_pipeline.sh for that product.
 #
-# Products are weighted-randomly selected (same weight field as DataForSEO pipeline).
-# Only products with landing_pages.gsc_property set are eligible.
+# PARALLEL PER-PRODUCT: fans out one background lane per eligible product
+# (products with landing_pages.gsc_property configured). Each lane invokes
+# run_gsc_pipeline.sh, which internally refreshes GSC query data via the
+# Search Console API, picks the highest-impression pending query, and
+# hands off to generate_page.py.
+#
+# Per-product locks in run_gsc_pipeline.sh prevent double-work if a
+# previous tick's lane is still processing.
+#
+# Previously this picked a single product via weighted-random selection,
+# which starved every product except fazm (the one with the largest queue).
+# The parallel design gives every GSC-configured product its own lane.
 #
 # Usage: cron_gsc.sh (no args)
 #
@@ -14,53 +22,65 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-LOCK_FILE="$SCRIPT_DIR/.locks/cron_gsc.lock"
-# Per-run log file lives in skill/logs/ so the dashboard picks it up alongside
-# every other pipeline. Filename prefix matches the script basename so
-# auto-discovered "Other Jobs" in bin/server.js resolve Last Run correctly.
-LOG_FILE="$REPO_DIR/skill/logs/cron_gsc-$(date +%Y-%m-%d_%H%M%S).log"
+TICK_ID=$(date +%Y-%m-%d_%H%M%S)
+TICK_LOG="$REPO_DIR/skill/logs/cron_gsc-$TICK_ID.log"
 
 mkdir -p "$SCRIPT_DIR/.locks" "$REPO_DIR/skill/logs"
 
-# --- Global lock ---
-if [ -f "$LOCK_FILE" ]; then
-    LOCK_AGE=$(( $(date +%s) - $(stat -f %m "$LOCK_FILE" 2>/dev/null || stat -c %Y "$LOCK_FILE" 2>/dev/null) ))
-    if [ "$LOCK_AGE" -gt 3600 ]; then
-        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Stale cron lock (${LOCK_AGE}s), removing" >> "$LOG_FILE"
-        rm -f "$LOCK_FILE"
-    else
-        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Cron already running (lock age: ${LOCK_AGE}s), skipping" >> "$LOG_FILE"
-        exit 0
-    fi
-fi
-echo "$$" > "$LOCK_FILE"
-trap 'rm -f "$LOCK_FILE"' EXIT
+ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# --- Reap stuck rows (orphans from killed runs) ---
-python3 "$SCRIPT_DIR/reap_stuck.py" >> "$LOG_FILE" 2>&1 || true
+echo "[$(ts)] cron_gsc tick $TICK_ID starting (parallel per-product)" >> "$TICK_LOG"
 
-# --- Pick product by weighted random ---
-# Prefer products that actually have pending GSC queries >= impression threshold;
-# fall back to any gsc-configured product (so we still refresh their GSC data).
-PRODUCT=$(python3 "$SCRIPT_DIR/select_product.py" --mode gsc)
-PICK_MODE="gsc-has-pending"
-if [ "$PRODUCT" = "NONE" ]; then
-    PRODUCT=$(python3 "$SCRIPT_DIR/select_product.py" --require-gsc)
-    PICK_MODE="gsc-configured"
-fi
+# --- Reap stuck rows once per tick (shared state) ---
+python3 "$SCRIPT_DIR/reap_stuck.py" >> "$TICK_LOG" 2>&1 || true
 
-if [ "$PRODUCT" = "NONE" ]; then
-    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) No eligible products with gsc_property configured" >> "$LOG_FILE"
-    exit 0
-fi
+# --- Enumerate eligible products (repo + gsc_property) ---
+PRODUCTS=()
+while IFS= read -r line; do
+    [ -n "$line" ] && PRODUCTS+=("$line")
+done < <(python3 -c "
+import json, os
+c = json.load(open('$REPO_DIR/config.json'))
+for p in c.get('projects', []):
+    lp = p.get('landing_pages', {}) or {}
+    repo = lp.get('repo', '')
+    gsc = lp.get('gsc_property', '')
+    if repo and gsc and os.path.isdir(os.path.expanduser(repo)):
+        print(p['name'])
+")
 
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Selected product: $PRODUCT (mode=$PICK_MODE)" >> "$LOG_FILE"
+echo "[$(ts)] ${#PRODUCTS[@]} eligible products: ${PRODUCTS[*]}" >> "$TICK_LOG"
 
-"$SCRIPT_DIR/run_gsc_pipeline.sh" "$PRODUCT" >> "$LOG_FILE" 2>&1
+# --- Lane runner (one per product, backgrounded) ---
+run_lane() {
+    local product="$1"
+    local product_lower
+    product_lower=$(echo "$product" | tr '[:upper:] ' '[:lower:]_')
+    local lane_log="$REPO_DIR/skill/logs/cron_gsc_${product_lower}-$TICK_ID.log"
 
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Pipeline complete for $PRODUCT" >> "$LOG_FILE"
+    # Jitter 0-29s to avoid GSC API / CPU bursts
+    sleep $((RANDOM % 30))
 
-# Clean up old per-product logs (keep 7 days)
-find "$SCRIPT_DIR/logs" -name "gsc_*.log" -mtime +7 -delete 2>/dev/null || true
-# Clean up old consolidated run logs in skill/logs (keep 14 days)
-find "$REPO_DIR/skill/logs" -name "cron_gsc-*.log" -mtime +14 -delete 2>/dev/null || true
+    {
+        echo "[$(ts)] === Lane start: $product ==="
+        "$SCRIPT_DIR/run_gsc_pipeline.sh" "$product"
+        echo "[$(ts)] === Lane done: $product ==="
+    } >> "$lane_log" 2>&1
+}
+
+# --- Spawn one lane per product ---
+PIDS=()
+for product in "${PRODUCTS[@]}"; do
+    run_lane "$product" &
+    PIDS+=($!)
+done
+
+echo "[$(ts)] Spawned ${#PIDS[@]} lanes (pids: ${PIDS[*]})" >> "$TICK_LOG"
+
+# Wait for all lanes so the next launchd tick sees a clean process table
+wait "${PIDS[@]}" 2>/dev/null || true
+
+echo "[$(ts)] cron_gsc tick $TICK_ID complete" >> "$TICK_LOG"
+
+# Cleanup old logs (keep 14 days)
+find "$REPO_DIR/skill/logs" -maxdepth 1 -name "cron_gsc*-*.log" -mtime +14 -delete 2>/dev/null || true
