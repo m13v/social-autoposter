@@ -722,18 +722,14 @@ def update_moltbook(db, api_key, quiet=False):
                 "thread_comments": thread_comment_count,
             })
 
-            # comments_count stores thread-level engagement (matches Moltbook/Reddit original-post
-            # semantics) so dashboard style stats reflect the conversation we're sitting in, not
-            # just direct replies to our comment. Direct replies live in thread_engagement.comment_replies.
             db.execute(
                 "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
                 "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
-                [comment_upvotes, thread_comment_count, engagement, post_id],
+                [comment_upvotes, comment_replies, engagement, post_id],
             )
             updated += 1
             results.append({"id": post_id, "upvotes": comment_upvotes,
-                            "replies": comment_replies, "thread_comments": thread_comment_count,
-                            "verification": verification})
+                            "replies": comment_replies, "verification": verification})
         else:
             # Original post - fetch post-level stats
             try:
