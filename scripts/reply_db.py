@@ -6,6 +6,8 @@ from db import load_env, get_conn
 load_env()
 db = get_conn()
 
+CLAUDE_SESSION_ID = os.environ.get("CLAUDE_SESSION_ID") or None
+
 cmd = sys.argv[1]
 if cmd == "processing":
     # reply_db.py processing ID
@@ -21,22 +23,31 @@ elif cmd == "replied":
     style = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] else None
     db.execute(
         "UPDATE replies SET status='replied', our_reply_content=%s, our_reply_url=%s, "
-        "engagement_style=COALESCE(%s, engagement_style), replied_at=NOW() WHERE id=%s",
-        [content, url, style, rid],
+        "engagement_style=COALESCE(%s, engagement_style), replied_at=NOW(), "
+        "claude_session_id=COALESCE(%s, claude_session_id) WHERE id=%s",
+        [content, url, style, CLAUDE_SESSION_ID, rid],
     )
     db.commit()
     print(f"ok {rid}")
 elif cmd == "skipped":
     # reply_db.py skipped ID "reason"
     rid, reason = int(sys.argv[2]), sys.argv[3]
-    db.execute("UPDATE replies SET status='skipped', skip_reason=%s WHERE id=%s", [reason, rid])
+    db.execute(
+        "UPDATE replies SET status='skipped', skip_reason=%s, "
+        "claude_session_id=COALESCE(%s, claude_session_id) WHERE id=%s",
+        [reason, CLAUDE_SESSION_ID, rid],
+    )
     db.commit()
     print(f"ok {rid}")
 elif cmd == "skip_batch":
     # reply_db.py skip_batch '{"ids":[1,2,3],"reason":"..."}'
     data = json.loads(sys.argv[2])
     for rid in data["ids"]:
-        db.execute("UPDATE replies SET status='skipped', skip_reason=%s WHERE id=%s", [data["reason"], rid])
+        db.execute(
+            "UPDATE replies SET status='skipped', skip_reason=%s, "
+            "claude_session_id=COALESCE(%s, claude_session_id) WHERE id=%s",
+            [data["reason"], CLAUDE_SESSION_ID, rid],
+        )
     db.commit()
     print(f"ok {len(data['ids'])}")
 elif cmd == "status":

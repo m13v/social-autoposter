@@ -206,7 +206,7 @@ try:
         result = outer
 
     score = result.get('score', 0)
-    status = 'pending' if score >= 1.5 else 'skip'
+    status = 'pending' if score >= 1.0 else 'skip'
 
     update_status(product, keyword, status,
         score=score,
