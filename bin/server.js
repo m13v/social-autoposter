@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execSync, spawn, spawnSync } = require('child_process');
+const { Pool } = require('pg');
 const platform = require('./platform');
 const scheduler = require('./scheduler');
 
@@ -71,6 +72,7 @@ const JOBS = [
   { label: 'com.m13v.social-audit-twitter', name: 'Health Check Twitter', type: 'Health Check', platform: 'Twitter', script: 'audit-twitter.sh', logPrefix: 'audit-twitter-', plist: 'com.m13v.social-audit-twitter.plist' },
   { label: 'com.m13v.social-audit-linkedin', name: 'Health Check LinkedIn', type: 'Health Check', platform: 'LinkedIn', script: 'audit-linkedin.sh', logPrefix: 'audit-linkedin-', plist: 'com.m13v.social-audit-linkedin.plist' },
   { label: 'com.m13v.social-audit-moltbook', name: 'Health Check MoltBook', type: 'Health Check', platform: 'MoltBook', script: 'audit-moltbook.sh', logPrefix: 'audit-moltbook-', plist: 'com.m13v.social-audit-moltbook.plist' },
+  { label: 'com.m13v.social-audit-reddit-resurrect', name: 'Resurrect Reddit', type: 'Health Check', platform: 'Reddit', script: 'audit-reddit-resurrect.sh', logPrefix: 'audit-reddit-resurrect-', plist: 'com.m13v.social-audit-reddit-resurrect.plist' },
   // Octolens row
   { label: 'com.m13v.social-octolens-reddit', name: 'Octolens Reddit', type: 'Octolens', platform: 'Reddit', script: 'octolens-reddit.sh', logPrefix: 'octolens-reddit-', plist: 'com.m13v.social-octolens-reddit.plist' },
   { label: 'com.m13v.social-octolens-twitter', name: 'Octolens Twitter', type: 'Octolens', platform: 'Twitter', script: 'octolens-twitter.sh', logPrefix: 'octolens-twitter-', plist: 'com.m13v.social-octolens-twitter.plist' },
@@ -205,6 +207,43 @@ function psql(query) {
   } catch { return null; }
 }
 
+let _pool = null;
+function getPool() {
+  if (_pool) return _pool;
+  const dbUrl = getDbUrl();
+  if (!dbUrl) return null;
+  _pool = new Pool({
+    connectionString: dbUrl,
+    max: 5,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
+  });
+  _pool.on('error', (err) => {
+    console.error('[pg.Pool] idle client error:', err.message);
+  });
+  return _pool;
+}
+
+async function pq(query, params) {
+  const pool = getPool();
+  if (!pool) return null;
+  try {
+    const r = await pool.query(query, params);
+    return r.rows;
+  } catch (e) {
+    console.error('[pq] query failed:', e.message);
+    return null;
+  }
+}
+
+async function pqScalar(query, params) {
+  const rows = await pq(query, params);
+  if (!rows || !rows.length) return null;
+  const row = rows[0];
+  const keys = Object.keys(row);
+  return keys.length ? row[keys[0]] : null;
+}
+
 function getLaunchAgentPath(unitFile) {
   return path.join(AGENT_DIR, driver.unitFileName(unitFile));
 }
@@ -215,15 +254,18 @@ function getLaunchAgentPath(unitFile) {
 let _pendingCache = { at: 0, value: null };
 let _statusCache = { at: 0, value: null };
 const activityStatsCache = new Map();
+const styleStatsCache = new Map();
+// Funnel stats: cached by days. Value shape: { at, value } or { at, pending: Promise }.
+const funnelStatsCache = new Map();
 function invalidateStatusCache() {
   _statusCache = { at: 0, value: null };
   _batchSnapshotCache = { at: 0, value: null };
 }
-function cachedPendingReplies() {
+async function cachedPendingReplies() {
   const now = Date.now();
   if (now - _pendingCache.at < 5000) return _pendingCache.value;
-  const raw = psql("SELECT COUNT(*) FROM replies WHERE status='pending'");
-  _pendingCache = { at: now, value: raw ? parseInt(raw, 10) : null };
+  const n = await pqScalar("SELECT COUNT(*)::int AS n FROM replies WHERE status='pending'");
+  _pendingCache = { at: now, value: (typeof n === 'number') ? n : (n == null ? null : parseInt(n, 10)) };
   return _pendingCache.value;
 }
 
@@ -377,6 +419,7 @@ function handleApi(req, res) {
     if (_statusCache.value && Date.now() - _statusCache.at < 1500) {
       return json(res, _statusCache.value);
     }
+    return (async () => {
     const snap = buildBatchSnapshot();
     const jobs = JOBS.map(job => {
       const plistPath = unitSrcPath(job);
@@ -438,12 +481,13 @@ function handleApi(req, res) {
       })
       .sort((a, b) => a.name.localeCompare(b.name));
 
-    const pending = cachedPendingReplies();
+    const pending = await cachedPendingReplies();
     const allDiscovered = discovered;
     const paused = allDiscovered.length > 0 && allDiscovered.every(j => !snap.loadedLabels.has(j.label));
     const payload = { jobs, otherJobs, pendingReplies: pending, paused };
     _statusCache = { at: Date.now(), value: payload };
     return json(res, payload);
+    })().catch(e => json(res, { error: e.message }, 500));
   }
 
   // POST /api/pause
@@ -766,16 +810,17 @@ function handleApi(req, res) {
 
   // GET /api/pending
   if (p === '/api/pending' && req.method === 'GET') {
-    const count = psql("SELECT COUNT(*) FROM replies WHERE status='pending'");
-    const byPlatform = psql("SELECT json_agg(row_to_json(r)) FROM (SELECT platform, COUNT(*) as count FROM replies WHERE status='pending' GROUP BY platform) r");
-    const recent = psql("SELECT json_agg(row_to_json(r)) FROM (SELECT id, platform, their_author, their_content, status FROM replies WHERE status='pending' ORDER BY discovered_at DESC LIMIT 20) r");
-    const statusCounts = psql("SELECT json_agg(row_to_json(r)) FROM (SELECT status, COUNT(*) as count FROM replies GROUP BY status ORDER BY status) r");
-    return json(res, {
-      count: count ? parseInt(count, 10) : null,
-      byPlatform: byPlatform ? JSON.parse(byPlatform) : [],
-      recent: recent ? JSON.parse(recent) : [],
-      statusCounts: statusCounts ? JSON.parse(statusCounts) : [],
-    });
+    return (async () => {
+      const q = "SELECT json_build_object(" +
+          "'count', (SELECT COUNT(*)::int FROM replies WHERE status='pending'), " +
+          "'byPlatform', COALESCE((SELECT json_agg(row_to_json(r)) FROM (SELECT platform, COUNT(*)::int as count FROM replies WHERE status='pending' GROUP BY platform) r), '[]'::json), " +
+          "'recent', COALESCE((SELECT json_agg(row_to_json(r)) FROM (SELECT id, platform, their_author, their_content, status FROM replies WHERE status='pending' ORDER BY discovered_at DESC LIMIT 20) r), '[]'::json), " +
+          "'statusCounts', COALESCE((SELECT json_agg(row_to_json(r)) FROM (SELECT status, COUNT(*)::int as count FROM replies GROUP BY status ORDER BY status) r), '[]'::json)" +
+        ") AS result";
+      const rows = await pq(q);
+      const result = (rows && rows.length && rows[0].result) ? rows[0].result : { count: null, byPlatform: [], recent: [], statusCounts: [] };
+      return json(res, result);
+    })().catch(e => json(res, { error: e.message }, 500));
   }
 
   // POST /api/webhooks/octolens
@@ -819,12 +864,15 @@ function handleApi(req, res) {
 
   // GET /api/webhooks/octolens/pending
   if (p === '/api/webhooks/octolens/pending' && req.method === 'GET') {
-    const count = psql("SELECT COUNT(*) FROM octolens_mentions WHERE status = 'pending'");
-    const recent = psql("SELECT json_agg(row_to_json(r)) FROM (SELECT id, platform, url, author, sentiment, tags, keywords, source_timestamp FROM octolens_mentions WHERE status = 'pending' ORDER BY source_timestamp DESC LIMIT 20) r");
-    return json(res, {
-      count: count ? parseInt(count, 10) : 0,
-      mentions: recent ? JSON.parse(recent) : [],
-    });
+    return (async () => {
+      const q = "SELECT json_build_object(" +
+          "'count', (SELECT COUNT(*)::int FROM octolens_mentions WHERE status = 'pending'), " +
+          "'mentions', COALESCE((SELECT json_agg(row_to_json(r)) FROM (SELECT id, platform, url, author, sentiment, tags, keywords, source_timestamp FROM octolens_mentions WHERE status = 'pending' ORDER BY source_timestamp DESC LIMIT 20) r), '[]'::json)" +
+        ") AS result";
+      const rows = await pq(q);
+      const result = (rows && rows.length && rows[0].result) ? rows[0].result : { count: 0, mentions: [] };
+      return json(res, result);
+    })().catch(e => json(res, { error: e.message }, 500));
   }
 
   // GET /api/activity - unified recent-events feed across posts, replies, mentions, dms
@@ -836,7 +884,10 @@ function handleApi(req, res) {
         "SELECT claude_session_id FROM posts WHERE claude_session_id IS NOT NULL AND posted_at IS NOT NULL " +
         "UNION ALL SELECT claude_session_id FROM replies WHERE claude_session_id IS NOT NULL AND status IN ('replied','skipped') " +
         "UNION ALL SELECT claude_session_id FROM dms WHERE claude_session_id IS NOT NULL AND status='sent' AND sent_at IS NOT NULL " +
-        "UNION ALL SELECT m.claude_session_id FROM dm_messages m WHERE m.claude_session_id IS NOT NULL AND m.direction='outbound'" +
+        "UNION ALL SELECT m.claude_session_id FROM dm_messages m WHERE m.claude_session_id IS NOT NULL AND m.direction='outbound' " +
+        "UNION ALL SELECT claude_session_id FROM posts WHERE claude_session_id IS NOT NULL AND resurrected_at IS NOT NULL " +
+        "UNION ALL SELECT claude_session_id FROM seo_keywords WHERE claude_session_id IS NOT NULL AND completed_at IS NOT NULL AND page_url IS NOT NULL " +
+        "UNION ALL SELECT claude_session_id FROM gsc_queries WHERE claude_session_id IS NOT NULL AND completed_at IS NOT NULL AND page_url IS NOT NULL" +
       "), session_counts AS (" +
         "SELECT claude_session_id, COUNT(*)::int AS rows_in_session FROM src GROUP BY claude_session_id" +
       "), session_cost AS (" +
@@ -850,12 +901,76 @@ function handleApi(req, res) {
       "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text, NULL::numeric FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
       "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || dms.id), NULL::text, sc.per_row_cost FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
       "UNION ALL SELECT * FROM (SELECT m.message_at, 'dm_reply_sent', d.platform, d.their_author, LEFT(m.content, 140), NULL::text, d.chat_url, ('dr' || m.id), NULL::text, sc.per_row_cost FROM dm_messages m JOIN dms d ON d.id = m.dm_id LEFT JOIN session_cost sc ON sc.session_id = m.claude_session_id WHERE m.direction = 'outbound' AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction = 'inbound' AND m2.message_at < m.message_at) ORDER BY m.message_at DESC LIMIT 150) x5b " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || id), product, NULL::numeric FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') <> 'reddit' ORDER BY completed_at DESC LIMIT 150) x6 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || id), product, NULL::numeric FROM gsc_queries WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || id), product, NULL::numeric FROM seo_keywords WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || sk.id), product, sc.per_row_cost FROM seo_keywords sk LEFT JOIN session_cost sc ON sc.session_id = sk.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') <> 'reddit' ORDER BY completed_at DESC LIMIT 150) x6 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || gq.id), product, sc.per_row_cost FROM gsc_queries gq LEFT JOIN session_cost sc ON sc.session_id = gq.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || sk2.id), product, sc.per_row_cost FROM seo_keywords sk2 LEFT JOIN session_cost sc ON sc.session_id = sk2.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
+      "UNION ALL SELECT * FROM (SELECT resurrected_at AS occurred_at, 'resurrected' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, NULL::text AS detail, our_url AS link, ('rr' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id WHERE resurrected_at IS NOT NULL ORDER BY resurrected_at DESC LIMIT 150) x9 " +
       "ORDER BY 1 DESC LIMIT 500) r";
-    const rows = psql(q);
-    return json(res, { events: rows && rows !== '' ? (JSON.parse(rows) || []) : [] });
+    return (async () => {
+      const rows = await pq(q);
+      const events = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
+      return json(res, { events });
+    })().catch(e => json(res, { error: e.message }, 500));
+  }
+
+  // GET /api/style/stats - posts grouped by engagement_style over a trailing window (default 24h)
+  if (p === '/api/style/stats' && req.method === 'GET') {
+    const url = new URL(req.url, 'http://localhost');
+    const windowHours = Math.max(1, Math.min(720, parseInt(url.searchParams.get('hours') || '24', 10) || 24));
+    // Normalize platform: accept 'x' as alias for 'twitter', empty/all = no filter.
+    const rawPlatform = (url.searchParams.get('platform') || '').trim().toLowerCase();
+    const platform = (rawPlatform === '' || rawPlatform === 'all') ? '' :
+                     (rawPlatform === 'x' ? 'twitter' : rawPlatform);
+    const platformOk = platform === '' || /^[a-z0-9_]{1,32}$/.test(platform);
+    if (!platformOk) return json(res, { error: 'invalid platform' }, 400);
+    // Project is case-sensitive (stored as 'Assrt', 'Cyrano', 'fazm', etc.).
+    const rawProject = (url.searchParams.get('project') || '').trim();
+    const project = (rawProject === '' || rawProject.toLowerCase() === 'all') ? '' : rawProject;
+    const projectOk = project === '' || /^[A-Za-z0-9_\-]{1,64}$/.test(project);
+    if (!projectOk) return json(res, { error: 'invalid project' }, 400);
+    const cacheKey = windowHours + '|' + platform + '|' + project;
+    const cached = styleStatsCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < 300000) {
+      return json(res, { windowHours, platform: platform || 'all', project: project || 'all',
+        rows: cached.value, platforms: cached.platforms, projects: cached.projects, cachedAt: cached.at });
+    }
+    const platformFilter = platform
+      ? "AND LOWER(CASE WHEN LOWER(platform)='x' THEN 'twitter' ELSE platform END) = '" + platform + "' "
+      : '';
+    const projectFilter = project
+      ? "AND project_name = '" + project.replace(/'/g, "''") + "' "
+      : '';
+    // Moltbook has no views metric in its API; keep Moltbook rows in posts/upvotes/comments
+    // totals but exclude them from views sum AND the views-per-post denominator so they don't
+    // dilute other styles' averages.
+    const q = "SELECT json_agg(row_to_json(r)) FROM (" +
+      "SELECT COALESCE(engagement_style, '(none)') AS style, COUNT(*)::int AS posts, " +
+        "COUNT(*) FILTER (WHERE LOWER(platform) <> 'moltbook')::int AS views_posts, " +
+        "COALESCE(SUM(upvotes), 0)::int AS upvotes, " +
+        "COALESCE(SUM(comments_count), 0)::int AS comments, " +
+        "COALESCE(SUM(views) FILTER (WHERE LOWER(platform) <> 'moltbook'), 0)::int AS views " +
+      "FROM posts WHERE posted_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
+      platformFilter + projectFilter +
+      "GROUP BY engagement_style ORDER BY posts DESC) r";
+    // Return the full list of active platforms/projects in the window so the pill
+    // rows reflect current reality regardless of the current filter selection.
+    const qp = "SELECT json_agg(p) FROM (" +
+      "SELECT DISTINCT LOWER(CASE WHEN LOWER(platform)='x' THEN 'twitter' ELSE platform END) AS p " +
+      "FROM posts WHERE posted_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
+      "AND platform IS NOT NULL ORDER BY p) s";
+    const qpr = "SELECT json_agg(p) FROM (" +
+      "SELECT DISTINCT project_name AS p FROM posts " +
+      "WHERE posted_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
+      "AND project_name IS NOT NULL ORDER BY p) s";
+    return (async () => {
+      const [rows, prows, prjRows] = await Promise.all([pq(q), pq(qp), pq(qpr)]);
+      const value = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
+      const platforms = (prows && prows.length && prows[0].json_agg) ? prows[0].json_agg : [];
+      const projects = (prjRows && prjRows.length && prjRows[0].json_agg) ? prjRows[0].json_agg : [];
+      styleStatsCache.set(cacheKey, { at: Date.now(), value, platforms, projects });
+      return json(res, { windowHours, platform: platform || 'all', project: project || 'all',
+        rows: value, platforms, projects });
+    })().catch(e => json(res, { error: e.message }, 500));
   }
 
   // GET /api/activity/stats - per-type, per-platform counts over a trailing window (default 24h)
@@ -881,12 +996,166 @@ function handleApi(req, res) {
         "UNION ALL SELECT 'dm_reply_sent', d.platform FROM dm_messages m JOIN dms d ON d.id = m.dm_id WHERE m.direction='outbound' AND m.message_at >= NOW() - " + win + " AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction='inbound' AND m2.message_at < m.message_at) " +
         "UNION ALL SELECT 'page_published_serp', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND COALESCE(source, '') <> 'reddit' " +
         "UNION ALL SELECT 'page_published_gsc', 'seo' FROM gsc_queries WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL " +
-        "UNION ALL SELECT 'page_published_reddit', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='reddit'" +
+        "UNION ALL SELECT 'page_published_reddit', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='reddit' " +
+        "UNION ALL SELECT 'resurrected', platform FROM posts WHERE resurrected_at >= NOW() - " + win +
       ") u GROUP BY type, platform ORDER BY type, platform) r";
-    const rows = psql(q);
-    const value = rows && rows !== '' ? (JSON.parse(rows) || []) : [];
-    activityStatsCache.set(windowHours, { at: Date.now(), value });
-    return json(res, { windowHours, rows: value });
+    return (async () => {
+      const rows = await pq(q);
+      const value = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
+      activityStatsCache.set(windowHours, { at: Date.now(), value });
+      return json(res, { windowHours, rows: value });
+    })().catch(e => json(res, { error: e.message }, 500));
+  }
+
+  // GET /api/top/dms - DM threads ranked by hotness.
+  // Ordering: needs_human first (human escalation), then by interest_level
+  // (hot > warm > general > cold), converted/closed/declined/not_our_prospect
+  // sink to the bottom. Tie-break on last_message_at DESC.
+  if (p === '/api/top/dms' && req.method === 'GET') {
+    const url = new URL(req.url, 'http://localhost');
+    const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get('limit') || '200', 10) || 200));
+    const WINDOW_HOURS = { '24h': 24, '7d': 24*7, '14d': 24*14, '30d': 24*30, '90d': 24*90, 'all': null };
+    const rawWindow = String(url.searchParams.get('window') || '7d').toLowerCase();
+    const windowKey = Object.prototype.hasOwnProperty.call(WINDOW_HOURS, rawWindow) ? rawWindow : '7d';
+    const windowHours = WINDOW_HOURS[windowKey];
+    const rawPlatform = String(url.searchParams.get('platform') || '').toLowerCase().trim();
+    const ALLOWED_PLATFORMS = new Set(['reddit', 'twitter', 'x', 'linkedin', 'moltbook', 'email']);
+    const platformFilter = ALLOWED_PLATFORMS.has(rawPlatform) ? rawPlatform : '';
+    const whereParts = [];
+    if (windowHours != null) {
+      whereParts.push("COALESCE(d.last_message_at, d.discovered_at) >= NOW() - INTERVAL '" + windowHours + " hours'");
+    }
+    if (platformFilter) {
+      whereParts.push("LOWER(d.platform) = '" + platformFilter + "'");
+    }
+    const whereSql = whereParts.length ? ('WHERE ' + whereParts.join(' AND ')) : '';
+    const q =
+      "SELECT json_agg(row_to_json(r)) FROM (" +
+        "SELECT d.id, d.platform, d.their_author, d.chat_url, " +
+          "d.tier, d.message_count, d.last_message_at, d.discovered_at, " +
+          "d.conversation_status, d.interest_level, " +
+          "d.human_reason, d.flagged_at, " +
+          "(SELECT content   FROM dm_messages WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1) AS last_msg, " +
+          "(SELECT direction FROM dm_messages WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1) AS last_dir, " +
+          "CASE WHEN d.conversation_status = 'needs_human' THEN 0 " +
+               "WHEN d.conversation_status IN ('converted','closed') THEN 90 " +
+               "WHEN d.interest_level = 'hot' THEN 10 " +
+               "WHEN d.interest_level = 'warm' THEN 20 " +
+               "WHEN d.interest_level = 'general_discussion' THEN 30 " +
+               "WHEN d.interest_level = 'cold' THEN 40 " +
+               "WHEN d.interest_level = 'declined' THEN 80 " +
+               "WHEN d.interest_level = 'not_our_prospect' THEN 85 " +
+               "ELSE 50 END AS sort_bucket " +
+        "FROM dms d " +
+        whereSql + " " +
+        "ORDER BY sort_bucket ASC, " +
+          "CASE WHEN d.conversation_status = 'needs_human' THEN d.flagged_at END DESC NULLS LAST, " +
+          "d.last_message_at DESC NULLS LAST, " +
+          "d.id DESC " +
+        "LIMIT " + limit +
+      ") r";
+    return (async () => {
+      const rows = await pq(q);
+      const dms = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
+      return json(res, { dms, window: windowKey, platform: platformFilter || 'all' });
+    })().catch(e => json(res, { error: e.message }, 500));
+  }
+
+  // GET /api/top - top-performing posts by engagement
+  // Mirrors scripts/top_performers.py: active posts, non-trivial content,
+  // excludes platforms we don't score. Default ranking is upvotes DESC (that's
+  // what the feedback-loop pipeline uses); a composite score is also returned
+  // so the UI can sort by it.
+  if (p === '/api/top' && req.method === 'GET') {
+    const url = new URL(req.url, 'http://localhost');
+    const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get('limit') || '150', 10) || 150));
+    const WINDOW_HOURS = { '24h': 24, '7d': 24*7, '14d': 24*14, '30d': 24*30, '90d': 24*90, 'all': null };
+    const rawWindow = String(url.searchParams.get('window') || '7d').toLowerCase();
+    const windowKey = Object.prototype.hasOwnProperty.call(WINDOW_HOURS, rawWindow) ? rawWindow : '7d';
+    const windowHours = WINDOW_HOURS[windowKey];
+    const rawPlatform = String(url.searchParams.get('platform') || '').toLowerCase().trim();
+    const ALLOWED_PLATFORMS = new Set(['reddit', 'twitter', 'x', 'linkedin', 'moltbook']);
+    const platformFilter = ALLOWED_PLATFORMS.has(rawPlatform) ? rawPlatform : '';
+    const rawKind = String(url.searchParams.get('kind') || 'all').toLowerCase().trim();
+    const kindFilter = (rawKind === 'threads' || rawKind === 'comments') ? rawKind : 'all';
+    const whereParts = [
+      "status = 'active'",
+      "our_content IS NOT NULL AND LENGTH(our_content) >= 30",
+      "platform NOT IN ('github_issues')",
+      "(upvotes IS NOT NULL OR comments_count IS NOT NULL OR views IS NOT NULL)",
+    ];
+    if (windowHours != null) {
+      whereParts.push("posted_at >= NOW() - INTERVAL '" + windowHours + " hours'");
+    }
+    if (platformFilter) {
+      whereParts.push("LOWER(platform) = '" + platformFilter + "'");
+    }
+    if (kindFilter === 'threads') {
+      whereParts.push("thread_url = our_url");
+    } else if (kindFilter === 'comments') {
+      whereParts.push("(our_url IS NULL OR thread_url <> our_url)");
+    }
+    const q = "SELECT json_agg(row_to_json(r)) FROM (" +
+      "SELECT id, platform, " +
+        "COALESCE(upvotes, 0)::int AS upvotes, " +
+        "COALESCE(comments_count, 0)::int AS comments_count, " +
+        "COALESCE(views, 0)::int AS views, " +
+        "(COALESCE(upvotes,0)*10 + COALESCE(comments_count,0)*5 + COALESCE(views,0)/100)::int AS score, " +
+        "(our_url IS NOT NULL AND thread_url = our_url) AS is_thread, " +
+        "posted_at, our_content, our_url, thread_url, thread_title, " +
+        "LEFT(COALESCE(thread_content, ''), 400) AS thread_content, " +
+        "our_account, project_name, engagement_style " +
+      "FROM posts " +
+      "WHERE " + whereParts.join(' AND ') + " " +
+      "ORDER BY upvotes DESC NULLS LAST, comments_count DESC NULLS LAST, views DESC NULLS LAST " +
+      "LIMIT " + limit +
+      ") r";
+    return (async () => {
+      const rows = await pq(q);
+      const posts = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
+      return json(res, { posts, window: windowKey, platform: platformFilter || 'all', kind: kindFilter });
+    })().catch(e => json(res, { error: e.message }, 500));
+  }
+
+  // GET /api/funnel/stats - per-project funnel (posts -> pageviews -> CTAs -> bookings)
+  // Shells out to scripts/project_stats_json.py. PostHog API calls make this
+  // slow (~15-30s), so we cache for 10 min and dedupe concurrent callers.
+  if (p === '/api/funnel/stats' && req.method === 'GET') {
+    const url = new URL(req.url, 'http://localhost');
+    const days = Math.max(1, Math.min(90, parseInt(url.searchParams.get('days') || '1', 10) || 1));
+    const entry = funnelStatsCache.get(days);
+    const TTL_MS = 600000;
+    if (entry && entry.value && Date.now() - entry.at < TTL_MS) {
+      return json(res, { days, ...entry.value, cachedAt: entry.at });
+    }
+    if (entry && entry.pending) {
+      entry.pending.then(val => json(res, { days, ...val, cachedAt: Date.now() }))
+                   .catch(err => json(res, { error: String(err && err.message || err) }, 500));
+      return;
+    }
+    const scriptPath = path.join(DEST, 'scripts', 'project_stats_json.py');
+    const pending = new Promise((resolve, reject) => {
+      const child = spawn('python3', [scriptPath, '--days', String(days)], {
+        env: process.env, cwd: DEST,
+      });
+      let out = '', err = '';
+      child.stdout.on('data', d => out += d);
+      child.stderr.on('data', d => err += d);
+      child.on('error', reject);
+      child.on('close', code => {
+        if (code !== 0) return reject(new Error(err || ('exit ' + code)));
+        try { resolve(JSON.parse(out)); } catch (e) { reject(e); }
+      });
+    });
+    funnelStatsCache.set(days, { at: Date.now(), pending });
+    pending.then(val => {
+      funnelStatsCache.set(days, { at: Date.now(), value: val });
+      json(res, { days, ...val, cachedAt: Date.now() });
+    }).catch(err => {
+      funnelStatsCache.delete(days);
+      json(res, { error: String(err && err.message || err) }, 500);
+    });
+    return;
   }
 
   return json(res, { error: 'Not found' }, 404);
@@ -1024,6 +1293,7 @@ const HTML = `<!DOCTYPE html>
   .activity-chip.active.ev-page_published_serp   { background: #422006; border-color: #f59e0b; color: #fcd34d; }
   .activity-chip.active.ev-page_published_gsc    { background: #134e4a; border-color: #14b8a6; color: #5eead4; }
   .activity-chip.active.ev-page_published_reddit { background: #7c2d12; border-color: #f97316; color: #fdba74; }
+  .activity-chip.active.ev-resurrected { background: #1e3a8a; border-color: #3b82f6; color: #93c5fd; }
 
   .activity-status { display: flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: #22d3ee; }
   .activity-live-dot {
@@ -1079,6 +1349,7 @@ const HTML = `<!DOCTYPE html>
   .ev-pill.ev-page_published_serp   { background: #422006; color: #fcd34d; border: 1px solid #f59e0b; }
   .ev-pill.ev-page_published_gsc    { background: #134e4a; color: #5eead4; border: 1px solid #14b8a6; }
   .ev-pill.ev-page_published_reddit { background: #7c2d12; color: #fdba74; border: 1px solid #f97316; }
+  .ev-pill.ev-resurrected { background: #1e3a8a; color: #93c5fd; border: 1px solid #3b82f6; }
 
   .activity-search {
     flex: 1; min-width: 220px; max-width: 420px; background: #0f0f0f; border: 1px solid #262626;
@@ -1151,6 +1422,60 @@ const HTML = `<!DOCTYPE html>
     100% { background: transparent; box-shadow: inset 3px 0 0 transparent; }
   }
 
+  /* Top tab */
+  .top-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 12px; flex-wrap: wrap; }
+  .top-title { font-size: 13px; font-weight: 600; color: #e5e5e5; text-transform: uppercase; letter-spacing: 0.05em; }
+  .top-subtabs { display: inline-flex; gap: 0; background: #0f0f0f; border: 1px solid #262626; border-radius: 6px; padding: 2px; }
+  .top-subtab { padding: 4px 12px; cursor: pointer; color: #a3a3a3; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; border-radius: 4px; transition: background 0.15s, color 0.15s; }
+  .top-subtab:hover { color: #e5e5e5; }
+  .top-subtab.active { background: #7c3aed; color: #fff; }
+  .top-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .top-filter {
+    background: #0f0f0f; color: #e5e5e5; border: 1px solid #262626; border-radius: 6px;
+    padding: 4px 8px; font-size: 12px; font-family: inherit; cursor: pointer;
+  }
+  .top-filter:hover { border-color: #404040; }
+  .top-filter:focus { outline: none; border-color: #8b5cf6; }
+  .top-total { font-size: 12px; color: #a3a3a3; font-variant-numeric: tabular-nums; margin-left: 4px; }
+  .top-post-content { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
+  .top-post-text { color: #e5e5e5; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+  .top-post-link { color: #8b5cf6; font-size: 12px; font-family: 'SF Mono', 'Fira Code', monospace; word-break: break-all; }
+  .top-post-link:hover { color: #a78bfa; text-decoration: underline; }
+  .top-post-meta { color: #737373; font-size: 11px; font-family: 'SF Mono', 'Fira Code', monospace; line-height: 1.4; }
+  .top-post-meta a { color: #737373; text-decoration: none; }
+  .top-post-meta a:hover { color: #a3a3a3; text-decoration: underline; }
+  .top-post-parent-title { color: #a3a3a3; font-style: italic; }
+  /* Top tab table: fixed layout so Content gets 50% and small columns truncate their headers */
+  #top-table-container .style-stats-table { table-layout: fixed; }
+  #top-table-container .style-stats-table th,
+  #top-table-container .style-stats-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 10px 10px; }
+  #top-table-container .style-stats-table td[data-col-key="our_content"] { white-space: normal; overflow: visible; text-overflow: clip; }
+  #top-table-container .style-stats-table th .activity-header-label { overflow: hidden; text-overflow: ellipsis; display: inline-block; max-width: 100%; vertical-align: bottom; }
+  #top-pages-container .style-stats-table { table-layout: fixed; }
+  #top-pages-container .style-stats-table th,
+  #top-pages-container .style-stats-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 10px 10px; }
+  #top-pages-container .style-stats-table td[data-col-key="path"] { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-all; }
+  /* DMs sub-tab */
+  #top-dms-container .style-stats-table { table-layout: fixed; }
+  #top-dms-container .style-stats-table th,
+  #top-dms-container .style-stats-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 10px 10px; }
+  #top-dms-container .style-stats-table td[data-col-key="last_msg"] { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; color: #a3a3a3; font-size: 12px; }
+  .dm-class-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+  .dm-class-human    { background: #7f1d1d; color: #fecaca; }
+  .dm-class-hot      { background: #b91c1c; color: #fff; }
+  .dm-class-warm     { background: #b45309; color: #fff; }
+  .dm-class-general  { background: #374151; color: #e5e5e5; }
+  .dm-class-cold     { background: #1e3a8a; color: #bfdbfe; }
+  .dm-class-declined { background: #292524; color: #a3a3a3; }
+  .dm-class-notours  { background: #1f2937; color: #9ca3af; }
+  .dm-class-converted{ background: #14532d; color: #bbf7d0; }
+  .dm-class-closed   { background: #1c1917; color: #737373; }
+  .dm-class-none     { background: #262626; color: #a3a3a3; }
+  .dm-class-sub      { color: #737373; font-size: 10px; margin-top: 2px; text-transform: lowercase; }
+  .dm-thread-author  { color: #e5e5e5; font-weight: 600; font-size: 13px; }
+  .dm-thread-tier    { color: #737373; font-size: 11px; font-family: 'SF Mono', 'Fira Code', monospace; }
+  .dm-last-dir       { color: #737373; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px; }
+
   /* Status tab: 24h activity stats */
   .stats-wrapper { background: #171717; border: 1px solid #262626; border-radius: 12px; padding: 16px 20px; margin-bottom: 20px; }
   .stats-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
@@ -1174,11 +1499,38 @@ const HTML = `<!DOCTYPE html>
   .stat-card.ev-page_published_serp   { border-left: 3px solid #f59e0b; }
   .stat-card.ev-page_published_gsc    { border-left: 3px solid #14b8a6; }
   .stat-card.ev-page_published_reddit { border-left: 3px solid #f97316; }
+  .stat-card.ev-resurrected         { border-left: 3px solid #3b82f6; }
   .stat-card-breakdown { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: #e5e5e5; }
   .stat-plat { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
   .stat-plat svg { height: 11px; width: 11px; fill: currentColor; }
   .stat-plat .plat-mono { height: 11px; width: 11px; border-radius: 2px; background: #262626; color: #e5e5e5; font-size: 9px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
   .stat-plat-count { color: #e5e5e5; }
+
+  /* Status tab: engagement style breakdown (collapsed by default) */
+  .style-stats-section { background: #171717; border: 1px solid #262626; border-radius: 12px; margin-bottom: 20px; overflow: hidden; }
+  .style-stats-section > summary { list-style: none; cursor: pointer; padding: 14px 20px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; user-select: none; }
+  .style-stats-section > summary::-webkit-details-marker { display: none; }
+  .style-stats-section > summary:hover { background: #1c1c1c; }
+  .style-stats-title { font-size: 13px; font-weight: 600; color: #e5e5e5; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 8px; }
+  .style-stats-caret { display: inline-block; width: 10px; font-size: 10px; color: #737373; transition: transform 0.15s; }
+  .style-stats-section[open] .style-stats-caret { transform: rotate(90deg); }
+  .style-stats-total { font-size: 12px; color: #a3a3a3; font-variant-numeric: tabular-nums; }
+  .style-stats-table-wrapper { border-top: 1px solid #262626; overflow-x: auto; }
+  .style-stats-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .style-stats-table th, .style-stats-table td { padding: 10px 16px; text-align: right; font-variant-numeric: tabular-nums; border-bottom: 1px solid #1f1f1f; }
+  .style-stats-table th { font-size: 11px; font-weight: 500; color: #a3a3a3; text-transform: uppercase; letter-spacing: 0.04em; background: #0f0f0f; }
+  .style-stats-table th:first-child, .style-stats-table td:first-child { text-align: left; color: #e5e5e5; font-weight: 600; }
+  .style-stats-table th:nth-child(1), .style-stats-table td:nth-child(1),
+  .style-stats-table th:nth-child(2), .style-stats-table td:nth-child(2) { white-space: nowrap; }
+  .style-stats-table tr:last-child td { border-bottom: none; }
+  .style-stats-table tr:hover td { background: #1c1c1c; }
+  .style-stats-empty { padding: 16px 20px; color: #737373; font-size: 13px; border-top: 1px solid #262626; }
+  .style-stats-controls { padding: 10px 20px; border-top: 1px solid #262626; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #a3a3a3; }
+  .style-stats-pill-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+  .style-stats-pill-row .label { color: #737373; text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px; margin-right: 4px; }
+  .style-stats-pill { background: #0f0f0f; color: #e5e5e5; border: 1px solid #262626; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-family: inherit; cursor: pointer; user-select: none; transition: background 0.1s, border-color 0.1s; }
+  .style-stats-pill:hover { border-color: #404040; background: #1c1c1c; }
+  .style-stats-pill.active { background: #1f2937; border-color: #3b82f6; color: #fff; }
 
   @media (max-width: 600px) { .cards { grid-template-columns: 1fr; } .content { padding: 16px; } }
 </style>
@@ -1196,6 +1548,7 @@ const HTML = `<!DOCTYPE html>
 <div class="tabs">
   <div class="tab active" data-tab="status">Status</div>
   <div class="tab" data-tab="activity">Activity</div>
+  <div class="tab" data-tab="top">Top</div>
   <div class="tab" data-tab="logs">Logs</div>
   <div class="tab" data-tab="settings">Settings</div>
 </div>
@@ -1208,6 +1561,32 @@ const HTML = `<!DOCTYPE html>
     </div>
     <div class="stats-grid" id="stats-grid"></div>
   </div>
+  <details class="style-stats-section" id="style-stats">
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span>Posts by Engagement Style (24h)</span>
+      <span class="style-stats-total" id="style-stats-total"></span>
+    </summary>
+    <div class="style-stats-controls">
+      <div class="style-stats-pill-row" id="style-stats-platform-pills" data-selected="all">
+        <span class="label">Platform</span>
+      </div>
+      <div class="style-stats-pill-row" id="style-stats-project-pills" data-selected="all">
+        <span class="label">Project</span>
+      </div>
+    </div>
+    <div id="style-stats-body">
+      <div class="style-stats-empty">Loading\u2026</div>
+    </div>
+  </details>
+  <details class="style-stats-section" id="funnel-stats">
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span>Project Funnel Stats (last 24 hours)</span>
+      <span class="style-stats-total" id="funnel-stats-total"></span>
+    </summary>
+    <div id="funnel-stats-body">
+      <div class="style-stats-empty">Click to load\u2026</div>
+    </div>
+  </details>
   <div class="matrix-wrapper">
     <table class="matrix-table">
       <thead>
@@ -1293,6 +1672,51 @@ const HTML = `<!DOCTYPE html>
     </table>
   </div>
   <div class="activity-pagination" id="activity-pagination"></div>
+</div>
+
+<div class="content hidden" id="tab-top">
+  <div class="top-header">
+    <div class="top-subtabs">
+      <span class="top-subtab active" data-subtab="posts">Posts</span>
+      <span class="top-subtab" data-subtab="pages">Pages</span>
+      <span class="top-subtab" data-subtab="dms">DMs</span>
+    </div>
+    <div class="top-controls">
+      <select id="top-window" class="top-filter">
+        <option value="24h">Last 24 hours</option>
+        <option value="7d" selected>Last 7 days</option>
+        <option value="14d">Last 14 days</option>
+        <option value="30d">Last 30 days</option>
+        <option value="90d">Last 90 days</option>
+        <option value="all">All time</option>
+      </select>
+      <select id="top-platform" class="top-filter">
+        <option value="all">All platforms</option>
+        <option value="reddit">Reddit</option>
+        <option value="twitter">Twitter / X</option>
+        <option value="linkedin">LinkedIn</option>
+        <option value="moltbook">Moltbook</option>
+      </select>
+      <select id="top-project" class="top-filter" style="display:none">
+        <option value="all">All projects</option>
+      </select>
+      <select id="top-kind" class="top-filter">
+        <option value="all">Threads &amp; comments</option>
+        <option value="threads">Threads only</option>
+        <option value="comments">Comments only</option>
+      </select>
+      <span class="top-total" id="top-total"></span>
+    </div>
+  </div>
+  <div id="top-table-container">
+    <div class="style-stats-empty">Loading\u2026</div>
+  </div>
+  <div id="top-pages-container" class="hidden">
+    <div class="style-stats-empty">Loading\u2026 (first call can take 15\u201330s)</div>
+  </div>
+  <div id="top-dms-container" class="hidden">
+    <div class="style-stats-empty">Loading\u2026</div>
+  </div>
 </div>
 
 <div class="content hidden" id="tab-logs">
@@ -1828,8 +2252,8 @@ async function saveSettings() {
 }
 
 // Activity tab
-const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'dm_reply_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit'];
-const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', dm_reply_sent: 'dm reply', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)' };
+const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'dm_reply_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit', 'resurrected'];
+const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', dm_reply_sent: 'dm reply', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)', resurrected: 'resurrected' };
 const ACTIVITY_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github', 'seo'];
 let _activitySeen = new Set();
 let _activityFirstLoad = true;
@@ -1841,7 +2265,12 @@ let _activityFilterSummary = '';
 let _activitySortField = 'occurred_at';
 let _activitySortDir = 'desc';
 let _activityPage = 0;
-let _activityPageSize = 25;
+let _activityPageSize = (() => {
+  try {
+    const v = parseInt(localStorage.getItem('activityPageSize'), 10);
+    return [10, 25, 50, 100].includes(v) ? v : 100;
+  } catch { return 100; }
+})();
 let _activityTimer = null;
 let _activityControlsWired = false;
 
@@ -1962,6 +2391,7 @@ function fmtCost(c) {
   if (c == null) return '';
   const n = Number(c);
   if (!isFinite(n)) return '';
+  if (n === 0) return '$0';
   if (n < 0.01) return '$' + n.toFixed(4);
   return '$' + n.toFixed(2);
 }
@@ -1996,7 +2426,12 @@ function renderPagination(totalFiltered) {
     '<button class="pager-btn" id="activity-prev"' + (_activityPage <= 0 ? ' disabled' : '') + '>Prev</button>' +
     '<button class="pager-btn" id="activity-next"' + (_activityPage >= totalPages - 1 ? ' disabled' : '') + '>Next</button>';
   const ps = document.getElementById('activity-page-size');
-  if (ps) ps.addEventListener('change', () => { _activityPageSize = parseInt(ps.value, 10) || 25; _activityPage = 0; renderActivity(_lastActivityEvents || []); });
+  if (ps) ps.addEventListener('change', () => {
+    _activityPageSize = parseInt(ps.value, 10) || 100;
+    _activityPage = 0;
+    try { localStorage.setItem('activityPageSize', String(_activityPageSize)); } catch {}
+    renderActivity(_lastActivityEvents || []);
+  });
   const prev = document.getElementById('activity-prev');
   if (prev) prev.addEventListener('click', () => { _activityPage -= 1; renderActivity(_lastActivityEvents || []); });
   const next = document.getElementById('activity-next');
@@ -2067,6 +2502,760 @@ async function loadActivityStats() {
     const data = await res.json();
     renderActivityStats(data);
   } catch {}
+}
+
+// Shared helper: mount a sortable + per-column-filterable table into containerId.
+// Only tbody and the sort-arrow glyphs are rewritten on state changes, so the
+// filter <input> elements keep their focus and caret position while typing.
+function mountSortableTable(opts) {
+  const container = document.getElementById(opts.containerId);
+  if (!container) return;
+  const cols = opts.columns;
+  const rows = opts.rows || [];
+  if (!rows.length) {
+    container.innerHTML = '<div class="style-stats-empty">' + escapeHtml(opts.emptyMessage || 'No data.') + '</div>';
+    return;
+  }
+  const state = opts.state;
+  state.filters = state.filters || {};
+  const alignAttr = c => (c.align === 'right' ? ' style="text-align:right;"' : (c.align === 'left' ? ' style="text-align:left;"' : ''));
+  const hasWidths = cols.some(c => c.widthPct != null);
+  const colgroup = hasWidths
+    ? '<colgroup>' + cols.map(c => '<col' + (c.widthPct != null ? ' style="width:' + c.widthPct + '%;"' : '') + ' />').join('') + '</colgroup>'
+    : '';
+  const headerCells = cols.map(c => (
+    '<th class="activity-sortable" data-sort-key="' + escapeHtml(c.key) + '"' + alignAttr(c) + ' title="' + escapeHtml(c.label) + '">' +
+      '<span class="activity-header-label">' + escapeHtml(c.label) +
+      ' <span class="activity-sort-arrow" data-sort-arrow-key="' + escapeHtml(c.key) + '"></span>' +
+      '</span>' +
+    '</th>'
+  )).join('');
+  const filterCells = cols.map(c => (
+    '<th' + alignAttr(c) + '>' +
+      '<input type="text" class="activity-col-filter" data-filter-key="' + escapeHtml(c.key) + '" placeholder="filter\u2026" />' +
+    '</th>'
+  )).join('');
+  container.innerHTML =
+    '<div class="style-stats-table-wrapper">' +
+      '<table class="style-stats-table">' +
+        colgroup +
+        '<thead>' +
+          '<tr>' + headerCells + '</tr>' +
+          '<tr class="activity-filter-row">' + filterCells + '</tr>' +
+        '</thead>' +
+        '<tbody></tbody>' +
+      '</table>' +
+    '</div>';
+  const tbody = container.querySelector('tbody');
+  function cellValue(c, r) { return c.accessor ? c.accessor(r) : r[c.key]; }
+  function cellDisplay(c, r) {
+    const v = cellValue(c, r);
+    if (c.formatter) return c.formatter(v, r);
+    return v == null ? '' : escapeHtml(String(v));
+  }
+  function apply() {
+    let filtered = rows;
+    for (const c of cols) {
+      const fv = (state.filters[c.key] || '').toLowerCase().trim();
+      if (!fv) continue;
+      filtered = filtered.filter(r => {
+        const raw = cellValue(c, r);
+        const disp = c.formatter ? c.formatter(raw, r) : (raw == null ? '' : String(raw));
+        const plain = String(disp).replace(/<[^>]*>/g, '').toLowerCase();
+        return plain.indexOf(fv) !== -1;
+      });
+    }
+    const sortCol = cols.find(c => c.key === state.sortField) || cols[0];
+    const dir = state.sortDir === 'asc' ? 1 : -1;
+    const sorted = filtered.slice().sort((a, b) => {
+      const va = cellValue(sortCol, a);
+      const vb = cellValue(sortCol, b);
+      if (sortCol.type === 'numeric') {
+        const na = Number(va); const nb = Number(vb);
+        const aMissing = !Number.isFinite(na); const bMissing = !Number.isFinite(nb);
+        if (aMissing && bMissing) return 0;
+        if (aMissing) return 1;
+        if (bMissing) return -1;
+        return (na - nb) * dir;
+      }
+      return String(va == null ? '' : va).localeCompare(String(vb == null ? '' : vb)) * dir;
+    });
+    tbody.innerHTML = sorted.map(r => (
+      '<tr>' + cols.map(c => '<td data-col-key="' + escapeHtml(c.key) + '"' + alignAttr(c) + '>' + cellDisplay(c, r) + '</td>').join('') + '</tr>'
+    )).join('') || '<tr><td colspan="' + cols.length + '" style="text-align:center;color:#737373;padding:14px;">No rows match filters.</td></tr>';
+    container.querySelectorAll('[data-sort-arrow-key]').forEach(el => {
+      const k = el.getAttribute('data-sort-arrow-key');
+      if (k === state.sortField) {
+        el.textContent = state.sortDir === 'asc' ? '\u25B2' : '\u25BC';
+        el.classList.add('active');
+      } else {
+        el.textContent = '';
+        el.classList.remove('active');
+      }
+    });
+  }
+  container.querySelectorAll('.activity-sortable').forEach(el => {
+    el.addEventListener('click', () => {
+      const key = el.getAttribute('data-sort-key');
+      if (state.sortField === key) {
+        state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        state.sortField = key;
+        const col = cols.find(c => c.key === key);
+        state.sortDir = (col && col.type === 'numeric') ? 'desc' : 'asc';
+      }
+      apply();
+    });
+  });
+  container.querySelectorAll('.activity-col-filter').forEach(el => {
+    const k = el.getAttribute('data-filter-key');
+    if (state.filters[k]) el.value = state.filters[k];
+    el.addEventListener('input', () => {
+      state.filters[k] = el.value;
+      apply();
+    });
+    el.addEventListener('click', e => e.stopPropagation());
+  });
+  apply();
+}
+
+let _styleStatsTableState = { sortField: 'views', sortDir: 'desc', filters: {} };
+function renderStyleStatsPills(containerId, values, selected, labelAll) {
+  const row = document.getElementById(containerId);
+  if (!row) return;
+  row.dataset.selected = selected || 'all';
+  // Preserve a user-picked value that has no rows in the current window.
+  const want = ['all'].concat(values || []);
+  if (selected && selected !== 'all' && !want.includes(selected)) want.push(selected);
+  const labelEl = row.querySelector('.label');
+  const labelHtml = labelEl ? labelEl.outerHTML : '';
+  const pillsHtml = want.map(v => (
+    '<button type="button" class="style-stats-pill' + (v === (selected || 'all') ? ' active' : '') +
+    '" data-value="' + escapeHtml(v) + '">' +
+    escapeHtml(v === 'all' ? labelAll : v) + '</button>'
+  )).join('');
+  row.innerHTML = labelHtml + pillsHtml;
+  row.querySelectorAll('.style-stats-pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      row.dataset.selected = btn.getAttribute('data-value') || 'all';
+      loadStyleStats();
+    });
+  });
+}
+function renderStyleStats(payload) {
+  const body = document.getElementById('style-stats-body');
+  const totalEl = document.getElementById('style-stats-total');
+  if (!body) return;
+  const selectedPlatform = (payload && payload.platform) || 'all';
+  const selectedProject  = (payload && payload.project)  || 'all';
+  renderStyleStatsPills('style-stats-platform-pills', (payload && payload.platforms) || [], selectedPlatform, 'All');
+  renderStyleStatsPills('style-stats-project-pills',  (payload && payload.projects)  || [], selectedProject,  'All');
+  const rows = (payload && payload.rows) || [];
+  if (!rows.length) {
+    if (totalEl) totalEl.textContent = '0 posts';
+    const scope = [
+      selectedPlatform !== 'all' ? selectedPlatform : '',
+      selectedProject  !== 'all' ? selectedProject  : '',
+    ].filter(Boolean).join(' / ');
+    const label = scope ? 'No ' + scope + ' posts in the last 24 hours.' : 'No posts in the last 24 hours.';
+    body.innerHTML = '<div class="style-stats-empty">' + escapeHtml(label) + '</div>';
+    return;
+  }
+  const totals = rows.reduce((a, r) => {
+    a.posts    += Number(r.posts)    || 0;
+    a.upvotes  += Number(r.upvotes)  || 0;
+    a.comments += Number(r.comments) || 0;
+    a.views    += Number(r.views)    || 0;
+    return a;
+  }, { posts: 0, upvotes: 0, comments: 0, views: 0 });
+  if (totalEl) totalEl.textContent = totals.posts + ' post' + (totals.posts === 1 ? '' : 's');
+  const fmt = n => (Number(n) || 0).toLocaleString();
+  const perPostStr = v => {
+    if (!Number.isFinite(v)) return '0';
+    if (v >= 100) return Math.round(v).toLocaleString();
+    if (v >= 10)  return v.toFixed(1);
+    return v.toFixed(2);
+  };
+  // Views uses views_posts (excludes Moltbook rows) as the denominator because the Moltbook
+  // API does not expose views. Upvotes/comments use the full posts count.
+  const denomFor = (field, r) => {
+    if (field === 'views') return Number(r && r.views_posts) || 0;
+    return Number(r && r.posts) || 0;
+  };
+  const perPostAccessor = field => r => {
+    const denom = denomFor(field, r);
+    if (denom <= 0) return 0;
+    return (Number(r[field]) || 0) / denom;
+  };
+  const makeFmtPerPost = field => (_v, r) => {
+    const total = Number(r && r[field]) || 0;
+    const denom = denomFor(field, r);
+    const per   = denom > 0 ? total / denom : 0;
+    return fmt(total) + ' <span style="color:#737373;">(' + perPostStr(per) + ')</span>';
+  };
+  const normalized = rows.map(r => ({
+    style:       r.style || '(none)',
+    posts:       Number(r.posts)       || 0,
+    views_posts: Number(r.views_posts) || 0,
+    upvotes:     Number(r.upvotes)     || 0,
+    comments:    Number(r.comments)    || 0,
+    views:       Number(r.views)       || 0,
+  }));
+  mountSortableTable({
+    containerId: 'style-stats-body',
+    rows: normalized,
+    state: _styleStatsTableState,
+    columns: [
+      { key: 'style',    label: 'Style',    type: 'text',    align: 'left',  formatter: v => escapeHtml(v) },
+      { key: 'posts',    label: 'Posts',    type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'upvotes',  label: 'Upvotes',  type: 'numeric', align: 'right', accessor: perPostAccessor('upvotes'),  formatter: makeFmtPerPost('upvotes') },
+      { key: 'comments', label: 'Comments', type: 'numeric', align: 'right', accessor: perPostAccessor('comments'), formatter: makeFmtPerPost('comments') },
+      { key: 'views',    label: 'Views',    type: 'numeric', align: 'right', accessor: perPostAccessor('views'),    formatter: makeFmtPerPost('views') },
+    ],
+  });
+}
+
+async function loadStyleStats() {
+  try {
+    const platformRow = document.getElementById('style-stats-platform-pills');
+    const projectRow  = document.getElementById('style-stats-project-pills');
+    const platform = (platformRow && platformRow.dataset.selected) || 'all';
+    const project  = (projectRow  && projectRow.dataset.selected)  || 'all';
+    const params = ['hours=24'];
+    if (platform && platform !== 'all') params.push('platform=' + encodeURIComponent(platform));
+    if (project  && project  !== 'all') params.push('project='  + encodeURIComponent(project));
+    const res = await fetch('/api/style/stats?' + params.join('&'));
+    const data = await res.json();
+    renderStyleStats(data);
+  } catch {}
+}
+
+let _funnelStatsTableState = { sortField: 'posts', sortDir: 'desc', filters: {} };
+function renderFunnelStats(payload) {
+  const body = document.getElementById('funnel-stats-body');
+  const totalEl = document.getElementById('funnel-stats-total');
+  if (!body) return;
+  if (payload && payload.error) {
+    if (totalEl) totalEl.textContent = 'error';
+    body.innerHTML = '<div class="style-stats-empty">' + escapeHtml(payload.error) + '</div>';
+    return;
+  }
+  const projects = (payload && payload.projects) || [];
+  if (!projects.length) {
+    if (totalEl) totalEl.textContent = '0 projects';
+    body.innerHTML = '<div class="style-stats-empty">No project data.</div>';
+    return;
+  }
+  const fmt = n => (Number(n) || 0).toLocaleString();
+  const totals = projects.reduce((a, p) => {
+    a.posts     += (p.posts && p.posts.recent)         || 0;
+    a.seo       += (p.seo && p.seo.pages_recent)       || 0;
+    a.pageviews += (p.funnel && p.funnel.pageviews)    || 0;
+    a.ctas      += (p.funnel && p.funnel.cta_clicks)   || 0;
+    a.bookings  += (p.funnel && p.funnel.real_bookings)|| 0;
+    return a;
+  }, { posts: 0, seo: 0, pageviews: 0, ctas: 0, bookings: 0 });
+  if (totalEl) {
+    totalEl.textContent = totals.posts + ' posts \u00b7 ' + totals.seo + ' pages \u00b7 ' + fmt(totals.pageviews) + ' pv \u00b7 ' + totals.ctas + ' cta \u00b7 ' + totals.bookings + ' book';
+  }
+  const normalized = projects.map(p => {
+    const pst = p.posts || {};
+    const seo = p.seo || {};
+    const f = p.funnel || {};
+    return {
+      name:      p.name || '',
+      posts:     Number(pst.recent) || 0,
+      upvotes:   Number(pst.upvotes_recent)  || 0,
+      comments:  Number(pst.comments_recent) || 0,
+      views:     Number(pst.views_recent)    || 0,
+      seo_pages: Number(seo.pages_recent)    || 0,
+      pageviews: Number(f.pageviews)         || 0,
+      ctas:      Number(f.cta_clicks)        || 0,
+      ctr:       f.ctr_pct == null ? null : Number(f.ctr_pct),
+      bookings:  Number(f.real_bookings)     || 0,
+    };
+  });
+  mountSortableTable({
+    containerId: 'funnel-stats-body',
+    rows: normalized,
+    state: _funnelStatsTableState,
+    columns: [
+      { key: 'name',      label: 'Project',   type: 'text',    align: 'left',  formatter: v => escapeHtml(v) },
+      { key: 'posts',     label: 'Posts',     type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'upvotes',   label: 'Upvotes',   type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'comments',  label: 'Comments',  type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'views',     label: 'Views',     type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'seo_pages', label: 'SEO Pages', type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'pageviews', label: 'Pageviews', type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'ctas',      label: 'CTA Clicks',type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'ctr',       label: 'CTR',       type: 'numeric', align: 'right', formatter: v => (v == null ? '\u2014' : v.toFixed(1) + '%') },
+      { key: 'bookings',  label: 'Bookings',  type: 'numeric', align: 'right', formatter: fmt },
+    ],
+  });
+}
+
+let _topTableState = { sortField: 'upvotes', sortDir: 'desc', filters: {} };
+let _topLoaded = false;
+let _topLoading = false;
+let _topWindow = '7d';
+let _topPlatform = 'all';
+let _topKind = 'all';
+let _topSubtab = 'posts';
+let _topProject = 'all';
+let _topPagesTableState = { sortField: 'pageviews', sortDir: 'desc', filters: {} };
+let _topPagesLoaded = false;
+let _topPagesLoading = false;
+let _topDmsTableState = { sortField: 'rank', sortDir: 'asc', filters: {} };
+let _topDmsLoaded = false;
+let _topDmsLoading = false;
+
+function parentLabel(post) {
+  const plat = String(post.platform || '').toLowerCase();
+  if (plat === 'reddit') {
+    const m = String(post.thread_url || '').match(/reddit\\.com\\/r\\/([^/]+)/i);
+    return m ? 'r/' + m[1] : 'reddit';
+  }
+  if (plat === 'twitter' || plat === 'x') {
+    const m = String(post.thread_url || '').match(/(?:twitter|x)\\.com\\/([^/]+)/i);
+    return m ? '@' + m[1] : (post.our_account ? '@' + String(post.our_account).replace(/^@/, '') : 'x');
+  }
+  if (plat === 'linkedin') return 'linkedin';
+  return plat || '';
+}
+
+function fmtDateShort(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  return d.toISOString().slice(0, 10);
+}
+
+function renderTopContentCell(_v, post) {
+  const text     = escapeHtml(post.our_content || '');
+  const link     = post.our_url ? escapeHtml(post.our_url) : '';
+  const date     = fmtDateShort(post.posted_at);
+  const parent   = escapeHtml(parentLabel(post));
+  const threadTx = String(post.thread_title || post.thread_content || '').trim();
+  const threadHt = threadTx ? escapeHtml(threadTx.slice(0, 140) + (threadTx.length > 140 ? '\u2026' : '')) : '';
+  const linkHtml = link
+    ? '<a href="' + link + '" target="_blank" rel="noopener" class="top-post-link">' + link + '</a>'
+    : '';
+  const metaBits = [];
+  if (date) metaBits.push(escapeHtml(date));
+  if (parent) {
+    const threadUrl = post.thread_url ? escapeHtml(post.thread_url) : '';
+    metaBits.push(threadUrl ? '<a href="' + threadUrl + '" target="_blank" rel="noopener">' + parent + '</a>' : parent);
+  }
+  if (threadHt) metaBits.push('<span class="top-post-parent-title">\u201c' + threadHt + '\u201d</span>');
+  const metaHtml = metaBits.length ? '<div class="top-post-meta">(' + metaBits.join(' \u00b7 ') + ')</div>' : '';
+  return '<div class="top-post-content">' +
+    '<div class="top-post-text">' + text + (date ? ' <span style="color:#737373;">\u00b7 ' + escapeHtml(date) + '</span>' : '') + '</div>' +
+    linkHtml +
+    metaHtml +
+  '</div>';
+}
+
+function renderTopPosts(payload) {
+  const totalEl = document.getElementById('top-total');
+  const container = document.getElementById('top-table-container');
+  if (!container) return;
+  if (payload && payload.error) {
+    container.innerHTML = '<div class="style-stats-empty">' + escapeHtml(payload.error) + '</div>';
+    if (totalEl) totalEl.textContent = '';
+    return;
+  }
+  const posts = (payload && payload.posts) || [];
+  if (totalEl) totalEl.textContent = posts.length + ' post' + (posts.length === 1 ? '' : 's');
+  if (!posts.length) {
+    container.innerHTML = '<div class="style-stats-empty">No posts with engagement yet.</div>';
+    return;
+  }
+  const fmt = n => (Number(n) || 0).toLocaleString();
+  const normalized = posts.map(p => ({
+    id:            p.id,
+    platform:      String(p.platform || '').toLowerCase(),
+    upvotes:       Number(p.upvotes)        || 0,
+    comments_count:Number(p.comments_count) || 0,
+    views:         Number(p.views)          || 0,
+    score:         Number(p.score)          || 0,
+    posted_at:     p.posted_at || null,
+    posted_ts:     p.posted_at ? new Date(p.posted_at).getTime() : 0,
+    our_content:   p.our_content || '',
+    our_url:       p.our_url || '',
+    thread_url:    p.thread_url || '',
+    thread_title:  p.thread_title || '',
+    thread_content:p.thread_content || '',
+    our_account:   p.our_account || '',
+    project_name:  p.project_name || '',
+  }));
+  mountSortableTable({
+    containerId: 'top-table-container',
+    rows: normalized,
+    state: _topTableState,
+    columns: [
+      { key: 'platform',       label: 'Platform', type: 'text',    align: 'left',  widthPct: 4,
+        formatter: v => platformIconHtml(v) },
+      { key: 'project_name',   label: 'Project',  type: 'text',    align: 'left',  widthPct: 10,
+        formatter: v => v ? escapeHtml(String(v)) : '' },
+      { key: 'score',          label: 'Score',    type: 'numeric', align: 'right', widthPct: 7,  formatter: fmt },
+      { key: 'upvotes',        label: 'Upvotes',  type: 'numeric', align: 'right', widthPct: 7,  formatter: fmt },
+      { key: 'comments_count', label: 'Comments', type: 'numeric', align: 'right', widthPct: 8,  formatter: fmt },
+      { key: 'views',          label: 'Views',    type: 'numeric', align: 'right', widthPct: 7,  formatter: fmt },
+      { key: 'posted_ts',      label: 'Posted',   type: 'numeric', align: 'right', widthPct: 7,
+        formatter: (_v, r) => escapeHtml(relTime(r.posted_at)) },
+      { key: 'our_content',    label: 'Content',  type: 'text',    align: 'left',  widthPct: 50,
+        formatter: renderTopContentCell },
+    ],
+  });
+}
+
+async function loadTopPosts(force) {
+  if (_topLoading) return;
+  if (_topLoaded && !force) return;
+  _topLoading = true;
+  try {
+    const params = new URLSearchParams({ limit: '200', window: _topWindow });
+    if (_topPlatform && _topPlatform !== 'all') params.set('platform', _topPlatform);
+    if (_topKind && _topKind !== 'all') params.set('kind', _topKind);
+    const container = document.getElementById('top-table-container');
+    if (container && force) container.innerHTML = '<div class="style-stats-empty">Loading\u2026</div>';
+    const res = await fetch('/api/top?' + params.toString());
+    const data = await res.json();
+    renderTopPosts(data);
+    _topLoaded = true;
+  } catch (e) {
+    const container = document.getElementById('top-table-container');
+    if (container) container.innerHTML = '<div class="style-stats-empty">Failed to load.</div>';
+  } finally {
+    _topLoading = false;
+  }
+}
+
+function initTopFilters() {
+  const winSel = document.getElementById('top-window');
+  const platSel = document.getElementById('top-platform');
+  const projSel = document.getElementById('top-project');
+  if (winSel && !winSel._wired) {
+    winSel.value = _topWindow;
+    winSel.addEventListener('change', () => {
+      _topWindow = winSel.value || '7d';
+      if (_topSubtab === 'pages') loadTopPages(true);
+      else if (_topSubtab === 'dms') loadTopDms(true);
+      else loadTopPosts(true);
+    });
+    winSel._wired = true;
+  }
+  if (platSel && !platSel._wired) {
+    platSel.value = _topPlatform;
+    platSel.addEventListener('change', () => {
+      _topPlatform = platSel.value || 'all';
+      if (_topSubtab === 'dms') loadTopDms(true);
+      else loadTopPosts(true);
+    });
+    platSel._wired = true;
+  }
+  if (projSel && !projSel._wired) {
+    projSel.value = _topProject;
+    projSel.addEventListener('change', () => {
+      _topProject = projSel.value || 'all';
+      renderTopPagesFromCache();
+    });
+    projSel._wired = true;
+  }
+  const kindSel = document.getElementById('top-kind');
+  if (kindSel && !kindSel._wired) {
+    kindSel.value = _topKind;
+    kindSel.addEventListener('change', () => {
+      _topKind = kindSel.value || 'all';
+      loadTopPosts(true);
+    });
+    kindSel._wired = true;
+  }
+  document.querySelectorAll('.top-subtab').forEach(el => {
+    if (el._wired) return;
+    el.addEventListener('click', () => {
+      const sub = el.dataset.subtab || 'posts';
+      if (sub === _topSubtab) return;
+      _topSubtab = sub;
+      document.querySelectorAll('.top-subtab').forEach(s => s.classList.toggle('active', s.dataset.subtab === sub));
+      const postsC = document.getElementById('top-table-container');
+      const pagesC = document.getElementById('top-pages-container');
+      const dmsC   = document.getElementById('top-dms-container');
+      const platSelEl = document.getElementById('top-platform');
+      const projSelEl = document.getElementById('top-project');
+      const kindSelEl = document.getElementById('top-kind');
+      const totalEl = document.getElementById('top-total');
+      if (sub === 'pages') {
+        postsC.classList.add('hidden');
+        if (dmsC) dmsC.classList.add('hidden');
+        pagesC.classList.remove('hidden');
+        if (platSelEl) platSelEl.style.display = 'none';
+        if (projSelEl) projSelEl.style.display = '';
+        if (kindSelEl) kindSelEl.style.display = 'none';
+        if (totalEl) totalEl.textContent = '';
+        loadTopPages();
+      } else if (sub === 'dms') {
+        postsC.classList.add('hidden');
+        pagesC.classList.add('hidden');
+        if (dmsC) dmsC.classList.remove('hidden');
+        if (platSelEl) platSelEl.style.display = '';
+        if (projSelEl) projSelEl.style.display = 'none';
+        if (kindSelEl) kindSelEl.style.display = 'none';
+        if (totalEl) totalEl.textContent = '';
+        loadTopDms(true);
+      } else {
+        pagesC.classList.add('hidden');
+        if (dmsC) dmsC.classList.add('hidden');
+        postsC.classList.remove('hidden');
+        if (platSelEl) platSelEl.style.display = '';
+        if (projSelEl) projSelEl.style.display = 'none';
+        if (kindSelEl) kindSelEl.style.display = '';
+        if (totalEl) totalEl.textContent = '';
+        loadTopPosts(true);
+      }
+    });
+    el._wired = true;
+  });
+}
+
+const _TOP_PAGES_WINDOW_DAYS = { '24h': 1, '7d': 7, '14d': 14, '30d': 30, '90d': 90, 'all': 90 };
+let _topPagesPayload = null;
+
+function renderTopPagesFromCache() {
+  if (_topPagesPayload) renderTopPages(_topPagesPayload);
+}
+
+function renderTopPages(payload) {
+  const container = document.getElementById('top-pages-container');
+  const totalEl = document.getElementById('top-total');
+  const projSel = document.getElementById('top-project');
+  if (!container) return;
+  if (payload && payload.error) {
+    container.innerHTML = '<div class="style-stats-empty">' + escapeHtml(payload.error) + '</div>';
+    if (totalEl) totalEl.textContent = '';
+    return;
+  }
+  const projects = (payload && payload.projects) || [];
+  if (projSel) {
+    const names = projects.map(p => p.name).filter(Boolean).sort();
+    const current = projSel.value || 'all';
+    const wanted = ['all', ...names];
+    const existing = Array.from(projSel.options).map(o => o.value);
+    const same = wanted.length === existing.length && wanted.every((v, i) => v === existing[i]);
+    if (!same) {
+      projSel.innerHTML = '<option value="all">All projects</option>' +
+        names.map(n => '<option value="' + escapeHtml(n) + '">' + escapeHtml(n) + '</option>').join('');
+      projSel.value = names.includes(current) ? current : 'all';
+      _topProject = projSel.value;
+    }
+  }
+  const fmt = n => (Number(n) || 0).toLocaleString();
+  const rows = [];
+  for (const p of projects) {
+    if (_topProject && _topProject !== 'all' && p.name !== _topProject) continue;
+    const details = (p.posthog && p.posthog.pageview_details) || {};
+    for (const domain of Object.keys(details)) {
+      const top = (details[domain] && details[domain].top_pages) || {};
+      for (const path of Object.keys(top)) {
+        const pv = Number(top[path]) || 0;
+        if (pv <= 0) continue;
+        const url = 'https://' + domain + (String(path).startsWith('/') ? path : '/' + path);
+        rows.push({
+          project: p.name || '',
+          domain: domain || '',
+          path: String(path || '/'),
+          url,
+          pageviews: pv,
+        });
+      }
+    }
+  }
+  if (totalEl) {
+    const totalPv = rows.reduce((a, r) => a + r.pageviews, 0);
+    totalEl.textContent = rows.length + ' page' + (rows.length === 1 ? '' : 's') + ' \u00b7 ' + fmt(totalPv) + ' pv';
+  }
+  if (!rows.length) {
+    container.innerHTML = '<div class="style-stats-empty">No page data in this window.</div>';
+    return;
+  }
+  mountSortableTable({
+    containerId: 'top-pages-container',
+    rows,
+    state: _topPagesTableState,
+    columns: [
+      { key: 'project',   label: 'Project',   type: 'text',    align: 'left',  widthPct: 16, formatter: v => escapeHtml(v) },
+      { key: 'domain',    label: 'Domain',    type: 'text',    align: 'left',  widthPct: 18, formatter: v => escapeHtml(v) },
+      { key: 'path',      label: 'Path',      type: 'text',    align: 'left',  widthPct: 52,
+        formatter: (_v, r) => '<a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener" class="top-post-link">' + escapeHtml(r.path) + '</a>' },
+      { key: 'pageviews', label: 'Pageviews', type: 'numeric', align: 'right', widthPct: 14, formatter: fmt },
+    ],
+  });
+}
+
+async function loadTopPages(force) {
+  if (_topPagesLoading) return;
+  const days = _TOP_PAGES_WINDOW_DAYS[_topWindow] || 7;
+  const container = document.getElementById('top-pages-container');
+  if (!_topPagesPayload && container) {
+    container.innerHTML = '<div class="style-stats-empty">Loading\u2026 (first call can take 15\u201330s)</div>';
+  }
+  _topPagesLoading = true;
+  try {
+    const res = await fetch('/api/funnel/stats?days=' + days);
+    const data = await res.json();
+    _topPagesPayload = data;
+    renderTopPages(data);
+    _topPagesLoaded = true;
+  } catch (e) {
+    if (container) container.innerHTML = '<div class="style-stats-empty">Failed to load.</div>';
+  } finally {
+    _topPagesLoading = false;
+  }
+}
+
+function dmClassBadge(dm) {
+  const status = String(dm.conversation_status || '').toLowerCase();
+  const interest = String(dm.interest_level || '').toLowerCase();
+  let cls = 'dm-class-none';
+  let label = 'unclassified';
+  if (status === 'needs_human') { cls = 'dm-class-human'; label = 'HUMAN'; }
+  else if (status === 'converted') { cls = 'dm-class-converted'; label = 'converted'; }
+  else if (status === 'closed')    { cls = 'dm-class-closed';    label = 'closed'; }
+  else if (interest === 'hot')                { cls = 'dm-class-hot';      label = 'hot'; }
+  else if (interest === 'warm')               { cls = 'dm-class-warm';     label = 'warm'; }
+  else if (interest === 'general_discussion') { cls = 'dm-class-general';  label = 'general'; }
+  else if (interest === 'cold')               { cls = 'dm-class-cold';     label = 'cold'; }
+  else if (interest === 'declined')           { cls = 'dm-class-declined'; label = 'declined'; }
+  else if (interest === 'not_our_prospect')   { cls = 'dm-class-notours';  label = 'not ours'; }
+  else if (status) { label = status; }
+  const badge = '<span class="dm-class-badge ' + cls + '">' + escapeHtml(label) + '</span>';
+  const subBits = [];
+  if (status && status !== 'needs_human' && status !== 'converted' && status !== 'closed' && status !== 'active') {
+    subBits.push(status);
+  }
+  if (status === 'needs_human' && dm.human_reason) {
+    subBits.push(String(dm.human_reason).slice(0, 40));
+  }
+  const sub = subBits.length ? '<div class="dm-class-sub">' + escapeHtml(subBits.join(' \u00b7 ')) + '</div>' : '';
+  return badge + sub;
+}
+
+function renderDmThreadCell(dm) {
+  const author = escapeHtml(dm.their_author || '');
+  const tier = dm.tier ? '<span class="dm-thread-tier">T' + Number(dm.tier) + '</span>' : '';
+  const url = dm.chat_url ? escapeHtml(dm.chat_url) : '';
+  const nameHtml = url
+    ? '<a class="dm-thread-author top-post-link" href="' + url + '" target="_blank" rel="noopener">' + author + '</a>'
+    : '<span class="dm-thread-author">' + author + '</span>';
+  return '<div class="top-post-content">' + nameHtml + (tier ? ' ' + tier : '') + '</div>';
+}
+
+function renderDmLastMsgCell(dm) {
+  const msg = String(dm.last_msg || '');
+  if (!msg) return '<span style="color:#525252;">(no messages)</span>';
+  const trimmed = msg.length > 300 ? msg.slice(0, 300) + '\u2026' : msg;
+  const dirLabel = dm.last_dir === 'inbound' ? 'IN' : (dm.last_dir === 'outbound' ? 'OUT' : '');
+  const dirHtml = dirLabel ? '<span class="dm-last-dir">' + dirLabel + '</span>' : '';
+  return dirHtml + escapeHtml(trimmed);
+}
+
+function renderTopDms(payload) {
+  const totalEl = document.getElementById('top-total');
+  const container = document.getElementById('top-dms-container');
+  if (!container) return;
+  if (payload && payload.error) {
+    container.innerHTML = '<div class="style-stats-empty">' + escapeHtml(payload.error) + '</div>';
+    if (totalEl) totalEl.textContent = '';
+    return;
+  }
+  const dms = (payload && payload.dms) || [];
+  if (totalEl) totalEl.textContent = dms.length + ' thread' + (dms.length === 1 ? '' : 's');
+  if (!dms.length) {
+    container.innerHTML = '<div class="style-stats-empty">No DM threads in this window.</div>';
+    return;
+  }
+  const fmt = n => (Number(n) || 0).toLocaleString();
+  const normalized = dms.map((d, i) => ({
+    id: d.id,
+    rank: i,
+    platform: String(d.platform || '').toLowerCase(),
+    their_author: d.their_author || '',
+    chat_url: d.chat_url || '',
+    tier: Number(d.tier) || 1,
+    message_count: Number(d.message_count) || 0,
+    last_message_at: d.last_message_at || d.discovered_at || null,
+    last_ts: (d.last_message_at || d.discovered_at) ? new Date(d.last_message_at || d.discovered_at).getTime() : 0,
+    conversation_status: d.conversation_status || '',
+    interest_level: d.interest_level || '',
+    human_reason: d.human_reason || '',
+    last_msg: d.last_msg || '',
+    last_dir: d.last_dir || '',
+  }));
+  mountSortableTable({
+    containerId: 'top-dms-container',
+    rows: normalized,
+    state: _topDmsTableState,
+    columns: [
+      { key: 'rank',           label: '#',        type: 'numeric', align: 'right', widthPct: 3,
+        formatter: v => '<span style="color:#737373;">' + (Number(v) + 1) + '</span>' },
+      { key: 'platform',       label: 'Platform', type: 'text',    align: 'left',  widthPct: 5,
+        formatter: v => platformIconHtml(v) },
+      { key: 'their_author',   label: 'Thread',   type: 'text',    align: 'left',  widthPct: 14,
+        formatter: (_v, r) => renderDmThreadCell(r) },
+      { key: 'last_msg',       label: 'Last message', type: 'text', align: 'left', widthPct: 38,
+        formatter: (_v, r) => renderDmLastMsgCell(r) },
+      { key: 'message_count',  label: 'Msgs',     type: 'numeric', align: 'right', widthPct: 6,  formatter: fmt },
+      { key: 'interest_level', label: 'Class',    type: 'text',    align: 'left',  widthPct: 14,
+        formatter: (_v, r) => dmClassBadge(r) },
+      { key: 'last_ts',        label: 'Last activity', type: 'numeric', align: 'right', widthPct: 10,
+        formatter: (_v, r) => escapeHtml(relTime(r.last_message_at)) },
+    ],
+  });
+}
+
+async function loadTopDms(force) {
+  if (_topDmsLoading) return;
+  if (_topDmsLoaded && !force) return;
+  _topDmsLoading = true;
+  try {
+    const params = new URLSearchParams({ limit: '200', window: _topWindow });
+    if (_topPlatform && _topPlatform !== 'all') params.set('platform', _topPlatform);
+    const container = document.getElementById('top-dms-container');
+    if (container && force) container.innerHTML = '<div class="style-stats-empty">Loading\u2026</div>';
+    const res = await fetch('/api/top/dms?' + params.toString());
+    const data = await res.json();
+    renderTopDms(data);
+    _topDmsLoaded = true;
+  } catch (e) {
+    const container = document.getElementById('top-dms-container');
+    if (container) container.innerHTML = '<div class="style-stats-empty">Failed to load.</div>';
+  } finally {
+    _topDmsLoading = false;
+  }
+}
+
+let _funnelStatsLoaded = false;
+let _funnelStatsLoading = false;
+async function loadFunnelStats(force) {
+  if (_funnelStatsLoading) return;
+  if (_funnelStatsLoaded && !force) return;
+  _funnelStatsLoading = true;
+  const totalEl = document.getElementById('funnel-stats-total');
+  const body = document.getElementById('funnel-stats-body');
+  if (totalEl && !totalEl.textContent) totalEl.textContent = 'loading\u2026';
+  if (body && body.querySelector('.style-stats-empty')) {
+    body.innerHTML = '<div class="style-stats-empty">Loading\u2026 (first call can take 15\u201330s)</div>';
+  }
+  try {
+    const res = await fetch('/api/funnel/stats?days=1');
+    const data = await res.json();
+    renderFunnelStats(data);
+    _funnelStatsLoaded = true;
+  } catch (e) {
+    if (body) body.innerHTML = '<div class="style-stats-empty">Failed to load.</div>';
+  } finally {
+    _funnelStatsLoading = false;
+  }
 }
 
 let _lastActivityEvents = [];
@@ -2157,7 +3346,7 @@ function stopActivityAutoRefresh() {
 // is preloaded on init (see preloadTabs) and kept rendered while hidden, so
 // switching back shows cached content immediately while the active tab's
 // timer keeps it fresh.
-const _tabLoaded = { logs: false, activity: false, settings: false };
+const _tabLoaded = { logs: false, activity: false, settings: false, top: false };
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -2178,13 +3367,37 @@ document.querySelectorAll('.tab').forEach(tab => {
     } else {
       stopActivityAutoRefresh();
     }
-    if (name === 'status') loadActivityStats();
+    if (name === 'status') { loadActivityStats(); loadStyleStats(); }
+    if (name === 'top') {
+      initTopFilters();
+      if (_topSubtab === 'pages') {
+        loadTopPages();
+      } else if (_topSubtab === 'dms') {
+        loadTopDms(true);
+      } else if (!_tabLoaded.top) {
+        loadTopPosts();
+        _tabLoaded.top = true;
+      } else {
+        loadTopPosts(true);
+      }
+    }
     if (name === 'settings' && !_tabLoaded.settings) {
       loadSettings();
       _tabLoaded.settings = true;
     }
   });
 });
+
+// Lazy-load funnel stats the first time the user opens the section. The fetch
+// shells out to PostHog and two Postgres DBs, so we don't want to run it on
+// every page load.
+(function wireFunnelStats() {
+  const el = document.getElementById('funnel-stats');
+  if (!el) return;
+  el.addEventListener('toggle', () => {
+    if (el.open) loadFunnelStats();
+  });
+})();
 
 document.getElementById('log-job-filter').addEventListener('change', () => { loadLogFiles(); startLogAutoRefresh(); });
 document.getElementById('log-file-select').addEventListener('change', e => loadLogContent(e.target.value));
@@ -2194,10 +3407,12 @@ document.getElementById('save-settings').addEventListener('click', saveSettings)
 // Init
 loadStatus();
 loadActivityStats();
+loadStyleStats();
 setInterval(loadStatus, 5000);
 // 5-min cadence matches the server-side cache TTL on /api/activity/stats,
 // so the panel re-renders in place without hammering the DB.
 setInterval(loadActivityStats, 300000);
+setInterval(loadStyleStats, 300000);
 
 // Preload every tab so switching never blocks on a fetch. Each loader is
 // idempotent; the active tab's timer takes over for ongoing refreshes.
@@ -2205,6 +3420,7 @@ setInterval(loadActivityStats, 300000);
   setTimeout(() => {
     try { loadLogFiles(); _tabLoaded.logs = true; } catch {}
     try { buildActivityFilters(); loadActivity(); _tabLoaded.activity = true; } catch {}
+    try { initTopFilters(); loadTopPosts(); _tabLoaded.top = true; } catch {}
     try { loadSettings(); _tabLoaded.settings = true; } catch {}
   }, 100);
 })();
