@@ -104,6 +104,61 @@ function installBrowserAgentConfigs() {
   console.log(`  browser profile dirs ready -> ${profilesDir}/{${BROWSER_PROFILES.join(',')}}`);
 }
 
+// Register the three browser-agent MCP servers with Claude so they show up
+// under user scope (writes to ~/.claude.json). Idempotent: parses the output
+// of `claude mcp list` and only calls `add-json` for missing entries.
+// If the `claude` CLI is not on PATH, prints manual instructions and returns.
+function registerBrowserAgentMcpServers() {
+  const configDir = path.join(HOME, '.claude', 'browser-agent-configs');
+  const servers = [
+    { name: 'twitter-agent', file: path.join(configDir, 'twitter-agent-mcp.json') },
+    { name: 'reddit-agent', file: path.join(configDir, 'reddit-agent-mcp.json') },
+    { name: 'linkedin-agent', file: path.join(configDir, 'linkedin-agent-mcp.json') },
+  ];
+
+  const claudeBin = spawnSync('claude', ['--version'], { stdio: 'pipe' });
+  if (claudeBin.status !== 0) {
+    console.log('  claude CLI not on PATH; skipping MCP registration.');
+    console.log('  Once Claude Code is installed, register manually with:');
+    for (const s of servers) {
+      console.log(`    claude mcp add-json ${s.name} "$(jq -c .mcpServers['\\"'${s.name}'\\"'] ${s.file})"`);
+    }
+    return;
+  }
+
+  const list = spawnSync('claude', ['mcp', 'list'], { encoding: 'utf8' });
+  const existing = list.status === 0 ? list.stdout : '';
+
+  let added = 0;
+  let skipped = 0;
+  for (const s of servers) {
+    if (!fs.existsSync(s.file)) {
+      console.warn(`  MCP config missing: ${s.file}`);
+      continue;
+    }
+    // `claude mcp list` prints one server per line starting with the name.
+    // Use a word-boundary check so twitter-agent does not false-match reddit-agent.
+    const re = new RegExp(`(^|\\s)${s.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}(:|\\s|$)`, 'm');
+    if (re.test(existing)) {
+      skipped++;
+      continue;
+    }
+    const tpl = JSON.parse(fs.readFileSync(s.file, 'utf8'));
+    const stanza = tpl.mcpServers && tpl.mcpServers[s.name];
+    if (!stanza) {
+      console.warn(`  ${s.file} has no mcpServers.${s.name} stanza; skipping`);
+      continue;
+    }
+    const r = spawnSync('claude', ['mcp', 'add-json', s.name, JSON.stringify(stanza)], { stdio: 'pipe', encoding: 'utf8' });
+    if (r.status === 0) {
+      added++;
+    } else {
+      console.warn(`  claude mcp add-json ${s.name} failed: ${(r.stderr || r.stdout || '').trim()}`);
+    }
+  }
+  console.log(`  MCP servers registered with Claude (added ${added}, already present ${skipped})`);
+}
+
 function generatePlists() {
   const nodeBin = path.dirname(process.execPath);
   const jobs = [
@@ -243,6 +298,8 @@ function init() {
 
   // Install browser agent MCP configs + profile dirs (skips existing files)
   installBrowserAgentConfigs();
+  // Register those MCP servers with Claude so they show up in `claude mcp list`.
+  registerBrowserAgentMcpServers();
 
   // config.json — only if it doesn't exist
   const configDest = path.join(DEST, 'config.json');
@@ -334,6 +391,8 @@ function update() {
 
   // Top up browser agent configs (won't overwrite user customizations)
   installBrowserAgentConfigs();
+  // Register any newly added MCP servers with Claude (idempotent).
+  registerBrowserAgentMcpServers();
 
   // Remove stale skill/SKILL.md if it exists (SKILL.md lives at repo root only)
   const skillMd = path.join(DEST, 'skill', 'SKILL.md');

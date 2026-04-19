@@ -168,22 +168,31 @@ logged-in state persist across invocations.
 
 ### 6.2 Register the servers with Claude
 
-Add each MCP server to your `~/.claude.json` or merge the stanza from
-the `*-mcp.json` file:
-
-```bash
-for agent in twitter reddit linkedin; do
-  claude mcp add-json "${agent}-agent" \
-    "$(jq -r '.mcpServers["'${agent}'-agent"]' \
-         ~/.claude/browser-agent-configs/${agent}-agent-mcp.json)"
-done
-```
+`init` and `update` auto-register the three servers (`twitter-agent`,
+`reddit-agent`, `linkedin-agent`) by shelling out to `claude mcp
+add-json ...` if the `claude` CLI is on `PATH`. Registration is
+idempotent: entries already present in `~/.claude.json` are left
+untouched.
 
 Verify:
 
 ```bash
 claude mcp list | grep -E '(twitter|reddit|linkedin)-agent'
 ```
+
+If the `claude` CLI was not on `PATH` when you ran `init`, the
+installer prints fallback commands. To register manually later:
+
+```bash
+for agent in twitter reddit linkedin; do
+  claude mcp add-json "${agent}-agent" \
+    "$(jq -c '.mcpServers["'${agent}'-agent"]' \
+         ~/.claude/browser-agent-configs/${agent}-agent-mcp.json)"
+done
+```
+
+Re-running `npx social-autoposter update` also catches up on any
+missing registrations.
 
 The pipeline shell scripts reference these servers by their exact names
 (`mcp__twitter-agent__*`, `mcp__reddit-agent__*`,
