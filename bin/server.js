@@ -940,15 +940,15 @@ function handleApi(req, res) {
     const projectFilter = project
       ? "AND project_name = '" + project.replace(/'/g, "''") + "' "
       : '';
-    // Moltbook has no views metric in its API; keep Moltbook rows in posts/upvotes/comments
-    // totals but exclude them from views sum AND the views-per-post denominator so they don't
-    // dilute other styles' averages.
+    // Moltbook and GitHub have no views metric; keep those rows in posts/upvotes/comments
+    // totals but exclude them from views sum AND the views-per-post denominator so they
+    // don't dilute other styles' averages.
     const q = "SELECT json_agg(row_to_json(r)) FROM (" +
       "SELECT COALESCE(engagement_style, '(none)') AS style, COUNT(*)::int AS posts, " +
-        "COUNT(*) FILTER (WHERE LOWER(platform) <> 'moltbook')::int AS views_posts, " +
+        "COUNT(*) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues'))::int AS views_posts, " +
         "COALESCE(SUM(upvotes), 0)::int AS upvotes, " +
         "COALESCE(SUM(comments_count), 0)::int AS comments, " +
-        "COALESCE(SUM(views) FILTER (WHERE LOWER(platform) <> 'moltbook'), 0)::int AS views " +
+        "COALESCE(SUM(views) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues')), 0)::int AS views " +
       "FROM posts WHERE posted_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
       platformFilter + projectFilter +
       "GROUP BY engagement_style ORDER BY posts DESC) r";
@@ -1035,6 +1035,7 @@ function handleApi(req, res) {
           "d.tier, d.message_count, d.last_message_at, d.discovered_at, " +
           "d.conversation_status, d.interest_level, " +
           "d.human_reason, d.flagged_at, " +
+          "COALESCE(p_direct.project_name, p_via_reply.project_name) AS project_name, " +
           "(SELECT content   FROM dm_messages WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1) AS last_msg, " +
           "(SELECT direction FROM dm_messages WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1) AS last_dir, " +
           "CASE WHEN d.conversation_status = 'needs_human' THEN 0 " +
@@ -1047,6 +1048,9 @@ function handleApi(req, res) {
                "WHEN d.interest_level = 'not_our_prospect' THEN 85 " +
                "ELSE 50 END AS sort_bucket " +
         "FROM dms d " +
+        "LEFT JOIN posts   p_direct    ON p_direct.id    = d.post_id " +
+        "LEFT JOIN replies r_link      ON r_link.id      = d.reply_id " +
+        "LEFT JOIN posts   p_via_reply ON p_via_reply.id = r_link.post_id " +
         whereSql + " " +
         "ORDER BY sort_bucket ASC, " +
           "CASE WHEN d.conversation_status = 'needs_human' THEN d.flagged_at END DESC NULLS LAST, " +
@@ -1436,6 +1440,12 @@ const HTML = `<!DOCTYPE html>
   }
   .top-filter:hover { border-color: #404040; }
   .top-filter:focus { outline: none; border-color: #8b5cf6; }
+  .top-search {
+    background: #0f0f0f; color: #e5e5e5; border: 1px solid #262626; border-radius: 6px;
+    padding: 4px 10px; font-size: 12px; font-family: inherit; min-width: 220px;
+  }
+  .top-search:hover { border-color: #404040; }
+  .top-search:focus { outline: none; border-color: #8b5cf6; }
   .top-total { font-size: 12px; color: #a3a3a3; font-variant-numeric: tabular-nums; margin-left: 4px; }
   .top-post-content { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
   .top-post-text { color: #e5e5e5; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
@@ -1451,6 +1461,17 @@ const HTML = `<!DOCTYPE html>
   #top-table-container .style-stats-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 10px 10px; }
   #top-table-container .style-stats-table td[data-col-key="our_content"] { white-space: normal; overflow: visible; text-overflow: clip; }
   #top-table-container .style-stats-table th .activity-header-label { overflow: hidden; text-overflow: ellipsis; display: inline-block; max-width: 100%; vertical-align: bottom; }
+  /* Inline header stack: sortable label on top, filter dropdown below */
+  .activity-th-stack { display: flex; flex-direction: column; align-items: stretch; gap: 4px; min-width: 0; }
+  .style-stats-table th[style*="text-align:right"] .activity-th-stack { align-items: flex-end; }
+  .activity-col-filter-inline {
+    background: #0a0a0a; color: #e5e5e5; border: 1px solid #262626; border-radius: 4px;
+    padding: 2px 4px; font-size: 11px; font-family: inherit; cursor: pointer;
+    width: 100%; max-width: 100%; min-width: 0; font-weight: 400;
+  }
+  .activity-col-filter-inline:hover { border-color: #404040; }
+  .activity-col-filter-inline:focus { outline: none; border-color: #8b5cf6; }
+  .activity-col-filter-placeholder { visibility: hidden; }
   #top-pages-container .style-stats-table { table-layout: fixed; }
   #top-pages-container .style-stats-table th,
   #top-pages-container .style-stats-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 10px 10px; }
@@ -1705,6 +1726,7 @@ const HTML = `<!DOCTYPE html>
         <option value="threads">Threads only</option>
         <option value="comments">Comments only</option>
       </select>
+      <input id="top-search" class="top-search" type="search" placeholder="Search posts\u2026" />
       <span class="top-total" id="top-total"></span>
     </div>
   </div>
@@ -2509,39 +2531,60 @@ async function loadActivityStats() {
 // filter <input> elements keep their focus and caret position while typing.
 function mountSortableTable(opts) {
   const container = document.getElementById(opts.containerId);
-  if (!container) return;
+  if (!container) return null;
   const cols = opts.columns;
   const rows = opts.rows || [];
   if (!rows.length) {
     container.innerHTML = '<div class="style-stats-empty">' + escapeHtml(opts.emptyMessage || 'No data.') + '</div>';
-    return;
+    return null;
   }
   const state = opts.state;
   state.filters = state.filters || {};
+  const inlineFilters = !!opts.inlineFilters;
   const alignAttr = c => (c.align === 'right' ? ' style="text-align:right;"' : (c.align === 'left' ? ' style="text-align:left;"' : ''));
   const hasWidths = cols.some(c => c.widthPct != null);
   const colgroup = hasWidths
     ? '<colgroup>' + cols.map(c => '<col' + (c.widthPct != null ? ' style="width:' + c.widthPct + '%;"' : '') + ' />').join('') + '</colgroup>'
     : '';
-  const headerCells = cols.map(c => (
-    '<th class="activity-sortable" data-sort-key="' + escapeHtml(c.key) + '"' + alignAttr(c) + ' title="' + escapeHtml(c.label) + '">' +
+
+  function buildInlineFilterHtml(c) {
+    const mode = c.filterMode || 'text';
+    if (mode === 'none') return '<span class="activity-col-filter-placeholder activity-col-filter-inline">\u00a0</span>';
+    if (mode === 'dropdown') {
+      const options = c.filterOptions || [];
+      return '<select class="activity-col-filter activity-col-filter-inline" data-filter-key="' + escapeHtml(c.key) + '">' +
+        options.map(o => '<option value="' + escapeHtml(o.value != null ? String(o.value) : '') + '">' + escapeHtml(o.label) + '</option>').join('') +
+        '</select>';
+    }
+    return '<input type="text" class="activity-col-filter activity-col-filter-inline" data-filter-key="' + escapeHtml(c.key) + '" placeholder="filter\u2026" />';
+  }
+
+  const headerCells = cols.map(c => {
+    const labelHtml =
       '<span class="activity-header-label">' + escapeHtml(c.label) +
       ' <span class="activity-sort-arrow" data-sort-arrow-key="' + escapeHtml(c.key) + '"></span>' +
-      '</span>' +
-    '</th>'
-  )).join('');
-  const filterCells = cols.map(c => (
-    '<th' + alignAttr(c) + '>' +
-      '<input type="text" class="activity-col-filter" data-filter-key="' + escapeHtml(c.key) + '" placeholder="filter\u2026" />' +
-    '</th>'
-  )).join('');
+      '</span>';
+    const innerHtml = inlineFilters
+      ? '<div class="activity-th-stack">' + labelHtml + buildInlineFilterHtml(c) + '</div>'
+      : labelHtml;
+    return '<th class="activity-sortable" data-sort-key="' + escapeHtml(c.key) + '"' + alignAttr(c) + ' title="' + escapeHtml(c.label) + '">' + innerHtml + '</th>';
+  }).join('');
+  const filterRowHtml = inlineFilters ? '' : (
+    '<tr class="activity-filter-row">' +
+    cols.map(c => (
+      '<th' + alignAttr(c) + '>' +
+        '<input type="text" class="activity-col-filter" data-filter-key="' + escapeHtml(c.key) + '" placeholder="filter\u2026" />' +
+      '</th>'
+    )).join('') +
+    '</tr>'
+  );
   container.innerHTML =
     '<div class="style-stats-table-wrapper">' +
       '<table class="style-stats-table">' +
         colgroup +
         '<thead>' +
           '<tr>' + headerCells + '</tr>' +
-          '<tr class="activity-filter-row">' + filterCells + '</tr>' +
+          filterRowHtml +
         '</thead>' +
         '<tbody></tbody>' +
       '</table>' +
@@ -2553,16 +2596,28 @@ function mountSortableTable(opts) {
     if (c.formatter) return c.formatter(v, r);
     return v == null ? '' : escapeHtml(String(v));
   }
+  function stripHtml(s) { return String(s).replace(/<[^>]*>/g, ''); }
+  function matchesColumnFilter(c, fv, row) {
+    const raw = cellValue(c, row);
+    if (c.filterPredicate) return c.filterPredicate(fv, row, raw);
+    const disp = c.formatter ? c.formatter(raw, row) : (raw == null ? '' : String(raw));
+    return stripHtml(disp).toLowerCase().indexOf(String(fv).toLowerCase().trim()) !== -1;
+  }
   function apply() {
     let filtered = rows;
     for (const c of cols) {
-      const fv = (state.filters[c.key] || '').toLowerCase().trim();
-      if (!fv) continue;
+      const fv = state.filters[c.key];
+      if (fv == null || fv === '') continue;
+      filtered = filtered.filter(r => matchesColumnFilter(c, fv, r));
+    }
+    const gq = String(state.globalQuery || '').trim().toLowerCase();
+    if (gq) {
       filtered = filtered.filter(r => {
-        const raw = cellValue(c, r);
-        const disp = c.formatter ? c.formatter(raw, r) : (raw == null ? '' : String(raw));
-        const plain = String(disp).replace(/<[^>]*>/g, '').toLowerCase();
-        return plain.indexOf(fv) !== -1;
+        for (const c of cols) {
+          const disp = cellDisplay(c, r);
+          if (stripHtml(disp).toLowerCase().indexOf(gq) !== -1) return true;
+        }
+        return false;
       });
     }
     const sortCol = cols.find(c => c.key === state.sortField) || cols[0];
@@ -2595,7 +2650,8 @@ function mountSortableTable(opts) {
     });
   }
   container.querySelectorAll('.activity-sortable').forEach(el => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (e) => {
+      if (e.target && (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT' || e.target.tagName === 'OPTION')) return;
       const key = el.getAttribute('data-sort-key');
       if (state.sortField === key) {
         state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
@@ -2609,14 +2665,17 @@ function mountSortableTable(opts) {
   });
   container.querySelectorAll('.activity-col-filter').forEach(el => {
     const k = el.getAttribute('data-filter-key');
-    if (state.filters[k]) el.value = state.filters[k];
-    el.addEventListener('input', () => {
+    if (state.filters[k] != null) el.value = state.filters[k];
+    const evt = el.tagName === 'SELECT' ? 'change' : 'input';
+    el.addEventListener(evt, () => {
       state.filters[k] = el.value;
       apply();
     });
     el.addEventListener('click', e => e.stopPropagation());
+    el.addEventListener('mousedown', e => e.stopPropagation());
   });
   apply();
+  return { apply, container };
 }
 
 let _styleStatsTableState = { sortField: 'views', sortDir: 'desc', filters: {} };
@@ -2676,21 +2735,22 @@ function renderStyleStats(payload) {
     if (v >= 10)  return v.toFixed(1);
     return v.toFixed(2);
   };
-  // Views uses views_posts (excludes Moltbook rows) as the denominator because the Moltbook
-  // API does not expose views. Upvotes/comments use the full posts count.
+  // Views uses views_posts (excludes Moltbook and GitHub rows) as the denominator because
+  // neither platform exposes views. Upvotes/comments use the full posts count.
   const denomFor = (field, r) => {
     if (field === 'views') return Number(r && r.views_posts) || 0;
     return Number(r && r.posts) || 0;
   };
   const perPostAccessor = field => r => {
     const denom = denomFor(field, r);
-    if (denom <= 0) return 0;
+    if (denom <= 0) return -1;
     return (Number(r[field]) || 0) / denom;
   };
   const makeFmtPerPost = field => (_v, r) => {
-    const total = Number(r && r[field]) || 0;
     const denom = denomFor(field, r);
-    const per   = denom > 0 ? total / denom : 0;
+    if (denom <= 0) return '\u2014';
+    const total = Number(r && r[field]) || 0;
+    const per   = total / denom;
     return fmt(total) + ' <span style="color:#737373;">(' + perPostStr(per) + ')</span>';
   };
   const normalized = rows.map(r => ({
@@ -2765,10 +2825,11 @@ function renderFunnelStats(payload) {
     const f = p.funnel || {};
     return {
       name:             p.name || '',
+      analytics_suspected_broken: !!p.analytics_suspected_broken,
       posts:            Number(pst.recent) || 0,
       upvotes:          Number(pst.upvotes_recent)  || 0,
       comments:         Number(pst.comments_recent) || 0,
-      views:            Number(pst.views_recent)    || 0,
+      views:            pst.views_recent == null ? null : Number(pst.views_recent),
       seo_pages:        Number(seo.pages_recent)    || 0,
       pageviews:        Number(f.pageviews)         || 0,
       email_signups:    Number(f.email_signups)     || 0,
@@ -2776,16 +2837,24 @@ function renderFunnelStats(payload) {
       bookings:         Number(f.real_bookings)     || 0,
     };
   });
+  const fmtProjectName = (v, r) => {
+    const name = escapeHtml(v);
+    if (r && r.analytics_suspected_broken) {
+      const tip = escapeHtml('High pageviews but zero tracked signups or schedule clicks; posthog likely not wired on this site. See https://github.com/m13v/seo-components#posthog-setup');
+      return name + ' <span title="' + tip + '" style="color:#dc2626;cursor:help;margin-left:4px;" aria-label="analytics suspected broken">\u26A0</span>';
+    }
+    return name;
+  };
   mountSortableTable({
     containerId: 'funnel-stats-body',
     rows: normalized,
     state: _funnelStatsTableState,
     columns: [
-      { key: 'name',             label: 'Project',         type: 'text',    align: 'left',  formatter: v => escapeHtml(v) },
+      { key: 'name',             label: 'Project',         type: 'text',    align: 'left',  formatter: fmtProjectName },
       { key: 'posts',            label: 'Posts',           type: 'numeric', align: 'right', formatter: fmt },
       { key: 'upvotes',          label: 'Upvotes',         type: 'numeric', align: 'right', formatter: fmt },
       { key: 'comments',         label: 'Comments',        type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'views',            label: 'Views',           type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'views',            label: 'Views',           type: 'numeric', align: 'right', formatter: v => v == null ? '\u2014' : fmt(v) },
       { key: 'seo_pages',        label: 'SEO Pages',       type: 'numeric', align: 'right', formatter: fmt },
       { key: 'pageviews',        label: 'Pageviews',       type: 'numeric', align: 'right', formatter: fmt },
       { key: 'email_signups',    label: 'Email Signups',   type: 'numeric', align: 'right', formatter: fmt },
@@ -2795,7 +2864,8 @@ function renderFunnelStats(payload) {
   });
 }
 
-let _topTableState = { sortField: 'upvotes', sortDir: 'desc', filters: {} };
+let _topTableState = { sortField: 'upvotes', sortDir: 'desc', filters: {}, globalQuery: '' };
+let _topTableHandle = null;
 let _topLoaded = false;
 let _topLoading = false;
 let _topWindow = '7d';
@@ -2856,6 +2926,60 @@ function renderTopContentCell(_v, post) {
   '</div>';
 }
 
+function distinctOptions(rows, key, labelAll) {
+  const set = new Set();
+  for (const r of rows) {
+    const v = r[key];
+    if (v == null || v === '') continue;
+    set.add(String(v));
+  }
+  const vals = Array.from(set).sort();
+  const opts = [{ label: labelAll || 'All', value: '' }];
+  for (const v of vals) opts.push({ label: v, value: '=' + v });
+  return opts;
+}
+
+function numericThresholdOptions(rows, key) {
+  const vals = rows.map(r => Number(r[key])).filter(v => Number.isFinite(v) && v > 0);
+  if (!vals.length) return [{ label: 'Any', value: '' }];
+  const max = Math.max.apply(null, vals);
+  const ladder = [10, 100, 1000, 10000, 100000, 1000000];
+  const opts = [{ label: 'Any', value: '' }];
+  for (const t of ladder) {
+    if (t <= max) opts.push({ label: '\u2265 ' + t.toLocaleString(), value: '>=' + t });
+  }
+  return opts;
+}
+
+function ageThresholdOptions() {
+  return [
+    { label: 'Any',         value: '' },
+    { label: '< 1 day',     value: 'age<=1' },
+    { label: '< 3 days',    value: 'age<=3' },
+    { label: '< 7 days',    value: 'age<=7' },
+    { label: '< 14 days',   value: 'age<=14' },
+    { label: '< 30 days',   value: 'age<=30' },
+    { label: '< 90 days',   value: 'age<=90' },
+  ];
+}
+
+function filterPredicateExact(fv, _row, rowValue) {
+  if (!fv || !fv.startsWith('=')) return true;
+  return String(rowValue == null ? '' : rowValue) === fv.slice(1);
+}
+
+function filterPredicateGte(fv, _row, rowValue) {
+  if (!fv || !fv.startsWith('>=')) return true;
+  return Number(rowValue) >= Number(fv.slice(2));
+}
+
+function filterPredicateAge(fv, _row, rowValue) {
+  if (!fv || !fv.startsWith('age<=')) return true;
+  const days = Number(fv.slice(5));
+  if (!Number.isFinite(days) || !rowValue) return false;
+  return (Date.now() - Number(rowValue)) <= days * 86400000;
+}
+
 function renderTopPosts(payload) {
   const totalEl = document.getElementById('top-total');
   const container = document.getElementById('top-table-container');
@@ -2863,12 +2987,14 @@ function renderTopPosts(payload) {
   if (payload && payload.error) {
     container.innerHTML = '<div class="style-stats-empty">' + escapeHtml(payload.error) + '</div>';
     if (totalEl) totalEl.textContent = '';
+    _topTableHandle = null;
     return;
   }
   const posts = (payload && payload.posts) || [];
   if (totalEl) totalEl.textContent = posts.length + ' post' + (posts.length === 1 ? '' : 's');
   if (!posts.length) {
     container.innerHTML = '<div class="style-stats-empty">No posts with engagement yet.</div>';
+    _topTableHandle = null;
     return;
   }
   const fmt = n => (Number(n) || 0).toLocaleString();
@@ -2889,23 +3015,50 @@ function renderTopPosts(payload) {
     our_account:   p.our_account || '',
     project_name:  p.project_name || '',
   }));
-  mountSortableTable({
+  _topTableHandle = mountSortableTable({
     containerId: 'top-table-container',
     rows: normalized,
     state: _topTableState,
+    inlineFilters: true,
     columns: [
-      { key: 'platform',       label: 'Platform', type: 'text',    align: 'left',  widthPct: 4,
-        formatter: v => platformIconHtml(v) },
+      { key: 'platform',       label: 'Platform', type: 'text',    align: 'left',  widthPct: 6,
+        formatter: v => platformIconHtml(v),
+        filterMode: 'dropdown',
+        filterOptions: distinctOptions(normalized, 'platform', 'All'),
+        filterPredicate: filterPredicateExact },
       { key: 'project_name',   label: 'Project',  type: 'text',    align: 'left',  widthPct: 10,
-        formatter: v => v ? escapeHtml(String(v)) : '' },
-      { key: 'score',          label: 'Score',    type: 'numeric', align: 'right', widthPct: 7,  formatter: fmt },
-      { key: 'upvotes',        label: 'Upvotes',  type: 'numeric', align: 'right', widthPct: 7,  formatter: fmt },
-      { key: 'comments_count', label: 'Comments', type: 'numeric', align: 'right', widthPct: 8,  formatter: fmt },
-      { key: 'views',          label: 'Views',    type: 'numeric', align: 'right', widthPct: 7,  formatter: fmt },
-      { key: 'posted_ts',      label: 'Posted',   type: 'numeric', align: 'right', widthPct: 7,
-        formatter: (_v, r) => escapeHtml(relTime(r.posted_at)) },
+        formatter: v => v ? escapeHtml(String(v)) : '',
+        filterMode: 'dropdown',
+        filterOptions: distinctOptions(normalized, 'project_name', 'All'),
+        filterPredicate: filterPredicateExact },
+      { key: 'score',          label: 'Score',    type: 'numeric', align: 'right', widthPct: 7,
+        formatter: fmt,
+        filterMode: 'dropdown',
+        filterOptions: numericThresholdOptions(normalized, 'score'),
+        filterPredicate: filterPredicateGte },
+      { key: 'upvotes',        label: 'Upvotes',  type: 'numeric', align: 'right', widthPct: 7,
+        formatter: fmt,
+        filterMode: 'dropdown',
+        filterOptions: numericThresholdOptions(normalized, 'upvotes'),
+        filterPredicate: filterPredicateGte },
+      { key: 'comments_count', label: 'Comments', type: 'numeric', align: 'right', widthPct: 7,
+        formatter: fmt,
+        filterMode: 'dropdown',
+        filterOptions: numericThresholdOptions(normalized, 'comments_count'),
+        filterPredicate: filterPredicateGte },
+      { key: 'views',          label: 'Views',    type: 'numeric', align: 'right', widthPct: 7,
+        formatter: fmt,
+        filterMode: 'dropdown',
+        filterOptions: numericThresholdOptions(normalized, 'views'),
+        filterPredicate: filterPredicateGte },
+      { key: 'posted_ts',      label: 'Posted',   type: 'numeric', align: 'right', widthPct: 6,
+        formatter: (_v, r) => escapeHtml(relTime(r.posted_at)),
+        filterMode: 'dropdown',
+        filterOptions: ageThresholdOptions(),
+        filterPredicate: filterPredicateAge },
       { key: 'our_content',    label: 'Content',  type: 'text',    align: 'left',  widthPct: 50,
-        formatter: renderTopContentCell },
+        formatter: renderTopContentCell,
+        filterMode: 'none' },
     ],
   });
 }
@@ -2971,6 +3124,15 @@ function initTopFilters() {
       loadTopPosts(true);
     });
     kindSel._wired = true;
+  }
+  const searchEl = document.getElementById('top-search');
+  if (searchEl && !searchEl._wired) {
+    searchEl.value = _topTableState.globalQuery || '';
+    searchEl.addEventListener('input', () => {
+      _topTableState.globalQuery = searchEl.value;
+      if (_topTableHandle && _topTableHandle.apply) _topTableHandle.apply();
+    });
+    searchEl._wired = true;
   }
   document.querySelectorAll('.top-subtab').forEach(el => {
     if (el._wired) return;
@@ -3189,6 +3351,7 @@ function renderTopDms(payload) {
     conversation_status: d.conversation_status || '',
     interest_level: d.interest_level || '',
     human_reason: d.human_reason || '',
+    project_name: d.project_name || '',
     last_msg: d.last_msg || '',
     last_dir: d.last_dir || '',
   }));
@@ -3201,12 +3364,14 @@ function renderTopDms(payload) {
         formatter: v => '<span style="color:#737373;">' + (Number(v) + 1) + '</span>' },
       { key: 'platform',       label: 'Platform', type: 'text',    align: 'left',  widthPct: 5,
         formatter: v => platformIconHtml(v) },
-      { key: 'their_author',   label: 'Thread',   type: 'text',    align: 'left',  widthPct: 14,
+      { key: 'project_name',   label: 'Project',  type: 'text',    align: 'left',  widthPct: 9,
+        formatter: v => v ? escapeHtml(String(v)) : '<span style="color:#525252;">\u2014</span>' },
+      { key: 'their_author',   label: 'Thread',   type: 'text',    align: 'left',  widthPct: 13,
         formatter: (_v, r) => renderDmThreadCell(r) },
-      { key: 'last_msg',       label: 'Last message', type: 'text', align: 'left', widthPct: 38,
+      { key: 'last_msg',       label: 'Last message', type: 'text', align: 'left', widthPct: 32,
         formatter: (_v, r) => renderDmLastMsgCell(r) },
-      { key: 'message_count',  label: 'Msgs',     type: 'numeric', align: 'right', widthPct: 6,  formatter: fmt },
-      { key: 'interest_level', label: 'Class',    type: 'text',    align: 'left',  widthPct: 14,
+      { key: 'message_count',  label: 'Msgs',     type: 'numeric', align: 'right', widthPct: 5,  formatter: fmt },
+      { key: 'interest_level', label: 'Class',    type: 'text',    align: 'left',  widthPct: 13,
         formatter: (_v, r) => dmClassBadge(r) },
       { key: 'last_ts',        label: 'Last activity', type: 'numeric', align: 'right', widthPct: 10,
         formatter: (_v, r) => escapeHtml(relTime(r.last_message_at)) },
