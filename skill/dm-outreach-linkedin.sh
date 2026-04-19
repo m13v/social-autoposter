@@ -7,8 +7,9 @@
 
 set -euo pipefail
 
-# Platform lock: wait up to 45min for any previous dm-outreach-linkedin run, then skip
+# Browser-profile lock first (shared with other linkedin pipelines), then pipeline lock.
 source "$(dirname "$0")/lock.sh"
+acquire_lock "linkedin-browser" 3600
 acquire_lock "dm-outreach-linkedin" 2700
 
 # Load secrets
@@ -58,6 +59,8 @@ DM_DATA=$(psql "$DATABASE_URL" -t -A -c "
         ORDER BY d.discovered_at ASC
     ) q;")
 
+export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
+
 PROMPT_FILE=$(mktemp)
 cat > "$PROMPT_FILE" <<PROMPT_EOF
 You are the Social Autoposter LinkedIn DM outreach bot.
@@ -105,19 +108,19 @@ $DM_DATA
 ## After each DM:
 
 Success (BOTH steps required):
-  psql "\$DATABASE_URL" -c "UPDATE dms SET status='sent', our_dm_content='DM_TEXT', sent_at=NOW() WHERE id=DM_ID;"
+  psql "\$DATABASE_URL" -c "UPDATE dms SET status='sent', our_dm_content='DM_TEXT', sent_at=NOW(), claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
   python3 $REPO_DIR/scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "DM_TEXT"
 
 Failed (rate limit, blocked, error):
-  psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='REASON' WHERE id=DM_ID;"
+  psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='REASON', claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
 
 DMs disabled:
-  psql "\$DATABASE_URL" -c "UPDATE dms SET status='skipped', skip_reason='chat_disabled' WHERE id=DM_ID;"
+  psql "\$DATABASE_URL" -c "UPDATE dms SET status='skipped', skip_reason='chat_disabled', claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
 
 CRITICAL: ALL browser calls MUST use mcp__linkedin-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools. If a linkedin-agent tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
 PROMPT_EOF
 
-gtimeout 2700 claude --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: LinkedIn DM outreach claude exited with code $?"
+gtimeout 2700 "$REPO_DIR/scripts/run_claude.sh" "dm-outreach-linkedin" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: LinkedIn DM outreach claude exited with code $?"
 rm -f "$PROMPT_FILE"
 
 SENT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE platform='linkedin' AND status='sent';" 2>/dev/null || echo "0")

@@ -35,6 +35,8 @@ import time
 PROFILE_DIR = os.path.expanduser("~/.claude/browser-profiles/twitter")
 LOCK_FILE = os.path.expanduser("~/.claude/twitter-agent-lock.json")
 LOCK_EXPIRY = 300  # Must match twitter-agent-lock.sh
+LOCK_WAIT_MAX = 45  # seconds to wait for lock to free before giving up
+LOCK_POLL_INTERVAL = 2
 VIEWPORT = {"width": 911, "height": 1016}
 OUR_HANDLE = "m13v_"
 
@@ -135,24 +137,31 @@ def _acquire_browser_lock():
     it instead of failing. Only python:PID holders represent a real conflict.
     """
     global _LOCK_SESSION_ID, _LOCK_INHERITED
-    if os.path.exists(LOCK_FILE):
-        try:
-            with open(LOCK_FILE) as f:
-                lock = json.load(f)
-            age = time.time() - lock.get("timestamp", 0)
-            holder = lock.get("session_id", "")
-            if age < LOCK_EXPIRY:
+    deadline = time.time() + LOCK_WAIT_MAX
+    while True:
+        if os.path.exists(LOCK_FILE):
+            try:
+                with open(LOCK_FILE) as f:
+                    lock = json.load(f)
+                age = time.time() - lock.get("timestamp", 0)
+                holder = lock.get("session_id", "")
+                if age >= LOCK_EXPIRY:
+                    break
                 if _UUID_RE.match(holder or ""):
                     _LOCK_SESSION_ID = holder
                     _LOCK_INHERITED = True
-                else:
+                    break
+                if time.time() >= deadline:
                     print(json.dumps({
                         "success": False,
-                        "error": f"Twitter browser is locked by session {holder} ({int(age)}s ago). Skipping."
+                        "error": f"Twitter browser locked by session {holder} ({int(age)}s); waited {LOCK_WAIT_MAX}s, giving up."
                     }))
                     sys.exit(1)
-        except (json.JSONDecodeError, OSError):
-            pass
+                time.sleep(LOCK_POLL_INTERVAL)
+                continue
+            except (json.JSONDecodeError, OSError):
+                pass
+        break
     with open(LOCK_FILE, "w") as f:
         json.dump({"session_id": _LOCK_SESSION_ID, "timestamp": int(time.time())}, f)
 
@@ -192,14 +201,30 @@ def get_browser_and_page(playwright):
         except Exception:
             pass
 
-    # Fallback: launch persistent browser with saved profile
-    context = playwright.chromium.launch_persistent_context(
-        PROFILE_DIR,
-        headless=True,
-        args=["--disable-blink-features=AutomationControlled"],
-        viewport=VIEWPORT,
-        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    )
+    # Fallback: launch persistent browser with saved profile.
+    # Retry on Chromium SingletonLock collisions (MCP holds the OS-level profile
+    # lock for its entire server lifetime; the JSON lock can expire while the
+    # OS lock is still held).
+    deadline = time.time() + LOCK_WAIT_MAX
+    while True:
+        try:
+            context = playwright.chromium.launch_persistent_context(
+                PROFILE_DIR,
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+                viewport=VIEWPORT,
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            )
+            break
+        except Exception as e:
+            if time.time() >= deadline:
+                _release_browser_lock()
+                print(json.dumps({
+                    "success": False,
+                    "error": f"chromium profile locked by another process; waited {LOCK_WAIT_MAX}s: {e}"
+                }))
+                sys.exit(1)
+            time.sleep(LOCK_POLL_INTERVAL)
     page = context.new_page()
     return context, page, False
 
