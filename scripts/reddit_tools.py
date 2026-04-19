@@ -257,6 +257,38 @@ def cmd_search(args):
     print(json.dumps(threads, indent=2))
 
 
+def _html_postable_check(thread_url):
+    """Second-opinion check against old.reddit.com HTML.
+
+    Reddit's JSON `locked` and `archived` flags sometimes miss HTML-only
+    lock states. Concretely seen on r/Entrepreneur where AutoMod renders
+    `.locked-tagline` on the thread page while the JSON payload reports
+    `locked=false`. This is cheap: one unauthenticated GET, ~1s, counts
+    against the same rate-limit window as the JSON call above.
+
+    Returns one of: "locked", "archived", "ok", or None on network error.
+    """
+    import re as _re
+    try:
+        url = thread_url.replace("www.reddit.com", "old.reddit.com").rstrip("/") + "/"
+        _wait_if_needed()
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        resp = urllib.request.urlopen(req, timeout=15)
+        remaining = float(resp.headers.get("X-Ratelimit-Remaining", 100))
+        reset = float(resp.headers.get("X-Ratelimit-Reset", 0))
+        _write_ratelimit(remaining, reset)
+        html = resp.read().decode("utf-8", errors="ignore")
+        # Match only the tagline CSS classes, not the archived-popup template
+        # that old.reddit.com preloads on every page.
+        if _re.search(r'class="[^"]*\blocked-tagline\b', html):
+            return "locked"
+        if _re.search(r'class="[^"]*\barchived-tagline\b', html):
+            return "archived"
+        return "ok"
+    except Exception:
+        return None
+
+
 def cmd_fetch(args):
     """Fetch a thread's comments via Reddit JSON API."""
     # Check if subreddit is blocked
@@ -296,6 +328,12 @@ def cmd_fetch(args):
     if thread_data.get("archived") or thread_data.get("locked"):
         status = "archived" if thread_data.get("archived") else "locked"
         print(json.dumps({"error": f"thread_{status}", "thread": thread}))
+        return
+
+    html_state = _html_postable_check(args.url)
+    if html_state in ("locked", "archived"):
+        print(json.dumps({"error": f"thread_{html_state}", "thread": thread,
+                          "detected_via": "html"}))
         return
 
     # Top comments (flatten one level)
@@ -348,18 +386,19 @@ def cmd_log_post(args):
         print(json.dumps({"error": "DUPLICATE_THREAD", "message": "Already posted in this thread", "existing_post_id": existing[0], "content_preview": existing[1]}))
         return
 
+    session_id = os.environ.get("CLAUDE_SESSION_ID") or None
     conn.execute(
         """INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
            thread_title, thread_content, our_url, our_content, our_account,
-           source_summary, project_name, status, posted_at, feedback_report_used, engagement_style)
-           VALUES ('reddit', %s, %s, %s, %s, '', %s, %s, %s, '', %s, 'active', NOW(), TRUE, %s)""",
+           source_summary, project_name, status, posted_at, feedback_report_used, engagement_style, claude_session_id)
+           VALUES ('reddit', %s, %s, %s, %s, '', %s, %s, %s, '', %s, 'active', NOW(), TRUE, %s, %s)""",
         [args.thread_url, args.thread_author, args.thread_author, args.thread_title,
          args.our_url, args.our_text, args.account, args.project,
-         getattr(args, 'engagement_style', None)],
+         getattr(args, 'engagement_style', None), session_id],
     )
     conn.commit()
     conn.close()
-    print(json.dumps({"logged": True}))
+    print(json.dumps({"logged": True, "claude_session_id": session_id}))
 
 
 def main():
