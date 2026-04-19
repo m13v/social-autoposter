@@ -56,27 +56,54 @@ def extract_ids(url):
 
 
 def update_views(db, scraped_data, quiet=False):
-    """Match scraped view data to DB posts and update."""
-    # scraped_data is a list of {url, views} or a dict of {url: views}
+    """Match scraped view data to DB posts and update.
+
+    scraped_data accepts:
+      - list of dicts {url, views, score?, comments_count?}
+      - legacy list of {url, views}
+      - legacy dict {url: views}
+
+    For thread rows (shreddit-post attrs present on profile page), score +
+    comments_count come in too and are written alongside views. This is the
+    cheap profile-scrape leg that sidesteps per-post API calls for the ~6%
+    of rows that are our own thread submissions.
+    """
+    # Normalise to list of dicts
     if isinstance(scraped_data, dict):
-        items = scraped_data.items()
+        normalised = [{"url": u, "views": v} for u, v in scraped_data.items()]
     else:
-        items = [(item["url"], item["views"]) for item in scraped_data]
+        normalised = []
+        for item in scraped_data:
+            if isinstance(item, dict):
+                normalised.append(item)
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                normalised.append({"url": item[0], "views": item[1]})
 
     # Build lookups by comment_id and post_id
     views_by_comment = {}
-    views_by_post = {}  # post_id -> max views (fallback for thread-URL-only DB entries)
-    for url, views in items:
-        if views is None:
+    views_by_post = {}   # post_id -> max views
+    score_by_post = {}   # post_id -> score (from shreddit-post attrs, threads only)
+    cc_by_post = {}      # post_id -> comment-count attr
+
+    for item in normalised:
+        url = item.get("url")
+        if not url:
             continue
+        views = item.get("views")
+        score = item.get("score")
+        cc = item.get("comments_count")
         post_id, comment_id = extract_ids(url)
-        if comment_id:
-            views_by_comment[comment_id] = views
-        # Always track max views per post_id so DB entries with only a thread URL
-        # (no comment_id) can still match via post_id fallback
-        if post_id:
-            if post_id not in views_by_post or views > views_by_post[post_id]:
-                views_by_post[post_id] = views
+
+        if views is not None:
+            if comment_id:
+                views_by_comment[comment_id] = views
+            if post_id:
+                if post_id not in views_by_post or views > views_by_post[post_id]:
+                    views_by_post[post_id] = views
+        if post_id and score is not None:
+            score_by_post[post_id] = score
+        if post_id and cc is not None:
+            cc_by_post[post_id] = cc
 
     posts = db.execute(
         "SELECT id, our_url FROM posts "
@@ -84,6 +111,7 @@ def update_views(db, scraped_data, quiet=False):
     ).fetchall()
 
     matched = 0
+    matched_thread_stats = 0
     unmatched = 0
 
     for post in posts:
@@ -96,21 +124,49 @@ def update_views(db, scraped_data, quiet=False):
         elif post_id and post_id in views_by_post:
             views = views_by_post[post_id]
 
+        # Thread stats from shreddit-post attrs: only applied when our_url is a
+        # thread (no comment_id) — for comment rows, score belongs to the
+        # parent post, not our comment, so don't overwrite it.
+        thread_score = None
+        thread_cc = None
+        if comment_id is None and post_id:
+            thread_score = score_by_post.get(post_id)
+            thread_cc = cc_by_post.get(post_id)
+
+        sets = []
+        params = []
         if views is not None:
+            sets.append("views=%s")
+            params.append(views)
+        if thread_score is not None:
+            sets.append("upvotes=%s")
+            params.append(thread_score)
+        if thread_cc is not None:
+            sets.append("comments_count=%s")
+            params.append(thread_cc)
+
+        if sets:
+            sets.append("engagement_updated_at=NOW()")
+            params.append(db_id)
             db.execute(
-                "UPDATE posts SET views=%s, engagement_updated_at=NOW() WHERE id=%s",
-                [views, db_id],
+                f"UPDATE posts SET {', '.join(sets)} WHERE id=%s",
+                params,
             )
             matched += 1
+            if thread_score is not None or thread_cc is not None:
+                matched_thread_stats += 1
         else:
             unmatched += 1
 
     db.commit()
     return {
         "matched": matched,
+        "matched_thread_stats": matched_thread_stats,
         "unmatched": unmatched,
-        "scraped_total": len(list(items)) if not isinstance(scraped_data, dict) else len(scraped_data),
+        "scraped_total": len(normalised),
         "with_views": len(views_by_comment) + len(views_by_post),
+        "with_score": len(score_by_post),
+        "with_comments_count": len(cc_by_post),
     }
 
 
