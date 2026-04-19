@@ -395,6 +395,52 @@ A page that satisfies (3) but not (1) and (2) is incomplete. If your angle genui
 """
 
 
+def render_book_call_block(product_cfg: dict, registry: dict) -> str:
+    """Emit the BookCallCTA requirement block if the product has a Cal.com link.
+
+    Reads `booking_link` from config.json. If unset, returns an empty string
+    (the page will still render; no booking CTA will be injected). If present,
+    we require two BookCallCTA instances: one `footer` near the end of the
+    article body and one `sticky` that follows the reader on scroll.
+    """
+    booking = (product_cfg.get("booking_link") or "").strip()
+    if not booking:
+        return ""
+    has_book_cta = bool(_components_with_quota_tag(registry, "book-call-mandatory"))
+    if not has_book_cta:
+        return ""
+    site_slug = product_cfg.get("name") or product_cfg.get("slug") or ""
+    return f"""### Book-a-call CTA (mandatory)
+
+This product has a booking link: `{booking}`.
+
+Every page MUST render exactly TWO `BookCallCTA` instances from `@seo/components`, both pointing at that booking link. They are tracked by the canonical `schedule_click` PostHog event, which feeds the Project Funnel Stats dashboard.
+
+1. **Footer variant** near the end of the article body (after the last prose section, before the FAQ):
+   ```tsx
+   <BookCallCTA
+     appearance="footer"
+     destination="{booking}"
+     site="{site_slug}"
+     heading="<one-line hook tailored to the angle>"
+     description="<one sentence explaining what the call unlocks>"
+   />
+   ```
+
+2. **Sticky variant** so the CTA follows the reader on long pages:
+   ```tsx
+   <BookCallCTA
+     appearance="sticky"
+     destination="{booking}"
+     site="{site_slug}"
+     description="<short benefit-oriented line>"
+   />
+   ```
+
+Do NOT hard-code `href="https://cal.com/..."` in a raw `<a>` tag or copy the booking URL into a custom button; always use `BookCallCTA` so the PostHog event fires with the canonical shape. Do NOT render more than two BookCallCTA instances per page.
+"""
+
+
 def build_prompt(product: str, keyword: str, slug: str, trigger: str,
                  product_cfg: dict, source_block: str,
                  content_type: str = "guide") -> str:
@@ -427,6 +473,7 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
     registry = load_component_registry(repo)
     palette_block = render_palette(registry)
     quotas_block = render_quotas(registry)
+    book_call_block = render_book_call_block(product_cfg, registry)
     consumer_theme = detect_consumer_theme(repo)
 
     type_context = {
@@ -594,6 +641,7 @@ Every page MUST include all of the following, but their PLACEMENT is flexible (n
 4. **`FaqSection`** — anywhere in the bottom third (does not have to be the last section). At least 5 concrete, specific FAQs drawn from your research. Generic FAQs are worse than no FAQs.
 5. **JSON-LD structured data** — `<script type="application/ld+json">` tag. Import `articleSchema`, `breadcrumbListSchema`, and `faqPageSchema` from `@seo/components`.
 
+{book_call_block}
 ## Step 5 — Typecheck, commit, and deploy
 
 - Run `npx tsc --noEmit` in the repo to confirm the page compiles cleanly. Fix any errors you introduced before committing. Do not commit a file that fails typecheck.
