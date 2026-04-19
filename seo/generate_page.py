@@ -29,6 +29,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -69,7 +70,12 @@ CONTENT_TYPES = {
         "route_prefix": "/t/",
         "path_candidates": [
             "src/app/(content)/t/{slug}/page.tsx",
+            "src/app/(main)/t/{slug}/page.tsx",
+            "src/app/(landing)/t/{slug}/page.tsx",
             "src/app/t/{slug}/page.tsx",
+            "website/src/app/(content)/t/{slug}/page.tsx",
+            "website/src/app/(main)/t/{slug}/page.tsx",
+            "website/src/app/t/{slug}/page.tsx",
         ],
         "example_dirs": ["src/app/(content)/t/"],
         "description": "a keyword-targeted guide page",
@@ -130,6 +136,111 @@ def detect_consumer_theme(repo_path: str) -> str:
             return "dark"
         return "light"
     return "light"
+
+
+def layout_candidates_for_check(root: Path) -> list[Path]:
+    return [
+        root / "src" / "app" / "layout.tsx",
+        root / "app" / "layout.tsx",
+    ]
+
+
+def check_consumer_setup(repo_path: str) -> dict:
+    """
+    Verify the consumer repo has the @seo/components infrastructure installed
+    before we try to ship a page into it. A missing piece means generated pages
+    render with white-on-dark component backgrounds, unreadable FaqSection
+    headers, no sidebar, and no guide chat (see setup-client-website Phase
+    2c/2d/4a/4d/4e).
+
+    Returns {"ok": bool, "missing": [reasons]}. If ok=False, generation must
+    refuse until the consumer site is onboarded.
+    """
+    if not repo_path or not os.path.isdir(repo_path):
+        return {"ok": False, "missing": ["repo missing on disk"]}
+
+    root = Path(repo_path)
+    missing: list[str] = []
+
+    # Phase 2c: cascade layer ordering so library CSS wins over consumer theme
+    globals_css_candidates = [
+        root / "src" / "app" / "globals.css",
+        root / "app" / "globals.css",
+    ]
+    globals_css = next((p for p in globals_css_candidates if p.exists()), None)
+    if not globals_css:
+        missing.append("globals.css not found (Phase 2c)")
+    else:
+        css_text = globals_css.read_text(errors="ignore")
+        if "@layer seo-components" not in css_text:
+            missing.append(
+                f"{globals_css.relative_to(root)} missing "
+                "'@layer seo-components, theme, base, components, utilities' (Phase 2c)"
+            )
+        has_source_pragma = (
+            "@source" in css_text and "seo-components" in css_text
+        )
+        # Fallback: layout.tsx may inject prebuilt SeoComponentsStyles instead
+        # of relying on the Tailwind JIT scan.
+        has_seo_styles_injection = False
+        for lay_p in layout_candidates_for_check(root):
+            if lay_p.exists() and "SeoComponentsStyles" in lay_p.read_text(
+                errors="ignore"
+            ):
+                has_seo_styles_injection = True
+                break
+        if not has_source_pragma and not has_seo_styles_injection:
+            missing.append(
+                f"{globals_css.relative_to(root)} missing "
+                "'@source \"../../node_modules/@seo/components/src\"' pragma "
+                "AND layout.tsx has no <SeoComponentsStyles /> (Phase 2c)"
+            )
+
+    # Phase 4a: withSeoContent wrapper so /api/guide-chat can read MDX at runtime
+    next_cfg_candidates = [
+        root / "next.config.ts",
+        root / "next.config.mjs",
+        root / "next.config.js",
+    ]
+    next_cfg = next((p for p in next_cfg_candidates if p.exists()), None)
+    if not next_cfg:
+        missing.append("next.config.* not found (Phase 4a)")
+    else:
+        cfg_text = next_cfg.read_text(errors="ignore")
+        if "withSeoContent" not in cfg_text:
+            missing.append(
+                f"{next_cfg.name} missing withSeoContent wrapper (Phase 4a)"
+            )
+
+    # Phase 4d/4e: sidebar + guide chat + api route mounted in layout
+    layout_candidates = layout_candidates_for_check(root)
+    layout = next((p for p in layout_candidates if p.exists()), None)
+    if not layout:
+        missing.append("layout.tsx not found (Phase 2d)")
+    else:
+        lay_text = layout.read_text(errors="ignore")
+        if "HeadingAnchors" not in lay_text:
+            missing.append(
+                f"{layout.relative_to(root)} missing HeadingAnchors import (Phase 2d)"
+            )
+        if "SiteSidebar" not in lay_text and "SitemapSidebar" not in lay_text:
+            missing.append(
+                f"{layout.relative_to(root)} missing SiteSidebar mount (Phase 4d)"
+            )
+        if "GuideChat" not in lay_text and "GuideChatPanel" not in lay_text:
+            missing.append(
+                f"{layout.relative_to(root)} missing GuideChat mount (Phase 4e)"
+            )
+
+    api_route_candidates = [
+        root / "src" / "app" / "api" / "guide-chat" / "route.ts",
+        root / "app" / "api" / "guide-chat" / "route.ts",
+        root / "src" / "app" / "api" / "guide-chat" / "route.tsx",
+    ]
+    if not any(p.exists() for p in api_route_candidates):
+        missing.append("src/app/api/guide-chat/route.ts not found (Phase 4e)")
+
+    return {"ok": len(missing) == 0, "missing": missing}
 
 
 def load_product_config(product: str) -> dict:
@@ -512,8 +623,10 @@ def run_claude_stream(prompt: str, cwd: str, log_dir: Path, slug: str) -> dict:
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     stream_log = log_dir / f"{ts}_{slug}_stream.jsonl"
 
+    session_id = str(uuid.uuid4())
     cmd = [
         "claude", "-p", prompt,
+        "--session-id", session_id,
         "--output-format", "stream-json",
         "--verbose",
         "--dangerously-skip-permissions",
@@ -536,6 +649,7 @@ def run_claude_stream(prompt: str, cwd: str, log_dir: Path, slug: str) -> dict:
         except FileNotFoundError:
             return {"exit_code": 127, "final_result_text": "",
                     "tool_summary": {}, "stream_log_path": str(stream_log),
+                    "session_id": session_id,
                     "error": "claude CLI not found on PATH"}
 
         assert proc.stdout is not None
@@ -550,9 +664,11 @@ def run_claude_stream(prompt: str, cwd: str, log_dir: Path, slug: str) -> dict:
 
             if time.time() - start > CLAUDE_TIMEOUT_SECONDS:
                 proc.kill()
+                _log_claude_session(session_id, "seo_generate_page")
                 return {"exit_code": 124, "final_result_text": final_text,
                         "tool_summary": _summarize_tools(tool_calls),
                         "stream_log_path": str(stream_log),
+                        "session_id": session_id,
                         "error": f"timeout after {CLAUDE_TIMEOUT_SECONDS}s"}
 
             try:
@@ -573,12 +689,28 @@ def run_claude_stream(prompt: str, cwd: str, log_dir: Path, slug: str) -> dict:
 
         proc.wait()
 
+    _log_claude_session(session_id, "seo_generate_page")
     return {
         "exit_code": proc.returncode,
         "final_result_text": final_text,
         "tool_summary": _summarize_tools(tool_calls),
         "stream_log_path": str(stream_log),
+        "session_id": session_id,
     }
+
+
+def _log_claude_session(session_id: str, script_tag: str) -> None:
+    """Best-effort: invoke log_claude_session.py to record cost into claude_sessions."""
+    logger = ROOT_DIR / "scripts" / "log_claude_session.py"
+    if not logger.exists():
+        return
+    try:
+        subprocess.run(
+            ["python3", str(logger), "--session-id", session_id, "--script", script_tag],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        pass
 
 
 def _summarize_tools(calls: list[dict]) -> dict:
@@ -661,25 +793,69 @@ def parse_concept(text: str) -> dict:
 
 
 def verify_commit_landed(repo_path: str, expected_file: str) -> dict:
-    """Check origin/main for the expected file. Returns {ok, commit_sha, error}."""
+    """Check origin/main (or local HEAD if no remote) for the expected file.
+    Returns {ok, commit_sha, error}."""
+    # Detect whether an 'origin' remote exists. Some projects are local-only
+    # (no GitHub remote configured), in which case we verify against HEAD.
     try:
-        subprocess.run(["git", "fetch", "origin"], cwd=repo_path,
-                       check=True, capture_output=True, timeout=60)
+        r = subprocess.run(["git", "remote"], cwd=repo_path,
+                           capture_output=True, text=True, check=True, timeout=10)
+        remotes = set(r.stdout.split())
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        return {"ok": False, "error": f"git fetch failed: {e}"}
+        return {"ok": False, "error": f"git remote failed: {e}"}
+
+    if "origin" in remotes:
+        ref = "origin/main"
+        try:
+            subprocess.run(["git", "fetch", "origin"], cwd=repo_path,
+                           check=True, capture_output=True, timeout=60)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            return {"ok": False, "error": f"git fetch failed: {e}"}
+    else:
+        ref = "HEAD"
 
     try:
         r = subprocess.run(
-            ["git", "log", "origin/main", "-1", "--format=%h", "--", expected_file],
+            ["git", "log", ref, "-1", "--format=%h", "--", expected_file],
             cwd=repo_path, capture_output=True, text=True, check=True,
         )
         sha = r.stdout.strip()
     except subprocess.CalledProcessError as e:
-        return {"ok": False, "error": f"git log failed: {e.stderr}"}
+        return {"ok": False, "error": f"git log {ref} failed: {e.stderr}"}
 
     if not sha:
-        return {"ok": False, "error": f"no commit on origin/main touching {expected_file}"}
-    return {"ok": True, "commit_sha": sha}
+        return {"ok": False, "error": f"no commit on {ref} touching {expected_file}"}
+    return {"ok": True, "commit_sha": sha, "ref": ref}
+
+
+def probe_url_live(url: str, timeout: int = 15, retries: int = 30,
+                   interval: int = 10) -> dict:
+    """HEAD-then-GET probe with fixed-interval retries. Returns {ok, status, error}.
+    Default budget: 30 retries x 10s = ~5 min, enough for a typical Vercel/Netlify
+    deploy to finish after git push. 2xx counts as live.
+    """
+    import urllib.request
+    import urllib.error
+    last_err = ""
+    for attempt in range(retries):
+        for method in ("HEAD", "GET"):
+            try:
+                req = urllib.request.Request(url, method=method,
+                                             headers={"User-Agent": "social-autoposter/seo-verify"})
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    status = resp.getcode()
+                    if 200 <= status < 300:
+                        return {"ok": True, "status": status}
+                    last_err = f"{method} {url} -> {status}"
+            except urllib.error.HTTPError as e:
+                if 200 <= e.code < 300:
+                    return {"ok": True, "status": e.code}
+                last_err = f"{method} {url} -> {e.code}"
+            except Exception as e:
+                last_err = f"{method} {url} failed: {e}"
+        if attempt < retries - 1:
+            time.sleep(interval)
+    return {"ok": False, "error": last_err}
 
 
 def save_concept_file(concepts_dir: Path, slug: str, product: str, keyword: str,
@@ -716,7 +892,8 @@ def save_concept_file(concepts_dir: Path, slug: str, product: str, keyword: str,
 def update_state(trigger: str, product: str, keyword: str, status: str,
                  page_url: str | None = None, notes: str | None = None,
                  slug: str | None = None,
-                 content_type: str | None = None) -> None:
+                 content_type: str | None = None,
+                 claude_session_id: str | None = None) -> None:
     """Dispatch state updates to the right table based on trigger."""
     if trigger == "serp":
         kwargs = {}
@@ -726,6 +903,8 @@ def update_state(trigger: str, product: str, keyword: str, status: str,
             kwargs["notes"] = notes
         if content_type is not None:
             kwargs["content_type"] = content_type
+        if claude_session_id is not None:
+            kwargs["claude_session_id"] = claude_session_id
         db_helpers.update_status(product, keyword, status, **kwargs)
     elif trigger == "gsc":
         conn = db_helpers.get_conn()
@@ -740,6 +919,8 @@ def update_state(trigger: str, product: str, keyword: str, status: str,
             sets.append("notes = %s"); vals.append(notes)
         if content_type is not None:
             sets.append("content_type = %s"); vals.append(content_type)
+        if claude_session_id is not None:
+            sets.append("claude_session_id = %s"); vals.append(claude_session_id)
         if status == "done":
             sets.append("completed_at = NOW()")
         vals.extend([product, keyword])
@@ -769,6 +950,8 @@ def update_state(trigger: str, product: str, keyword: str, status: str,
             sets.append("notes = %s"); vals.append(notes)
         if content_type is not None:
             sets.append("content_type = %s"); vals.append(content_type)
+        if claude_session_id is not None:
+            sets.append("claude_session_id = %s"); vals.append(claude_session_id)
         if status == "done":
             sets.append("completed_at = NOW()")
         vals.extend([product, keyword])
@@ -809,6 +992,23 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
         return {"success": False, "error": f"repo not found: {repo_path}",
                 "content_type": content_type}
 
+    setup = check_consumer_setup(repo_path)
+    if not setup["ok"]:
+        reason = "; ".join(setup["missing"])[:400]
+        notes = f"consumer setup incomplete: {reason}"
+        update_state(trigger, product, keyword, "pending",
+                     notes=notes, slug=slug, content_type=content_type)
+        return {
+            "success": False,
+            "error": (
+                f"consumer site {repo_path} is missing @seo/components setup. "
+                f"Run the setup-client-website skill (Phase 2c/2d/4a/4d/4e) "
+                f"before generating pages. Missing: {reason}"
+            ),
+            "content_type": content_type,
+            "setup_missing": setup["missing"],
+        }
+
     sources = resolve_source_paths(product_cfg)
     source_block = format_source_block(sources)
     prompt = build_prompt(product, keyword, slug, trigger, product_cfg,
@@ -829,50 +1029,87 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
     save_concept_file(concepts_dir, slug, product, keyword,
                       concept, final_json, stream["tool_summary"], touches)
 
+    session_id = stream.get("session_id")
+
+    # Stream-level errors (process crash, timeout) are still hard failures.
     if stream.get("error"):
         update_state(trigger, product, keyword, "pending",
                      notes=stream["error"][:500], slug=slug,
-                     content_type=content_type)
+                     content_type=content_type,
+                     claude_session_id=session_id)
         return {"success": False, "error": stream["error"],
                 "content_type": content_type,
                 "stream_log": stream["stream_log_path"],
                 "tool_summary": stream["tool_summary"]}
 
-    if not final_json or not final_json.get("success"):
-        err = (final_json or {}).get("error", "no final success JSON from claude")
-        update_state(trigger, product, keyword, "pending",
-                     notes=err[:500], slug=slug,
-                     content_type=content_type)
-        return {"success": False, "error": err,
-                "content_type": content_type,
-                "stream_log": stream["stream_log_path"],
-                "tool_summary": stream["tool_summary"]}
+    # Whether the inner Claude session reported success itself. If False, we
+    # attempt salvage: when the page is committed AND live, treat as success
+    # regardless of the missing final marker (e.g. inner session credit-out
+    # after the file was already committed/pushed).
+    claimed_success = bool(final_json and final_json.get("success"))
+    claimed_err = (final_json or {}).get("error", "no final success JSON from claude")
 
     expected_file_candidates = [
         tmpl.format(slug=slug)
         for tmpl in CONTENT_TYPES[content_type]["path_candidates"]
     ]
-    verify = {"ok": False, "error": "file candidates not checked"}
+    verify = {"ok": False, "error": f"no candidate matched: {expected_file_candidates}"}
+    last_verify_err = ""
     for candidate in expected_file_candidates:
         v = verify_commit_landed(repo_path, candidate)
         if v["ok"]:
             verify = v
             verify["file"] = candidate
             break
+        last_verify_err = v.get("error", "")
+    if not verify["ok"] and last_verify_err:
+        verify["error"] = f"{last_verify_err} (tried {len(expected_file_candidates)} candidates)"
 
     if not verify["ok"]:
+        err = claimed_err if not claimed_success else verify.get("error", "")
         update_state(trigger, product, keyword, "pending",
-                     notes=f"commit not on origin/main: {verify.get('error','')}"[:500],
-                     slug=slug, content_type=content_type)
-        return {"success": False, "error": verify.get("error"),
+                     notes=f"commit not on origin/main: {err}"[:500],
+                     slug=slug, content_type=content_type,
+                     claude_session_id=session_id)
+        return {"success": False, "error": err,
                 "content_type": content_type,
                 "stream_log": stream["stream_log_path"],
                 "tool_summary": stream["tool_summary"]}
 
-    page_url = final_json.get("page_url") or ""
+    base_url = (product_cfg.get("landing_pages", {}).get("base_url")
+                or product_cfg.get("website", "")).rstrip("/")
+    has_website = bool(base_url)
+    constructed_url = f"{base_url}{CONTENT_TYPES[content_type]['route_prefix']}{slug}" if has_website else ""
+    page_url = (final_json or {}).get("page_url") or constructed_url
+
+    # Always probe the live URL before marking done. Vercel/Netlify deploys
+    # take minutes after git push, and the inner Claude session may declare
+    # success the moment the commit lands. Wait for the page to actually serve.
+    # If the product has no configured website (repo-only), trust the commit.
+    if has_website and page_url:
+        live = probe_url_live(page_url)
+        if not live["ok"]:
+            update_state(trigger, product, keyword, "pending",
+                         notes=f"url not live: claude={'ok' if claimed_success else claimed_err}; live={live.get('error','')}"[:500],
+                         slug=slug, content_type=content_type,
+                         claude_session_id=session_id)
+            return {"success": False,
+                    "error": claimed_err if not claimed_success else live.get("error"),
+                    "content_type": content_type,
+                    "stream_log": stream["stream_log_path"],
+                    "tool_summary": stream["tool_summary"]}
+    else:
+        live = {"ok": True, "status": "no-website-configured"}
+
+    salvage_note = ""
+    if not claimed_success:
+        salvage_note = f"salvaged after claude={claimed_err}; commit={verify['commit_sha']}; url={live.get('status')}"
+
     update_state(trigger, product, keyword, "done",
                  page_url=page_url, slug=slug,
-                 content_type=content_type)
+                 content_type=content_type,
+                 notes=salvage_note or None,
+                 claude_session_id=session_id)
 
     return {
         "success": True,
@@ -883,6 +1120,8 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
         "tool_summary": stream["tool_summary"],
         "source_touches": touches,
         "stream_log": stream["stream_log_path"],
+        "salvaged": bool(salvage_note),
+        "salvage_note": salvage_note,
     }
 
 

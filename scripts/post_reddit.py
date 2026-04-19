@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
@@ -312,7 +313,11 @@ def run_claude(prompt, timeout=600):
     """
     import time as _time
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
-    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+    session_id = str(uuid.uuid4())
+    usage["session_id"] = session_id
+    # Set in this process's env so subsequent log_post → reddit_tools.py inherits it
+    os.environ["CLAUDE_SESSION_ID"] = session_id
+    cmd = ["claude", "-p", "--session-id", session_id, "--output-format", "stream-json", "--verbose"]
     cmd += ["--tools", "Bash,Read"]
     env = os.environ.copy()
     env.pop("ANTHROPIC_API_KEY", None)  # ensure claude uses OAuth, not API key
@@ -389,6 +394,14 @@ def run_claude(prompt, timeout=600):
                 pass
         text_output = "\n".join(all_text_parts) if all_text_parts else "".join(collected)
         stderr_out = proc.stderr.read() if proc.stderr else ""
+        try:
+            subprocess.run(
+                ["python3", os.path.join(REPO_DIR, "scripts", "log_claude_session.py"),
+                 "--session-id", session_id, "--script", "post_reddit"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except Exception as e:
+            print(f"[post_reddit] WARNING: log_claude_session failed: {e}", file=sys.stderr)
         return proc.returncode == 0, text_output + stderr_out, usage
     except Exception as e:
         return False, str(e), usage
