@@ -2748,31 +2748,32 @@ function renderFunnelStats(payload) {
   }
   const fmt = n => (Number(n) || 0).toLocaleString();
   const totals = projects.reduce((a, p) => {
-    a.posts     += (p.posts && p.posts.recent)         || 0;
-    a.seo       += (p.seo && p.seo.pages_recent)       || 0;
-    a.pageviews += (p.funnel && p.funnel.pageviews)    || 0;
-    a.ctas      += (p.funnel && p.funnel.cta_clicks)   || 0;
-    a.bookings  += (p.funnel && p.funnel.real_bookings)|| 0;
+    a.posts            += (p.posts && p.posts.recent)             || 0;
+    a.seo              += (p.seo && p.seo.pages_recent)           || 0;
+    a.pageviews        += (p.funnel && p.funnel.pageviews)        || 0;
+    a.email_signups    += (p.funnel && p.funnel.email_signups)    || 0;
+    a.schedule_clicks  += (p.funnel && p.funnel.schedule_clicks)  || 0;
+    a.bookings         += (p.funnel && p.funnel.real_bookings)    || 0;
     return a;
-  }, { posts: 0, seo: 0, pageviews: 0, ctas: 0, bookings: 0 });
+  }, { posts: 0, seo: 0, pageviews: 0, email_signups: 0, schedule_clicks: 0, bookings: 0 });
   if (totalEl) {
-    totalEl.textContent = totals.posts + ' posts \u00b7 ' + totals.seo + ' pages \u00b7 ' + fmt(totals.pageviews) + ' pv \u00b7 ' + totals.ctas + ' cta \u00b7 ' + totals.bookings + ' book';
+    totalEl.textContent = totals.posts + ' posts \u00b7 ' + totals.seo + ' pages \u00b7 ' + fmt(totals.pageviews) + ' pv \u00b7 ' + totals.email_signups + ' signup \u00b7 ' + totals.schedule_clicks + ' sched \u00b7 ' + totals.bookings + ' book';
   }
   const normalized = projects.map(p => {
     const pst = p.posts || {};
     const seo = p.seo || {};
     const f = p.funnel || {};
     return {
-      name:      p.name || '',
-      posts:     Number(pst.recent) || 0,
-      upvotes:   Number(pst.upvotes_recent)  || 0,
-      comments:  Number(pst.comments_recent) || 0,
-      views:     Number(pst.views_recent)    || 0,
-      seo_pages: Number(seo.pages_recent)    || 0,
-      pageviews: Number(f.pageviews)         || 0,
-      ctas:      Number(f.cta_clicks)        || 0,
-      ctr:       f.ctr_pct == null ? null : Number(f.ctr_pct),
-      bookings:  Number(f.real_bookings)     || 0,
+      name:             p.name || '',
+      posts:            Number(pst.recent) || 0,
+      upvotes:          Number(pst.upvotes_recent)  || 0,
+      comments:         Number(pst.comments_recent) || 0,
+      views:            Number(pst.views_recent)    || 0,
+      seo_pages:        Number(seo.pages_recent)    || 0,
+      pageviews:        Number(f.pageviews)         || 0,
+      email_signups:    Number(f.email_signups)     || 0,
+      schedule_clicks:  Number(f.schedule_clicks)   || 0,
+      bookings:         Number(f.real_bookings)     || 0,
     };
   });
   mountSortableTable({
@@ -2780,16 +2781,16 @@ function renderFunnelStats(payload) {
     rows: normalized,
     state: _funnelStatsTableState,
     columns: [
-      { key: 'name',      label: 'Project',   type: 'text',    align: 'left',  formatter: v => escapeHtml(v) },
-      { key: 'posts',     label: 'Posts',     type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'upvotes',   label: 'Upvotes',   type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'comments',  label: 'Comments',  type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'views',     label: 'Views',     type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'seo_pages', label: 'SEO Pages', type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'pageviews', label: 'Pageviews', type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'ctas',      label: 'CTA Clicks',type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'ctr',       label: 'CTR',       type: 'numeric', align: 'right', formatter: v => (v == null ? '\u2014' : v.toFixed(1) + '%') },
-      { key: 'bookings',  label: 'Bookings',  type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'name',             label: 'Project',         type: 'text',    align: 'left',  formatter: v => escapeHtml(v) },
+      { key: 'posts',            label: 'Posts',           type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'upvotes',          label: 'Upvotes',         type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'comments',         label: 'Comments',        type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'views',            label: 'Views',           type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'seo_pages',        label: 'SEO Pages',       type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'pageviews',        label: 'Pageviews',       type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'email_signups',    label: 'Email Signups',   type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'schedule_clicks',  label: 'Schedule Clicks', type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'bookings',         label: 'Bookings',        type: 'numeric', align: 'right', formatter: fmt },
     ],
   });
 }
