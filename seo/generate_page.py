@@ -405,6 +405,11 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
     accent_cfg = product_cfg.get("landing_pages", {}).get("accent", {})
     accent_hex = accent_cfg.get("hex", "")
     accent_hex_dark = accent_cfg.get("hex_dark", "")
+    accent_name = accent_cfg.get("name", "teal")
+    accent_gradient_from = accent_cfg.get(
+        "gradient_from",
+        "cyan" if accent_name == "teal" else accent_name,
+    )
 
     trigger_context = {
         "serp": "This keyword came from SERP discovery. It has SERP gap and the product fits the commercial intent.",
@@ -506,37 +511,37 @@ If you reference a Lottie animation via `LottiePlayer`, you MUST also create the
 
 CONSUMER THEME DETECTED: {consumer_theme}. The consumer site's root layout uses a {consumer_theme}-mode global, so your page MUST match. Using the wrong theme renders the article body as a contrasting slab between the navbar and footer.
 
-{'''DARK theme palette (use these exact classes, do NOT use the light palette below):
+{f'''DARK theme palette (use these exact classes, do NOT use the light palette below). BRAND ACCENT FAMILY: `{accent_name}` (do NOT substitute teal or any other color — this is the consumer's brand color):
 
 - Article wrapper: `<article className="min-h-screen">` (no explicit bg; let the site-wide dark root show through). Never `bg-white`.
 - Headings: `text-zinc-100` (NOT text-zinc-900).
 - Body text: `text-zinc-400`. Muted/lede: `text-zinc-500`.
-- Primary pill: `bg-teal-900/30 text-teal-300`. Secondary pill: `bg-zinc-800/60 text-zinc-300`. Outline pill: `bg-transparent border border-zinc-800 text-zinc-300`.
+- Primary pill: `bg-{accent_name}-900/30 text-{accent_name}-300`. Secondary pill: `bg-zinc-800/60 text-zinc-300`. Outline pill: `bg-transparent border border-zinc-800 text-zinc-300`.
 - Section bands: `bg-zinc-950/40 border-y border-zinc-800/60`.
-- Tinted boxes: `bg-teal-500/10 border border-teal-500/30`.
-- Inline code: `bg-zinc-900 border border-zinc-800 text-teal-300 font-mono`.
+- Tinted boxes: `bg-{accent_name}-500/10 border border-{accent_name}-500/30`.
+- Inline code: `bg-zinc-900 border border-zinc-800 text-{accent_name}-300 font-mono`.
 - Dividers/borders: `border-zinc-800/60` (NOT border-zinc-200).
-- Links: `text-teal-300` (NOT text-teal-600). Accent gradients for CTAs: `from-cyan-500 to-teal-500` still works.
-- CTA button: `bg-teal-500 text-zinc-950 hover:bg-teal-400 font-semibold`.
+- Links: `text-{accent_name}-300` (NOT text-{accent_name}-600). Accent gradients for CTAs: `from-{accent_gradient_from}-500 to-{accent_name}-500` still works.
+- CTA button: `bg-{accent_name}-500 text-zinc-950 hover:bg-{accent_name}-400 font-semibold`.
 
-NEVER emit on a dark consumer: bg-white (solid), bg-zinc-50, bg-zinc-100, text-zinc-900, text-zinc-700, text-zinc-600, text-teal-700, text-teal-600, border-zinc-200, bg-teal-50. Translucent overlays like `bg-white/5` and `bg-black/30` are fine.
+NEVER emit on a dark consumer: bg-white (solid), bg-zinc-50, bg-zinc-100, text-zinc-900, text-zinc-700, text-zinc-600, text-{accent_name}-700, text-{accent_name}-600, border-zinc-200, bg-{accent_name}-50. Translucent overlays like `bg-white/5` and `bg-black/30` are fine.
 
-NEVER use violet, indigo, or purple anywhere.''' if consumer_theme == 'dark' else '''LIGHT theme palette:
+NEVER use violet, indigo, or purple anywhere. NEVER use teal unless the brand accent family IS teal.''' if consumer_theme == 'dark' else f'''LIGHT theme palette. BRAND ACCENT FAMILY: `{accent_name}` (do NOT substitute teal or any other color — this is the consumer's brand color):
 
-bg-white base, text-zinc-900 for headings, text-zinc-500/text-gray-600 for secondary text. Accent colors: `from-cyan-500 to-teal-500` gradient for CTAs, `text-teal-600` for links, `bg-teal-50 text-teal-700` for badges/pills, `bg-teal-50 border-teal-200` for tinted boxes. NEVER use violet, indigo, or purple anywhere.
+bg-white base, text-zinc-900 for headings, text-zinc-500/text-gray-600 for secondary text. Accent colors: `from-{accent_gradient_from}-500 to-{accent_name}-500` gradient for CTAs, `text-{accent_name}-600` for links, `bg-{accent_name}-50 text-{accent_name}-700` for badges/pills, `bg-{accent_name}-50 border-{accent_name}-200` for tinted boxes. NEVER use violet, indigo, or purple anywhere. NEVER use teal unless the brand accent family IS teal.
 
 Do NOT use Tailwind semantic theme tokens like `text-foreground`, `text-muted`, `bg-card`, `bg-background`, `bg-surface-light`, `border-border`, `border-white/5`. Those tokens are not wired for light pages and will render invisibly. Use explicit classes like `text-zinc-900`, `text-zinc-500`, `bg-white`, `bg-zinc-50`, `border-zinc-200`.'''}
 
 {"" if not accent_hex else f'''### Product accent color override
 
-This product uses a custom accent color, NOT the default teal. Pass these props explicitly:
+This product's brand accent is `{accent_name}` ({accent_hex}), already baked into the Tailwind classes you emit above. For isolated-canvas components that render outside the Tailwind pipeline, pass the hex explicitly:
 
 - `<RemotionClip accentHex="{accent_hex}" accentHexDark="{accent_hex_dark or accent_hex}" ... />`
 - `<AnimatedBeam accentColor="{accent_hex}" ... />`
 - `<Particles color="{accent_hex}" ... />`
 - `<ShineBorder color="{accent_hex}" ... />`
 
-The Tailwind class overrides and CSS custom properties are handled by the repo's layout and globals.css, so components using utility classes (StepTimeline, ProofBand, etc.) will automatically pick up the right color. Only the components listed above need explicit props because they render in isolated contexts (Remotion canvas, SVG stops, HTML canvas).
+Library components (GradientText, SitemapSidebar, GlowCard, BackgroundGrid, etc.) read `--seo-accent*` CSS variables, which the consumer's `globals.css` already sets to match `{accent_hex}`. You do not need to override those components' variants or props.
 '''}### No decorative icons or emoji
 
 Functional icons are allowed: expand/collapse chevrons, check/x indicators in comparison tables, arrow indicators on CTA buttons, terminal chrome, status badges. These exist to convey meaning the text cannot.

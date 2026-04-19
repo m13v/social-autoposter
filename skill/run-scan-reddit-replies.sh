@@ -1,13 +1,14 @@
 #!/bin/bash
 # Social Autoposter - Reddit reply scanner
-# Runs scan_reddit_replies.py on its own launchd schedule.
-# Reddit-API-bound; can take ~85min at the current filter size, so uses a 90min lock wait.
+# Runs scan_reddit_replies.py every 5 min via launchd.
+# Inbox-based discovery + engage_reddit.py --limit 5 in one job.
+# Skip-if-locked (timeout 0) since runs are frequent and a previous tick may still be engaging.
 
 
 set -euo pipefail
 
 source "$(dirname "$0")/lock.sh"
-acquire_lock "scan-reddit-replies" 5400
+acquire_lock "scan-reddit-replies" 0
 
 [ -f "$HOME/social-autoposter/.env" ] && source "$HOME/social-autoposter/.env"
 
