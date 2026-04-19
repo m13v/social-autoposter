@@ -195,11 +195,22 @@ def upsert_candidates(tweets, config, batch_id=None):
                     retweet_ratio = EXCLUDED.retweet_ratio,
                     virality_score = EXCLUDED.virality_score,
                     author_followers = EXCLUDED.author_followers,
-                    likes_t0 = COALESCE(twitter_candidates.likes_t0, EXCLUDED.likes_t0),
-                    retweets_t0 = COALESCE(twitter_candidates.retweets_t0, EXCLUDED.retweets_t0),
-                    replies_t0 = COALESCE(twitter_candidates.replies_t0, EXCLUDED.replies_t0),
-                    views_t0 = COALESCE(twitter_candidates.views_t0, EXCLUDED.views_t0),
-                    bookmarks_t0 = COALESCE(twitter_candidates.bookmarks_t0, EXCLUDED.bookmarks_t0),
+                    status = CASE
+                        WHEN twitter_candidates.status = 'posted' THEN 'posted'
+                        ELSE 'pending'
+                    END,
+                    likes_t0 = EXCLUDED.likes_t0,
+                    retweets_t0 = EXCLUDED.retweets_t0,
+                    replies_t0 = EXCLUDED.replies_t0,
+                    views_t0 = EXCLUDED.views_t0,
+                    bookmarks_t0 = EXCLUDED.bookmarks_t0,
+                    likes_t1 = NULL,
+                    retweets_t1 = NULL,
+                    replies_t1 = NULL,
+                    views_t1 = NULL,
+                    bookmarks_t1 = NULL,
+                    t1_checked_at = NULL,
+                    delta_score = NULL,
                     batch_id = COALESCE(EXCLUDED.batch_id, twitter_candidates.batch_id)
                 """,
                 [
