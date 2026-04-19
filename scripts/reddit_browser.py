@@ -38,6 +38,8 @@ import time
 PROFILE_DIR = os.path.expanduser("~/.claude/browser-profiles/reddit")
 LOCK_FILE = os.path.expanduser("~/.claude/reddit-agent-lock.json")
 LOCK_EXPIRY = 300  # Must match reddit-agent-lock.sh
+LOCK_WAIT_MAX = 45  # seconds to wait for lock to free before giving up
+LOCK_POLL_INTERVAL = 2
 VIEWPORT = {"width": 911, "height": 1016}
 
 # Load Reddit username from config
@@ -140,26 +142,33 @@ atexit.register(_release_browser_lock)
 
 
 def _acquire_browser_lock():
-    """Check if another session holds the Reddit browser lock, then acquire it.
+    """Wait for the Reddit browser lock to free, then acquire it.
 
-    Raises SystemExit if the lock is held by another session.
-    Writes our own lock so MCP agents know the profile is in use.
+    Polls every LOCK_POLL_INTERVAL seconds for up to LOCK_WAIT_MAX seconds.
+    Exits 1 only after exhausting the wait budget; the launchd caller will
+    retry on the next 5-min tick.
     """
-    if os.path.exists(LOCK_FILE):
-        try:
-            with open(LOCK_FILE) as f:
-                lock = json.load(f)
-            age = time.time() - lock.get("timestamp", 0)
-            if age < LOCK_EXPIRY:
+    deadline = time.time() + LOCK_WAIT_MAX
+    while True:
+        if os.path.exists(LOCK_FILE):
+            try:
+                with open(LOCK_FILE) as f:
+                    lock = json.load(f)
+                age = time.time() - lock.get("timestamp", 0)
+                if age >= LOCK_EXPIRY:
+                    break
                 holder = lock.get("session_id", "unknown")
-                print(json.dumps({
-                    "success": False,
-                    "error": f"Reddit browser is locked by session {holder} ({int(age)}s ago). Skipping."
-                }))
-                sys.exit(1)
-        except (json.JSONDecodeError, OSError):
-            pass
-    # Acquire the lock
+                if time.time() >= deadline:
+                    print(json.dumps({
+                        "success": False,
+                        "error": f"Reddit browser locked by session {holder} ({int(age)}s); waited {LOCK_WAIT_MAX}s, giving up."
+                    }))
+                    sys.exit(1)
+                time.sleep(LOCK_POLL_INTERVAL)
+                continue
+            except (json.JSONDecodeError, OSError):
+                pass
+        break
     with open(LOCK_FILE, "w") as f:
         json.dump({"session_id": _LOCK_SESSION_ID, "timestamp": int(time.time())}, f)
 
@@ -190,13 +199,31 @@ def get_browser_and_page(playwright):
     # Always use the persistent profile directly. CDP connections to the MCP
     # browser expose a default context that is NOT logged in (the MCP's logged-in
     # context is isolated/invisible to CDP), causing auth failures.
-    context = playwright.chromium.launch_persistent_context(
-        PROFILE_DIR,
-        headless=True,
-        args=["--disable-blink-features=AutomationControlled"],
-        viewport=VIEWPORT,
-        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    )
+    # Retry on Chromium SingletonLock collisions (MCP holds the OS-level profile
+    # lock for its entire server lifetime; the JSON lock can expire while the
+    # OS lock is still held).
+    deadline = time.time() + LOCK_WAIT_MAX
+    last_err = None
+    while True:
+        try:
+            context = playwright.chromium.launch_persistent_context(
+                PROFILE_DIR,
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+                viewport=VIEWPORT,
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            )
+            break
+        except Exception as e:
+            last_err = e
+            if time.time() >= deadline:
+                _release_browser_lock()
+                print(json.dumps({
+                    "success": False,
+                    "error": f"chromium profile locked by another process; waited {LOCK_WAIT_MAX}s: {e}"
+                }))
+                sys.exit(1)
+            time.sleep(LOCK_POLL_INTERVAL)
     page = context.new_page()
     return context, page, False
 
@@ -1395,15 +1422,40 @@ def scrape_views(username, max_scrolls=300):
         f"https://www.reddit.com/user/{username}/submitted/?sort=new",
     ]
 
+    # Extract per-article: url (permalink), views (via visible text scan),
+    # and — for thread rows where shreddit-post exists — score + comment-count
+    # from SSR attrs. Comment rows (shreddit-profile-comment) have no such attrs
+    # so score/comments_count stay null and Step 1 still handles them via API.
     extract_js = """() => {
         const results = [];
         document.querySelectorAll("article").forEach(article => {
-            const links = article.querySelectorAll('a[href*="/comments/"]');
+            // Prefer permalink from <shreddit-post> when present; otherwise fall
+            // back to the first /comments/... anchor (covers comment rows).
+            const post = article.querySelector("shreddit-post");
             let url = null;
-            for (const link of links) {
-                const href = link.getAttribute("href");
-                if (href && href.includes("/comments/")) {
-                    if (!url || href.includes("/comment/")) url = href;
+            let score = null;
+            let commentsCount = null;
+            if (post) {
+                const permalink = post.getAttribute("permalink");
+                if (permalink) url = permalink;
+                const s = post.getAttribute("score");
+                if (s !== null && s !== "") {
+                    const n = parseInt(s, 10);
+                    if (!Number.isNaN(n)) score = n;
+                }
+                const cc = post.getAttribute("comment-count");
+                if (cc !== null && cc !== "") {
+                    const n = parseInt(cc, 10);
+                    if (!Number.isNaN(n)) commentsCount = n;
+                }
+            }
+            if (!url) {
+                const links = article.querySelectorAll('a[href*="/comments/"]');
+                for (const link of links) {
+                    const href = link.getAttribute("href");
+                    if (href && href.includes("/comments/")) {
+                        if (!url || href.includes("/comment/")) url = href;
+                    }
                 }
             }
             let views = null;
@@ -1422,13 +1474,16 @@ def scrape_views(username, max_scrolls=300):
                 results.push({
                     url: url.startsWith("http") ? url : "https://www.reddit.com" + url,
                     views: views,
+                    score: score,
+                    comments_count: commentsCount,
                 });
             }
         });
         return results;
     }"""
 
-    all_results = {}  # url -> views (deduped, keep non-null)
+    # url -> {views, score, comments_count} — keep non-null values across pages
+    all_results = {}
 
     with sync_playwright() as p:
         browser, page, is_cdp = get_browser_and_page(p)
@@ -1438,12 +1493,24 @@ def scrape_views(username, max_scrolls=300):
                 page.goto(page_url, wait_until="domcontentloaded")
                 page.wait_for_timeout(3000)
 
-                # Extract initial articles
-                items = page.evaluate(extract_js)
-                for item in items:
-                    url = item["url"]
-                    if url not in all_results or (item["views"] is not None and all_results[url] is None):
-                        all_results[url] = item["views"]
+                def merge_items(items):
+                    for item in items:
+                        url = item["url"]
+                        prev = all_results.get(url)
+                        if prev is None:
+                            all_results[url] = {
+                                "views": item.get("views"),
+                                "score": item.get("score"),
+                                "comments_count": item.get("comments_count"),
+                            }
+                            continue
+                        # Keep non-null values across repeated sightings.
+                        for k in ("views", "score", "comments_count"):
+                            v = item.get(k)
+                            if v is not None:
+                                prev[k] = v
+
+                merge_items(page.evaluate(extract_js))
 
                 # Scroll to load more
                 prev_height = 0
@@ -1456,11 +1523,7 @@ def scrape_views(username, max_scrolls=300):
                     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                     page.wait_for_timeout(2000)
 
-                    items = page.evaluate(extract_js)
-                    for item in items:
-                        url = item["url"]
-                        if url not in all_results or (item["views"] is not None and all_results[url] is None):
-                            all_results[url] = item["views"]
+                    merge_items(page.evaluate(extract_js))
 
                     if cur_height == prev_height:
                         same_count += 1
@@ -1469,13 +1532,21 @@ def scrape_views(username, max_scrolls=300):
                     prev_height = cur_height
                     scroll_count += 1
 
-            results_list = [{"url": url, "views": views} for url, views in all_results.items()]
-            with_views = sum(1 for v in all_results.values() if v is not None)
+            results_list = [
+                {"url": url, "views": d.get("views"),
+                 "score": d.get("score"), "comments_count": d.get("comments_count")}
+                for url, d in all_results.items()
+            ]
+            with_views = sum(1 for d in all_results.values() if d.get("views") is not None)
+            with_score = sum(1 for d in all_results.values() if d.get("score") is not None)
+            with_cc = sum(1 for d in all_results.values() if d.get("comments_count") is not None)
 
             return {
                 "ok": True,
                 "total": len(results_list),
                 "with_views": with_views,
+                "with_score": with_score,
+                "with_comments_count": with_cc,
                 "results": results_list,
             }
 
