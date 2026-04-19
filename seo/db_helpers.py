@@ -31,10 +31,10 @@ def pick_next_keyword(product):
     conn = get_conn()
     cur = conn.cursor()
 
-    # First: pending keywords ready to build (score >= 1.5)
+    # First: pending keywords ready to build (soft floor; ORDER BY score DESC prioritizes)
     cur.execute("""
         SELECT keyword, slug, status, score FROM seo_keywords
-        WHERE product = %s AND status = 'pending' AND score >= 1.5
+        WHERE product = %s AND status = 'pending' AND score >= 1.0
         ORDER BY score DESC LIMIT 1
     """, (product,))
     row = cur.fetchone()
@@ -70,7 +70,7 @@ def update_status(product, keyword, status, **kwargs):
     sets = ["status = %s", "updated_at = NOW()"]
     vals = [status]
 
-    for field in ("score", "signal1", "signal2", "signal3", "notes", "page_url", "content_type"):
+    for field in ("score", "signal1", "signal2", "signal3", "notes", "page_url", "content_type", "claude_session_id"):
         if field in kwargs:
             sets.append(f"{field} = %s")
             vals.append(kwargs[field])
@@ -113,7 +113,7 @@ def has_work(product):
     cur.execute("""
         SELECT
             sum(case when status = 'unscored' then 1 else 0 end) as unscored,
-            sum(case when status = 'pending' and score >= 1.5 then 1 else 0 end) as pending
+            sum(case when status = 'pending' and score >= 1.0 then 1 else 0 end) as pending
         FROM seo_keywords WHERE product = %s
     """, (product,))
     row = cur.fetchone()
@@ -137,7 +137,7 @@ def report(product):
 
     cur.execute("""
         SELECT score, keyword FROM seo_keywords
-        WHERE product = %s AND status = 'pending' AND score >= 1.5
+        WHERE product = %s AND status = 'pending' AND score >= 1.0
         ORDER BY score DESC LIMIT 5
     """, (product,))
     pending = cur.fetchall()
