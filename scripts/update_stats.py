@@ -57,29 +57,154 @@ def fetch_json(url, headers=None, user_agent="social-autoposter/1.0"):
         return None
 
 
+_reddit_rate_state = {"remaining": None, "reset_in": None}
+
+
+def _parse_float_header(v):
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _update_reddit_rate_state(headers):
+    """Read x-ratelimit-* headers into module state for pacing decisions."""
+    if not headers:
+        return
+    rem = _parse_float_header(headers.get("x-ratelimit-remaining"))
+    reset = _parse_float_header(headers.get("x-ratelimit-reset"))
+    if rem is not None:
+        _reddit_rate_state["remaining"] = rem
+    if reset is not None:
+        _reddit_rate_state["reset_in"] = reset
+
+
+def _reddit_pacing_sleep():
+    """Sleep between Reddit calls based on remaining rate budget.
+
+    Reddit's public endpoint allows ~100 calls per 10-minute sliding window.
+    If we've read rate headers, spread remaining calls across the reset window.
+    Otherwise fall back to a flat 2s pacer.
+    """
+    rem = _reddit_rate_state.get("remaining")
+    reset_in = _reddit_rate_state.get("reset_in")
+    if rem is None or reset_in is None:
+        time.sleep(2)
+        return
+    if rem <= 0:
+        time.sleep(min(max(1, reset_in), 120))
+        return
+    per_call = reset_in / rem
+    time.sleep(max(1, min(per_call, 30)))
+
+
+def fetch_reddit_json(url, user_agent, max_retries=2, timeout=15):
+    """Rate-limit aware Reddit JSON fetch.
+
+    Returns a 2-tuple (status, data). status is one of:
+      'ok'            - parsed JSON returned as data
+      'not_found'     - HTTP 404 (data=None)
+      'rate_limited'  - HTTP 429 even after retries (data=None)
+      'empty'         - HTTP 200 but empty/malformed body (data=None)
+      'error'         - network, timeout, or other HTTPError (data=None)
+
+    Reads x-ratelimit-remaining / x-ratelimit-reset from every response
+    (success AND error) into _reddit_rate_state so the caller can pace.
+    On 429, honors Retry-After (capped to 120s) and retries.
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
+    for attempt in range(max_retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                _update_reddit_rate_state(resp.headers)
+                body = resp.read()
+                if not body:
+                    return ("empty", None)
+                try:
+                    return ("ok", json.loads(body))
+                except Exception:
+                    return ("empty", None)
+        except urllib.error.HTTPError as e:
+            _update_reddit_rate_state(e.headers)
+            if e.code == 404:
+                return ("not_found", None)
+            if e.code == 429:
+                retry_after = None
+                if e.headers:
+                    ra = e.headers.get("Retry-After")
+                    if ra:
+                        try:
+                            retry_after = int(ra)
+                        except (TypeError, ValueError):
+                            retry_after = None
+                if retry_after is None:
+                    retry_after = int(_reddit_rate_state.get("reset_in") or 60)
+                retry_after = max(1, min(retry_after, 120))
+                if attempt < max_retries:
+                    time.sleep(retry_after)
+                    continue
+                return ("rate_limited", None)
+            return ("error", None)
+        except Exception:
+            if attempt < max_retries:
+                time.sleep(5 * (attempt + 1))
+                continue
+            return ("error", None)
+    return ("error", None)
+
+
 def update_reddit(db, user_agent, config=None, quiet=False):
     config = config or {}
     posts = db.execute(
         "SELECT id, our_url, thread_url, upvotes, comments_count, "
-        "COALESCE(scan_no_change_count, 0) as scan_no_change_count, posted_at "
+        "COALESCE(scan_no_change_count, 0) as scan_no_change_count, posted_at, "
+        "engagement_updated_at "
         "FROM posts "
         "WHERE platform='reddit' AND status='active' AND our_url IS NOT NULL ORDER BY id"
     ).fetchall()
 
     BATCH_SIZE = 200
     total = updated = deleted = removed = errors = skipped = 0
+    skipped_fresh = 0
+    errors_404 = errors_rate_limited = errors_empty = errors_other = 0
     results = []
+
+    # If Step 2 (profile scrape) just ran, thread rows were already refreshed
+    # and have a recent engagement_updated_at. Skip them here to save API calls.
+    FRESH_WINDOW = timedelta(hours=4)
+    now_utc = datetime.now(timezone.utc)
 
     for post in posts:
         total += 1
         if total % BATCH_SIZE == 0:
             db.commit()
             if not quiet:
-                print(f"  Committed batch ({total}/{len(posts)} iterated, {updated} updated)", flush=True)
+                rem = _reddit_rate_state.get("remaining")
+                rem_str = f", rem={int(rem)}" if rem is not None else ""
+                print(f"  Committed batch ({total}/{len(posts)} iterated, {updated} updated, {errors} errors [404={errors_404} rl={errors_rate_limited} empty={errors_empty} other={errors_other}]{rem_str})", flush=True)
         post_id, our_url, thread_url = post[0], post[1], post[2]
         prev_upvotes, prev_comments = post[3], post[4]
         no_change = post[5]
         posted_at = post[6]
+        engagement_updated_at = post[7]
+
+        # Skip rows refreshed by Step 2 within the fresh window. Threads picked
+        # up by the profile scrape fall entirely into this branch; comment rows
+        # only hit it when their views were scraped AND the API already ran
+        # recently for score.
+        is_thread_row = not bool(
+            re.search(r"/comment/[a-z0-9]+", our_url or "") or
+            re.search(r"/comments/[a-z0-9]+/[^/]+/[a-z0-9]+", our_url or "")
+        )
+        if is_thread_row and engagement_updated_at:
+            eu = engagement_updated_at
+            if eu.tzinfo is None:
+                eu = eu.replace(tzinfo=timezone.utc)
+            if now_utc - eu < FRESH_WINDOW:
+                skipped_fresh += 1
+                continue
 
         # Skip stable posts: 2+ scans with no change AND older than 3 days
         if no_change >= 2 and posted_at:
@@ -90,6 +215,7 @@ def update_reddit(db, user_agent, config=None, quiet=False):
 
         if not our_url or not our_url.startswith("http"):
             errors += 1
+            errors_other += 1
             continue
 
         # Detect if our_url points to a specific comment or just the thread
@@ -100,22 +226,24 @@ def update_reddit(db, user_agent, config=None, quiet=False):
 
         json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
 
-        try:
-            response = fetch_json(json_url, user_agent=user_agent)
-        except HttpNotFoundError:
+        _reddit_pacing_sleep()
+        status, response = fetch_reddit_json(json_url, user_agent)
+        if status == "not_found":
             errors += 1
+            errors_404 += 1
             continue
-        if not response or not isinstance(response, list) or len(response) < 2:
-            # Retry once
-            time.sleep(5)
-            try:
-                response = fetch_json(json_url, user_agent=user_agent)
-            except HttpNotFoundError:
-                errors += 1
-                continue
-            if not response or not isinstance(response, list) or len(response) < 2:
-                errors += 1
-                continue
+        if status == "rate_limited":
+            errors += 1
+            errors_rate_limited += 1
+            continue
+        if status == "empty" or not isinstance(response, list) or len(response) < 2:
+            errors += 1
+            errors_empty += 1
+            continue
+        if status != "ok":
+            errors += 1
+            errors_other += 1
+            continue
 
         thread_data = response[0].get("data", {}).get("children", [{}])[0].get("data", {})
         thread_score = thread_data.get("score", 0)
@@ -296,13 +424,127 @@ def update_reddit(db, user_agent, config=None, quiet=False):
             else:
                 db.execute("UPDATE posts SET scan_no_change_count = 0 WHERE id = %s", [post_id])
 
-        time.sleep(5)
+        # Pacing now happens at top of loop (before API call) via _reddit_pacing_sleep().
 
     db.commit()
     if skipped and not quiet:
         print(f"  Skipped {skipped} stable posts (2+ scans unchanged, older than 3 days)")
+    if skipped_fresh and not quiet:
+        print(f"  Skipped {skipped_fresh} thread rows refreshed by Step 2 within 4h")
     return {"total": total, "updated": updated, "deleted": deleted, "removed": removed,
-            "errors": errors, "skipped": skipped, "results": results}
+            "errors": errors,
+            "errors_404": errors_404,
+            "errors_rate_limited": errors_rate_limited,
+            "errors_empty": errors_empty,
+            "errors_other": errors_other,
+            "skipped": skipped, "skipped_fresh": skipped_fresh, "results": results}
+
+
+def update_reddit_resurrect(db, user_agent, config=None, quiet=False, days=60):
+    """Re-check Reddit posts marked 'deleted'/'removed' in the last N days.
+
+    If the post/comment is now visible with real content, flip status back to 'active'.
+    One live detection is enough (bias: don't falsely mark deleted).
+    """
+    config = config or {}
+    our_username = config.get("accounts", {}).get("reddit", {}).get("username", "")
+
+    posts = db.execute(
+        "SELECT id, our_url, thread_url, status "
+        "FROM posts "
+        "WHERE platform='reddit' AND status IN ('deleted','removed') "
+        "AND posted_at > NOW() - INTERVAL '%s days' "
+        "AND our_url IS NOT NULL ORDER BY id" % int(days)
+    ).fetchall()
+
+    total = resurrected = still_dead = errors = 0
+    errors_404 = errors_rate_limited = errors_empty = errors_malformed = errors_other = 0
+
+    for post in posts:
+        total += 1
+        post_id, our_url, thread_url, prev_status = post[0], post[1], post[2], post[3]
+
+        if not our_url or not our_url.startswith("http"):
+            errors += 1
+            continue
+
+        has_comment_id = bool(
+            re.search(r"/comment/[a-z0-9]+", our_url) or
+            re.search(r"/comments/[a-z0-9]+/[^/]+/[a-z0-9]+", our_url)
+        )
+
+        json_url = re.sub(r"www\.reddit\.com", "old.reddit.com", our_url).rstrip("/") + ".json"
+
+        _reddit_pacing_sleep()
+        status, response = fetch_reddit_json(json_url, user_agent)
+        if status == "not_found":
+            still_dead += 1
+            db.execute("UPDATE posts SET status_checked_at=NOW() WHERE id=%s", [post_id])
+            db.commit()
+            continue
+        if status == "rate_limited":
+            errors += 1; errors_rate_limited += 1
+            continue
+        if status == "empty":
+            errors += 1; errors_empty += 1
+            continue
+        if status == "error":
+            errors += 1; errors_other += 1
+            continue
+        if not isinstance(response, list) or len(response) < 2:
+            errors += 1; errors_malformed += 1
+            continue
+
+        thread_data = response[0].get("data", {}).get("children", [{}])[0].get("data", {})
+        thread_author = thread_data.get("author", "")
+
+        is_live = False
+
+        if has_comment_id:
+            children = response[1].get("data", {}).get("children", [])
+            comment_data = children[0].get("data") if children else None
+            if comment_data:
+                body = comment_data.get("body", "")
+                author = comment_data.get("author", "")
+                if body not in ("[deleted]", "[removed]") and author != "[deleted]" and body.strip():
+                    is_live = True
+        else:
+            is_our_post = thread_author.lower() == our_username.lower()
+            if is_our_post:
+                if not thread_data.get("removed_by_category") and thread_data.get("selftext") not in ("[removed]", "[deleted]"):
+                    is_live = True
+            else:
+                children = response[1].get("data", {}).get("children", [])
+                for child in children:
+                    cd = child.get("data", {})
+                    if cd.get("author", "").lower() == our_username.lower():
+                        body = cd.get("body", "")
+                        if body not in ("[deleted]", "[removed]") and body.strip():
+                            is_live = True
+                        break
+
+        if is_live:
+            db.execute(
+                "UPDATE posts SET status='active', deletion_detect_count=0, status_checked_at=NOW(), resurrected_at=NOW() WHERE id=%s",
+                [post_id],
+            )
+            resurrected += 1
+            if not quiet:
+                print(f"RESURRECTED [{post_id}] ({prev_status} -> active): {our_url}", flush=True)
+        else:
+            still_dead += 1
+            db.execute("UPDATE posts SET status_checked_at=NOW() WHERE id=%s", [post_id])
+
+        # Commit per row so updates survive mid-run connection drops (Neon idle timeout).
+        db.commit()
+
+        # Pacing now happens at top of loop (before API call) via _reddit_pacing_sleep().
+
+    db.commit()
+    return {"total": total, "resurrected": resurrected, "still_dead": still_dead, "errors": errors,
+            "errors_404": errors_404, "errors_rate_limited": errors_rate_limited,
+            "errors_empty": errors_empty, "errors_malformed": errors_malformed,
+            "errors_other": errors_other}
 
 
 def update_moltbook(db, api_key, quiet=False):
@@ -480,14 +722,18 @@ def update_moltbook(db, api_key, quiet=False):
                 "thread_comments": thread_comment_count,
             })
 
+            # comments_count stores thread-level engagement (matches Moltbook/Reddit original-post
+            # semantics) so dashboard style stats reflect the conversation we're sitting in, not
+            # just direct replies to our comment. Direct replies live in thread_engagement.comment_replies.
             db.execute(
                 "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
                 "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
-                [comment_upvotes, comment_replies, engagement, post_id],
+                [comment_upvotes, thread_comment_count, engagement, post_id],
             )
             updated += 1
             results.append({"id": post_id, "upvotes": comment_upvotes,
-                            "replies": comment_replies, "verification": verification})
+                            "replies": comment_replies, "thread_comments": thread_comment_count,
+                            "verification": verification})
         else:
             # Original post - fetch post-level stats
             try:
@@ -554,6 +800,138 @@ def update_moltbook(db, api_key, quiet=False):
 
     db.commit()
     return {"total": total, "updated": updated, "deleted": deleted, "errors": errors, "results": results}
+
+
+def update_github(db, quiet=False, limit=None):
+    """Fetch engagement on our GitHub issue/PR comments via `gh api`.
+
+    Stores reactions.total_count in posts.upvotes and the count of replies
+    detected by scan_github_replies.py in posts.comments_count.
+    Per-emoji reaction breakdown goes into thread_engagement JSON.
+    """
+    import subprocess
+
+    sql = ("SELECT id, our_url FROM posts WHERE platform='github' "
+           "AND status='active' AND our_url IS NOT NULL ORDER BY id")
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    posts = db.execute(sql).fetchall()
+
+    total = updated = deleted = errors = 0
+    results = []
+    comment_url_re = re.compile(
+        r"https?://github\.com/([^/]+)/([^/]+)/(?:issues|pull)/\d+#issuecomment-(\d+)"
+    )
+
+    for post in posts:
+        total += 1
+        post_id, our_url = post[0], post[1]
+
+        m = comment_url_re.match(our_url or "")
+        if not m:
+            errors += 1
+            continue
+        owner, repo, comment_id = m.group(1), m.group(2), m.group(3)
+
+        try:
+            proc = subprocess.run(
+                ["gh", "api", f"repos/{owner}/{repo}/issues/comments/{comment_id}"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except Exception:
+            errors += 1
+            continue
+
+        if proc.returncode != 0:
+            err_text = (proc.stderr or "") + (proc.stdout or "")
+            if "rate limit" in err_text.lower():
+                if not quiet:
+                    print(f"  github: rate-limited at {total}/{len(posts)}, sleeping 60s", flush=True)
+                time.sleep(60)
+                errors += 1
+                continue
+            if "Not Found" in err_text or "HTTP 404" in err_text:
+                row = db.execute(
+                    "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s",
+                    [post_id],
+                ).fetchone()
+                detect_count = (row[0] if row else 0) + 1
+                if detect_count >= 2:
+                    db.execute(
+                        "UPDATE posts SET status='deleted', deletion_detect_count=%s, "
+                        "status_checked_at=NOW() WHERE id=%s",
+                        [detect_count, post_id],
+                    )
+                    deleted += 1
+                    if not quiet:
+                        print(f"DELETED (github 404) [{post_id}]", flush=True)
+                else:
+                    db.execute(
+                        "UPDATE posts SET deletion_detect_count=%s, status_checked_at=NOW() "
+                        "WHERE id=%s",
+                        [detect_count, post_id],
+                    )
+            else:
+                errors += 1
+            continue
+
+        try:
+            data = json.loads(proc.stdout)
+        except Exception:
+            errors += 1
+            continue
+
+        reactions = data.get("reactions") or {}
+        total_reactions = int(reactions.get("total_count") or 0)
+
+        row = db.execute(
+            "SELECT COUNT(*) FROM replies WHERE post_id=%s AND platform='github'",
+            [post_id],
+        ).fetchone()
+        reply_count = int(row[0] or 0)
+
+        engagement = json.dumps({
+            "reactions": {
+                "total": total_reactions,
+                "+1": reactions.get("+1", 0),
+                "-1": reactions.get("-1", 0),
+                "laugh": reactions.get("laugh", 0),
+                "hooray": reactions.get("hooray", 0),
+                "confused": reactions.get("confused", 0),
+                "heart": reactions.get("heart", 0),
+                "rocket": reactions.get("rocket", 0),
+                "eyes": reactions.get("eyes", 0),
+            },
+            "replies": reply_count,
+        })
+
+        db.execute(
+            "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
+            "engagement_updated_at=NOW(), status_checked_at=NOW(), "
+            "deletion_detect_count=0 WHERE id=%s",
+            [total_reactions, reply_count, engagement, post_id],
+        )
+        updated += 1
+        if total_reactions or reply_count:
+            results.append({
+                "id": post_id,
+                "reactions": total_reactions,
+                "replies": reply_count,
+                "url": our_url,
+            })
+
+        time.sleep(0.1)
+
+        if total % 100 == 0:
+            db.commit()
+            if not quiet:
+                print(f"  github: {total}/{len(posts)} processed "
+                      f"(updated={updated}, deleted={deleted}, errors={errors})",
+                      flush=True)
+
+    db.commit()
+    return {"total": total, "updated": updated, "deleted": deleted,
+            "errors": errors, "results": results}
 
 
 def update_twitter(db, config=None, quiet=False, audit_mode=False):
@@ -757,7 +1135,11 @@ def main():
     parser.add_argument("--twitter-only", action="store_true", help="Only update Twitter stats")
     parser.add_argument("--twitter-audit", action="store_true", help="Audit all Twitter posts (check deleted + update stats)")
     parser.add_argument("--reddit-only", action="store_true", help="Only update Reddit stats")
+    parser.add_argument("--reddit-resurrect", action="store_true", help="Re-check Reddit posts marked deleted/removed in last N days and flip live ones back to active")
+    parser.add_argument("--resurrect-days", type=int, default=60, help="Lookback window for --reddit-resurrect (default 60)")
     parser.add_argument("--moltbook-only", action="store_true", help="Only update Moltbook stats")
+    parser.add_argument("--github-only", action="store_true", help="Only update GitHub stats")
+    parser.add_argument("--github-limit", type=int, default=None, help="Limit github backfill to N posts (for smoke tests)")
     args = parser.parse_args()
 
     config = load_config()
@@ -768,21 +1150,28 @@ def main():
     db = dbmod.get_conn()
 
     reddit_stats = None
+    reddit_resurrect_stats = None
     moltbook_stats = None
     twitter_stats = None
+    github_stats = None
 
     if args.twitter_audit:
         twitter_stats = update_twitter(db, config=config, quiet=args.quiet, audit_mode=True)
     elif args.twitter_only:
         twitter_stats = update_twitter(db, config=config, quiet=args.quiet)
+    elif args.reddit_resurrect:
+        reddit_resurrect_stats = update_reddit_resurrect(db, user_agent, config=config, quiet=args.quiet, days=args.resurrect_days)
     elif args.reddit_only:
         reddit_stats = update_reddit(db, user_agent, config=config, quiet=args.quiet)
     elif args.moltbook_only:
         moltbook_stats = update_moltbook(db, os.environ.get("MOLTBOOK_API_KEY", ""), quiet=args.quiet)
+    elif args.github_only:
+        github_stats = update_github(db, quiet=args.quiet, limit=args.github_limit)
     else:
         reddit_stats = update_reddit(db, user_agent, config=config, quiet=args.quiet)
         moltbook_stats = update_moltbook(db, os.environ.get("MOLTBOOK_API_KEY", ""), quiet=args.quiet)
         twitter_stats = update_twitter(db, config=config, quiet=args.quiet)
+        github_stats = update_github(db, quiet=args.quiet)
 
     # Gather aggregate totals across all platforms
     totals = get_aggregate_totals(db)
@@ -792,24 +1181,42 @@ def main():
     output = {"totals": totals}
     if reddit_stats is not None:
         output["reddit"] = reddit_stats
+    if reddit_resurrect_stats is not None:
+        output["reddit_resurrect"] = reddit_resurrect_stats
     if moltbook_stats is not None:
         output["moltbook"] = moltbook_stats
     if twitter_stats is not None:
         output["twitter"] = twitter_stats
+    if github_stats is not None:
+        output["github"] = github_stats
 
     if args.json:
         print(json.dumps(output, indent=2))
     else:
         if reddit_stats is not None:
             r = reddit_stats
+            err_break = (
+                f" [404={r.get('errors_404', 0)} "
+                f"rl={r.get('errors_rate_limited', 0)} "
+                f"empty={r.get('errors_empty', 0)} "
+                f"other={r.get('errors_other', 0)}]"
+            )
             print(f"\nReddit: {r['total']} total, {r.get('skipped', 0)} skipped, "
                   f"{r['total'] - r.get('skipped', 0)} checked, {r['updated']} updated, "
-                  f"{r['deleted']} deleted, {r['removed']} removed, {r['errors']} errors")
+                  f"{r['deleted']} deleted, {r['removed']} removed, {r['errors']} errors" + err_break)
             if not args.quiet and r["results"]:
                 print(f"{'ID':>4} {'Score':>5} {'Thread':>7} {'Comments':>8}  Title")
                 for row in sorted(r["results"], key=lambda x: x["score"], reverse=True):
                     print(f"{row['id']:>4} {row['score']:>5} {row['thread_score']:>7} "
                           f"{row['thread_comments']:>8}  {row['title']}")
+
+        if reddit_resurrect_stats is not None:
+            r = reddit_resurrect_stats
+            print(f"\nReddit resurrect ({args.resurrect_days}d): {r['total']} rechecked, "
+                  f"{r['resurrected']} resurrected, {r['still_dead']} still dead, "
+                  f"{r['errors']} errors (rl={r.get('errors_rate_limited',0)} "
+                  f"empty={r.get('errors_empty',0)} malformed={r.get('errors_malformed',0)} "
+                  f"other={r.get('errors_other',0)})")
 
         if moltbook_stats is not None and not moltbook_stats.get("skipped"):
             m = moltbook_stats
@@ -827,6 +1234,18 @@ def main():
                 for row in top:
                     print(f"{row['id']:>4} {row.get('views',0):>7} {row.get('likes',0):>5} "
                           f"{row.get('replies',0):>7} {row.get('retweets',0):>4}")
+
+        if github_stats is not None:
+            g = github_stats
+            print(f"\nGitHub: {g['total']} checked, {g['updated']} updated, "
+                  f"{g['deleted']} deleted, {g['errors']} errors")
+            if not args.quiet and g["results"]:
+                top = sorted(g["results"],
+                             key=lambda x: (x.get("reactions", 0) + x.get("replies", 0)),
+                             reverse=True)[:20]
+                print(f"{'ID':>5} {'React':>5} {'Reply':>5}  URL")
+                for row in top:
+                    print(f"{row['id']:>5} {row['reactions']:>5} {row['replies']:>5}  {row['url']}")
 
         print_aggregate_totals(totals)
 
