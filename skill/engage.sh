@@ -229,7 +229,7 @@ CRITICAL: ALL Reddit browser calls MUST use mcp__reddit-agent__* tools (e.g. mcp
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_BODY
 
-    gtimeout 5400 "$REPO_DIR/scripts/run_claude.sh" "engage-reddit-phaseB" -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B batch $BATCH_NUM claude exited with code $?"
+    gtimeout 5400 "$REPO_DIR/scripts/run_claude.sh" "engage-reddit-phaseB" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B batch $BATCH_NUM claude exited with code $?"
     rm -f "$PHASE_B_PROMPT"
 
     # Check if we actually made progress (avoid infinite loop)
