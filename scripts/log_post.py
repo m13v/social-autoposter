@@ -91,22 +91,24 @@ def main():
         }))
         return
 
+    claude_session_id = os.environ.get("CLAUDE_SESSION_ID") or None
+
     cur = conn.execute(
         """INSERT INTO posts (
             platform, thread_url, thread_author, thread_author_handle,
             thread_title, thread_content, our_url, our_content, our_account,
             source_summary, project_name, status, posted_at,
-            feedback_report_used, engagement_style, language
+            feedback_report_used, engagement_style, language, claude_session_id
         ) VALUES (
             %s, %s, %s, %s,
             %s, '', %s, %s, %s,
             '', %s, 'active', NOW(),
-            TRUE, %s, %s
+            TRUE, %s, %s, %s
         ) RETURNING id""",
         [
             args.platform, args.thread_url, args.thread_author, args.thread_author,
             args.thread_title, args.our_url, args.our_content, account,
-            args.project, args.engagement_style, args.language,
+            args.project, args.engagement_style, args.language, claude_session_id,
         ],
     )
     row = cur.fetchone()
