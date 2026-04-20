@@ -76,7 +76,7 @@ log "=== DM Reply Engagement Run: $(date) (platform: ${PLATFORM:-all}) ==="
 REDDIT_USERNAME=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(c.get('accounts',{}).get('reddit',{}).get('username',''))" 2>/dev/null || echo "")
 EXCLUDED_AUTHORS=$(python3 -c "import json; c=json.load(open('$REPO_DIR/config.json')); print(', '.join(c.get('exclusions',{}).get('authors',[])))" 2>/dev/null || echo "")
 
-# Load projects for context (including booking link info)
+# Load projects for context (booking link + qualification criteria per project)
 PROJECTS=$(python3 -c "
 import json
 c = json.load(open('$REPO_DIR/config.json'))
@@ -86,6 +86,13 @@ for p in c.get('projects', []):
         line += f\" | booking_link: {p['booking_link']}\"
     if p.get('booking_link_auto_share'):
         line += ' | booking_link_auto_share: true'
+    q = p.get('qualification') or {}
+    if q.get('question'):
+        line += f\" | qualifying_question: {q['question']}\"
+    if q.get('must_have'):
+        line += f\" | must_have: {' ; '.join(q['must_have'])}\"
+    if q.get('disqualify'):
+        line += f\" | disqualify: {' ; '.join(q['disqualify'])}\"
     print(line)
 " 2>/dev/null || echo "")
 
@@ -106,7 +113,15 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT d.id as dm_id, d.platform, d.their_author, d.tier,
                d.chat_url, d.their_content as original_comment,
-               d.comment_context, d.project_name,
+               d.comment_context, d.project_name, d.target_project,
+               d.qualification_status, d.qualification_notes,
+               d.booking_link_sent_at,
+               pr.headline as prospect_headline,
+               pr.bio as prospect_bio,
+               pr.company as prospect_company,
+               pr.role as prospect_role,
+               pr.recent_activity as prospect_recent_activity,
+               pr.notes as prospect_notes,
                last_in.content as last_inbound_msg,
                last_in.message_at as inbound_at,
                (SELECT COUNT(*) FROM dm_messages WHERE dm_id = d.id) as total_messages,
@@ -117,6 +132,7 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
                ) ORDER BY m.message_at ASC)
                FROM dm_messages m WHERE m.dm_id = d.id) as conversation_history
         FROM dms d
+        LEFT JOIN prospects pr ON pr.id = d.prospect_id
         JOIN LATERAL (
             SELECT content, message_at FROM dm_messages
             WHERE dm_id = d.id AND direction = 'inbound'
@@ -464,32 +480,48 @@ Check conversation_history. SKIP (do nothing, don't mark stale) if:
 
 ### Step 1: Should a HUMAN handle this? (with booking link exception)
 
-**BOOKING LINK AUTO-SHARE (Cyrano & PieLine only):**
-If the conversation's project_name is "Cyrano" or "PieLine" (or you can infer the project from conversation context), AND they asked for a call, meeting, demo, or scheduled time:
-- Do NOT flag for human. Instead, share the booking link naturally in your reply.
-- Cyrano booking link: https://cal.com/cyranohq/s4l-demo
-- PieLine booking link: https://cal.com/team/pieline-demo/pieline-demo
-- Example: "yeah for sure, here's a link to grab a time: https://cal.com/cyranohq/s4l-demo — Soorya will walk you through it"
-- After sending, set the project if not already set:
+**BOOKING LINK AUTO-SHARE (config-driven):**
+Booking links are stored in \`config.json\` per project and injected into the \$PROJECTS context block above. A project is auto-share eligible ONLY if BOTH fields are present:
+- \`booking_link\`: the URL to share
+- \`booking_link_auto_share: true\`: the flag authorizing the bot to send it
+
+The DM row carries \`target_project\` (set at outreach time, from post or topic match) and a \`qualification_status\` (pending / asked / answered / qualified / disqualified). Use \`target_project\` first; if it's NULL, fall back to \`project_name\`. Never substitute another project's booking link.
+
+If the matched project has \`booking_link_auto_share: true\` AND they just asked outright for a call/meeting/demo/scheduled time AND \`qualification_status\` is already \`qualified\` (or the prospect's own message plus the conversation+prospect profile clearly satisfy the project's \`must_have\` list and don't trigger any \`disqualify\` item):
+- Do NOT flag for human. Share the matching project's \`booking_link\` verbatim from \$PROJECTS. Copy the URL character-for-character, never make one up.
+- Example shape: "yeah for sure, here's a link to grab a time: <booking_link_from_config>"
+- After sending, lock the project, raise tier, mark booking sent, and finalize qualification if it wasn't already:
   \`\`\`bash
-  python3 scripts/dm_conversation.py set-project --dm-id DM_ID --project "Cyrano"
-  \`\`\`
-- Then set tier to 3:
-  \`\`\`bash
+  python3 scripts/dm_conversation.py set-project --dm-id DM_ID --project "EXACT_PROJECT_NAME_FROM_CONFIG"
+  python3 scripts/dm_conversation.py set-target-project --dm-id DM_ID --project "EXACT_PROJECT_NAME_FROM_CONFIG"
   python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier 3
+  python3 scripts/dm_conversation.py set-qualification --dm-id DM_ID --status qualified --notes "ASKED_FOR_CALL"
+  python3 scripts/dm_conversation.py mark-booking-sent --dm-id DM_ID
   \`\`\`
-- This ONLY applies to Cyrano and PieLine. All other projects still flag for human.
+
+If they asked for a call/demo but \`qualification_status\` is still \`pending\` or \`asked\` AND the must_have/disqualify bar isn't clearly met yet, do NOT share the booking link yet — drop into Step 2.5 and qualify first, or compose a rapport reply that surfaces the qualifying question naturally.
+
+If the conversation's matched project has a \`booking_link\` but \`booking_link_auto_share\` is false (or the field is missing), the bot must NOT share that link automatically — flag for human instead.
 
 **Flag for human (do NOT auto-reply) if:**
-- They asked for a call/meeting/demo BUT the conversation is NOT about Cyrano or PieLine
+- They asked for a call/meeting/demo BUT the matched project lacks \`booking_link_auto_share: true\` in config
+- They asked for a call/meeting/demo AND the prospect clearly fails the project's \`disqualify\` list (e.g., competitor, wrong geography, wrong scale) — a human needs to decide whether to decline
 - They invited us to a podcast, interview, or event
 - They offered a collaboration or business proposal
 - They asked to move to another platform (Telegram, email, etc.)
 - They need a specific personal commitment ("when are you free?", "can you demo this?") that isn't a booking link scenario
-- They asked about pricing or business terms (UNLESS it's Cyrano/PieLine and pricing is in config.json — then answer from config)
+- They asked about pricing or business terms (UNLESS config has pricing for that project — then answer from config)
 - They're frustrated or upset
 - The conversation is 8+ messages deep and going really well (high-value relationship) AND isn't a booking link scenario
 - You're not sure how to respond authentically
+
+**NEVER flag for human (set interest to not_our_prospect and skip instead) if:**
+- They are pitching US a product, service, offer, agency, or partnership deal
+- They treat us as a potential buyer/customer for their thing
+- They offered a call/demo/meeting but the call is about THEIR work, THEIR product, or THEIR workflow — not a buying interest in one of our products
+- They work in an unrelated domain with no realistic fit to our project list
+- Peer/colleague chatter with no buyer signal
+These waste inbox attention. Set `--interest not_our_prospect`, skip the reply, and move on.
 
 \`\`\`bash
 cd ~/social-autoposter && python3 scripts/dm_conversation.py flag-human --dm-id DM_ID --reason "REASON"
@@ -506,13 +538,77 @@ Your reply should:
 - NEVER repeat a question or point you already made in a previous message
 
 COMMITMENT GUARDRAILS (never violate these in any reply):
-- NEVER suggest, offer, or agree to calls, meetings, demos, or video chats — UNLESS the conversation is about Cyrano or PieLine and they asked first (then share the booking link). Keep it in the DM otherwise.
+- NEVER suggest, offer, or agree to calls, meetings, demos, or video chats UNLESS the matched project in \$PROJECTS has \`booking_link_auto_share: true\` AND the prospect asked first AND \`qualification_status = qualified\` on the DM row. In that case Step 3.5 shares the config booking_link. Otherwise keep it in the DM.
 - NEVER agree to podcast appearances, X Spaces, interviews, or live events.
 - NEVER offer to move to another platform (Telegram, Discord, email, etc.). Stay in this DM thread.
 - NEVER promise to share specific links or resources you don't have right now in config.json projects.
 - NEVER make time-bound commitments ("this week", "tomorrow", "Thursday").
 - NEVER share location ("I'm in SF") or personal details not in config.json.
 - If they push for any of the above, deflect naturally: "honestly easier to hash it out here" or ask a follow-up question to keep the convo going in the DM.
+
+### Step 2.4: Rescore ICP against every project (and optionally switch target_project)
+
+Before the qualification funnel, rescore this prospect against EVERY project listed in \$PROJECTS that has qualification criteria. A conversation can reveal new facts (role, company, domain), and the best-fit project may have changed since the initial scan.
+
+For each project in \$PROJECTS with qualification criteria:
+- Compare the prospect profile (headline, company, role, bio, recent_activity, notes) + conversation history against that project's \`must_have\` and \`disqualify\` lists.
+- Pick one label: icp_match, icp_miss, disqualified, unknown.
+- Upsert one entry per project:
+  \`\`\`bash
+  python3 scripts/dm_conversation.py set-icp-precheck \\
+      --dm-id DM_ID --project PROJECT_NAME --label LABEL --notes "SHORT_RATIONALE"
+  \`\`\`
+  Repeat for every project. Each call upserts one entry in dms.icp_matches (JSONB array) keyed by project.
+
+Then decide whether to switch \`target_project\`:
+- If a project OTHER than the current target_project scores \`icp_match\` AND the current target_project scores \`icp_miss\` or \`disqualified\`, switch target_project to that better-fit project.
+- If nothing scores \`icp_match\`, leave target_project alone.
+- If the current target_project is NULL and a project scores \`icp_match\`, set it to that project.
+- When switching, log the change:
+  \`\`\`bash
+  python3 scripts/dm_conversation.py set-target-project --dm-id DM_ID --project NEW_PROJECT
+  python3 scripts/dm_conversation.py set-qualification --dm-id DM_ID --status \$CURRENT_STATUS --notes "target: OLD -> NEW (reason: SHORT_WHY)"
+  \`\`\`
+
+The qualification funnel in Step 2.5 then runs against the (possibly updated) target_project.
+
+### Step 2.5: Qualification funnel (only for DMs whose target_project has a qualifying_question)
+
+Goal: before we ever drop a booking link or pitch, know whether the prospect matches the project's must_have list and doesn't trigger the disqualify list. Do this as a natural conversational question, not a form.
+
+Pull the matched project's \`qualifying_question\`, \`must_have\`, and \`disqualify\` from the \$PROJECTS block. If the DM has no target_project (and no project_name), skip this step entirely; Step 2 already produced a rapport reply.
+
+Branch on \`qualification_status\` of the DM row:
+
+1. \`pending\` → we have never asked yet.
+   - If fewer than 2 total messages exist, do NOT ask yet. Stay in rapport mode from Step 2.
+   - If we have 2+ messages and a clearly relevant topic has surfaced, fold the project's \`qualifying_question\` into the reply in a natural, one-sentence form (paraphrase it; don't paste verbatim). Never interrogate; never list multiple questions. If the conversation hasn't surfaced a relevant topic yet, stay in rapport mode and do NOT force it.
+   - After sending, mark status as \`asked\`:
+     \`\`\`bash
+     python3 scripts/dm_conversation.py set-qualification --dm-id DM_ID --status asked --notes "ASKED: short paraphrase of what we asked"
+     \`\`\`
+
+2. \`asked\` → we already asked on a prior turn. The inbound we're processing now is (usually) their answer. Evaluate:
+   - Read their latest inbound message plus the prospect profile fields (headline, bio, company, role, recent_activity, notes) that are attached to the DM row.
+   - Cross-check against the project's \`must_have\` and \`disqualify\` lists from \$PROJECTS.
+   - If their answer + profile plainly satisfy at least one must_have and trigger NO disqualify: set status to \`qualified\` with a one-line rationale.
+   - If they trigger ANY disqualify item: set status to \`disqualified\` with the rationale.
+   - If the answer is ambiguous, vague, or off-topic: set status to \`answered\` and compose ONE follow-up clarifier in Step 2. Do not keep grinding; 1 follow-up max before letting it rest.
+     \`\`\`bash
+     python3 scripts/dm_conversation.py set-qualification --dm-id DM_ID --status qualified --notes "SHORT_REASON"
+     # or --status disqualified --notes "SHORT_REASON"
+     # or --status answered  --notes "SHORT_REASON"
+     \`\`\`
+
+3. \`answered\` → we already asked a clarifier on the prior turn. Evaluate now and land on \`qualified\` or \`disqualified\`; do not ask a third time.
+
+4. \`qualified\` → proceed to Step 3.5 (auto-share the booking link if eligible).
+
+5. \`disqualified\` → never share the booking link. Do NOT pitch. Also set \`--interest not_our_prospect\` in Step 5b and usually let the conversation rest with a short, polite reply.
+
+### Step 2.6: Use prospect profile context in the reply
+
+The DM payload now includes prospect_headline, prospect_bio, prospect_company, prospect_role, prospect_recent_activity, and prospect_notes (best-effort; some may be NULL). If any of these are set, weave at most ONE specific detail into your reply so it sounds like we know who they are (e.g., referencing their company's stage, the role they hold, or a recent thing they shipped). Never dump the whole profile; never mention that we scraped it. If the fields are all NULL, don't apologize, just write the reply without.
 
 ### Step 3: Should we recommend a tool? (ONLY if step 2 naturally leads here)
 Only recommend a product if ALL of these are true:
@@ -531,6 +627,27 @@ Update tier AND project ONLY when a product is recommended or when they explicit
 python3 scripts/dm_conversation.py set-project --dm-id DM_ID --project "PROJECT_NAME"
 python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier N
 \`\`\`
+
+### Step 3.5: Share the booking link when the prospect is qualified
+
+If all of the following are true, append the matched project's \`booking_link\` to the reply you're about to send:
+- \`qualification_status = qualified\` for this DM (set in Step 2.5 or earlier)
+- The matched project has \`booking_link\` AND \`booking_link_auto_share: true\` in config
+- \`booking_link_sent_at\` is NULL (we haven't already sent it)
+- The conversation is at a natural place to propose a call (they've surfaced pain or asked for more; not just "cool")
+
+Phrase it naturally, one sentence, link embedded:
+"makes sense — if you want to see how it'd work on your setup, grab a time here: <booking_link>"
+
+After sending, stamp it:
+\`\`\`bash
+python3 scripts/dm_conversation.py set-project --dm-id DM_ID --project "EXACT_PROJECT_NAME_FROM_CONFIG"
+python3 scripts/dm_conversation.py set-target-project --dm-id DM_ID --project "EXACT_PROJECT_NAME_FROM_CONFIG"
+python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier 3
+python3 scripts/dm_conversation.py mark-booking-sent --dm-id DM_ID
+\`\`\`
+
+Never send the booking link twice. If \`booking_link_sent_at\` is not NULL, Step 3.5 is a no-op; let Step 3 handle any tool mention normally.
 
 ### Step 4: Send the reply
 
@@ -573,7 +690,7 @@ python3 scripts/dm_conversation.py set-interest --dm-id DM_ID --interest LEVEL
 LEVEL is one of (pick the single best fit; the ladder roughly goes no_response → general_discussion → warm → hot, with cold / not_our_prospect / declined as off-ramps):
 - **no_response** — we messaged them and they have never replied. This flow only runs on threads with an inbound message, so you will rarely pick this; it is set upstream by the classifier/DB for untouched outreach. Do not pick it once there is any inbound content.
 - **general_discussion** — default baseline AFTER they have replied but BEFORE any product-relevant signal has appeared. Use this for early-stage threads where the topic hasn't yet touched anything our products solve, no product has been mentioned by either side, and you're still getting to know each other. This is what most tier-1 threads should be until they surface a real pain point.
-- **hot** — explicit buying or trial signals: asked for the link/demo/trial/pricing, said "tell me more" about the product, said they already use or want to use it, booked a call, gave us an email for follow-up. These are leads to action on.
+- **hot** — explicit buying or trial signals DIRECTED AT ONE OF OUR PRODUCTS (Terminator, Fazm, PieLine, Cyrano, vipassana.cool, Octolens): asked for the link/demo/trial/pricing for our product, said "tell me more" about our product, said they already use or want to use our product, booked a call to discuss our product, gave us an email for follow-up about our product. A call offer that is about THEIR workflow, THEIR product, or an adjacent topic is NOT hot — it's warm or not_our_prospect depending on fit. The buy signal must point at something we sell.
 - **warm** — engaged and problem-aware: asking substantive follow-up questions, describing their exact pain in detail, comparing tools, acknowledging the use case, multi-turn back-and-forth where they keep the thread alive AND the thread is in a domain one of our products could serve. Not yet a direct ask, but the conversation has real traction.
 - **cold** — polite but shallow AFTER the conversation already touched a relevant topic: one-liners ("cool", "thanks", "will check it out", "interesting"), they disengaged from a thread that had product relevance, conversational small talk that used to have a product angle and no longer does. (If the thread never had a product angle, use general_discussion instead.)
 - **not_our_prospect** — engaged but in the wrong direction: they're pitching US (offering services, leads, a sale), they treat us as a potential customer/buyer, they work in an unrelated domain, or it's a peer/colleague exchange with no realistic buyer fit. The conversation may be friendly and ongoing, but they are not a candidate for our products.
