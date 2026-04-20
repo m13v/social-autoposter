@@ -18,11 +18,26 @@ overwriting scored/done entries.
 
 import json
 import os
+import re
 import sys
 import urllib.request
 import base64
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def slugify(keyword: str) -> str:
+    """Normalize a keyword into a URL-safe slug.
+
+    Lowercases, strips apostrophes entirely (so "claude's" -> "claudes"),
+    replaces any run of non-alphanumerics with a single dash, collapses
+    duplicate dashes, and trims dashes from the ends.
+    """
+    s = (keyword or "").lower().strip()
+    s = s.replace("'", "").replace("\u2019", "")  # ASCII + curly apostrophe
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s
 
 SCRIPT_DIR = Path(__file__).parent
 ROOT_DIR = SCRIPT_DIR.parent
@@ -283,16 +298,14 @@ def generate_keyword_templates(project):
     for topic in topics:
         for template in topic_prefixes:
             kw = template.format(topic=topic.lower())
-            slug = kw.replace(" ", "-").replace(".", "-")
-            keywords.append({"keyword": kw, "slug": slug, "source": "topic_template"})
+            keywords.append({"keyword": kw, "slug": slugify(kw), "source": "topic_template"})
 
     for comp_key in competitive:
         comp_name = comp_key.replace("vs_", "").replace("_", " ")
         for kw in [f"{comp_name} alternative", f"{comp_name} vs {name_lower}",
                     f"{name_lower} vs {comp_name}", f"best {comp_name} alternative free",
                     f"{comp_name} alternative open source"]:
-            slug = kw.replace(" ", "-").replace(".", "-")
-            keywords.append({"keyword": kw, "slug": slug, "source": "competitor"})
+            keywords.append({"keyword": kw, "slug": slugify(kw), "source": "competitor"})
 
     seen = set()
     unique = []
@@ -333,7 +346,7 @@ def merge_keywords_db(product_name, new_candidates):
 
     for candidate in new_candidates:
         key = candidate["keyword"].lower()
-        slug = candidate.get("slug") or key.replace(" ", "-").replace(".", "-")
+        slug = candidate.get("slug") or slugify(key)
 
         if key in existing_keywords:
             # Update volume/competition if we have newer data
