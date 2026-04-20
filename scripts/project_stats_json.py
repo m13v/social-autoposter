@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,118 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import project_stats as ps
+
+
+_PAGE_FILENAMES = ("page.tsx", "page.ts", "page.jsx", "page.js", "page.mdx", "page.md")
+
+
+def _scan_repo_pages(repo_path):
+    """Walk a Next.js app-router repo and return URL paths we ship as static files.
+
+    Skips dynamic segments ([slug], [...rest]), route groups ((group)), private
+    folders (_foo), and parallel-route slots (@slot) per Next.js conventions.
+    Route groups collapse to nothing; dynamic segments exclude the whole branch.
+    """
+    out = set()
+    if not repo_path:
+        return out
+    repo = os.path.expanduser(repo_path)
+    app_roots = [
+        os.path.join(repo, "src", "app"),
+        os.path.join(repo, "app"),
+    ]
+    for root in app_roots:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            rel = os.path.relpath(dirpath, root)
+            segs = [] if rel == "." else rel.split(os.sep)
+            if any(s.startswith(("[", "_", "@")) for s in segs):
+                dirnames[:] = []
+                continue
+            dirnames[:] = [d for d in dirnames if not d.startswith(("[", "_", "@", "."))
+                           and d not in ("node_modules",)]
+            has_page = any(f in _PAGE_FILENAMES for f in filenames)
+            if has_page:
+                url_segs = [s for s in segs if not (s.startswith("(") and s.endswith(")"))]
+                path = "/" + "/".join(url_segs) if url_segs else "/"
+                out.add(path)
+    return out
+
+
+def _db_created_pages(conn, product_name, days=None):
+    """Return {domain: set(paths)} for pages this project published via the SEO
+    pipelines (seo_keywords) or GSC-driven page generation (gsc_queries).
+
+    When `days` is set, restrict to pages whose `completed_at` falls inside the
+    window. The seo_keywords / gsc_queries rows get `completed_at` stamped when
+    the page is actually generated, so this matches "pages created in the last
+    N days" as used by the dashboard's period selector.
+    """
+    out = {}
+    window_sql = ""
+    if days is not None:
+        window_sql = f" AND completed_at >= NOW() - INTERVAL '{int(days)} days'"
+    for sql in (
+        "SELECT page_url FROM seo_keywords WHERE product = %s AND page_url IS NOT NULL" + window_sql,
+        "SELECT page_url FROM gsc_queries WHERE product = %s AND page_url IS NOT NULL" + window_sql,
+    ):
+        try:
+            cur = conn.execute(sql, (product_name,))
+            for row in cur.fetchall():
+                url = row[0]
+                if not url:
+                    continue
+                try:
+                    parsed = urllib.parse.urlparse(url)
+                except Exception:
+                    continue
+                host = (parsed.netloc or "").lower()
+                path = parsed.path or "/"
+                while len(path) > 1 and path.endswith("/"):
+                    path = path[:-1]
+                if not host:
+                    continue
+                out.setdefault(host, set()).add(path)
+        except Exception as e:
+            print(f"  _db_created_pages query error: {e}", file=sys.stderr)
+    return out
+
+
+def _created_paths_for_project(conn, proj, days=None):
+    """Return {domain: set(paths)} of pages we created for this project.
+
+    Source-of-truth union: filesystem scan of the project's landing-pages repo
+    (applies to every domain the project owns) plus any URLs logged in
+    seo_keywords / gsc_queries (keyed by their own host).
+
+    When `days` is set, the filesystem scan is skipped entirely — static page
+    files on disk carry no creation timestamp we can trust, so a window-scoped
+    "pages created in the last N days" answer has to come from the DB alone.
+    """
+    by_domain = {}
+    domains = ps.get_project_domains(proj) or []
+    if days is None:
+        lp = proj.get("landing_pages") or {}
+        repo_path = lp.get("repo") if isinstance(lp, dict) else None
+        fs_paths = _scan_repo_pages(repo_path) if repo_path else set()
+        for d in domains:
+            by_domain.setdefault(d.lower(), set()).update(fs_paths)
+    for host, paths in _db_created_pages(conn, proj.get("name") or "", days=days).items():
+        by_domain.setdefault(host, set()).update(paths)
+    return by_domain
+
+
+def _norm_path(p):
+    """Match the frontend `normPath` in bin/server.js so PostHog pathnames
+    (`properties.$pathname`) and DB-derived created paths compare cleanly.
+    """
+    s = str(p or "/")
+    if not s.startswith("/"):
+        s = "/" + s
+    while len(s) > 1 and s.endswith("/"):
+        s = s[:-1]
+    return s
 
 
 # HogQL-based PostHog query layer.
@@ -61,7 +174,7 @@ def _ph_domain_counts(api_key, project_id, domain, after_iso):
     Output shape matches what _ph_combine used to produce per domain:
       { "pageviews": int,
         "cta_clicks": int,
-        "pageview_details": { domain: { "total": int, "top_pages": {path: n} } },
+        "pageview_details": { domain: { "total": int, "top_pages": {path: n}, "top_pages_signups": {path: n}, "top_pages_schedule": {path: n} } },
         "cta_details": [ {text, section, time}, ... up to 10 ] }
     """
     empty = {
@@ -69,7 +182,7 @@ def _ph_domain_counts(api_key, project_id, domain, after_iso):
         "cta_clicks": 0,
         "email_signups": 0,
         "schedule_clicks": 0,
-        "pageview_details": {domain: {"total": 0, "top_pages": {}}},
+        "pageview_details": {domain: {"total": 0, "top_pages": {}, "top_pages_signups": {}, "top_pages_schedule": {}}},
         "cta_details": [],
     }
     if not _SAFE_DOMAIN_RE.match(domain or ""):
@@ -93,7 +206,7 @@ def _ph_domain_counts(api_key, project_id, domain, after_iso):
         f"WHERE event = '$pageview' "
         f"AND properties.$host = '{domain}' "
         f"AND timestamp >= toDateTime('{after_str}') "
-        "GROUP BY path ORDER BY c DESC LIMIT 10"
+        "GROUP BY path ORDER BY c DESC LIMIT 500"
     )
     cta_total_q = (
         "SELECT count() FROM events "
@@ -121,6 +234,20 @@ def _ph_domain_counts(api_key, project_id, domain, after_iso):
         f"AND properties.$host = '{domain}' "
         f"AND timestamp >= toDateTime('{after_str}')"
     )
+    signup_by_page_q = (
+        "SELECT properties.$pathname AS path, count() AS c FROM events "
+        f"WHERE event = 'newsletter_subscribed' "
+        f"AND properties.$host = '{domain}' "
+        f"AND timestamp >= toDateTime('{after_str}') "
+        "GROUP BY path ORDER BY c DESC LIMIT 50"
+    )
+    schedule_by_page_q = (
+        "SELECT properties.$pathname AS path, count() AS c FROM events "
+        f"WHERE event = 'schedule_click' "
+        f"AND properties.$host = '{domain}' "
+        f"AND timestamp >= toDateTime('{after_str}') "
+        "GROUP BY path ORDER BY c DESC LIMIT 50"
+    )
 
     pv_rows = _hogql(api_key, project_id, pv_total_q)
     pv_total = int(pv_rows[0][0]) if pv_rows and pv_rows[0] else 0
@@ -140,6 +267,18 @@ def _ph_domain_counts(api_key, project_id, domain, after_iso):
 
     sched_rows = _hogql(api_key, project_id, schedule_click_q)
     schedule_clicks = int(sched_rows[0][0]) if sched_rows and sched_rows[0] else 0
+
+    signup_page_rows = _hogql(api_key, project_id, signup_by_page_q)
+    top_pages_signups = {}
+    for r in (signup_page_rows or []):
+        path = r[0] if r and r[0] else "/"
+        top_pages_signups[path] = int(r[1])
+
+    sched_page_rows = _hogql(api_key, project_id, schedule_by_page_q)
+    top_pages_schedule = {}
+    for r in (sched_page_rows or []):
+        path = r[0] if r and r[0] else "/"
+        top_pages_schedule[path] = int(r[1])
 
     if cta_total > 0:
         detail_rows = _hogql(api_key, project_id, cta_detail_q)
@@ -191,7 +330,12 @@ def _ph_domain_counts(api_key, project_id, domain, after_iso):
         "cta_clicks": cta_total,
         "email_signups": email_signups,
         "schedule_clicks": schedule_clicks,
-        "pageview_details": {domain: {"total": pv_total, "top_pages": top_pages}},
+        "pageview_details": {domain: {
+            "total": pv_total,
+            "top_pages": top_pages,
+            "top_pages_signups": top_pages_signups,
+            "top_pages_schedule": top_pages_schedule,
+        }},
         "cta_details": cta_details,
     }
 
@@ -321,13 +465,56 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
                     "cta_clicks": 0,
                     "email_signups": 0,
                     "schedule_clicks": 0,
-                    "pageview_details": {d: {"total": 0, "top_pages": {}}},
+                    "pageview_details": {d: {"total": 0, "top_pages": {}, "top_pages_signups": {}, "top_pages_schedule": {}}},
                     "cta_details": [],
                 }
             per_domain.append(stats)
         posthog = _ph_combine(per_domain)
     else:
         posthog = None
+
+    # Window-scoped: `created_paths` is now restricted to pages whose
+    # seo_keywords/gsc_queries `completed_at` falls inside `days`. Top tab →
+    # Pages sub-tab already filters rows on this set, so it becomes "pages
+    # created in the selected period" automatically.
+    created_by_domain = _created_paths_for_project(conn, proj, days=days)
+    if posthog is not None:
+        for d, detail in (posthog.get("pageview_details") or {}).items():
+            paths = created_by_domain.get((d or "").lower(), set())
+            detail["created_paths"] = sorted(paths)
+
+    # Preserve the pre-rewrite, domain-wide totals for the analytics-broken
+    # canary below — it's meant to answer "is window.posthog wired up on this
+    # site at all?", which requires domain-level signal, not per-new-page.
+    domain_wide_pv = int(posthog["pageviews"]) if posthog else 0
+    domain_wide_signups = int(posthog["email_signups"]) if posthog else 0
+    domain_wide_sched = int(posthog["schedule_clicks"]) if posthog else 0
+
+    # Recompute funnel totals against the window-scoped created set so the
+    # Status tab → project funnel columns reflect "pageviews / signups /
+    # schedule clicks ONLY on pages we generated in this window" instead of
+    # domain-wide traffic. cta_clicks and real_bookings are not tracked
+    # per-page so they stay domain/project-wide.
+    if posthog is not None:
+        scoped_pv = 0
+        scoped_signups = 0
+        scoped_sched = 0
+        for d, detail in (posthog.get("pageview_details") or {}).items():
+            created = {_norm_path(p) for p in created_by_domain.get((d or "").lower(), set())}
+            if not created:
+                continue
+            for path, cnt in (detail.get("top_pages") or {}).items():
+                if _norm_path(path) in created:
+                    scoped_pv += int(cnt or 0)
+            for path, cnt in (detail.get("top_pages_signups") or {}).items():
+                if _norm_path(path) in created:
+                    scoped_signups += int(cnt or 0)
+            for path, cnt in (detail.get("top_pages_schedule") or {}).items():
+                if _norm_path(path) in created:
+                    scoped_sched += int(cnt or 0)
+        posthog["pageviews"] = scoped_pv
+        posthog["email_signups"] = scoped_signups
+        posthog["schedule_clicks"] = scoped_sched
 
     client_slug = ps.get_client_slug(name)
     bookings = _bookings_shared(bookings_conn, client_slug, days) if client_slug else None
@@ -343,7 +530,9 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
     # Canary: real traffic but zero tracked conversion events almost always
     # means window.posthog was never wired up on the site (e.g. Fazm
     # newsletter bug where signups worked but nothing fired to PostHog).
-    analytics_suspected_broken = (pvs >= 500) and ((email_signups + schedule_clicks) == 0)
+    # Use domain-wide totals so the signal doesn't get diluted by the
+    # window-scoped funnel numbers above.
+    analytics_suspected_broken = (domain_wide_pv >= 500) and ((domain_wide_signups + domain_wide_sched) == 0)
 
     return {
         "name": name,
@@ -397,11 +586,6 @@ def main():
         print(json.dumps({"error": "POSTHOG_PERSONAL_API_KEY not set"}), file=sys.stdout)
         sys.exit(1)
 
-    projects_with_stats = {
-        "fazm", "Cyrano", "PieLine", "Terminator", "S4L",
-        "macOS MCP", "Vipassana", "WhatsApp MCP", "AI Browser Profile", "macOS Session Replay",
-    }
-
     conn = ps.dbmod.get_conn()
 
     bookings_conn = None
@@ -417,8 +601,6 @@ def main():
     for proj in config.get("projects", []):
         name = proj["name"]
         if args.project and args.project.lower() != name.lower():
-            continue
-        if name not in projects_with_stats and not args.project:
             continue
         selected_projects.append(proj)
 
@@ -457,7 +639,7 @@ def main():
                         "cta_clicks": 0,
                         "email_signups": 0,
                         "schedule_clicks": 0,
-                        "pageview_details": {key[2]: {"total": 0, "top_pages": {}}},
+                        "pageview_details": {key[2]: {"total": 0, "top_pages": {}, "top_pages_signups": {}, "top_pages_schedule": {}}},
                         "cta_details": [],
                     }
 
