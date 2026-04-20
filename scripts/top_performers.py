@@ -22,7 +22,34 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
 
 MIN_CONTENT_LEN = 30  # skip posts with empty/placeholder content
-MIN_UPVOTES = 10  # only show posts with meaningful engagement
+
+# Composite score: comments are the strongest imitation signal (real discussion),
+# upvotes are second, views deliberately excluded (viral-by-algorithm ≠ a pattern
+# worth imitating). Reddit upvotes get -1 because the OP's self-upvote inflates
+# `score` returned by the API. SQL expression is reused across queries.
+SCORE_SQL = (
+    "(COALESCE(comments_count,0) * 3 + "
+    "CASE WHEN LOWER(platform) = 'reddit' "
+    "THEN GREATEST(0, COALESCE(upvotes,0) - 1) "
+    "ELSE COALESCE(upvotes,0) END)"
+)
+
+# Per-platform "meaningful engagement" floor for the SCORE_SQL composite.
+# Twitter/LinkedIn reactions are rarer than Reddit upvotes, so thresholds differ.
+PLATFORM_MIN_SCORE = {
+    "reddit":   10,
+    "twitter":  5,
+    "x":        5,
+    "linkedin": 3,
+    "moltbook": 3,
+    "github":   3,
+}
+DEFAULT_MIN_SCORE = 5
+
+def min_score_for(platform):
+    if platform is None:
+        return DEFAULT_MIN_SCORE
+    return PLATFORM_MIN_SCORE.get(str(platform).lower(), DEFAULT_MIN_SCORE)
 
 # =====================================================================
 # DO NOT REMOVE OR SIMPLIFY THE FUNCTIONS BELOW.
@@ -42,9 +69,11 @@ def get_distilled_rules(platform):
     """Return guidance on how to interpret the performance data below."""
     if platform == "reddit":
         return """## HOW TO USE THIS REPORT
-- Study the top posts: what style, length, and tone got the most upvotes? Do more of that.
+- Comments are the strongest signal: a post that sparked replies taught people something or hit a nerve. Prioritize imitating posts with high comment counts, even if upvotes are modest.
+- Upvotes are second-tier (passive approval). Views are excluded because viral-by-algorithm is not a pattern worth copying.
+- Study the top posts: what style, length, and tone got real discussion? Do more of that.
 - Study the bottom posts and their FAILURE REASON annotations: avoid those patterns entirely.
-- Compare avg_upvotes across styles in the summary. Pick styles that actually perform well, not just familiar ones.
+- Compare avg_cm (then avg_up) across styles in the summary. Pick styles that actually drive conversation, not just familiar ones.
 - Posts with product mentions or URLs consistently underperform. The top posts never contain them.
 - Look at content length in top vs bottom posts. Let the data guide whether to go short or long.
 """
@@ -96,7 +125,12 @@ def annotate_failure(row):
 
 
 def get_style_performance(conn, platform=None):
-    """Avg upvotes per engagement_style for the given platform."""
+    """Avg upvotes AND avg comments per engagement_style for the given platform.
+
+    Comments are reported alongside upvotes so Claude can see which styles
+    drive discussion (the strongest imitation signal), not just which accumulate
+    passive upvotes.
+    """
     where_clauses = [
         "status = 'active'",
         "engagement_style IS NOT NULL",
@@ -112,9 +146,11 @@ def get_style_performance(conn, platform=None):
     cur = conn.execute(
         f"SELECT engagement_style, COUNT(*) as cnt, "
         f"AVG(COALESCE(upvotes,0))::numeric(10,2) as avg_up, "
-        f"MAX(upvotes) as max_up "
+        f"AVG(COALESCE(comments_count,0))::numeric(10,2) as avg_cm, "
+        f"MAX(upvotes) as max_up, "
+        f"MAX(comments_count) as max_cm "
         f"FROM posts WHERE {where} "
-        f"GROUP BY engagement_style ORDER BY avg_up DESC",
+        f"GROUP BY engagement_style ORDER BY avg_cm DESC, avg_up DESC",
         params,
     )
     return cur.fetchall()
@@ -156,27 +192,31 @@ def get_project_platform_summary(conn, project=None, platform=None):
         f"SELECT COALESCE(project_name, '(no project)') as proj, platform, "
         f"COUNT(*) as cnt, "
         f"AVG(COALESCE(upvotes,0))::numeric(10,1) as avg_up, "
-        f"MAX(upvotes) as max_up "
+        f"AVG(COALESCE(comments_count,0))::numeric(10,1) as avg_cm, "
+        f"MAX(upvotes) as max_up, "
+        f"MAX(comments_count) as max_cm "
         f"FROM posts WHERE {where} "
-        f"GROUP BY project_name, platform ORDER BY proj, avg_up DESC",
+        f"GROUP BY project_name, platform ORDER BY proj, avg_cm DESC, avg_up DESC",
         params
     )
     return cur.fetchall()
 
 
-def get_top_posts(conn, project=None, platform=None, limit=15, min_upvotes=None):
+def get_top_posts(conn, project=None, platform=None, limit=15, min_score=None):
     """Top performing posts with full factual details.
 
-    Only returns posts with >= min_upvotes (default MIN_UPVOTES).
-    If project is given and has no posts meeting the threshold,
-    returns None so the caller can fall back to general posts.
+    Ranks by composite SCORE_SQL (comments*3 + upvotes, Reddit -1) so that
+    discussion-driving posts surface even with modest upvote counts. Threshold
+    is per-platform (see PLATFORM_MIN_SCORE) since reactions/likes/upvotes have
+    different scales. If project is given and has no posts meeting the
+    threshold, returns None so the caller can fall back to general posts.
     """
-    if min_upvotes is None:
-        min_upvotes = MIN_UPVOTES
+    if min_score is None:
+        min_score = min_score_for(platform)
     where_clauses = [
         "status = 'active'",
         "upvotes IS NOT NULL",
-        f"upvotes >= {min_upvotes}",
+        f"{SCORE_SQL} >= {min_score}",
         "our_content IS NOT NULL",
         f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
         "platform NOT IN ('github_issues')",
@@ -197,7 +237,7 @@ def get_top_posts(conn, project=None, platform=None, limit=15, min_upvotes=None)
         f"our_content, thread_title, thread_content, "
         f"project_name, posted_at::date, our_account "
         f"FROM posts WHERE {where} "
-        f"ORDER BY upvotes DESC LIMIT %s",
+        f"ORDER BY {SCORE_SQL} DESC, upvotes DESC LIMIT %s",
         params + [fetch_limit]
     )
     rows = cur.fetchall()
@@ -208,11 +248,17 @@ def get_top_posts(conn, project=None, platform=None, limit=15, min_upvotes=None)
 
 
 def get_bottom_posts(conn, project=None, platform=None, limit=10):
-    """Worst performing posts."""
+    """Worst performing posts (zero-engagement by composite score).
+
+    Uses SCORE_SQL = 0 as the failure gate instead of `upvotes < 1`. This
+    correctly catches Reddit posts sitting at upvotes=1 with no comments
+    (which the old filter missed because the OP self-upvote clears `< 1`),
+    and still captures zero-engagement posts across all platforms.
+    """
     where_clauses = [
         "status = 'active'",
         "upvotes IS NOT NULL",
-        "upvotes < 1",
+        f"{SCORE_SQL} = 0",
         "our_content IS NOT NULL",
         f"LENGTH(our_content) >= {MIN_CONTENT_LEN}",
         "platform NOT IN ('github_issues')",
@@ -231,7 +277,7 @@ def get_bottom_posts(conn, project=None, platform=None, limit=10):
         f"our_content, thread_title, thread_content, "
         f"project_name, posted_at::date, our_account "
         f"FROM posts WHERE {where} "
-        f"ORDER BY upvotes ASC LIMIT %s",
+        f"ORDER BY posted_at DESC LIMIT %s",
         params + [limit]
     )
     return cur.fetchall()
@@ -281,22 +327,39 @@ def format_report(summary, top, bottom, project=None, platform=None,
         if rules:
             lines.append(rules)
 
-    # Style performance (live from DB)
+    # "meaningful engagement" is scored as comments*3 + upvotes (Reddit -1),
+    # with a per-platform floor (see PLATFORM_MIN_SCORE). Report it to Claude so
+    # it understands why borderline posts are/aren't included.
+    threshold_label = (
+        f">= score {min_score_for(platform)} "
+        f"(comments*3 + upvotes, Reddit upvote -1)"
+    )
+
+    # Style performance (live from DB). Report both upvotes AND comments so
+    # discussion-driving styles surface, not just upvote-accumulating ones.
     if style_perf:
-        lines.append("### Avg Upvotes by Engagement Style (live data)")
+        lines.append("### Engagement Style Performance (live data, sorted by avg comments)")
         for row in style_perf:
-            lines.append(f"  {row[0]:<22} {row[1]:>5} posts  avg_upvotes={row[2]}  best={row[3]}")
+            lines.append(
+                f"  {row[0]:<22} {row[1]:>5} posts  "
+                f"avg_cm={row[3]}  avg_up={row[2]}  "
+                f"best_cm={row[5]}  best_up={row[4]}"
+            )
         lines.append("")
 
     # Summary table
     lines.append("### Posts per Project per Platform")
     for row in summary:
-        lines.append(f"  {row[0]:<20} {row[1]:<12} {row[2]:>5} posts  avg_upvotes={row[3]}  best={row[4]}")
+        lines.append(
+            f"  {row[0]:<20} {row[1]:<12} {row[2]:>5} posts  "
+            f"avg_cm={row[4]}  avg_up={row[3]}  "
+            f"best_cm={row[6]}  best_up={row[5]}"
+        )
     lines.append("")
 
     # Per-project top performers (when no project filter)
     if top_by_group:
-        lines.append(f"### Top Posts by Project (>= {MIN_UPVOTES} upvotes)")
+        lines.append(f"### Top Posts by Project ({threshold_label})")
         for group_name, posts in top_by_group.items():
             if not posts:
                 continue
@@ -306,14 +369,16 @@ def format_report(summary, top, bottom, project=None, platform=None,
                 lines.append("")
     elif top:
         # Filtered view with results
-        lines.append(f"### Top {len(top)} Posts for {project or 'all projects'} (>= {MIN_UPVOTES} upvotes)")
+        lines.append(
+            f"### Top {len(top)} Posts for {project or 'all projects'} ({threshold_label})"
+        )
         for p in top:
             lines.append(format_post(p))
             lines.append("")
     elif fallback_top:
         # No project-specific posts met threshold — show general high performers
         platform_label = f" on {platform}" if platform else ""
-        lines.append(f"### No {project} posts with >= {MIN_UPVOTES} upvotes{platform_label}.")
+        lines.append(f"### No {project} posts meeting {threshold_label}{platform_label}.")
         lines.append(f"### Showing top posts from OTHER projects{platform_label} as reference:")
         lines.append("")
         for p in fallback_top:
@@ -354,10 +419,12 @@ def main():
     if args.project and not top:
         fallback_top = get_top_posts(conn, project=None, platform=args.platform, limit=args.top)
 
-    # When no project filter, also get top 5 per project for focused examples
+    # When no project filter, also get top 5 per project for focused examples.
+    # Uses the same SCORE_SQL composite as get_top_posts so ranking is consistent.
     top_by_group = None
     if not args.project:
         top_by_group = {}
+        min_score = min_score_for(args.platform)
         platform_filter = "AND platform = %s" if args.platform else ""
         platform_params = [args.platform] if args.platform else []
         # Get distinct projects (respecting platform filter)
@@ -365,10 +432,10 @@ def main():
             f"SELECT DISTINCT COALESCE(project_name, '(no project)') FROM posts "
             f"WHERE status = 'active' AND platform NOT IN ('github_issues') "
             f"AND our_content IS NOT NULL AND LENGTH(our_content) >= %s "
-            f"AND upvotes IS NOT NULL AND upvotes >= %s "
+            f"AND upvotes IS NOT NULL AND {SCORE_SQL} >= %s "
             f"{platform_filter} "
             f"ORDER BY 1",
-            [MIN_CONTENT_LEN, MIN_UPVOTES] + platform_params
+            [MIN_CONTENT_LEN, min_score] + platform_params
         )
         projects = [row[0] for row in cur.fetchall()]
         for proj in projects:
@@ -379,11 +446,11 @@ def main():
                 f"SELECT id, platform, upvotes, comments_count, views, "
                 f"our_content, thread_title, thread_content, "
                 f"project_name, posted_at::date, our_account "
-                f"FROM posts WHERE status = 'active' AND upvotes >= {MIN_UPVOTES} "
+                f"FROM posts WHERE status = 'active' AND {SCORE_SQL} >= {min_score} "
                 f"AND our_content IS NOT NULL AND LENGTH(our_content) >= {MIN_CONTENT_LEN} "
                 f"AND platform NOT IN ('github_issues') "
                 f"{where_extra} {platform_filter} "
-                f"ORDER BY upvotes DESC LIMIT 5",
+                f"ORDER BY {SCORE_SQL} DESC, upvotes DESC LIMIT 5",
                 params
             )
             top_by_group[proj] = cur.fetchall()
