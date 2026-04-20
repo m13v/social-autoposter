@@ -110,15 +110,11 @@ def update_linkedin_stats(db, scraped_data, quiet=False):
 
             reactions = item.get("reactions", 0) or 0
 
-            engagement = json.dumps({
-                "comment_reactions": reactions,
-            })
-
             db.execute(
                 "UPDATE posts SET upvotes=%s, comments_count=NULL, views=NULL, "
-                "thread_engagement=%s, engagement_updated_at=NOW(), "
+                "engagement_updated_at=NOW(), "
                 "status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
-                [reactions, engagement, db_id],
+                [reactions, db_id],
             )
             matched += 1
             if not quiet:
