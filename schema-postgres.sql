@@ -144,6 +144,51 @@ ALTER TABLE dms ADD COLUMN IF NOT EXISTS last_message_at TIMESTAMP;
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS message_count INTEGER DEFAULT 0;
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS interest_level TEXT;  -- no_response | general_discussion | cold | warm | hot | declined | not_our_prospect
 
+-- Qualification + book-a-call conversion flow
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS target_project TEXT;              -- project we are pursuing for this thread (set at outreach)
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS qualification_status TEXT DEFAULT 'pending';  -- pending | asked | answered | qualified | disqualified
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS qualification_notes TEXT;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS booking_link_sent_at TIMESTAMP;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS icp_precheck TEXT;                -- pass | fail | ambiguous (labelled at outreach, not used as filter)
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS prospect_id INTEGER;              -- FK added below after prospects table defined
+
+-- prospects: persistent per-(platform, author) record. One person can have multiple DMs over time.
+CREATE TABLE IF NOT EXISTS prospects (
+    id SERIAL PRIMARY KEY,
+    platform TEXT NOT NULL,
+    author TEXT NOT NULL,
+    profile_url TEXT,
+    display_name TEXT,
+    headline TEXT,
+    bio TEXT,
+    follower_count INTEGER,
+    recent_activity TEXT,
+    company TEXT,
+    role TEXT,
+    profile_fetched_at TIMESTAMP,
+    notes TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT prospects_platform_author_unique UNIQUE (platform, author)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prospects_platform_author ON prospects(platform, author);
+CREATE INDEX IF NOT EXISTS idx_prospects_profile_fetched ON prospects(profile_fetched_at);
+
+-- dms.prospect_id FK (added after prospects table exists)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'dms_prospect_id_fkey' AND table_name = 'dms'
+    ) THEN
+        ALTER TABLE dms ADD CONSTRAINT dms_prospect_id_fkey FOREIGN KEY (prospect_id) REFERENCES prospects(id);
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_dms_prospect_id ON dms(prospect_id);
+CREATE INDEX IF NOT EXISTS idx_dms_target_project ON dms(target_project);
+CREATE INDEX IF NOT EXISTS idx_dms_qualification_status ON dms(qualification_status);
+
 -- dm_messages: every message in a DM conversation (ours and theirs)
 CREATE TABLE IF NOT EXISTS dm_messages (
     id SERIAL PRIMARY KEY,
