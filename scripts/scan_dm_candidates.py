@@ -30,6 +30,13 @@ MAX_AGE_DAYS = 7
 DEFAULT_MAX_CANDIDATES = 100
 PLATFORMS = ["reddit", "linkedin", "x"]
 
+# config project topic fields to check per scan platform.
+TOPIC_FIELDS_BY_PLATFORM = {
+    "reddit": ["topics"],
+    "linkedin": ["linkedin_topics", "topics"],
+    "x": ["twitter_topics", "topics"],
+}
+
 
 def load_config():
     if os.path.exists(CONFIG_PATH):
@@ -40,6 +47,66 @@ def load_config():
 
 def word_count(text):
     return len(text.split()) if text else 0
+
+
+def build_project_topic_index(config, platform):
+    """Return [(project_name, [topic_phrase_lower, ...]), ...] for topic matching."""
+    fields = TOPIC_FIELDS_BY_PLATFORM.get(platform, ["topics"])
+    out = []
+    for p in config.get("projects", []) or []:
+        name = p.get("name") or p.get("id")
+        if not name:
+            continue
+        phrases = []
+        for field in fields:
+            vals = p.get(field) or []
+            for v in vals:
+                if isinstance(v, str) and v.strip():
+                    phrases.append(v.strip().lower())
+        if phrases:
+            out.append((name, phrases))
+    return out
+
+
+def infer_target_project(text_parts, project_topic_index):
+    """Return the project whose topics overlap most with the given text, or None."""
+    blob = " ".join(t for t in text_parts if t).lower()
+    if not blob:
+        return None
+    best_name, best_score = None, 0
+    for name, phrases in project_topic_index:
+        score = 0
+        for phrase in phrases:
+            if not phrase:
+                continue
+            if " " in phrase:
+                if phrase in blob:
+                    score += 2
+            else:
+                if f" {phrase} " in f" {blob} ":
+                    score += 1
+        if score > best_score:
+            best_score = score
+            best_name = name
+    return best_name if best_score > 0 else None
+
+
+def upsert_prospect_row(conn, platform, author):
+    """Ensure a prospects row exists for (platform, author); return prospect_id."""
+    conn.execute(
+        """
+        INSERT INTO prospects (platform, author)
+        VALUES (%s, %s)
+        ON CONFLICT ON CONSTRAINT prospects_platform_author_unique DO NOTHING
+        """,
+        (platform, author),
+    )
+    cur = conn.execute(
+        "SELECT id FROM prospects WHERE platform=%s AND author=%s",
+        (platform, author),
+    )
+    row = cur.fetchone()
+    return row["id"] if row else None
 
 
 def get_excluded_authors(config, platform):
@@ -71,13 +138,14 @@ def get_excluded_authors(config, platform):
 def scan_platform(conn, config, platform, max_candidates, dry_run):
     """Scan for DM candidates on a single platform."""
     excluded = get_excluded_authors(config, platform)
+    topic_index = build_project_topic_index(config, platform)
 
     candidates = conn.execute("""
         SELECT r.id as reply_id, r.post_id, r.platform, r.their_author, r.their_content,
                r.their_comment_url, r.depth,
                r.our_reply_content, r.our_reply_url,
                p.thread_title, p.our_content as our_post_content,
-               p.thread_url, p.our_url,
+               p.thread_url, p.our_url, p.project_name as post_project,
                r.replied_at
         FROM replies r
         JOIN posts p ON r.post_id = p.id
@@ -131,23 +199,35 @@ def scan_platform(conn, config, platform, max_candidates, dry_run):
         context += f"Their comment: {content[:500]}\n"
         context += f"Our reply: {(row['our_reply_content'] or '')[:500]}"
 
+        # Pick target_project: inherit from post; fall back to topic match.
+        target_project = row["post_project"]
+        if not target_project:
+            target_project = infer_target_project(
+                [row["thread_title"], content, row["our_reply_content"]],
+                topic_index,
+            )
+
         if dry_run:
-            print(f"  [{platform}] CANDIDATE: {author} (reply #{row['reply_id']})")
+            print(f"  [{platform}] CANDIDATE: {author} (reply #{row['reply_id']}) target={target_project}")
             print(f"    Their comment: {content[:100]}...")
             print(f"    Our reply: {(row['our_reply_content'] or '')[:100]}...")
             print()
             inserted += 1
             continue
 
+        prospect_id = upsert_prospect_row(conn, platform, author)
+
         conn.execute("""
             INSERT INTO dms (platform, reply_id, post_id, their_author, their_content,
-                             comment_context, status)
-            VALUES (%s, %s, %s, %s, %s, %s, 'pending')
+                             comment_context, status, prospect_id, target_project)
+            VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s)
             ON CONFLICT (platform, their_author, reply_id) DO NOTHING
-        """, (platform, row["reply_id"], row["post_id"], author, content, context))
+        """, (platform, row["reply_id"], row["post_id"], author, content, context,
+              prospect_id, target_project))
         conn.commit()
         inserted += 1
-        print(f"  [{platform}] NEW DM candidate: {author} (reply #{row['reply_id']}): {content[:80]}...")
+        print(f"  [{platform}] NEW DM candidate: {author} (reply #{row['reply_id']}) "
+              f"target={target_project or '-'}: {content[:70]}...")
 
     if skipped_reasons:
         skip_summary = ", ".join(f"{k}={v}" for k, v in skipped_reasons.items())
