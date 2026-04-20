@@ -6,7 +6,7 @@ Single tool for all platforms. Enforces:
   - our_url must start with http (validated)
   - dedup on thread_url per platform
 
-Usage:
+Usage (INSERT — default mode):
     python3 scripts/log_post.py \\
         --platform reddit \\
         --thread-url URL \\
@@ -19,10 +19,21 @@ Usage:
         [--engagement-style STYLE] \\
         [--language LANG]
 
+Usage (UPDATE — record a self-reply / link follow-up on an existing post):
+    python3 scripts/log_post.py --mark-self-reply \\
+        --post-id 12345 \\
+        --self-reply-url URL \\
+        --self-reply-content TEXT
+
+    Writes to posts.link_edited_at / link_edit_content so the
+    link-edit-* sweeps skip this row on the next pass.
+
 Output (JSON):
     {"logged": true, "post_id": 12345}
+    {"marked": true, "post_id": 12345}
     {"error": "DUPLICATE_THREAD", ...}
     {"error": "INVALID_URL", ...}
+    {"error": "POST_NOT_FOUND", ...}
 """
 
 import argparse
@@ -44,14 +55,54 @@ DEFAULT_ACCOUNTS = {
 }
 
 
+def mark_self_reply(args):
+    if args.post_id is None or not args.self_reply_url or args.self_reply_content is None:
+        print(json.dumps({
+            "error": "MISSING_ARGS",
+            "message": "--mark-self-reply requires --post-id, --self-reply-url, --self-reply-content",
+        }))
+        sys.exit(1)
+    if not args.self_reply_url.startswith("http"):
+        print(json.dumps({
+            "error": "INVALID_URL",
+            "message": f"self-reply-url must start with http, got: {args.self_reply_url[:50]}",
+        }))
+        sys.exit(1)
+
+    dbmod.load_env()
+    conn = dbmod.get_conn()
+    cur = conn.execute(
+        "UPDATE posts SET link_edited_at=NOW(), link_edit_content=%s "
+        "WHERE id=%s RETURNING id",
+        [f"{args.self_reply_content} {args.self_reply_url}".strip(), args.post_id],
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        print(json.dumps({"error": "POST_NOT_FOUND", "post_id": args.post_id}))
+        sys.exit(1)
+    conn.commit()
+    conn.close()
+    print(json.dumps({"marked": True, "post_id": args.post_id}))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Log a posted comment to the database")
-    parser.add_argument("--platform", required=True, choices=VALID_PLATFORMS)
-    parser.add_argument("--thread-url", required=True)
-    parser.add_argument("--our-url", required=True,
+    parser.add_argument("--mark-self-reply", action="store_true",
+                        help="UPDATE mode: mark link_edited_at on an existing post. "
+                             "Requires --post-id, --self-reply-url, --self-reply-content.")
+    parser.add_argument("--post-id", type=int, default=None,
+                        help="posts.id to update (only with --mark-self-reply)")
+    parser.add_argument("--self-reply-url", default=None,
+                        help="URL of the self-reply that carries the project link")
+    parser.add_argument("--self-reply-content", default=None,
+                        help="Text of the self-reply (goes into link_edit_content)")
+    parser.add_argument("--platform", choices=VALID_PLATFORMS)
+    parser.add_argument("--thread-url")
+    parser.add_argument("--our-url",
                         help="Permalink to our posted comment (must start with http)")
-    parser.add_argument("--our-content", required=True)
-    parser.add_argument("--project", required=True)
+    parser.add_argument("--our-content")
+    parser.add_argument("--project")
     parser.add_argument("--thread-author", default="")
     parser.add_argument("--thread-title", default="")
     parser.add_argument("--account", default=None,
@@ -60,6 +111,20 @@ def main():
     parser.add_argument("--language", default=None,
                         help="ISO 639-1 language code (e.g. en, ja, zh, es)")
     args = parser.parse_args()
+
+    if args.mark_self_reply:
+        mark_self_reply(args)
+        return
+
+    # INSERT mode — enforce required fields that argparse can't conditionally require.
+    missing = [f for f in ("platform", "thread_url", "our_url", "our_content", "project")
+               if getattr(args, f) is None]
+    if missing:
+        print(json.dumps({
+            "error": "MISSING_ARGS",
+            "message": f"INSERT mode requires: {', '.join('--' + m.replace('_', '-') for m in missing)}",
+        }))
+        sys.exit(1)
 
     # Validate our_url
     if not args.our_url.startswith("http"):
