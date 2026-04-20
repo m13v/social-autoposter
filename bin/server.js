@@ -9,6 +9,7 @@ const { execSync, spawn, spawnSync } = require('child_process');
 const { Pool } = require('pg');
 const platform = require('./platform');
 const scheduler = require('./scheduler');
+const auth = require('./auth');
 
 const DEST = path.join(os.homedir(), 'social-autoposter');
 const LOG_DIR = path.join(DEST, 'skill', 'logs');
@@ -265,6 +266,36 @@ const funnelStatsCache = new Map();
 // if written within the last SNAPSHOT_FRESH_MS.
 const SNAPSHOT_DIR = path.join(DEST, 'skill', 'cache');
 const SNAPSHOT_FRESH_MS = 15 * 60 * 1000;
+
+// In CLIENT_MODE the server runs on Cloud Run with no access to the
+// operator's disk. The precompute script mirrors every snapshot to the
+// Neon dashboard_cache table; we cache DB hits briefly per-cache_key so
+// the same window served to many clients doesn't hammer Postgres.
+const _dbSnapshotCache = new Map();
+const DB_SNAPSHOT_CACHE_MS = 20 * 1000;
+async function readSnapshotFromDb(key, maxAgeMs) {
+  const fresh = maxAgeMs != null ? maxAgeMs : SNAPSHOT_FRESH_MS;
+  const now = Date.now();
+  const cached = _dbSnapshotCache.get(key);
+  if (cached && now - cached.at < DB_SNAPSHOT_CACHE_MS) return cached.value;
+  let rows;
+  try {
+    rows = await pq(
+      "SELECT payload, EXTRACT(EPOCH FROM updated_at) * 1000 AS ts FROM dashboard_cache WHERE cache_key = $1",
+      [key]
+    );
+  } catch { return null; }
+  if (!rows || !rows.length) { _dbSnapshotCache.set(key, { at: now, value: null }); return null; }
+  const ts = Number(rows[0].ts);
+  if (now - ts > fresh) { _dbSnapshotCache.set(key, { at: now, value: null }); return null; }
+  const value = { value: rows[0].payload, at: ts };
+  _dbSnapshotCache.set(key, { at: now, value });
+  return value;
+}
+
+// Sync call kept for existing callers. Tries disk first (fast, what the
+// operator has), then falls back to the last value the DB returned if
+// available. The async variant should be preferred in CLIENT_MODE paths.
 function readSnapshot(filename, maxAgeMs) {
   try {
     const p = path.join(SNAPSHOT_DIR, filename);
@@ -272,7 +303,27 @@ function readSnapshot(filename, maxAgeMs) {
     const age = Date.now() - st.mtimeMs;
     if (age > (maxAgeMs != null ? maxAgeMs : SNAPSHOT_FRESH_MS)) return null;
     return { value: JSON.parse(fs.readFileSync(p, 'utf8')), at: st.mtimeMs };
-  } catch { return null; }
+  } catch {}
+  if (auth.CLIENT_MODE) {
+    const key = filename.replace(/\.json$/, '');
+    const cached = _dbSnapshotCache.get(key);
+    if (cached && cached.value) {
+      const fresh = maxAgeMs != null ? maxAgeMs : SNAPSHOT_FRESH_MS;
+      if (Date.now() - cached.value.at <= fresh) return cached.value;
+    }
+  }
+  return null;
+}
+
+// CLIENT_MODE-aware snapshot read. Call sites that already have an
+// async context use this so a missing on-disk file still returns the
+// Neon-backed snapshot.
+async function readSnapshotCached(filename, maxAgeMs) {
+  const disk = readSnapshot(filename, maxAgeMs);
+  if (disk) return disk;
+  if (!auth.CLIENT_MODE) return null;
+  const key = filename.replace(/\.json$/, '');
+  return await readSnapshotFromDb(key, maxAgeMs);
 }
 
 function invalidateStatusCache() {
@@ -428,9 +479,20 @@ function findJob(label) {
 
 // --- API Routes ---
 
-function handleApi(req, res) {
+async function handleApi(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
+
+  // Auth: no-op when CLIENT_MODE is unset (local operator use).
+  // When CLIENT_MODE=1, require a Firebase Bearer token and enforce admin/project claims.
+  const av = await auth.verifyAuth(req, p);
+  if (!av.ok) return json(res, { error: av.error, detail: av.detail || null }, av.status);
+  req.user = av.user;
+
+  // GET /api/me - who am I + what projects can I see
+  if (p === '/api/me' && req.method === 'GET') {
+    return json(res, { user: req.user, clientMode: auth.CLIENT_MODE });
+  }
 
   // GET /api/status
   if (p === '/api/status' && req.method === 'GET') {
@@ -926,7 +988,13 @@ function handleApi(req, res) {
       "ORDER BY 1 DESC LIMIT 500) r";
     return (async () => {
       const rows = await pq(q);
-      const events = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
+      let events = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
+      // Non-admin: drop events not tagged with an allowed project (including
+      // octolens mentions, which have no project column).
+      if (!req.user.admin) {
+        const allowed = new Set(req.user.projects);
+        events = events.filter(e => e.project && allowed.has(e.project));
+      }
       return json(res, { events });
     })().catch(e => json(res, { error: e.message }, 500));
   }
@@ -946,6 +1014,10 @@ function handleApi(req, res) {
     const project = (rawProject === '' || rawProject.toLowerCase() === 'all') ? '' : rawProject;
     const projectOk = project === '' || /^[A-Za-z0-9_\-]{1,64}$/.test(project);
     if (!projectOk) return json(res, { error: 'invalid project' }, 400);
+    // Non-admin clients can only see projects in their claim. Reject if the
+    // requested project isn't allowed, and force-filter the default "all" view.
+    const stylePc = auth.projectClause(req.user, 'project_name', project || null);
+    if (!stylePc.ok) return json(res, { windowHours, platform: platform || 'all', project: project || 'all', rows: [], platforms: [], projects: [] });
     const cacheKey = windowHours + '|' + platform + '|' + project;
     const cached = styleStatsCache.get(cacheKey);
     if (cached && Date.now() - cached.at < 300000) {
@@ -954,8 +1026,9 @@ function handleApi(req, res) {
     }
     // Precomputed snapshot, default all/all filter only (the dashboard's
     // initial load). Specific platform/project filters still run live.
-    if (!platform && !project) {
-      const sSnap = readSnapshot(`style_stats_${windowHours}h.json`);
+    // Non-admin users bypass the snapshot because it aggregates across all projects.
+    if (!platform && !project && req.user.admin) {
+      const sSnap = await readSnapshotCached(`style_stats_${windowHours}h.json`);
       if (sSnap && sSnap.value && Array.isArray(sSnap.value.rows)) {
         const v = sSnap.value;
         styleStatsCache.set(cacheKey, { at: sSnap.at, value: v.rows, platforms: v.platforms || [], projects: v.projects || [] });
@@ -966,9 +1039,10 @@ function handleApi(req, res) {
     const platformFilter = platform
       ? "AND LOWER(CASE WHEN LOWER(platform)='x' THEN 'twitter' ELSE platform END) = '" + platform + "' "
       : '';
-    const projectFilter = project
-      ? "AND project_name = '" + project.replace(/'/g, "''") + "' "
-      : '';
+    const projectFilter = stylePc.clause ? stylePc.clause + ' '
+      : (project
+        ? "AND project_name = '" + project.replace(/'/g, "''") + "' "
+        : '');
     // Moltbook and GitHub have no views metric; keep those rows in posts/upvotes/comments
     // totals but exclude them from views sum AND the views-per-post denominator so they
     // don't dilute other styles' averages.
@@ -996,7 +1070,7 @@ function handleApi(req, res) {
     const qpr = "SELECT json_agg(p) FROM (" +
       "SELECT DISTINCT project_name AS p FROM posts " +
       "WHERE posted_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
-      "AND project_name IS NOT NULL ORDER BY p) s";
+      "AND project_name IS NOT NULL" + stylePc.clause + " ORDER BY p) s";
     return (async () => {
       const [rows, prows, prjRows] = await Promise.all([pq(q), pq(qp), pq(qpr)]);
       const value = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
@@ -1012,6 +1086,9 @@ function handleApi(req, res) {
   if (p === '/api/activity/stats' && req.method === 'GET') {
     const url = new URL(req.url, 'http://localhost');
     const windowHours = Math.max(1, Math.min(720, parseInt(url.searchParams.get('hours') || '24', 10) || 24));
+    // Cross-project aggregates are admin-only for now; per-project activity stats
+    // would require rewriting 9 UNION subqueries with project filters. MVP.
+    if (!req.user.admin) return json(res, { windowHours, rows: [] });
     const cached = activityStatsCache.get(windowHours);
     // 5-min TTL. The 9-way UNION runs via execSync(psql), blocking Node's
     // event loop; caching prevents dashboard polling from stalling /api/status
@@ -1020,7 +1097,7 @@ function handleApi(req, res) {
       return json(res, { windowHours, rows: cached.value, cachedAt: cached.at });
     }
     // Precomputed snapshot (launchd com.m13v.social-precompute-stats).
-    const aSnap = readSnapshot(`activity_stats_${windowHours}h.json`);
+    const aSnap = await readSnapshotCached(`activity_stats_${windowHours}h.json`);
     if (aSnap && aSnap.value && Array.isArray(aSnap.value.rows)) {
       activityStatsCache.set(windowHours, { at: aSnap.at, value: aSnap.value.rows });
       return json(res, { windowHours, rows: aSnap.value.rows, cachedAt: aSnap.at });
@@ -1069,6 +1146,11 @@ function handleApi(req, res) {
     if (platformFilter) {
       whereParts.push("LOWER(d.platform) = '" + platformFilter + "'");
     }
+    // Scope DMs to the user's project claim. DM project can come from three sources
+    // (direct post join, via reply post, or explicit d.target_project); include all.
+    const dmPc = auth.projectClause(req.user, 'COALESCE(p_direct.project_name, p_via_reply.project_name, d.target_project)', url.searchParams.get('project'));
+    if (!dmPc.ok) return json(res, { dms: [], window: windowKey, platform: platformFilter || 'all' });
+    if (dmPc.clause) whereParts.push(dmPc.clause.replace(/^\s*AND\s+/, ''));
     const whereSql = whereParts.length ? ('WHERE ' + whereParts.join(' AND ')) : '';
     const q =
       "SELECT json_agg(row_to_json(r)) FROM (" +
@@ -1076,7 +1158,7 @@ function handleApi(req, res) {
           "d.tier, d.message_count, d.last_message_at, d.discovered_at, " +
           "d.conversation_status, d.interest_level, " +
           "d.human_reason, d.flagged_at, " +
-          "d.target_project, d.icp_precheck, d.qualification_status, " +
+          "d.target_project, d.icp_precheck, d.icp_matches, d.qualification_status, " +
           "d.qualification_notes, d.booking_link_sent_at, " +
           "COALESCE(p_direct.project_name, p_via_reply.project_name) AS project_name, " +
           "pr.headline AS prospect_headline, pr.bio AS prospect_bio, " +
@@ -1150,6 +1232,9 @@ function handleApi(req, res) {
     } else if (kindFilter === 'comments') {
       whereParts.push("(our_url IS NULL OR thread_url <> our_url)");
     }
+    const pc = auth.projectClause(req.user, 'project_name', url.searchParams.get('project'));
+    if (!pc.ok) return json(res, { posts: [], window: windowKey, platform: platformFilter || 'all', kind: kindFilter });
+    if (pc.clause) whereParts.push(pc.clause.replace(/^\s*AND\s+/, ''));
     // Moltbook and GitHub have no views metric; return NULL for those so the UI can
     // render a dash instead of a misleading 0. Score still uses COALESCE so they
     // rank alongside other platforms based on upvotes + comments only.
@@ -1197,7 +1282,7 @@ function handleApi(req, res) {
     if (entry && entry.value && Date.now() - entry.at < TTL_MS) {
       return json(res, { days, ...entry.value, cachedAt: entry.at });
     }
-    const snap = readSnapshot(`funnel_stats_${days}d.json`);
+    const snap = await readSnapshotCached(`funnel_stats_${days}d.json`);
     if (snap && snap.value && !snap.value.error) {
       // Warm the in-memory cache so subsequent hits skip the disk read too.
       funnelStatsCache.set(days, { at: snap.at, value: snap.value });
@@ -1207,6 +1292,12 @@ function handleApi(req, res) {
       entry.pending.then(val => json(res, { days, ...val, cachedAt: Date.now() }))
                    .catch(err => json(res, { error: String(err && err.message || err) }, 500));
       return;
+    }
+    // Cloud Run has no python runtime and no PostHog creds; only the
+    // operator's local server can run the live pipeline. Return whatever
+    // we've got (empty snapshot if nothing) rather than hanging.
+    if (auth.CLIENT_MODE) {
+      return json(res, { days, error: 'snapshot_missing', cachedAt: null }, 503);
     }
     const scriptPath = path.join(DEST, 'scripts', 'project_stats_json.py');
     const pending = new Promise((resolve, reject) => {
@@ -1238,9 +1329,12 @@ function handleApi(req, res) {
   // com.m13v.social-deploy-status (scripts/project_deploy_status.py). If the
   // snapshot is missing or >20 min stale, we run the scraper synchronously.
   if (p === '/api/deploy/status' && req.method === 'GET') {
-    const snap = readSnapshot('deploy_status.json', 20 * 60 * 1000);
+    const snap = await readSnapshotCached('deploy_status.json', 20 * 60 * 1000);
     if (snap && snap.value) {
       return json(res, { ...snap.value, cachedAt: snap.at });
+    }
+    if (auth.CLIENT_MODE) {
+      return json(res, { error: 'snapshot_missing', cachedAt: null }, 503);
     }
     const scriptPath = path.join(DEST, 'scripts', 'project_deploy_status.py');
     const child = spawn('python3', [scriptPath], { env: process.env, cwd: DEST });
@@ -1808,9 +1902,55 @@ const HTML = `<!DOCTYPE html>
   .style-stats-pill.active { background: var(--accent-panel-bg); border-color: #3b82f6; color: var(--text); }
 
   @media (max-width: 600px) { .cards { grid-template-columns: 1fr; } .content { padding: 16px; } }
+
+  /* Client-mode auth overlay. Non-admin users see the app with admin-only
+     sections hidden via body.sa-non-admin; unauthenticated users see only
+     the login card. */
+  .sa-login-overlay { position: fixed; inset: 0; background: var(--bg); display: none; align-items: center; justify-content: center; z-index: 9999; }
+  .sa-login-card { background: var(--bg-panel, #fff); border: 1px solid var(--border, #e5e7eb); border-radius: 12px; padding: 32px; width: 360px; max-width: 90vw; box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+  .sa-login-card h1 { margin: 0 0 4px; font-size: 20px; }
+  .sa-login-card p { color: var(--text-muted, #6b7280); margin: 0 0 20px; font-size: 13px; }
+  .sa-login-card input { width: 100%; padding: 10px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--bg-subtle, #f9fafb); color: var(--text); font: inherit; margin-bottom: 10px; box-sizing: border-box; }
+  .sa-login-card button { width: 100%; padding: 10px; background: #2563eb; color: #fff; border: none; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer; }
+  .sa-login-card button:hover { background: #1d4ed8; }
+  .sa-login-error { color: #dc2626; font-size: 13px; min-height: 18px; margin-top: 6px; }
+  body.sa-non-admin .sa-admin-only { display: none !important; }
+  body.sa-authed-pending .header, body.sa-authed-pending .tabs, body.sa-authed-pending .content { visibility: hidden; }
 </style>
+<script>
+  window.SA_CONFIG = { clientMode: __SA_CLIENT_MODE_PLACEHOLDER__, firebase: __SA_FIREBASE_CONFIG_PLACEHOLDER__ };
+  // Install fetch wrapper upfront so any /api/ call picks up the token
+  // once auth resolves. Missing-token calls will 401 server-side in CLIENT_MODE.
+  (function() {
+    var origFetch = window.fetch.bind(window);
+    window.fetch = function(url, opts) {
+      opts = opts || {};
+      try {
+        var isApi = typeof url === 'string' && url.startsWith('/api/');
+        if (isApi && window.SA_ID_TOKEN) {
+          opts.headers = Object.assign({}, opts.headers || {}, { Authorization: 'Bearer ' + window.SA_ID_TOKEN });
+        }
+      } catch (e) {}
+      return origFetch(url, opts);
+    };
+  })();
+</script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 </head>
-<body>
+<body class="sa-authed-pending">
+
+<div class="sa-login-overlay" id="sa-login-overlay">
+  <div class="sa-login-card">
+    <h1>Sign in</h1>
+    <p id="sa-login-desc">Enter your email and we'll send you a sign-in link.</p>
+    <form id="sa-login-form">
+      <input type="email" id="sa-login-email" placeholder="Email" autocomplete="username" required>
+      <button type="submit" id="sa-login-submit">Send sign-in link</button>
+      <div class="sa-login-error" id="sa-login-error"></div>
+    </form>
+  </div>
+</div>
 
 <div class="header">
   <h1>Social Autoposter</h1>
@@ -1819,8 +1959,9 @@ const HTML = `<!DOCTYPE html>
       <span class="theme-icon moon-icon">\u{1F319}</span>
       <span class="theme-icon sun-icon">\u2600\uFE0F</span>
     </button>
-    <button class="btn" id="pause-btn" onclick="togglePause()" style="font-weight:600;"></button>
-    <span class="pending" id="pending-badge">-- pending</span>
+    <button class="btn sa-admin-only" id="pause-btn" onclick="togglePause()" style="font-weight:600;"></button>
+    <span class="pending sa-admin-only" id="pending-badge">-- pending</span>
+    <button class="btn sa-client-only" id="sa-signout-btn" onclick="saSignOut()" style="font-weight:600;display:none;">Sign out</button>
   </div>
 </div>
 
@@ -1828,8 +1969,8 @@ const HTML = `<!DOCTYPE html>
   <div class="tab active" data-tab="status">Status</div>
   <div class="tab" data-tab="activity">Activity</div>
   <div class="tab" data-tab="top">Top</div>
-  <div class="tab" data-tab="logs">Logs</div>
-  <div class="tab" data-tab="settings">Settings</div>
+  <div class="tab sa-admin-only" data-tab="logs">Logs</div>
+  <div class="tab sa-admin-only" data-tab="settings">Settings</div>
 </div>
 
 <div class="content" id="tab-status">
@@ -1975,10 +2116,10 @@ const HTML = `<!DOCTYPE html>
     </div>
   </div>
   <div class="top-filters">
-    <div class="style-stats-pill-row" id="top-window-pills" data-selected="7d">
+    <div class="style-stats-pill-row" id="top-window-pills" data-selected="24h">
       <span class="label">Window</span>
-      <button type="button" class="style-stats-pill" data-value="24h">Last 24h</button>
-      <button type="button" class="style-stats-pill active" data-value="7d">Last 7d</button>
+      <button type="button" class="style-stats-pill active" data-value="24h">Last 24h</button>
+      <button type="button" class="style-stats-pill" data-value="7d">Last 7d</button>
       <button type="button" class="style-stats-pill" data-value="14d">Last 14d</button>
       <button type="button" class="style-stats-pill" data-value="30d">Last 30d</button>
       <button type="button" class="style-stats-pill" data-value="90d">Last 90d</button>
@@ -3173,7 +3314,7 @@ let _topTableState = { sortField: 'score', sortDir: 'desc', filters: {}, globalQ
 let _topTableHandle = null;
 let _topLoaded = false;
 let _topLoading = false;
-let _topWindow = '7d';
+let _topWindow = '24h';
 let _topPlatform = 'all';
 let _topKind = 'all';
 let _topSubtab = 'posts';
@@ -3422,7 +3563,7 @@ function initTopFilters() {
   if (projRow) setTopPillActive(projRow, _topProject);
   if (kindRow) setTopPillActive(kindRow, _topKind);
   wireTopPillRow('top-window-pills', (v) => {
-    _topWindow = v || '7d';
+    _topWindow = v || '24h';
     if (_topSubtab === 'pages') loadTopPages(true);
     else if (_topSubtab === 'dms') loadTopDms(true);
     else loadTopPosts(true);
@@ -3697,9 +3838,21 @@ function dmClassBadge(dm) {
   }
   const sub = subBits.length ? '<div class="dm-class-sub">' + escapeHtml(subBits.join(' \u00b7 ')) + '</div>' : '';
   const extras = [];
-  if (dm.icp_precheck) {
-    const icpCls = 'dm-icp-' + String(dm.icp_precheck).replace(/[^a-z_]/gi, '');
-    extras.push('<span class="dm-meta-chip ' + icpCls + '">icp: ' + escapeHtml(String(dm.icp_precheck)) + '</span>');
+  const matches = Array.isArray(dm.icp_matches) ? dm.icp_matches : [];
+  const target = dm.target_project || null;
+  let primaryLabel = null;
+  if (target) {
+    const hit = matches.find(m => m && m.project === target);
+    if (hit && hit.label) primaryLabel = hit.label;
+  }
+  if (!primaryLabel && dm.icp_precheck) primaryLabel = String(dm.icp_precheck);
+  if (primaryLabel) {
+    const icpCls = 'dm-icp-' + primaryLabel.replace(/[^a-z_]/gi, '');
+    const matchTitle = matches.length
+      ? matches.map(m => String(m.project) + ': ' + String(m.label)).join('\\n')
+      : '';
+    const extra = (matches.length > 1) ? ' +' + (matches.length - 1) : '';
+    extras.push('<span class="dm-meta-chip ' + icpCls + '" title="' + escapeHtml(matchTitle) + '">icp: ' + escapeHtml(primaryLabel) + extra + '</span>');
   }
   if (dm.qualification_status && dm.qualification_status !== 'pending') {
     const qCls = 'dm-qual-' + String(dm.qualification_status).replace(/[^a-z_]/gi, '');
@@ -3822,6 +3975,7 @@ function renderTopDms(payload) {
     target_project: d.target_project || '',
     project_display: d.target_project || d.project_name || '',
     icp_precheck: d.icp_precheck || '',
+    icp_matches: Array.isArray(d.icp_matches) ? d.icp_matches : [],
     qualification_status: d.qualification_status || '',
     qualification_notes: d.qualification_notes || '',
     booking_link_sent_at: d.booking_link_sent_at || null,
@@ -4243,31 +4397,145 @@ document.getElementById('log-file-select').addEventListener('change', e => loadL
 document.getElementById('log-refresh-btn').addEventListener('click', loadLogFiles);
 document.getElementById('save-settings').addEventListener('click', saveSettings);
 
-// Init
-loadStatus();
-loadActivityStats();
-loadStyleStats();
-loadDeployHealth();
-setInterval(loadDeployHealth, 60000);
-setInterval(loadStatus, 5000);
-// 5-min cadence matches the server-side cache TTL on /api/activity/stats,
-// so the panel re-renders in place without hammering the DB.
-setInterval(loadActivityStats, 300000);
-setInterval(loadStyleStats, 300000);
-
-// Preload every tab so switching never blocks on a fetch. Each loader is
-// idempotent; the active tab's timer takes over for ongoing refreshes.
-(function preloadTabs() {
+// Init. In CLIENT_MODE the auth bootstrap below calls saStartApp() once
+// Firebase hands us an ID token; in local mode it fires immediately.
+function saStartApp() {
+  document.body.classList.remove('sa-authed-pending');
+  loadStatus();
+  loadActivityStats();
+  loadStyleStats();
+  loadDeployHealth();
+  setInterval(loadDeployHealth, 60000);
+  setInterval(loadStatus, 5000);
+  setInterval(loadActivityStats, 300000);
+  setInterval(loadStyleStats, 300000);
   setTimeout(() => {
     try { loadLogFiles(); _tabLoaded.logs = true; } catch {}
     try { buildActivityFilters(); loadActivity(); _tabLoaded.activity = true; } catch {}
     try { initTopFilters(); loadTopPosts(); _tabLoaded.top = true; } catch {}
     try { loadSettings(); _tabLoaded.settings = true; } catch {}
   }, 100);
+}
+window.saStartApp = saStartApp;
+
+// Auth bootstrap. CLIENT_MODE=0 (local operator): start immediately. Else
+// init Firebase, gate the app on a valid ID token, and hide admin-only UI
+// for project-scoped users based on /api/me claims.
+(function saAuthBootstrap() {
+  var cfg = window.SA_CONFIG || {};
+  if (!cfg.clientMode) { saStartApp(); return; }
+  if (!cfg.firebase || !cfg.firebase.apiKey) {
+    document.getElementById('sa-login-error').textContent = 'Auth not configured';
+    document.getElementById('sa-login-overlay').style.display = 'flex';
+    return;
+  }
+  firebase.initializeApp(cfg.firebase);
+  var fbAuth = firebase.auth();
+  var overlay = document.getElementById('sa-login-overlay');
+  var errEl = document.getElementById('sa-login-error');
+  var form = document.getElementById('sa-login-form');
+  var descEl = document.getElementById('sa-login-desc');
+  var submitBtn = document.getElementById('sa-login-submit');
+  var emailInput = document.getElementById('sa-login-email');
+  var descDefault = "Enter your email and we'll send you a sign-in link.";
+
+  var actionCodeSettings = {
+    url: window.location.origin + '/',
+    handleCodeInApp: true
+  };
+
+  // If user landed here by clicking a magic link, finish the sign-in.
+  if (fbAuth.isSignInWithEmailLink(window.location.href)) {
+    overlay.style.display = 'flex';
+    form.style.display = 'none';
+    descEl.textContent = 'Completing sign-in...';
+    var savedEmail = window.localStorage.getItem('saEmailForSignIn') || '';
+    if (!savedEmail) {
+      savedEmail = (window.prompt('Confirm your email for sign-in') || '').trim();
+    }
+    fbAuth.signInWithEmailLink(savedEmail, window.location.href).then(function() {
+      window.localStorage.removeItem('saEmailForSignIn');
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }).catch(function(err) {
+      form.style.display = '';
+      descEl.textContent = descDefault;
+      errEl.textContent = (err && err.message) || 'Sign-in link failed. Request a new one.';
+    });
+  }
+
+  form.addEventListener('submit', function(e) {
+    e.preventDefault();
+    errEl.textContent = '';
+    var email = emailInput.value.trim();
+    if (!email) return;
+    submitBtn.disabled = true;
+    fbAuth.sendSignInLinkToEmail(email, actionCodeSettings).then(function() {
+      window.localStorage.setItem('saEmailForSignIn', email);
+      form.style.display = 'none';
+      descEl.textContent = 'Check your email for a sign-in link. You can close this tab; the link will open it back up signed in.';
+    }).catch(function(err) {
+      errEl.textContent = err.message || 'Could not send link';
+    }).finally(function() {
+      submitBtn.disabled = false;
+    });
+  });
+  window.saSignOut = function() {
+    fbAuth.signOut().then(function() { location.reload(); });
+  };
+  fbAuth.onIdTokenChanged(function(user) {
+    if (!user) {
+      window.SA_ID_TOKEN = null;
+      document.body.classList.add('sa-authed-pending');
+      overlay.style.display = 'flex';
+      return;
+    }
+    user.getIdToken().then(function(tok) {
+      window.SA_ID_TOKEN = tok;
+      return fetch('/api/me').then(function(r) { return r.json(); });
+    }).then(function(me) {
+      var u = me && me.user;
+      if (!u) throw new Error('no user');
+      if (!u.admin) {
+        document.body.classList.add('sa-non-admin');
+        var btn = document.getElementById('sa-signout-btn');
+        if (btn) btn.style.display = '';
+      }
+      overlay.style.display = 'none';
+      saStartApp();
+    }).catch(function(err) {
+      errEl.textContent = (err && err.message) || 'Auth failed';
+      overlay.style.display = 'flex';
+    });
+  });
+  // Refresh token proactively so long sessions don't 401.
+  setInterval(function() {
+    var u = fbAuth.currentUser;
+    if (u) u.getIdToken(true).then(function(t) { window.SA_ID_TOKEN = t; }).catch(function(){});
+  }, 30 * 60 * 1000);
 })();
 </script>
 </body>
 </html>`;
+
+// Firebase Web SDK config for the dashboard bootstrap. Values are public
+// (this is the client-side apiKey, not a secret) but kept in env so a
+// different Firebase project can be pointed at the same server image.
+// Fallback to the s4l-app-prod config wired up on 2026-04-20.
+function firebaseWebConfig() {
+  return {
+    apiKey: process.env.FIREBASE_WEB_API_KEY || 'AIzaSyAjgA6fJx-a9aOSeUwrWfGRL1RVrguXG2Q',
+    authDomain: process.env.FIREBASE_AUTH_DOMAIN || 's4l-app-prod.firebaseapp.com',
+    projectId: process.env.FIREBASE_PROJECT_ID || 's4l-app-prod',
+  };
+}
+
+function renderHtml() {
+  return HTML
+    .replace('__SA_CLIENT_MODE_PLACEHOLDER__', JSON.stringify(auth.CLIENT_MODE))
+    .replace('__SA_FIREBASE_CONFIG_PLACEHOLDER__', JSON.stringify(firebaseWebConfig()));
+}
 
 // --- Server ---
 
@@ -4275,14 +4543,17 @@ const server = http.createServer((req, res) => {
   // CORS for local dev
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
-  if (req.url === '/' || req.url === '/index.html') {
+  const pathname = req.url.split('?')[0];
+  if (pathname === '/' || pathname === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(HTML);
-  } else if (req.url.startsWith('/api/')) {
-    handleApi(req, res);
+    res.end(renderHtml());
+  } else if (pathname.startsWith('/api/')) {
+    Promise.resolve(handleApi(req, res)).catch(e => {
+      try { json(res, { error: e.message || String(e) }, 500); } catch {}
+    });
   } else {
     res.writeHead(404);
     res.end('Not found');
@@ -4290,13 +4561,17 @@ const server = http.createServer((req, res) => {
 });
 
 function tryListen(port, maxAttempts = 10) {
-  server.listen(port, '127.0.0.1', () => {
+  // In CLIENT_MODE the server runs on Cloud Run and must bind publicly;
+  // otherwise keep localhost-only for the operator's own Mac.
+  const host = auth.CLIENT_MODE ? '0.0.0.0' : '127.0.0.1';
+  server.listen(port, host, () => {
     const actualPort = server.address().port;
-    console.log(`Social Autoposter dashboard running at http://localhost:${actualPort}`);
-    // Auto-open browser
-    const { platform } = os;
-    const cmd = platform === 'darwin' ? 'open' : platform === 'win32' ? 'start' : 'xdg-open';
-    try { execSync(`${cmd} http://localhost:${actualPort}`, { stdio: 'ignore' }); } catch {}
+    console.log(`Social Autoposter dashboard running at http://${host}:${actualPort}`);
+    if (!auth.CLIENT_MODE) {
+      const { platform } = os;
+      const cmd = platform === 'darwin' ? 'open' : platform === 'win32' ? 'start' : 'xdg-open';
+      try { execSync(`${cmd} http://localhost:${actualPort}`, { stdio: 'ignore' }); } catch {}
+    }
   });
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE' && maxAttempts > 1) {
