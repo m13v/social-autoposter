@@ -25,7 +25,6 @@ REPO_DIR = os.path.expanduser("~/social-autoposter")
 CONFIG_PATH = os.path.join(REPO_DIR, "config.json")
 REPLY_DB = os.path.join(REPO_DIR, "scripts", "reply_db.py")
 REDDIT_MCP_CONFIG = os.path.expanduser("~/.claude/browser-agent-configs/reddit-agent-mcp.json")
-API_KEY_KEYCHAIN_SERVICE = "Anthropic API Key Fazm"
 
 from engagement_styles import REPLY_STYLES as VALID_STYLES, get_styles_prompt, get_content_rules, get_anti_patterns
 
@@ -160,20 +159,6 @@ def ensure_mcp_config():
             with open(REDDIT_MCP_CONFIG, "w") as f:
                 json.dump(mcp, f, indent=2)
             return REDDIT_MCP_CONFIG
-    return None
-
-
-def get_api_key():
-    """Retrieve Anthropic API key from macOS keychain."""
-    try:
-        result = subprocess.run(
-            ["security", "find-generic-password", "-s", API_KEY_KEYCHAIN_SERVICE, "-w"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except Exception:
-        pass
     return None
 
 
