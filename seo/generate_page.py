@@ -395,6 +395,55 @@ A page that satisfies (3) but not (1) and (2) is incomplete. If your angle genui
 """
 
 
+def render_content_guardrails(product_cfg: dict) -> str:
+    """Emit hard content rules for products that define content_guardrails.
+
+    This is the only place where per-product content policy reaches the LLM.
+    The voice block is marketing guidance; this block is a set of do-not-cross
+    lines for traditions or domains that require it (e.g. the Goenka Vipassana
+    tradition reserves technique transmission for authorized teachers at
+    10-day courses, so the site must not teach the technique).
+    """
+    cg = product_cfg.get("content_guardrails") or {}
+    if not cg:
+        return ""
+    lines: list[str] = ["## Content guardrails (hard rules, non-negotiable)", ""]
+    summary = (cg.get("summary") or "").strip()
+    if summary:
+        lines.append(summary)
+        lines.append("")
+    do_not = cg.get("do_not") or []
+    if do_not:
+        lines.append("### Do NOT")
+        for item in do_not:
+            lines.append(f"- {item}")
+        lines.append("")
+    do_instead = cg.get("do_instead") or []
+    if do_instead:
+        lines.append("### Do instead")
+        for item in do_instead:
+            lines.append(f"- {item}")
+        lines.append("")
+    forbidden = cg.get("forbidden_phrases") or []
+    if forbidden:
+        lines.append("### Forbidden phrases (must not appear in the page)")
+        for item in forbidden:
+            lines.append(f"- {item!r}")
+        lines.append("")
+    redirect = (cg.get("redirect_language") or "").strip()
+    if redirect:
+        lines.append("### Redirect policy")
+        lines.append(redirect)
+        lines.append("")
+    lines.append(
+        "A page that violates any rule in this block must not be written. "
+        "If the keyword itself forces a violation to answer it, stop and report "
+        "`{\"success\": false, \"error\": \"content_guardrail_violation: <reason>\"}` "
+        "as the final JSON instead of shipping a page."
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def render_book_call_block(product_cfg: dict, registry: dict) -> str:
     """Emit the BookCallCTA requirement block if the product has a Cal.com link.
 
@@ -474,6 +523,7 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
     palette_block = render_palette(registry)
     quotas_block = render_quotas(registry)
     book_call_block = render_book_call_block(product_cfg, registry)
+    guardrails_block = render_content_guardrails(product_cfg)
     consumer_theme = detect_consumer_theme(repo)
 
     type_context = {
@@ -497,6 +547,7 @@ DIFFERENTIATOR: {differentiator}
 TRIGGER: {trigger}
 {trigger_context}
 
+{guardrails_block}
 ## Step 1 — Find an angle no competitor has
 
 Before you write anything, do research. Budget ~15 minutes for this step. It matters more than the writing.
@@ -642,14 +693,60 @@ Every page MUST include all of the following, but their PLACEMENT is flexible (n
 5. **JSON-LD structured data** — `<script type="application/ld+json">` tag. Import `articleSchema`, `breadcrumbListSchema`, and `faqPageSchema` from `@seo/components`.
 
 {book_call_block}
-## Step 5 — Typecheck, commit, and deploy
+## Step 5 — Typecheck, commit, deploy, and verify the Vercel build
 
-- Run `npx tsc --noEmit` in the repo to confirm the page compiles cleanly. Fix any errors you introduced before committing. Do not commit a file that fails typecheck.
-- Stage the new page file (and any new components you added).
+This step is a strict gate. You may not report success until a Vercel production deploy for your commit reaches state `READY`. Local typecheck passing is not enough. A 200 on the page is not enough. You must confirm the deploy state.
+
+**5a. Typecheck (mandatory, pre-commit).**
+
+- Run `npx tsc --noEmit` in the repo. If it reports ANY error, fix the code you introduced and re-run until clean. Never commit on a failing typecheck.
+- Common trap: `@seo/components` props are strictly typed. Pass primitives where primitives are expected (e.g., `SequenceDiagram.actors: string[]`, `SequenceDiagram.messages[].from: number`, `OrbitingCircles.items: ReactNode[]`). Confirm by reading the component source under `node_modules/@m13v/seo-components/src/components/` or `~/seo-components/src/components/` if the props shape is non-obvious.
+
+**5b. Commit and push.**
+
+- Stage the new page file (and any new shared components you added).
 - Commit on the current branch with a clear message naming the keyword.
 - Push to origin main (or whatever the repo's main branch is).
-- Build and deploy per the repo's conventions. If the repo uses Vercel, push alone may trigger deploy.
-- Confirm the commit is on origin before reporting.
+- Confirm the commit is on origin. Record the 7-char SHA.
+
+**5c. Poll Vercel for deploy status (mandatory).**
+
+If the repo has `.vercel/project.json`, run this polling loop from bash. Get the token once:
+
+```
+VERCEL_TOKEN=$(python3 -c "import json; print(json.load(open('/Users/matthewdi/Library/Application Support/com.vercel.cli/auth.json'))['token'])")
+PROJECT_ID=$(python3 -c "import json; print(json.load(open('.vercel/project.json'))['projectId'])")
+TEAM_ID=$(python3 -c "import json; print(json.load(open('.vercel/project.json'))['orgId'])")
+SHA=<your 40-char commit SHA from git rev-parse HEAD>
+```
+
+Then poll (up to 30 attempts, 10s apart = ~5 min budget):
+
+```
+curl -s -H "Authorization: Bearer $VERCEL_TOKEN" \
+  "https://api.vercel.com/v6/deployments?teamId=$TEAM_ID&projectId=$PROJECT_ID&target=production&limit=10" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); [print(x['state'], x.get('meta',{{}}).get('githubCommitSha',''), x['uid'], x.get('inspectorUrl','')) for x in d['deployments']]"
+```
+
+Find the row matching your $SHA. Terminal states are `READY` (good), `ERROR` (failed), `CANCELED` (retry may be needed). `BUILDING`, `QUEUED`, `INITIALIZING` — keep polling.
+
+**5d. If deploy fails, fix and retry (up to 2 times).**
+
+If the state is `ERROR`, fetch the build log and fix the problem:
+
+```
+curl -s -H "Authorization: Bearer $VERCEL_TOKEN" \
+  "https://api.vercel.com/v3/deployments/<deploy_uid>/events?teamId=$TEAM_ID&builds=1&direction=backward&limit=100" \
+  | python3 -c "import sys,json; [print(e.get('payload',{{}}).get('text','')) for e in json.load(sys.stdin) if e.get('type') in ('stdout','stderr','command','build-error')]"
+```
+
+Read the log. The last few error lines usually show the file + line that broke the prerender. Do NOT guess: locate the exact file the build complains about, read it, and fix only what's broken (typically your new page, but occasionally a shared component you added).
+
+After fixing, re-run `npx tsc --noEmit`, commit, push, then poll again with the new SHA. Budget: at most 2 self-heal iterations. If you cannot get a READY state in 2 tries, STOP and report `success: false` with the deploy error message as the reason. Do not paper over the failure with `success: true`; a false success here corrupts the DB and blocks future generations.
+
+**5e. Final live-URL sanity check.**
+
+Only after the Vercel deploy is `READY`, run `curl -sI -o /dev/null -w "%{{http_code}}\\n" {page_url}` — you should see 200. If it's still 404 after 30s (Vercel alias propagation), wait 30s more and retry once. If still 404, report the problem instead of silently succeeding.
 
 ## Step 6 — Report back
 
@@ -1019,13 +1116,34 @@ def update_state(trigger: str, product: str, keyword: str, status: str,
         pass  # caller manages state
 
 
+def find_existing_target_path(repo_path: str, content_type: str,
+                              slug: str) -> str | None:
+    """Return first existing candidate page path for this slug, or None.
+
+    Protects hand-edited or previously-generated pages from silent overwrite.
+    The generator invokes Claude with --dangerously-skip-permissions, so there
+    is no interactive guard inside the Claude session; we must gate at the
+    Python layer before calling out. Any match across the candidate list means
+    'a page already lives here' — abort unless the caller passes force=True.
+    """
+    ct = CONTENT_TYPES.get(content_type, CONTENT_TYPES["guide"])
+    for tmpl in ct["path_candidates"]:
+        p = os.path.join(repo_path, tmpl.format(slug=slug))
+        if os.path.exists(p):
+            return p
+    return None
+
+
 def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
-             content_type: str | None = None) -> dict:
+             content_type: str | None = None, force: bool = False) -> dict:
     """
     Full generation lifecycle. Caller already marked the row in_progress.
     Returns a structured result; also updates state on success/failure.
 
     content_type: override classifier. If None, classify_content_type() runs.
+    force: if True, overwrite an existing target file. Default False — abort
+           with overwrite_blocked status so hand-edited pages are never
+           clobbered by a cron tick.
     """
     if content_type is None:
         content_type = classify_content_type(keyword)
@@ -1044,6 +1162,17 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
                      content_type=content_type)
         return {"success": False, "error": f"repo not found: {repo_path}",
                 "content_type": content_type}
+
+    existing = find_existing_target_path(repo_path, content_type, slug)
+    if existing and not force:
+        rel = os.path.relpath(existing, repo_path)
+        note = f"overwrite_blocked: target already exists at {rel}"
+        update_state(trigger, product, keyword, "done",
+                     notes=note[:500], slug=slug,
+                     content_type=content_type)
+        return {"success": False, "error": note,
+                "content_type": content_type,
+                "existing_path": existing}
 
     setup = check_consumer_setup(repo_path)
     if not setup["ok"]:
@@ -1186,11 +1315,14 @@ def main() -> int:
     ap.add_argument("--trigger", choices=["serp", "gsc", "manual", "reddit"], default="manual")
     ap.add_argument("--content-type", choices=list(CONTENT_TYPES.keys()), default=None,
                     help="Override the regex classifier. Default: auto-classify from keyword.")
+    ap.add_argument("--force", action="store_true",
+                    help="Overwrite an existing page at the target path. Default: abort if the target file already exists.")
     args = ap.parse_args()
 
     result = generate(product=args.product, keyword=args.keyword,
                       slug=args.slug, trigger=args.trigger,
-                      content_type=args.content_type)
+                      content_type=args.content_type,
+                      force=args.force)
     print(json.dumps(result, indent=2, default=str))
     return 0 if result.get("success") else 1
 
