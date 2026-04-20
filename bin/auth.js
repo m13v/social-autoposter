@@ -51,7 +51,10 @@ async function verifyAuth(req, pathname) {
     return { ok: true, user: { uid: 'local', email: 'local', admin: true, projects: [] } };
   }
   const token = extractToken(req);
-  if (!token) return { ok: false, status: 401, error: 'missing_token' };
+  if (!token) {
+    console.warn(JSON.stringify({ event: 'auth_reject', reason: 'missing_token', path: pathname, authHeaderPresent: !!(req.headers['authorization'] || req.headers['Authorization']) }));
+    return { ok: false, status: 401, error: 'missing_token' };
+  }
   try {
     const decoded = await getAdmin().auth().verifyIdToken(token);
     const user = {
@@ -61,10 +64,12 @@ async function verifyAuth(req, pathname) {
       projects: Array.isArray(decoded.projects) ? decoded.projects : [],
     };
     if (isAdminOnly(pathname) && !user.admin) {
+      console.warn(JSON.stringify({ event: 'auth_reject', reason: 'admin_required', path: pathname, uid: user.uid, email: user.email }));
       return { ok: false, status: 403, error: 'admin_required' };
     }
     return { ok: true, user };
   } catch (e) {
+    console.warn(JSON.stringify({ event: 'auth_reject', reason: 'invalid_token', path: pathname, errCode: e.code || null, errMessage: e.message, tokenHead: token.slice(0, 20), tokenLen: token.length }));
     return { ok: false, status: 401, error: 'invalid_token', detail: e.message };
   }
 }
