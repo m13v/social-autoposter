@@ -37,6 +37,15 @@ log "Phase A: Scanning GitHub issues for replies..."
 python3 "$REPO_DIR/scripts/scan_github_replies.py" 2>&1 | tee -a "$LOG_FILE"
 
 # ═══════════════════════════════════════════════════════
+# PHASE A.5: Refresh engagement stats on our GitHub comments
+# Reactions pulled via gh api; reply counts tallied from the replies
+# table that Phase A just refreshed. Stored on posts.upvotes +
+# posts.comments_count.
+# ═══════════════════════════════════════════════════════
+log "Phase A.5: Updating github engagement stats (reactions + reply counts)..."
+python3 "$REPO_DIR/scripts/update_stats.py" --github-only --quiet 2>&1 | tee -a "$LOG_FILE"
+
+# ═══════════════════════════════════════════════════════
 # PHASE B: Respond to pending GitHub replies
 # ═══════════════════════════════════════════════════════
 PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='github' AND status='pending';")
