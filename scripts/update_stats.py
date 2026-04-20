@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Fetch engagement stats for Reddit + Moltbook posts via public APIs.
 
-Updates upvotes, comments_count, thread_engagement, and status in the DB.
-No browser needed.
+Updates upvotes, comments_count, and status in the DB. No browser needed.
+Reddit profile scrape (Step 1 of stats.sh) covers most stats; this script
+acts as deletion/removal detection and as a fallback for rows the scrape
+couldn't match.
 
 Usage:
     python3 scripts/update_stats.py [--db PATH] [--quiet]
@@ -171,8 +173,11 @@ def update_reddit(db, user_agent, config=None, quiet=False):
     errors_404 = errors_rate_limited = errors_empty = errors_other = 0
     results = []
 
-    # If Step 2 (profile scrape) just ran, thread rows were already refreshed
-    # and have a recent engagement_updated_at. Skip them here to save API calls.
+    # If Step 1 (profile scrape) just ran, the row was already refreshed and
+    # has a recent engagement_updated_at. Skip to save API calls. Applies to
+    # both thread and comment rows since the scrape now captures comment-row
+    # scores too. Deletion detection is delayed by up to FRESH_WINDOW for
+    # those rows, which is acceptable (next cycle catches it).
     FRESH_WINDOW = timedelta(hours=4)
     now_utc = datetime.now(timezone.utc)
 
@@ -190,15 +195,10 @@ def update_reddit(db, user_agent, config=None, quiet=False):
         posted_at = post[6]
         engagement_updated_at = post[7]
 
-        # Skip rows refreshed by Step 2 within the fresh window. Threads picked
-        # up by the profile scrape fall entirely into this branch; comment rows
-        # only hit it when their views were scraped AND the API already ran
-        # recently for score.
-        is_thread_row = not bool(
-            re.search(r"/comment/[a-z0-9]+", our_url or "") or
-            re.search(r"/comments/[a-z0-9]+/[^/]+/[a-z0-9]+", our_url or "")
-        )
-        if is_thread_row and engagement_updated_at:
+        # Skip any row (thread or comment) refreshed by Step 1 within the
+        # fresh window. Step 1 captures views + upvotes + comments_count for
+        # both row types, so all stats are covered without an API hit.
+        if engagement_updated_at:
             eu = engagement_updated_at
             if eu.tzinfo is None:
                 eu = eu.replace(tzinfo=timezone.utc)
@@ -315,11 +315,10 @@ def update_reddit(db, user_agent, config=None, quiet=False):
                         print(f"REMOVAL PENDING [{post_id}] (detection {detect_count}/2)")
                 continue
 
-            engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
             db.execute(
-                "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
+                "UPDATE posts SET upvotes=%s, comments_count=%s, "
                 "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
-                [score, comment_reply_count, engagement, post_id],
+                [score, comment_reply_count, post_id],
             )
             updated += 1
             results.append({"id": post_id, "score": score, "comment_replies": comment_reply_count,
@@ -350,11 +349,10 @@ def update_reddit(db, user_agent, config=None, quiet=False):
                             print(f"REMOVAL PENDING (thread) [{post_id}] (detection {detect_count}/2)")
                     continue
 
-                engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
                 db.execute(
-                    "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
+                    "UPDATE posts SET upvotes=%s, comments_count=%s, "
                     "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
-                    [thread_score, thread_comments, engagement, post_id],
+                    [thread_score, thread_comments, post_id],
                 )
                 updated += 1
                 results.append({"id": post_id, "score": thread_score, "thread_score": thread_score,
@@ -378,11 +376,10 @@ def update_reddit(db, user_agent, config=None, quiet=False):
                         else:
                             # Found our comment with stats — update
                             score = cd.get("score", 0)
-                            engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
                             db.execute(
-                                "UPDATE posts SET upvotes=%s, thread_engagement=%s, "
+                                "UPDATE posts SET upvotes=%s, "
                                 "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
-                                [score, engagement, post_id],
+                                [score, post_id],
                             )
                             updated += 1
                             results.append({"id": post_id, "score": score, "thread_score": thread_score,
@@ -407,10 +404,9 @@ def update_reddit(db, user_agent, config=None, quiet=False):
                             print(f"REMOVAL PENDING (no permalink) [{post_id}] (detection {detect_count}/2)")
                 elif not our_found:
                     # Comment not in top-level replies — just update checked timestamp
-                    engagement = json.dumps({"thread_score": thread_score, "thread_comments": thread_comments})
                     db.execute(
-                        "UPDATE posts SET thread_engagement=%s, status_checked_at=NOW() WHERE id=%s",
-                        [engagement, post_id],
+                        "UPDATE posts SET status_checked_at=NOW() WHERE id=%s",
+                        [post_id],
                     )
                     if not quiet:
                         print(f"SKIP (no permalink, comment not in top-level) [{post_id}]")
@@ -430,7 +426,7 @@ def update_reddit(db, user_agent, config=None, quiet=False):
     if skipped and not quiet:
         print(f"  Skipped {skipped} stable posts (2+ scans unchanged, older than 3 days)")
     if skipped_fresh and not quiet:
-        print(f"  Skipped {skipped_fresh} thread rows refreshed by Step 2 within 4h")
+        print(f"  Skipped {skipped_fresh} rows refreshed by Step 1 within 4h")
     return {"total": total, "updated": updated, "deleted": deleted, "removed": removed,
             "errors": errors,
             "errors_404": errors_404,
@@ -714,18 +710,10 @@ def update_moltbook(db, api_key, quiet=False):
             verification = our_comment.get("verification_status", "unknown")
             thread_comment_count = data.get("count", 0)
 
-            engagement = json.dumps({
-                "comment_upvotes": comment_upvotes,
-                "comment_score": comment_score,
-                "comment_replies": comment_replies,
-                "verification": verification,
-                "thread_comments": thread_comment_count,
-            })
-
             db.execute(
-                "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
+                "UPDATE posts SET upvotes=%s, comments_count=%s, "
                 "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
-                [comment_upvotes, comment_replies, engagement, post_id],
+                [comment_upvotes, comment_replies, post_id],
             )
             updated += 1
             results.append({"id": post_id, "upvotes": comment_upvotes,
@@ -783,12 +771,11 @@ def update_moltbook(db, api_key, quiet=False):
             comment_count = post_data.get("comment_count", post_data.get("comments_count", 0))
             score = post_data.get("score", 0)
             views = post_data.get("views", 0)
-            engagement = json.dumps({"score": score, "upvotes": upvotes, "comment_count": comment_count, "views": views})
 
             db.execute(
-                "UPDATE posts SET upvotes=%s, comments_count=%s, views=%s, thread_engagement=%s, "
+                "UPDATE posts SET upvotes=%s, comments_count=%s, views=%s, "
                 "engagement_updated_at=NOW(), status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
-                [upvotes, comment_count, views, engagement, post_id],
+                [upvotes, comment_count, views, post_id],
             )
             updated += 1
             results.append({"id": post_id, "upvotes": upvotes, "score": score,
@@ -803,7 +790,6 @@ def update_github(db, quiet=False, limit=None):
 
     Stores reactions.total_count in posts.upvotes and the count of replies
     detected by scan_github_replies.py in posts.comments_count.
-    Per-emoji reaction breakdown goes into thread_engagement JSON.
     """
     import subprocess
 
@@ -886,26 +872,11 @@ def update_github(db, quiet=False, limit=None):
         ).fetchone()
         reply_count = int(row[0] or 0)
 
-        engagement = json.dumps({
-            "reactions": {
-                "total": total_reactions,
-                "+1": reactions.get("+1", 0),
-                "-1": reactions.get("-1", 0),
-                "laugh": reactions.get("laugh", 0),
-                "hooray": reactions.get("hooray", 0),
-                "confused": reactions.get("confused", 0),
-                "heart": reactions.get("heart", 0),
-                "rocket": reactions.get("rocket", 0),
-                "eyes": reactions.get("eyes", 0),
-            },
-            "replies": reply_count,
-        })
-
         db.execute(
-            "UPDATE posts SET upvotes=%s, comments_count=%s, thread_engagement=%s, "
+            "UPDATE posts SET upvotes=%s, comments_count=%s, "
             "engagement_updated_at=NOW(), status_checked_at=NOW(), "
             "deletion_detect_count=0 WHERE id=%s",
-            [total_reactions, reply_count, engagement, post_id],
+            [total_reactions, reply_count, post_id],
         )
         updated += 1
         if total_reactions or reply_count:
@@ -1037,26 +1008,18 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
         retweets = tweet.get("retweets") or 0
         bookmarks = tweet.get("bookmarks") or 0
 
-        engagement = json.dumps({
-            "likes": likes,
-            "retweets": retweets,
-            "replies": replies,
-            "bookmarks": bookmarks,
-            "views": views,
-        })
-
         if audit_mode:
             db.execute(
                 "UPDATE posts SET views=%s, upvotes=%s, comments_count=%s, "
-                "thread_engagement=%s, engagement_updated_at=NOW(), "
+                "engagement_updated_at=NOW(), "
                 "status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
-                [views, likes, replies, engagement, post_id],
+                [views, likes, replies, post_id],
             )
         else:
             db.execute(
                 "UPDATE posts SET views=%s, upvotes=%s, comments_count=%s, "
-                "thread_engagement=%s, engagement_updated_at=NOW(), deletion_detect_count=0 WHERE id=%s",
-                [views, likes, replies, engagement, post_id],
+                "engagement_updated_at=NOW(), deletion_detect_count=0 WHERE id=%s",
+                [views, likes, replies, post_id],
             )
 
         updated += 1
