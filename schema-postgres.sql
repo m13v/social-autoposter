@@ -149,7 +149,9 @@ ALTER TABLE dms ADD COLUMN IF NOT EXISTS target_project TEXT;              -- pr
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS qualification_status TEXT DEFAULT 'pending';  -- pending | asked | answered | qualified | disqualified
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS qualification_notes TEXT;
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS booking_link_sent_at TIMESTAMP;
-ALTER TABLE dms ADD COLUMN IF NOT EXISTS icp_precheck TEXT;                -- pass | fail | ambiguous (labelled at outreach, not used as filter)
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS icp_precheck TEXT;                -- DEPRECATED: superseded by icp_matches; kept during transition
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS icp_matches JSONB NOT NULL DEFAULT '[]'::jsonb;  -- [{project,label,notes,at}, ...] per-project ICP verdicts
+CREATE INDEX IF NOT EXISTS idx_dms_icp_matches ON dms USING gin (icp_matches);
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS prospect_id INTEGER;              -- FK added below after prospects table defined
 
 -- prospects: persistent per-(platform, author) record. One person can have multiple DMs over time.
@@ -242,4 +244,17 @@ CREATE INDEX IF NOT EXISTS idx_posts_claude_session       ON posts(claude_sessio
 CREATE INDEX IF NOT EXISTS idx_replies_claude_session     ON replies(claude_session_id)     WHERE claude_session_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_dms_claude_session         ON dms(claude_session_id)         WHERE claude_session_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_dm_messages_claude_session ON dm_messages(claude_session_id) WHERE claude_session_id IS NOT NULL;
+
+-- Precomputed dashboard snapshots. Local operator writes here via
+-- scripts/precompute_dashboard_stats.py on a launchd timer; Cloud Run
+-- reads the same rows so hosted clients see warm stats without needing
+-- the operator's disk. Key is the snapshot filename (funnel_stats_7d,
+-- activity_stats_24h, etc.) and updated_at is the source of truth for
+-- freshness (bin/server.js applies a max-age like the on-disk path did).
+CREATE TABLE IF NOT EXISTS dashboard_cache (
+  cache_key   TEXT PRIMARY KEY,
+  payload     JSONB NOT NULL,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_dashboard_cache_updated ON dashboard_cache(updated_at DESC);
 
