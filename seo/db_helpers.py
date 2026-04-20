@@ -26,6 +26,41 @@ def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"])
 
 
+def load_forbidden_keywords(product):
+    """Return the list of forbidden-keyword patterns configured for this product.
+
+    Reads from config.json projects[].landing_pages.forbidden_keywords. Matching
+    is case-insensitive substring; the patterns are meant to be surface-form
+    search fragments (e.g. 'body scan'), not regex.
+    """
+    cfg_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "config.json",
+    )
+    try:
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+    for p in cfg.get("projects", []):
+        if p.get("name", "").lower() == (product or "").lower():
+            lp = p.get("landing_pages") or {}
+            return [str(x).lower() for x in (lp.get("forbidden_keywords") or [])]
+    return []
+
+
+def match_forbidden(product, keyword):
+    """Return the first forbidden pattern matching this keyword, or ''.
+
+    Case-insensitive substring match. '' means not forbidden.
+    """
+    kw = (keyword or "").lower()
+    for pattern in load_forbidden_keywords(product):
+        if pattern and pattern in kw:
+            return pattern
+    return ""
+
+
 def pick_next_keyword(product):
     """Pick next keyword: pending (ready to build) first, then unscored."""
     conn = get_conn()
@@ -168,5 +203,9 @@ if __name__ == "__main__":
     elif cmd == "check_slug":
         slug = sys.argv[3]
         print("exists" if check_slug_exists(product, slug) else "new")
+    elif cmd == "check_forbidden":
+        keyword = sys.argv[3]
+        match = match_forbidden(product, keyword)
+        print(match if match else "ok")
     else:
-        print("Usage: db_helpers.py <pick|update|has_work|report|check_slug> <product> [args]")
+        print("Usage: db_helpers.py <pick|update|has_work|report|check_slug|check_forbidden> <product> [args]")
