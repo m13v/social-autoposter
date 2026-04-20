@@ -348,6 +348,67 @@ def set_interest(conn, dm_id, interest):
     print(f"  Set interest_level={interest} for DM #{dm_id}")
 
 
+def set_project(conn, dm_id, project):
+    conn.execute("UPDATE dms SET project_name = %s WHERE id = %s", (project, dm_id))
+    conn.commit()
+    print(f"  Set project_name={project} for DM #{dm_id}")
+
+
+def set_target_project(conn, dm_id, project):
+    conn.execute("UPDATE dms SET target_project = %s WHERE id = %s", (project, dm_id))
+    conn.commit()
+    print(f"  Set target_project={project} for DM #{dm_id}")
+
+
+def set_qualification(conn, dm_id, status, notes=None):
+    if notes is not None:
+        conn.execute(
+            "UPDATE dms SET qualification_status = %s, qualification_notes = %s WHERE id = %s",
+            (status, notes, dm_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE dms SET qualification_status = %s WHERE id = %s",
+            (status, dm_id),
+        )
+    conn.commit()
+    suffix = f" (notes: {notes[:60]}...)" if notes else ""
+    print(f"  Set qualification_status={status} for DM #{dm_id}{suffix}")
+
+
+def mark_booking_sent(conn, dm_id):
+    conn.execute("UPDATE dms SET booking_link_sent_at = NOW() WHERE id = %s", (dm_id,))
+    conn.commit()
+    print(f"  Set booking_link_sent_at=NOW() for DM #{dm_id}")
+
+
+def set_icp_precheck(conn, dm_id, label, notes=None):
+    """Label-only ICP pre-check at outreach time. Does NOT gate sending."""
+    if notes is not None:
+        # Append notes to qualification_notes, keyed with an icp: prefix.
+        prefix = f"icp:{label} — {notes}"
+        conn.execute(
+            """
+            UPDATE dms
+            SET icp_precheck = %s,
+                qualification_notes = CASE
+                    WHEN qualification_notes IS NULL OR qualification_notes = ''
+                    THEN %s
+                    ELSE qualification_notes || E'\n' || %s
+                END
+            WHERE id = %s
+            """,
+            (label, prefix, prefix, dm_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE dms SET icp_precheck = %s WHERE id = %s", (label, dm_id)
+        )
+    conn.commit()
+    suffix = f" (notes: {notes[:60]}...)" if notes else ""
+    print(f"  Set icp_precheck={label} for DM #{dm_id}{suffix}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="DM conversation tracker")
     sub = parser.add_subparsers(dest="command")
@@ -396,6 +457,29 @@ def main():
 
     sub.add_parser("show-flagged", help="Show conversations needing human attention")
 
+    p_proj = sub.add_parser("set-project", help="Set project_name (project we recommended)")
+    p_proj.add_argument("--dm-id", type=int, required=True)
+    p_proj.add_argument("--project", required=True)
+
+    p_tproj = sub.add_parser("set-target-project", help="Set target_project (project we're pursuing)")
+    p_tproj.add_argument("--dm-id", type=int, required=True)
+    p_tproj.add_argument("--project", required=True)
+
+    p_qual = sub.add_parser("set-qualification", help="Set qualification_status and optional notes")
+    p_qual.add_argument("--dm-id", type=int, required=True)
+    p_qual.add_argument("--status", required=True,
+                         choices=["pending", "asked", "answered", "qualified", "disqualified"])
+    p_qual.add_argument("--notes", default=None)
+
+    p_book = sub.add_parser("mark-booking-sent", help="Record that a booking link was shared")
+    p_book.add_argument("--dm-id", type=int, required=True)
+
+    p_icp = sub.add_parser("set-icp-precheck", help="Label-only ICP verdict at outreach time (no filter)")
+    p_icp.add_argument("--dm-id", type=int, required=True)
+    p_icp.add_argument("--label", required=True,
+                        choices=["icp_match", "icp_miss", "disqualified", "unknown"])
+    p_icp.add_argument("--notes", default=None)
+
     args = parser.parse_args()
 
     if not args.command:
@@ -429,6 +513,16 @@ def main():
         flag_human(conn, args.dm_id, args.reason)
     elif args.command == "show-flagged":
         show_flagged(conn)
+    elif args.command == "set-project":
+        set_project(conn, args.dm_id, args.project)
+    elif args.command == "set-target-project":
+        set_target_project(conn, args.dm_id, args.project)
+    elif args.command == "set-qualification":
+        set_qualification(conn, args.dm_id, args.status, args.notes)
+    elif args.command == "mark-booking-sent":
+        mark_booking_sent(conn, args.dm_id)
+    elif args.command == "set-icp-precheck":
+        set_icp_precheck(conn, args.dm_id, args.label, args.notes)
 
     conn.close()
 
