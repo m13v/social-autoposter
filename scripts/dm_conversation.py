@@ -382,31 +382,56 @@ def mark_booking_sent(conn, dm_id):
     print(f"  Set booking_link_sent_at=NOW() for DM #{dm_id}")
 
 
-def set_icp_precheck(conn, dm_id, label, notes=None):
-    """Label-only ICP pre-check at outreach time. Does NOT gate sending."""
+def set_icp_precheck(conn, dm_id, label, project, notes=None):
+    """Upsert a per-project ICP verdict into dms.icp_matches (JSONB array).
+    Does NOT gate sending. Also syncs icp_precheck TEXT with the entry matching
+    the row's current target_project so legacy readers still see a label."""
+    import json as _json
+
+    if not project:
+        raise ValueError("set_icp_precheck requires project (name from config.json)")
+
+    entry = {
+        "project": project,
+        "label":   label,
+        "notes":   notes,
+        "at":      datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+    conn.execute(
+        """
+        UPDATE dms
+        SET icp_matches = COALESCE(
+            (SELECT jsonb_agg(e) FROM jsonb_array_elements(icp_matches) e
+             WHERE e->>'project' IS DISTINCT FROM %s),
+            '[]'::jsonb
+        ) || %s::jsonb,
+            icp_precheck = CASE
+                WHEN target_project = %s THEN %s
+                ELSE icp_precheck
+            END
+        WHERE id = %s
+        """,
+        (project, _json.dumps(entry), project, label, dm_id),
+    )
+
     if notes is not None:
-        # Append notes to qualification_notes, keyed with an icp: prefix.
-        prefix = f"icp:{label} — {notes}"
+        prefix = f"icp:{project}:{label} - {notes}"
         conn.execute(
             """
             UPDATE dms
-            SET icp_precheck = %s,
-                qualification_notes = CASE
-                    WHEN qualification_notes IS NULL OR qualification_notes = ''
-                    THEN %s
-                    ELSE qualification_notes || E'\n' || %s
-                END
+            SET qualification_notes = CASE
+                WHEN qualification_notes IS NULL OR qualification_notes = ''
+                THEN %s
+                ELSE qualification_notes || E'\n' || %s
+            END
             WHERE id = %s
             """,
-            (label, prefix, prefix, dm_id),
-        )
-    else:
-        conn.execute(
-            "UPDATE dms SET icp_precheck = %s WHERE id = %s", (label, dm_id)
+            (prefix, prefix, dm_id),
         )
     conn.commit()
     suffix = f" (notes: {notes[:60]}...)" if notes else ""
-    print(f"  Set icp_precheck={label} for DM #{dm_id}{suffix}")
+    print(f"  Upserted icp_matches[{project}]={label} for DM #{dm_id}{suffix}")
 
 
 def main():
@@ -474,10 +499,12 @@ def main():
     p_book = sub.add_parser("mark-booking-sent", help="Record that a booking link was shared")
     p_book.add_argument("--dm-id", type=int, required=True)
 
-    p_icp = sub.add_parser("set-icp-precheck", help="Label-only ICP verdict at outreach time (no filter)")
+    p_icp = sub.add_parser("set-icp-precheck", help="Upsert per-project ICP verdict into icp_matches array (no filter)")
     p_icp.add_argument("--dm-id", type=int, required=True)
     p_icp.add_argument("--label", required=True,
                         choices=["icp_match", "icp_miss", "disqualified", "unknown"])
+    p_icp.add_argument("--project", required=True,
+                       help="Project name from config.json (e.g., 'mk0r', 'Assrt')")
     p_icp.add_argument("--notes", default=None)
 
     args = parser.parse_args()
@@ -522,7 +549,7 @@ def main():
     elif args.command == "mark-booking-sent":
         mark_booking_sent(conn, args.dm_id)
     elif args.command == "set-icp-precheck":
-        set_icp_precheck(conn, args.dm_id, args.label, args.notes)
+        set_icp_precheck(conn, args.dm_id, args.label, args.project, args.notes)
 
     conn.close()
 
