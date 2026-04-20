@@ -1,5 +1,20 @@
 # Social Autoposter
 
+## Source of truth for active projects: config.json
+
+`~/social-autoposter/config.json` is the authoritative list of client websites. Every project entry has `landing_pages.repo`, `website`, `gsc_property`, and posting configuration. When writing any script, audit, or dashboard feature that needs to iterate over "all our websites," drive it from `projects[]` in `config.json` instead of hardcoding a list.
+
+- New website? Add it to `config.json` first; everything else (SEO pipeline, analytics checker, dashboard) picks it up automatically.
+- Never hardcode project names, repo paths, or domains anywhere outside `config.json`. Hardcoded lists drift; `config.json` does not.
+
+## Analytics wiring check
+
+`scripts/check_analytics_wiring.py` audits every project in `config.json` for correct PostHog + @m13v/seo-components wiring. It catches the class of silent-failure bug where `window.posthog` is never set and seo-components helpers (NewsletterSignup, trackScheduleClick, etc.) no-op.
+
+- Run on demand: `python3 scripts/check_analytics_wiring.py`
+- Exits 1 on any BROKEN project; safe to wire into pre-commit or CI.
+- Preferred fix for new or failing sites: mount `<FullSiteAnalytics>` from `@m13v/seo-components` (handles init + `window.posthog` + `<SeoAnalyticsProvider>` in one component).
+
 ## SKILL.md - Single File, No Copies
 
 `SKILL.md` lives at the repo root. There is no `skill/SKILL.md`.
