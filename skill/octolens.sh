@@ -31,7 +31,19 @@ esac
 # each other, but repeat invocations of the same platform queue up.
 LOCK_NAME="octolens${PLATFORM:+-$PLATFORM}"
 
+# Browser-profile lock first (shared across pipelines that use the same browser),
+# then the pipeline-specific lock. Alphabetical for multi-platform runs.
 source "$(dirname "$0")/lock.sh"
+case "${PLATFORM:-all}" in
+    linkedin) acquire_lock "linkedin-browser" 3600 ;;
+    reddit)   acquire_lock "reddit-browser" 3600 ;;
+    twitter|x) acquire_lock "twitter-browser" 3600 ;;
+    all)
+        acquire_lock "linkedin-browser" 3600
+        acquire_lock "reddit-browser" 3600
+        acquire_lock "twitter-browser" 3600
+        ;;
+esac
 acquire_lock "$LOCK_NAME" 3600
 
 cd ~/social-autoposter
@@ -84,7 +96,7 @@ fi
 
 # Run Claude with the social-autoposter skill to engage
 echo "Starting Claude engagement..." | tee -a "$LOG_FILE"
-echo "$CANDIDATES" | claude --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/all-agents-mcp.json" -p "You are running the social-autoposter Octolens engagement workflow.
+echo "$CANDIDATES" | "$REPO_DIR/scripts/run_claude.sh" "octolens" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/all-agents-mcp.json" -p "You are running the social-autoposter Octolens engagement workflow.
 
 Here are the Octolens mention candidates (JSON):
 $(echo "$CANDIDATES")
