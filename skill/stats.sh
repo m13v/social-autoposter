@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # stats.sh — Full stats pipeline:
-#   Step 1: API stats (upvotes, comments, deleted/removed) via Python
-#   Step 2: Reddit view counts via Claude + Playwright (browser required)
+#   Step 1: Reddit profile scrape (headless Playwright, views + upvotes + comments_count)
+#   Step 2: API stats (deletion/removal detection + stats fallback) via Python
 #   Step 3: X/Twitter stats via Claude + Playwright (browser required)
 #   Step 4: LinkedIn stats via Claude + Playwright (browser required)
 # Called by launchd every 6 hours.
@@ -24,6 +24,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/platform.sh"
 REPO_DIR="$HOME/social-autoposter"
 SKILL_FILE="$REPO_DIR/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"
+
+# shellcheck source=/dev/null
+source "$(dirname "${BASH_SOURCE[0]}")/lock.sh"
 
 # Parse args (support --platform <name> and --quiet in any order).
 QUIET=""
@@ -60,18 +63,18 @@ case "$PLATFORM" in
 esac
 
 # Decide which steps to run.
+# Variable naming: RUN_STEP1 = Reddit profile scrape, RUN_STEP2 = API stats.
 # No --platform means "all" (legacy behavior, kept for manual invocations).
 if [ -z "$PLATFORM" ]; then
     RUN_STEP1=1; RUN_STEP2=1; RUN_STEP3=1; RUN_STEP4=1
 else
-    # Per-platform mode: Step 1 is narrowed via update_stats.py's per-platform
-    # flags, and only the one browser step for this platform runs.
-    RUN_STEP2=0; RUN_STEP3=0; RUN_STEP4=0
+    # Per-platform mode: default everything off, then enable per platform.
+    RUN_STEP1=0; RUN_STEP2=0; RUN_STEP3=0; RUN_STEP4=0
     case "$PLATFORM" in
-        reddit)   RUN_STEP1=1; RUN_STEP2=1 ;;
-        twitter)  RUN_STEP1=0; RUN_STEP3=1 ;;  # Step 3 handles Twitter API directly.
-        linkedin) RUN_STEP1=0; RUN_STEP4=1 ;;  # LinkedIn has no cheap API leg.
-        moltbook) RUN_STEP1=1 ;;               # API-only, covered by Step 1.
+        reddit)   RUN_STEP1=1; RUN_STEP2=1 ;;  # scrape then API.
+        twitter)  RUN_STEP3=1 ;;                # Step 3 handles Twitter API directly.
+        linkedin) RUN_STEP4=1 ;;                # LinkedIn has no cheap API leg.
+        moltbook) RUN_STEP2=1 ;;                # API-only, covered by Step 2.
     esac
 fi
 
@@ -94,25 +97,31 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════
-# STEP 2: Reddit profile scrape (headless Playwright, no Claude session).
-# Runs BEFORE Step 1 so thread rows get views + score + comments_count in a
-# single no-API pass. Step 1 then skips any thread refreshed within the last
-# 4h and spends the API budget only on comment rows.
+# STEP 1: Reddit profile scrape (headless Playwright, no Claude session).
+# Runs BEFORE Step 2 so thread + comment rows get views/upvotes/comments_count
+# in a single no-API pass. Step 2 then skips rows refreshed within the last 4h
+# and spends the API budget only on deletion detection + unmatched rows.
 # ═══════════════════════════════════════════════════════
-if [ "$RUN_STEP2" -eq 1 ]; then
-log "Step 2: Reddit profile scrape (headless Playwright)"
+if [ "$RUN_STEP1" -eq 1 ]; then
+log "Step 1: Reddit profile scrape (headless Playwright)"
+
+# Serialize with other reddit-agent consumers (post_reddit, run-reddit-threads,
+# engage-dm-replies, audit-reddit*). Without this, the thread/comment pipelines
+# acquire the shell-level reddit-browser file lock while this script holds only
+# the MCP hook lock, causing Claude's mcp__reddit-agent__* calls to abort mid-run.
+acquire_lock "reddit-browser" 3600
 
 REDDIT_USERNAME=$(python3 -c "import json; print(json.load(open('$REPO_DIR/config.json'))['accounts']['reddit']['username'])" 2>/dev/null || echo "")
 
 if [ -n "$REDDIT_USERNAME" ]; then
     SCRAPE_OUT=$(mktemp)
     gtimeout 900 python3 "$REPO_DIR/scripts/reddit_browser.py" scrape-views "$REDDIT_USERNAME" 300 > "$SCRAPE_OUT" 2>> "$LOGFILE"
-    STEP2_EXIT=$?
-    if [ "$STEP2_EXIT" -eq 124 ]; then
-        log "Step 2: TIMEOUT (15 min limit reached)"
+    STEP1_EXIT=$?
+    if [ "$STEP1_EXIT" -eq 124 ]; then
+        log "Step 1: TIMEOUT (15 min limit reached)"
         rm -f "$SCRAPE_OUT"
-    elif [ "$STEP2_EXIT" -ne 0 ]; then
-        log "Step 2: FAILED scrape-views (exit $STEP2_EXIT)"
+    elif [ "$STEP1_EXIT" -ne 0 ]; then
+        log "Step 1: FAILED scrape-views (exit $STEP1_EXIT)"
         head -c 500 "$SCRAPE_OUT" >> "$LOGFILE" 2>/dev/null || true
         rm -f "$SCRAPE_OUT"
     else
@@ -131,50 +140,50 @@ print(f\"scraped {data.get('total', 0)} urls, {data.get('with_views', 0)} with v
         EXTRACT_EXIT=$?
         rm -f "$SCRAPE_OUT"
         if [ "$EXTRACT_EXIT" -ne 0 ]; then
-            log "Step 2: FAILED extract (exit $EXTRACT_EXIT)"
+            log "Step 1: FAILED extract (exit $EXTRACT_EXIT)"
         else
             python3 "$REPO_DIR/scripts/scrape_reddit_views.py" --from-json /tmp/reddit_views.json $QUIET >> "$LOGFILE" 2>&1
             UPDATE_EXIT=$?
             if [ "$UPDATE_EXIT" -ne 0 ]; then
-                log "Step 2: FAILED DB update (exit $UPDATE_EXIT)"
+                log "Step 1: FAILED DB update (exit $UPDATE_EXIT)"
             else
-                log "Step 2: Done"
+                log "Step 1: Done"
             fi
         fi
     fi
 else
-    log "Step 2: SKIPPED, no Reddit username in config.json"
+    log "Step 1: SKIPPED, no Reddit username in config.json"
 fi
-else
-    log "Step 2: SKIPPED (platform=$PLATFORM)"
-fi
-
-# ═══════════════════════════════════════════════════════
-# STEP 1: API stats (upvotes, comments, deleted/removed) for anything
-# Step 2 couldn't cover (i.e. comment rows; threads are skipped via the
-# 4h freshness window set by Step 2).
-# ═══════════════════════════════════════════════════════
-if [ "$RUN_STEP1" -eq 1 ]; then
-    # Narrow the Python call per platform. Without --platform we run the
-    # default all-platforms pass (kept for manual invocations only).
-    STEP1_ARGS=()
-    [ "$QUIET" = "--quiet" ] && STEP1_ARGS+=("--quiet")
-    case "$PLATFORM" in
-        reddit)   STEP1_ARGS+=("--reddit-only") ;;
-        moltbook) STEP1_ARGS+=("--moltbook-only") ;;
-        twitter)  STEP1_ARGS+=("--twitter-only") ;;
-    esac
-
-    log "Step 1: API stats (Python) ${STEP1_ARGS[*]:-}"
-    python3 "$REPO_DIR/scripts/update_stats.py" "${STEP1_ARGS[@]}" >> "$LOGFILE" 2>&1
-    STEP1_EXIT=$?
-    if [ "$STEP1_EXIT" -ne 0 ]; then
-        log "Step 1: FAILED (exit $STEP1_EXIT), continuing to next step"
-    else
-        log "Step 1: Done"
-    fi
 else
     log "Step 1: SKIPPED (platform=$PLATFORM)"
+fi
+
+# ═══════════════════════════════════════════════════════
+# STEP 2: API stats — deletion/removal detection and stats fallback for any
+# row Step 1 couldn't cover. Rows refreshed by Step 1 within the last 4h
+# are skipped via the engagement_updated_at freshness window.
+# ═══════════════════════════════════════════════════════
+if [ "$RUN_STEP2" -eq 1 ]; then
+    # Narrow the Python call per platform. Without --platform we run the
+    # default all-platforms pass (kept for manual invocations only).
+    STEP2_ARGS=()
+    [ "$QUIET" = "--quiet" ] && STEP2_ARGS+=("--quiet")
+    case "$PLATFORM" in
+        reddit)   STEP2_ARGS+=("--reddit-only") ;;
+        moltbook) STEP2_ARGS+=("--moltbook-only") ;;
+        twitter)  STEP2_ARGS+=("--twitter-only") ;;
+    esac
+
+    log "Step 2: API stats (Python) ${STEP2_ARGS[*]:-}"
+    python3 "$REPO_DIR/scripts/update_stats.py" "${STEP2_ARGS[@]}" >> "$LOGFILE" 2>&1
+    STEP2_EXIT=$?
+    if [ "$STEP2_EXIT" -ne 0 ]; then
+        log "Step 2: FAILED (exit $STEP2_EXIT), continuing to next step"
+    else
+        log "Step 2: Done"
+    fi
+else
+    log "Step 2: SKIPPED (platform=$PLATFORM)"
 fi
 
 # ═══════════════════════════════════════════════════════
