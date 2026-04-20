@@ -35,7 +35,7 @@ STYLES_BLOCK=$(generate_styles_block moltbook posting)
 # Pre-generate session id so the prompt's inline INSERT can stamp it.
 export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
 
-"$REPO_DIR/scripts/run_claude.sh" "run-moltbook" -p "You are the Social Autoposter.
+"$REPO_DIR/scripts/run_claude.sh" "run-moltbook" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/no-agents-mcp.json" -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for the moltbook account.
