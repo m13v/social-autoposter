@@ -1915,6 +1915,7 @@ const HTML = `<!DOCTYPE html>
   .sa-login-card button:hover { background: #1d4ed8; }
   .sa-login-error { color: #dc2626; font-size: 13px; min-height: 18px; margin-top: 6px; }
   body.sa-non-admin .sa-admin-only { display: none !important; }
+  body:not(.sa-hosted) .sa-hosted-only { display: none !important; }
   body.sa-authed-pending .header, body.sa-authed-pending .tabs, body.sa-authed-pending .content { visibility: hidden; }
 </style>
 <script>
@@ -1966,14 +1967,36 @@ const HTML = `<!DOCTYPE html>
 </div>
 
 <div class="tabs">
-  <div class="tab active" data-tab="status">Status</div>
+  <div class="tab sa-admin-only sa-hosted-only" data-tab="status">Status</div>
+  <div class="tab active" data-tab="stats">Stats</div>
   <div class="tab" data-tab="activity">Activity</div>
   <div class="tab" data-tab="top">Top</div>
   <div class="tab sa-admin-only" data-tab="logs">Logs</div>
   <div class="tab sa-admin-only" data-tab="settings">Settings</div>
 </div>
 
-<div class="content" id="tab-status">
+<div class="content hidden sa-admin-only sa-hosted-only" id="tab-status">
+  <div class="matrix-wrapper">
+    <table class="matrix-table">
+      <thead>
+        <tr>
+          <th class="row-header"></th>
+          <th class="freq-header">Freq</th>
+          <th>Reddit</th>
+          <th>Twitter</th>
+          <th>LinkedIn</th>
+          <th>MoltBook</th>
+          <th>GitHub</th>
+        </tr>
+      </thead>
+      <tbody id="matrix-body"></tbody>
+    </table>
+  </div>
+  <div id="other-jobs-section" style="margin-top: 24px;"></div>
+  <div id="pending-section" style="margin-top: 16px;"></div>
+</div>
+
+<div class="content" id="tab-stats">
   <div class="stats-wrapper">
     <div class="stats-header">
       <span class="stats-title">Last 24 hours</span>
@@ -2016,24 +2039,6 @@ const HTML = `<!DOCTYPE html>
       <div class="style-stats-empty">Click to load\u2026</div>
     </div>
   </details>
-  <div class="matrix-wrapper">
-    <table class="matrix-table">
-      <thead>
-        <tr>
-          <th class="row-header"></th>
-          <th class="freq-header">Freq</th>
-          <th>Reddit</th>
-          <th>Twitter</th>
-          <th>LinkedIn</th>
-          <th>MoltBook</th>
-          <th>GitHub</th>
-        </tr>
-      </thead>
-      <tbody id="matrix-body"></tbody>
-    </table>
-  </div>
-  <div id="other-jobs-section" style="margin-top: 24px;"></div>
-  <div id="pending-section" style="margin-top: 16px;"></div>
 </div>
 
 <div class="content hidden" id="tab-activity">
@@ -4360,7 +4365,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     } else {
       stopActivityAutoRefresh();
     }
-    if (name === 'status') { loadActivityStats(); loadStyleStats(); }
+    if (name === 'stats') { loadActivityStats(); loadStyleStats(); }
     if (name === 'top') {
       initTopFilters();
       if (_topSubtab === 'pages') {
@@ -4423,6 +4428,7 @@ window.saStartApp = saStartApp;
 // for project-scoped users based on /api/me claims.
 (function saAuthBootstrap() {
   var cfg = window.SA_CONFIG || {};
+  if (cfg.clientMode) document.body.classList.add('sa-hosted');
   if (!cfg.clientMode) { saStartApp(); return; }
   if (!cfg.firebase || !cfg.firebase.apiKey) {
     document.getElementById('sa-login-error').textContent = 'Auth not configured';
@@ -4519,15 +4525,20 @@ window.saStartApp = saStartApp;
 </body>
 </html>`;
 
-// Firebase Web SDK config for the dashboard bootstrap. Values are public
-// (this is the client-side apiKey, not a secret) but kept in env so a
-// different Firebase project can be pointed at the same server image.
-// Fallback to the s4l-app-prod config wired up on 2026-04-20.
+// Firebase Web SDK config for the dashboard bootstrap. The apiKey is a
+// client-side identifier (intended to be shipped in HTML), not a secret;
+// access control is enforced by Firebase Security Rules and by HTTP
+// referrer restrictions on the key itself. Values are injected via env
+// so the image can be repointed at a different Firebase project, and so
+// GitHub secret scanning does not flag literal AIza-prefixed strings in
+// source. In CLIENT_MODE=1 these env vars are required; in local
+// operator mode (CLIENT_MODE=0) the config is written into the HTML but
+// Firebase is never initialized, so missing values are harmless.
 function firebaseWebConfig() {
   return {
-    apiKey: process.env.FIREBASE_WEB_API_KEY || 'AIzaSyAjgA6fJx-a9aOSeUwrWfGRL1RVrguXG2Q',
-    authDomain: process.env.FIREBASE_AUTH_DOMAIN || 's4l-app-prod.firebaseapp.com',
-    projectId: process.env.FIREBASE_PROJECT_ID || 's4l-app-prod',
+    apiKey: process.env.FIREBASE_WEB_API_KEY || '',
+    authDomain: process.env.FIREBASE_AUTH_DOMAIN || '',
+    projectId: process.env.FIREBASE_PROJECT_ID || '',
   };
 }
 
