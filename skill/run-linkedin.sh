@@ -15,6 +15,13 @@ LOG_FILE="$LOG_DIR/run-linkedin-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== LinkedIn Post Run: $(date) ===" | tee "$LOG_FILE"
 
+# Serialize with other linkedin-agent consumers (engage-linkedin,
+# dm-outreach-linkedin, link-edit-linkedin, engage-dm-replies --platform linkedin,
+# stats.sh Step 4). Without this, concurrent pipelines collide on the shared
+# linkedin-agent browser profile and Claude calls abort mid-run.
+source "$REPO_DIR/skill/lock.sh"
+acquire_lock "linkedin-browser" 3600
+
 # Load all projects for LLM-driven selection
 ALL_PROJECTS_JSON=$(python3 -c "
 import json, os
@@ -32,7 +39,7 @@ TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform linkedin 2
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block linkedin posting)
 
-"$REPO_DIR/scripts/run_claude.sh" "run-linkedin" -p "You are the Social Autoposter.
+"$REPO_DIR/scripts/run_claude.sh" "run-linkedin" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for account name.
