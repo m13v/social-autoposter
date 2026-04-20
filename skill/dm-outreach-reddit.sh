@@ -51,6 +51,7 @@ log "Reddit: $DM_PENDING DMs to send"
 DM_DATA=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT d.id, d.platform, d.their_author, d.their_content, d.comment_context,
+               d.target_project, d.prospect_id,
                r.their_comment_url, r.our_reply_content,
                p.thread_title, p.our_content as our_post_content
         FROM dms d
@@ -59,6 +60,21 @@ DM_DATA=$(psql "$DATABASE_URL" -t -A -c "
         WHERE d.status='pending' AND d.platform='reddit'
         ORDER BY d.discovered_at ASC
     ) q;")
+
+# Per-project qualification context for ICP pre-check
+PROJECTS_QUALIFICATION=$(python3 -c "
+import json
+c = json.load(open('$REPO_DIR/config.json'))
+for p in c.get('projects', []):
+    q = p.get('qualification') or {}
+    if not q:
+        continue
+    print(f\"- {p['name']}:\")
+    if q.get('must_have'):
+        print(f\"    must_have: {' ; '.join(q['must_have'])}\")
+    if q.get('disqualify'):
+        print(f\"    disqualify: {' ; '.join(q['disqualify'])}\")
+" 2>/dev/null || echo "")
 
 export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
 
@@ -100,6 +116,44 @@ DM EXAMPLES (bad):
 
 ## Users to DM:
 $DM_DATA
+
+## Per-project ICP criteria (used for the pre-check step, NOT to skip sending):
+$PROJECTS_QUALIFICATION
+
+## Pre-send profile fetch + ICP pre-check (MANDATORY per DM, no filter)
+
+For each DM row, BEFORE you compose or send, do this in order:
+
+1. Look at the row's \`target_project\`. If it's NULL, skip the ICP evaluation (set icp_precheck=unknown with notes="no_target_project") and move to step 4 — but still fetch the profile if it's cheap.
+
+2. Fetch the prospect's Reddit profile with mcp__reddit-agent__* tools:
+   - Navigate to https://www.reddit.com/user/THEIR_AUTHOR/
+   - browser_snapshot. Pull:
+     - the profile bio/tagline (text under their name)
+     - karma numbers (post + comment karma)
+     - a 1-2 line summary of their most recent 3-5 posts/comments (titles + subreddits)
+   - If the profile page is a login wall, deleted, or suspended user, record notes="profile_inaccessible" and proceed with icp_precheck=unknown.
+
+3. Persist the profile fields via:
+   \`\`\`bash
+   python3 $REPO_DIR/scripts/fetch_prospect_profile.py upsert \\
+       --platform reddit --author "THEIR_AUTHOR" \\
+       --profile-url "https://www.reddit.com/user/THEIR_AUTHOR/" \\
+       --headline "SHORT_TAGLINE_OR_BIO_FIRST_LINE" \\
+       --bio "FULL_BIO_TEXT" \\
+       --recent-activity "SHORT_3-5_ITEM_SUMMARY" \\
+       --notes "ANY_SIGNAL_WORTH_REMEMBERING" \\
+       --link-dm DM_ID
+   \`\`\`
+   Omit any flag whose value is empty or unknown. \`--link-dm\` also wires dms.prospect_id.
+
+4. Evaluate ICP match: compare the profile + their_content + comment_context against the target_project's must_have (satisfy at least one) and disqualify (trigger ANY = fail). Pick one label: icp_match, icp_miss, disqualified, or unknown.
+   \`\`\`bash
+   python3 $REPO_DIR/scripts/dm_conversation.py set-icp-precheck \\
+       --dm-id DM_ID --label LABEL --notes "SHORT_RATIONALE"
+   \`\`\`
+
+5. PROCEED TO SEND THE DM regardless of the ICP label. The label is informational; it does NOT gate outreach at this phase. Do not skip a DM because of \`icp_miss\` or \`disqualified\`.
 
 ## How to send DMs on Reddit (use mcp__reddit-agent__* tools):
 1. Navigate to https://www.reddit.com/message/compose/?to=THEIR_AUTHOR
