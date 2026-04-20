@@ -1,0 +1,30 @@
+# Keep Cloud Build source uploads small. Only the files needed to build
+# the hosted dashboard image go up; everything else stays local.
+.git
+.gitignore
+.gcloudignore
+.github
+.venv
+.env
+.env.*
+node_modules
+dashboard
+scripts
+seo
+skill
+setup
+launchd
+systemd
+test
+docs
+browser-agent-configs
+config.json
+config.json.bak.*
+**/.DS_Store
+**/__pycache__
+**/*.pyc
+*.log
+*.md
+!SKILL.md
+!setup/SKILL.md
+schema-postgres.sql
