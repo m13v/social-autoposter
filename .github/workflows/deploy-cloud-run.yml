@@ -1,0 +1,64 @@
+name: Deploy sa-dashboard to Cloud Run
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'bin/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'config.example.json'
+      - '.github/workflows/deploy-cloud-run.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-sa-dashboard
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: s4l-app-prod
+  PROJECT_NUMBER: '232065702422'
+  REGION: us-central1
+  SERVICE: sa-dashboard
+  REPO: sa-dashboard
+  IMAGE_HOST: us-central1-docker.pkg.dev
+  RUNTIME_SA: 232065702422-compute@developer.gserviceaccount.com
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/232065702422/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-deploy@s4l-app-prod.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure docker auth
+        run: gcloud auth configure-docker ${{ env.IMAGE_HOST }} --quiet
+
+      - name: Build and push image
+        run: |
+          IMAGE="${IMAGE_HOST}/${PROJECT_ID}/${REPO}/${SERVICE}:${GITHUB_SHA}"
+          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+          docker build -t "${IMAGE}" -t "${IMAGE_HOST}/${PROJECT_ID}/${REPO}/${SERVICE}:latest" .
+          docker push "${IMAGE}"
+          docker push "${IMAGE_HOST}/${PROJECT_ID}/${REPO}/${SERVICE}:latest"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "${SERVICE}" \
+            --project="${PROJECT_ID}" \
+            --region="${REGION}" \
+            --image="${IMAGE}" \
+            --service-account="${RUNTIME_SA}" \
+            --quiet

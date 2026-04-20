@@ -27,6 +27,7 @@ skill/SKILL.md
 
 # Agent-generated browser snapshots and data dumps
 *.yml
+!.github/workflows/*.yml
 *-notifications.json
 *-search-result
 .gstack/
