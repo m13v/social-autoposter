@@ -474,11 +474,12 @@ def build_global_brief(days=1, top_n=10, cooldown_days=7):
     skipped_on_cooldown = []
     for r in all_rows:
         key = (r["product"], r["path"])
-        if key in recent:
+        r["on_cooldown"] = key in recent
+        if r["on_cooldown"]:
             skipped_on_cooldown.append(key)
             continue
-        winner = r
-        break
+        if winner is None:
+            winner = r
     if winner is None:
         print(
             f"  all {len(all_rows)} candidates on {cooldown_days}d cooldown; "
