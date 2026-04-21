@@ -1003,7 +1003,8 @@ async function handleApi(req, res) {
         "UNION ALL SELECT m.claude_session_id FROM dm_messages m WHERE m.claude_session_id IS NOT NULL AND m.direction='outbound' " +
         "UNION ALL SELECT claude_session_id FROM posts WHERE claude_session_id IS NOT NULL AND resurrected_at IS NOT NULL " +
         "UNION ALL SELECT claude_session_id FROM seo_keywords WHERE claude_session_id IS NOT NULL AND completed_at IS NOT NULL AND page_url IS NOT NULL " +
-        "UNION ALL SELECT claude_session_id FROM gsc_queries WHERE claude_session_id IS NOT NULL AND completed_at IS NOT NULL AND page_url IS NOT NULL" +
+        "UNION ALL SELECT claude_session_id FROM gsc_queries WHERE claude_session_id IS NOT NULL AND completed_at IS NOT NULL AND page_url IS NOT NULL " +
+        "UNION ALL SELECT claude_session_id FROM seo_page_improvements WHERE claude_session_id IS NOT NULL AND completed_at IS NOT NULL AND status='committed'" +
       "), session_counts AS (" +
         "SELECT claude_session_id, COUNT(*)::int AS rows_in_session FROM src GROUP BY claude_session_id" +
       "), session_cost AS (" +
@@ -1021,6 +1022,7 @@ async function handleApi(req, res) {
       "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || gq.id), product, sc.per_row_cost FROM gsc_queries gq LEFT JOIN session_cost sc ON sc.session_id = gq.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
       "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || sk2.id), product, sc.per_row_cost FROM seo_keywords sk2 LEFT JOIN session_cost sc ON sc.session_id = sk2.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
       "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_top', 'seo', product, keyword, slug, page_url, ('kt' || sk3.id), product, sc.per_row_cost FROM seo_keywords sk3 LEFT JOIN session_cost sc ON sc.session_id = sk3.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'top_page' ORDER BY completed_at DESC LIMIT 150) x8b " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_improved', 'seo', product, LEFT(COALESCE(rationale, diff_summary, page_path), 140), page_path, page_url, ('pi' || spi.id), product, sc.per_row_cost FROM seo_page_improvements spi LEFT JOIN session_cost sc ON sc.session_id = spi.claude_session_id WHERE completed_at IS NOT NULL AND status = 'committed' ORDER BY completed_at DESC LIMIT 150) x8c " +
       "UNION ALL SELECT * FROM (SELECT resurrected_at AS occurred_at, 'resurrected' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, NULL::text AS detail, our_url AS link, ('rr' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id WHERE resurrected_at IS NOT NULL ORDER BY resurrected_at DESC LIMIT 150) x9 " +
       "ORDER BY 1 DESC LIMIT 500) r";
     return (async () => {
@@ -1172,6 +1174,7 @@ async function handleApi(req, res) {
     parts.push("SELECT 'page_published_gsc' AS type, 'seo' AS pl FROM gsc_queries WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL" + seoProdPc.clause);
     parts.push("SELECT 'page_published_reddit' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='reddit'" + seoProdPc.clause);
     parts.push("SELECT 'page_published_top' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='top_page'" + seoProdPc.clause);
+    parts.push("SELECT 'page_improved' AS type, 'seo' AS pl FROM seo_page_improvements WHERE completed_at >= NOW() - " + win + " AND status='committed'" + seoProdPc.clause);
     parts.push("SELECT 'resurrected' AS type, platform AS pl FROM posts WHERE resurrected_at >= NOW() - " + win + postsPc.clause);
     const q = "SELECT json_agg(row_to_json(r)) FROM (" +
       "SELECT type, " + norm + " AS platform, COUNT(*)::int AS count FROM (" +
