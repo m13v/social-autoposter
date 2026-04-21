@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -142,202 +143,265 @@ def _norm_path(p):
 _SAFE_DOMAIN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
-def _hogql(api_key, project_id, query, timeout=60):
+class HogqlError(Exception):
+    """Raised when a HogQL query fails after all retries.
+
+    Caller is expected to surface this as an error on the affected rows
+    instead of silently rendering zeros.
+    """
+
+
+_RETRY_BACKOFF_S = (2.0, 5.0, 12.0)
+_RETRY_AFTER_CAP_S = 30.0
+
+
+def _hogql(api_key, project_id, query, timeout=60, max_attempts=4):
     """Run a HogQL query against /api/projects/{pid}/query/.
-    Returns the `results` list (list of row lists), or [] on error.
+
+    Retries on 429 (throttled) and 5xx. Honors `Retry-After` up to
+    `_RETRY_AFTER_CAP_S`; otherwise uses `_RETRY_BACKOFF_S`. Raises
+    `HogqlError` on permanent failure so callers can mark rows as
+    errored rather than zero.
     """
     url = f"https://us.posthog.com/api/projects/{project_id}/query/"
     body = json.dumps({"query": {"kind": "HogQLQuery", "query": query}}).encode("utf-8")
-    req = urllib.request.Request(url, data=body, method="POST", headers={
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
-            return data.get("results", []) or []
-    except urllib.error.HTTPError as e:
+    last_err = None
+    for attempt in range(max_attempts):
+        req = urllib.request.Request(url, data=body, method="POST", headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        })
         try:
-            detail = e.read().decode("utf-8", errors="replace")[:300]
-        except Exception:
-            detail = ""
-        print(f"  HogQL HTTPError {e.code}: {detail} | query={query[:120]}", file=sys.stderr)
-        return []
-    except urllib.error.URLError as e:
-        print(f"  HogQL URLError: {e} | query={query[:120]}", file=sys.stderr)
-        return []
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read())
+                return data.get("results", []) or []
+        except urllib.error.HTTPError as e:
+            try:
+                detail = e.read().decode("utf-8", errors="replace")[:300]
+            except Exception:
+                detail = ""
+            last_err = f"HTTP {e.code}: {detail}"
+            retryable = (e.code == 429) or (500 <= e.code < 600)
+            if not retryable or attempt == max_attempts - 1:
+                print(f"  HogQL HTTPError {e.code}: {detail} | query={query[:120]}", file=sys.stderr)
+                break
+            wait = _RETRY_BACKOFF_S[min(attempt, len(_RETRY_BACKOFF_S) - 1)]
+            try:
+                ra = e.headers.get("Retry-After") if e.headers else None
+                if ra is not None:
+                    wait = min(_RETRY_AFTER_CAP_S, max(wait, float(ra)))
+            except Exception:
+                pass
+            print(f"  HogQL {e.code} retry {attempt + 1}/{max_attempts - 1} in {wait:.1f}s | query={query[:80]}", file=sys.stderr)
+            time.sleep(wait)
+            continue
+        except urllib.error.URLError as e:
+            last_err = f"URLError: {e}"
+            if attempt == max_attempts - 1:
+                print(f"  HogQL URLError: {e} | query={query[:120]}", file=sys.stderr)
+                break
+            wait = _RETRY_BACKOFF_S[min(attempt, len(_RETRY_BACKOFF_S) - 1)]
+            print(f"  HogQL URLError retry {attempt + 1}/{max_attempts - 1} in {wait:.1f}s: {e}", file=sys.stderr)
+            time.sleep(wait)
+            continue
+    raise HogqlError(last_err or "unknown HogQL failure")
 
 
-def _ph_domain_counts(api_key, project_id, domain, after_iso):
-    """Return aggregated stats for one domain using HogQL (no 1000-row cap).
-
-    Output shape matches what _ph_combine used to produce per domain:
-      { "pageviews": int,
-        "cta_clicks": int,
-        "pageview_details": { domain: { "total": int, "top_pages": {path: n}, "top_pages_signups": {path: n}, "top_pages_schedule": {path: n} } },
-        "cta_details": [ {text, section, time}, ... up to 10 ] }
-    """
-    empty = {
+def _empty_domain_stats(domain, error=None):
+    """Zero'd per-domain stats. If `error` is set, treat the zeros as
+    UNKNOWN (not truly 0) so the dashboard can render an error cell
+    instead of silently misreporting."""
+    out = {
         "pageviews": 0,
         "cta_clicks": 0,
         "email_signups": 0,
         "schedule_clicks": 0,
-        "pageview_details": {domain: {"total": 0, "top_pages": {}, "top_pages_signups": {}, "top_pages_schedule": {}}},
+        "get_started_clicks": 0,
+        "pageview_details": {domain: {
+            "total": 0,
+            "top_pages": {},
+            "top_pages_signups": {},
+            "top_pages_schedule": {},
+            "top_pages_get_started": {},
+        }},
         "cta_details": [],
     }
-    if not _SAFE_DOMAIN_RE.match(domain or ""):
-        print(f"  skip unsafe domain: {domain!r}", file=sys.stderr)
-        return empty
+    if error:
+        out["error"] = error
+    return out
 
-    # after_iso looks like "2026-04-17T22:07:30"; HogQL's toDateTime wants a
-    # 'YYYY-MM-DD HH:MM:SS' literal.
+
+# Legacy + canonical event names for the "get started" click.  Fazm fires
+# `download_click`, Assrt fires `cta_get_started_clicked`, new sites fire
+# `get_started_click`.  Collapsed back to a single name once both old sites
+# migrate to trackGetStartedClick.
+_GET_STARTED_EVENTS = "('get_started_click', 'download_click', 'cta_get_started_clicked')"
+
+
+def _ph_batch_counts(api_key, project_id, domains, after_iso):
+    """Fetch per-domain PostHog aggregates for every `domain` in one batched
+    pass against a single (api_key, project_id) bucket.
+
+    The previous implementation fired ~10 HogQL queries per domain, which
+    fanned out to 100+ concurrent requests and tripped PostHog's rate
+    limiter; throttled calls silently returned 0, misreporting every
+    project except the one with its own dedicated API key.
+
+    This version groups each aggregate by `properties.$host`, so one query
+    covers every domain in the bucket. Returns `{domain: stats_dict}` in
+    the same shape the old per-domain function produced. On permanent
+    HogQL failure, raises `HogqlError` so the caller can mark rows as
+    errored rather than rendering a misleading zero.
+    """
+    result = {d: _empty_domain_stats(d) for d in domains}
+    safe_domains = []
+    for d in domains:
+        if _SAFE_DOMAIN_RE.match(d or ""):
+            safe_domains.append(d)
+        else:
+            print(f"  skip unsafe domain: {d!r}", file=sys.stderr)
+            result[d]["error"] = "unsafe domain"
+    if not safe_domains:
+        return result
+
     after_str = (after_iso or "").replace("T", " ")
     if not after_str:
-        return empty
+        return result
 
-    pv_total_q = (
-        "SELECT count() FROM events "
-        f"WHERE event = '$pageview' "
-        f"AND properties.$host = '{domain}' "
-        f"AND timestamp >= toDateTime('{after_str}')"
-    )
-    top_pages_q = (
-        "SELECT properties.$pathname AS path, count() AS c FROM events "
-        f"WHERE event = '$pageview' "
-        f"AND properties.$host = '{domain}' "
-        f"AND timestamp >= toDateTime('{after_str}') "
-        "GROUP BY path ORDER BY c DESC LIMIT 500"
-    )
-    cta_total_q = (
-        "SELECT count() FROM events "
-        f"WHERE event = 'cta_click' "
-        f"AND properties.$host = '{domain}' "
-        f"AND timestamp >= toDateTime('{after_str}')"
-    )
-    cta_detail_q = (
-        "SELECT properties.$el_text, properties.text, properties.section, timestamp "
-        "FROM events "
-        f"WHERE event = 'cta_click' "
-        f"AND properties.$host = '{domain}' "
-        f"AND timestamp >= toDateTime('{after_str}') "
-        "ORDER BY timestamp DESC LIMIT 10"
-    )
-    email_signup_q = (
-        "SELECT count() FROM events "
-        f"WHERE event = 'newsletter_subscribed' "
-        f"AND properties.$host = '{domain}' "
-        f"AND timestamp >= toDateTime('{after_str}')"
-    )
-    schedule_click_q = (
-        "SELECT count() FROM events "
-        f"WHERE event = 'schedule_click' "
-        f"AND properties.$host = '{domain}' "
-        f"AND timestamp >= toDateTime('{after_str}')"
-    )
-    signup_by_page_q = (
-        "SELECT properties.$pathname AS path, count() AS c FROM events "
-        f"WHERE event = 'newsletter_subscribed' "
-        f"AND properties.$host = '{domain}' "
-        f"AND timestamp >= toDateTime('{after_str}') "
-        "GROUP BY path ORDER BY c DESC LIMIT 50"
-    )
-    schedule_by_page_q = (
-        "SELECT properties.$pathname AS path, count() AS c FROM events "
-        f"WHERE event = 'schedule_click' "
-        f"AND properties.$host = '{domain}' "
-        f"AND timestamp >= toDateTime('{after_str}') "
-        "GROUP BY path ORDER BY c DESC LIMIT 50"
-    )
+    in_list = ", ".join(f"'{d}'" for d in safe_domains)
 
-    pv_rows = _hogql(api_key, project_id, pv_total_q)
-    pv_total = int(pv_rows[0][0]) if pv_rows and pv_rows[0] else 0
+    def _count_by_host(event_clause):
+        q = (
+            "SELECT properties.$host AS host, count() AS c FROM events "
+            f"WHERE {event_clause} "
+            f"AND properties.$host IN ({in_list}) "
+            f"AND timestamp >= toDateTime('{after_str}') "
+            "GROUP BY host"
+        )
+        rows = _hogql(api_key, project_id, q)
+        return {r[0]: int(r[1]) for r in (rows or []) if r and r[0]}
 
-    top_rows = _hogql(api_key, project_id, top_pages_q)
-    top_pages = {}
-    for r in (top_rows or []):
-        path = r[0] if r and r[0] else "/"
-        top_pages[path] = int(r[1])
+    def _top_pages_by_host(event_clause, row_cap=5000):
+        q = (
+            "SELECT properties.$host AS host, properties.$pathname AS path, count() AS c FROM events "
+            f"WHERE {event_clause} "
+            f"AND properties.$host IN ({in_list}) "
+            f"AND timestamp >= toDateTime('{after_str}') "
+            f"GROUP BY host, path ORDER BY c DESC LIMIT {int(row_cap)}"
+        )
+        rows = _hogql(api_key, project_id, q)
+        out = {d: {} for d in safe_domains}
+        for r in (rows or []):
+            host = r[0] if len(r) > 0 else None
+            path = r[1] if len(r) > 1 and r[1] else "/"
+            cnt = int(r[2]) if len(r) > 2 else 0
+            if host in out:
+                out[host][path] = cnt
+        return out
 
-    cta_rows = _hogql(api_key, project_id, cta_total_q)
-    cta_total = int(cta_rows[0][0]) if cta_rows and cta_rows[0] else 0
-    cta_details = []
+    pv_total = _count_by_host("event = '$pageview'")
+    cta_total = _count_by_host("event = 'cta_click'")
+    signup_total = _count_by_host("event = 'newsletter_subscribed'")
+    sched_total = _count_by_host("event = 'schedule_click'")
+    get_started_total = _count_by_host(f"event IN {_GET_STARTED_EVENTS}")
 
-    email_rows = _hogql(api_key, project_id, email_signup_q)
-    email_signups = int(email_rows[0][0]) if email_rows and email_rows[0] else 0
+    top_pv = _top_pages_by_host("event = '$pageview'", row_cap=5000)
+    top_signup = _top_pages_by_host("event = 'newsletter_subscribed'", row_cap=500)
+    top_sched = _top_pages_by_host("event = 'schedule_click'", row_cap=500)
+    top_get_started = _top_pages_by_host(f"event IN {_GET_STARTED_EVENTS}", row_cap=500)
 
-    sched_rows = _hogql(api_key, project_id, schedule_click_q)
-    schedule_clicks = int(sched_rows[0][0]) if sched_rows and sched_rows[0] else 0
-
-    signup_page_rows = _hogql(api_key, project_id, signup_by_page_q)
-    top_pages_signups = {}
-    for r in (signup_page_rows or []):
-        path = r[0] if r and r[0] else "/"
-        top_pages_signups[path] = int(r[1])
-
-    sched_page_rows = _hogql(api_key, project_id, schedule_by_page_q)
-    top_pages_schedule = {}
-    for r in (sched_page_rows or []):
-        path = r[0] if r and r[0] else "/"
-        top_pages_schedule[path] = int(r[1])
-
-    if cta_total > 0:
-        detail_rows = _hogql(api_key, project_id, cta_detail_q)
-        for r in (detail_rows or []):
-            el_text = r[0] if len(r) > 0 else None
-            text = r[1] if len(r) > 1 else None
-            section = r[2] if len(r) > 2 else None
-            ts = r[3] if len(r) > 3 else None
-            cta_details.append({
+    cta_details_by_host = {d: [] for d in safe_domains}
+    if any(v > 0 for v in cta_total.values()):
+        cta_detail_q = (
+            "SELECT properties.$host AS host, properties.$el_text, properties.text, properties.section, timestamp "
+            "FROM events "
+            "WHERE event = 'cta_click' "
+            f"AND properties.$host IN ({in_list}) "
+            f"AND timestamp >= toDateTime('{after_str}') "
+            "ORDER BY timestamp DESC LIMIT 200"
+        )
+        rows = _hogql(api_key, project_id, cta_detail_q)
+        for r in (rows or []):
+            host = r[0] if len(r) > 0 else None
+            el_text = r[1] if len(r) > 1 else None
+            text = r[2] if len(r) > 2 else None
+            section = r[3] if len(r) > 3 else None
+            ts = r[4] if len(r) > 4 else None
+            bucket = cta_details_by_host.get(host)
+            if bucket is None or len(bucket) >= 10:
+                continue
+            bucket.append({
                 "text": el_text or text or "?",
                 "section": section or "?",
                 "time": (str(ts)[:16] if ts else "?"),
             })
-    else:
-        # Fallback: $autocapture clicks whose el_text contains "book"
+
+    # Autocapture fallback: only domains with zero `cta_click` get the
+    # "$autocapture clicks whose text contains 'book'" treatment. Batched
+    # like everything else so we don't fan out.
+    fallback_hosts = [d for d in safe_domains if cta_total.get(d, 0) == 0]
+    if fallback_hosts:
+        fb_in = ", ".join(f"'{d}'" for d in fallback_hosts)
         ac_total_q = (
-            "SELECT count() FROM events "
-            f"WHERE event = '$autocapture' "
-            f"AND properties.$host = '{domain}' "
+            "SELECT properties.$host AS host, count() AS c FROM events "
+            "WHERE event = '$autocapture' "
+            f"AND properties.$host IN ({fb_in}) "
             f"AND timestamp >= toDateTime('{after_str}') "
-            "AND lower(properties.$el_text) LIKE '%book%'"
+            "AND lower(properties.$el_text) LIKE '%book%' "
+            "GROUP BY host"
         )
         ac_rows = _hogql(api_key, project_id, ac_total_q)
-        cta_total = int(ac_rows[0][0]) if ac_rows and ac_rows[0] else 0
-        if cta_total > 0:
+        ac_total = {r[0]: int(r[1]) for r in (ac_rows or []) if r and r[0]}
+        hosts_with_ac = [d for d in fallback_hosts if ac_total.get(d, 0) > 0]
+        if hosts_with_ac:
+            ac_in = ", ".join(f"'{d}'" for d in hosts_with_ac)
             ac_detail_q = (
-                "SELECT properties.$el_text, properties.text, properties.section, timestamp "
+                "SELECT properties.$host AS host, properties.$el_text, properties.text, properties.section, timestamp "
                 "FROM events "
-                f"WHERE event = '$autocapture' "
-                f"AND properties.$host = '{domain}' "
+                "WHERE event = '$autocapture' "
+                f"AND properties.$host IN ({ac_in}) "
                 f"AND timestamp >= toDateTime('{after_str}') "
                 "AND lower(properties.$el_text) LIKE '%book%' "
-                "ORDER BY timestamp DESC LIMIT 10"
+                "ORDER BY timestamp DESC LIMIT 200"
             )
             rows = _hogql(api_key, project_id, ac_detail_q)
             for r in (rows or []):
-                el_text = r[0] if len(r) > 0 else None
-                text = r[1] if len(r) > 1 else None
-                section = r[2] if len(r) > 2 else None
-                ts = r[3] if len(r) > 3 else None
-                cta_details.append({
+                host = r[0] if len(r) > 0 else None
+                el_text = r[1] if len(r) > 1 else None
+                text = r[2] if len(r) > 2 else None
+                section = r[3] if len(r) > 3 else None
+                ts = r[4] if len(r) > 4 else None
+                bucket = cta_details_by_host.get(host)
+                if bucket is None or len(bucket) >= 10:
+                    continue
+                bucket.append({
                     "text": el_text or text or "?",
                     "section": section or "?",
                     "time": (str(ts)[:16] if ts else "?"),
                 })
+        # Roll autocapture counts into cta_total so the funnel "cta_clicks"
+        # column matches the detail list for fallback domains.
+        for h, c in ac_total.items():
+            cta_total[h] = max(cta_total.get(h, 0), c)
 
-    return {
-        "pageviews": pv_total,
-        "cta_clicks": cta_total,
-        "email_signups": email_signups,
-        "schedule_clicks": schedule_clicks,
-        "pageview_details": {domain: {
-            "total": pv_total,
-            "top_pages": top_pages,
-            "top_pages_signups": top_pages_signups,
-            "top_pages_schedule": top_pages_schedule,
-        }},
-        "cta_details": cta_details,
-    }
+    for d in safe_domains:
+        pv = pv_total.get(d, 0)
+        result[d] = {
+            "pageviews": pv,
+            "cta_clicks": cta_total.get(d, 0),
+            "email_signups": signup_total.get(d, 0),
+            "schedule_clicks": sched_total.get(d, 0),
+            "get_started_clicks": get_started_total.get(d, 0),
+            "pageview_details": {d: {
+                "total": pv,
+                "top_pages": top_pv.get(d, {}),
+                "top_pages_signups": top_signup.get(d, {}),
+                "top_pages_schedule": top_sched.get(d, {}),
+                "top_pages_get_started": top_get_started.get(d, {}),
+            }},
+            "cta_details": cta_details_by_host.get(d, []),
+        }
+    return result
 
 
 def _ph_combine(per_domain):
@@ -346,6 +410,7 @@ def _ph_combine(per_domain):
         "cta_clicks": 0,
         "email_signups": 0,
         "schedule_clicks": 0,
+        "get_started_clicks": 0,
         "pageview_details": {},
         "cta_details": [],
     }
@@ -354,6 +419,7 @@ def _ph_combine(per_domain):
         out["cta_clicks"] += s.get("cta_clicks", 0)
         out["email_signups"] += s.get("email_signups", 0)
         out["schedule_clicks"] += s.get("schedule_clicks", 0)
+        out["get_started_clicks"] += s.get("get_started_clicks", 0)
         out["pageview_details"].update(s.get("pageview_details", {}))
         out["cta_details"].extend(s.get("cta_details", []))
     return out
@@ -455,21 +521,19 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
     ph_override = proj.get("posthog", {}) or {}
     ph_key = env.get(ph_override.get("api_key_env", ""), api_key)
     ph_pid_proj = ph_override.get("project_id", ph_pid)
+    analytics_error = None
     if domains:
         per_domain = []
         for d in domains:
             stats = ph_results.get((ph_key, ph_pid_proj, d))
             if stats is None:
-                stats = {
-                    "pageviews": 0,
-                    "cta_clicks": 0,
-                    "email_signups": 0,
-                    "schedule_clicks": 0,
-                    "pageview_details": {d: {"total": 0, "top_pages": {}, "top_pages_signups": {}, "top_pages_schedule": {}}},
-                    "cta_details": [],
-                }
+                stats = _empty_domain_stats(d)
+            if stats.get("error") and not analytics_error:
+                analytics_error = stats["error"]
             per_domain.append(stats)
         posthog = _ph_combine(per_domain)
+        if analytics_error:
+            posthog["error"] = analytics_error
     else:
         posthog = None
 
@@ -489,16 +553,23 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
     domain_wide_pv = int(posthog["pageviews"]) if posthog else 0
     domain_wide_signups = int(posthog["email_signups"]) if posthog else 0
     domain_wide_sched = int(posthog["schedule_clicks"]) if posthog else 0
+    domain_wide_get_started = int(posthog["get_started_clicks"]) if posthog else 0
 
     # Recompute funnel totals against the window-scoped created set so the
     # Status tab → project funnel columns reflect "pageviews / signups /
-    # schedule clicks ONLY on pages we generated in this window" instead of
-    # domain-wide traffic. cta_clicks and real_bookings are not tracked
-    # per-page so they stay domain/project-wide.
-    if posthog is not None:
+    # schedule clicks / download clicks ONLY on pages we generated in this
+    # window" instead of domain-wide traffic. cta_clicks and real_bookings
+    # are not tracked per-page so they stay domain/project-wide.
+    #
+    # Skip entirely when PostHog is errored: the top_pages maps are empty
+    # for errored domains, so scoping would silently collapse everything to
+    # zero. Keep the funnel values as None below so the dashboard renders
+    # 'err' instead of a misleading 0.
+    if posthog is not None and not analytics_error:
         scoped_pv = 0
         scoped_signups = 0
         scoped_sched = 0
+        scoped_get_started = 0
         for d, detail in (posthog.get("pageview_details") or {}).items():
             created = {_norm_path(p) for p in created_by_domain.get((d or "").lower(), set())}
             if not created:
@@ -512,27 +583,59 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
             for path, cnt in (detail.get("top_pages_schedule") or {}).items():
                 if _norm_path(path) in created:
                     scoped_sched += int(cnt or 0)
+            for path, cnt in (detail.get("top_pages_get_started") or {}).items():
+                if _norm_path(path) in created:
+                    scoped_get_started += int(cnt or 0)
         posthog["pageviews"] = scoped_pv
         posthog["email_signups"] = scoped_signups
         posthog["schedule_clicks"] = scoped_sched
+        posthog["get_started_clicks"] = scoped_get_started
 
     client_slug = ps.get_client_slug(name)
     bookings = _bookings_shared(bookings_conn, client_slug, days) if client_slug else None
 
-    pvs = posthog["pageviews"] if posthog else 0
-    ctas = posthog["cta_clicks"] if posthog else 0
-    real = bookings.get("real_bookings", 0) if bookings else 0
-    ctr = (ctas / pvs * 100) if pvs else None
-    conv = (real / ctas * 100) if ctas else None
+    # When the PostHog batch failed, the aggregate numbers on `posthog` are
+    # all 0 but that doesn't mean there are no events, it means we couldn't
+    # read them. Surface null + an error string on the funnel so the
+    # dashboard renders 'err' instead of silently claiming "zero pageviews".
+    if analytics_error:
+        pvs = None
+        ctas = None
+        email_signups = None
+        schedule_clicks = None
+        get_started_clicks = None
+        ctr = None
+        conv = None
+        dw_pv_out = None
+        dw_signups_out = None
+        dw_sched_out = None
+        dw_get_started_out = None
+        analytics_suspected_broken = False
+    else:
+        pvs = posthog["pageviews"] if posthog else 0
+        ctas = posthog["cta_clicks"] if posthog else 0
+        email_signups = (posthog["email_signups"] if posthog else 0)
+        schedule_clicks = (posthog["schedule_clicks"] if posthog else 0)
+        get_started_clicks = (posthog["get_started_clicks"] if posthog else 0)
+        # Domain-wide counterparts for the "scoped (domain-wide)" dashboard
+        # rendering. domain_wide_* were captured before the window-scoping
+        # overwrote posthog["pageviews"] etc.
+        dw_pv_out = domain_wide_pv if posthog else 0
+        dw_signups_out = domain_wide_signups if posthog else 0
+        dw_sched_out = domain_wide_sched if posthog else 0
+        dw_get_started_out = domain_wide_get_started if posthog else 0
+        ctr = (ctas / pvs * 100) if pvs else None
+        conv = None  # computed below once `real` is in scope
+        # Canary: real traffic but zero tracked conversion events almost
+        # always means window.posthog was never wired up on the site (e.g.
+        # Fazm newsletter bug where signups worked but nothing fired to
+        # PostHog). Use domain-wide totals so the signal isn't diluted by
+        # the window-scoped funnel numbers above.
+        analytics_suspected_broken = (domain_wide_pv >= 500) and ((domain_wide_signups + domain_wide_sched + domain_wide_get_started) == 0)
 
-    email_signups = (posthog["email_signups"] if posthog else 0)
-    schedule_clicks = (posthog["schedule_clicks"] if posthog else 0)
-    # Canary: real traffic but zero tracked conversion events almost always
-    # means window.posthog was never wired up on the site (e.g. Fazm
-    # newsletter bug where signups worked but nothing fired to PostHog).
-    # Use domain-wide totals so the signal doesn't get diluted by the
-    # window-scoped funnel numbers above.
-    analytics_suspected_broken = (domain_wide_pv >= 500) and ((domain_wide_signups + domain_wide_sched) == 0)
+    real = bookings.get("real_bookings", 0) if bookings else 0
+    if not analytics_error:
+        conv = (real / ctas * 100) if ctas else None
 
     return {
         "name": name,
@@ -559,10 +662,19 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
             "cta_clicks": ctas,
             "email_signups": email_signups,
             "schedule_clicks": schedule_clicks,
+            "get_started_clicks": get_started_clicks,
             "real_bookings": real,
             "ctr_pct": ctr,
             "conv_pct": conv,
+            # Domain-wide siblings: the dashboard shows each as "<scoped>
+            # (<domain>)" so "0 pv for mk0r" doesn't hide 62 real visits
+            # that happened to land on older pages.
+            "domain_pageviews": dw_pv_out,
+            "domain_email_signups": dw_signups_out,
+            "domain_schedule_clicks": dw_sched_out,
+            "domain_get_started_clicks": dw_get_started_out,
         },
+        "analytics_error": analytics_error,
         "analytics_suspected_broken": analytics_suspected_broken,
     }
 
@@ -604,11 +716,12 @@ def main():
             continue
         selected_projects.append(proj)
 
-    # Collect unique (api_key, project_id, domain) tuples, dedup across
-    # projects that share the same PostHog instance and domain so we only
-    # pay for each fetch once.
+    # Group domains by (api_key, project_id) so we issue one batched set of
+    # HogQL calls per PostHog bucket instead of one-per-domain. Projects that
+    # share a bucket collapse into a single batched fetch; projects with
+    # dedicated credentials run in their own bucket concurrently.
     after = (datetime.now(timezone.utc) - timedelta(days=args.days)).strftime("%Y-%m-%dT%H:%M:%S")
-    ph_tasks = set()
+    buckets = {}
     for proj in selected_projects:
         domains = ps.get_project_domains(proj)
         if not domains:
@@ -616,32 +729,35 @@ def main():
         ph_over = proj.get("posthog", {}) or {}
         ph_key = env.get(ph_over.get("api_key_env", ""), api_key)
         ph_pid_proj = ph_over.get("project_id", project_id)
+        bucket_domains = buckets.setdefault((ph_key, ph_pid_proj), set())
         for d in domains:
-            ph_tasks.add((ph_key, ph_pid_proj, d))
+            bucket_domains.add(d)
 
-    # Fan out one HogQL batch per unique (key, pid, domain). Each call issues
-    # 3-5 small aggregate queries; we run them concurrently across domains.
+    # One batched fetch per bucket. When a batch fails after retries, mark
+    # every domain in that bucket as errored rather than rendering zeros.
     ph_results = {}
-    if ph_tasks:
-        pool_size = max(4, min(16, len(ph_tasks)))
+    if buckets:
+        pool_size = max(2, min(8, len(buckets)))
         with ThreadPoolExecutor(max_workers=pool_size) as ex:
             futs = {
-                ex.submit(_ph_domain_counts, k, pid, d, after): (k, pid, d)
-                for (k, pid, d) in ph_tasks
+                ex.submit(_ph_batch_counts, k, pid, sorted(ds), after): (k, pid, ds)
+                for (k, pid), ds in buckets.items()
             }
-            for fut, key in futs.items():
+            for fut, (k, pid, ds) in futs.items():
                 try:
-                    ph_results[key] = fut.result()
+                    per_domain = fut.result()
+                    for d, stats in per_domain.items():
+                        ph_results[(k, pid, d)] = stats
+                except HogqlError as e:
+                    msg = f"PostHog unavailable: {e}"
+                    print(f"  PostHog batch error (pid={pid}): {e}", file=sys.stderr)
+                    for d in ds:
+                        ph_results[(k, pid, d)] = _empty_domain_stats(d, error=msg)
                 except Exception as e:
-                    print(f"  PostHog HogQL error for {key[2]}: {e}", file=sys.stderr)
-                    ph_results[key] = {
-                        "pageviews": 0,
-                        "cta_clicks": 0,
-                        "email_signups": 0,
-                        "schedule_clicks": 0,
-                        "pageview_details": {key[2]: {"total": 0, "top_pages": {}, "top_pages_signups": {}, "top_pages_schedule": {}}},
-                        "cta_details": [],
-                    }
+                    msg = f"PostHog batch error: {e}"
+                    print(f"  PostHog batch unexpected error (pid={pid}): {e}", file=sys.stderr)
+                    for d in ds:
+                        ph_results[(k, pid, d)] = _empty_domain_stats(d, error=msg)
 
     out_projects = []
     for proj in selected_projects:
