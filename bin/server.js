@@ -1107,41 +1107,62 @@ async function handleApi(req, res) {
   if (p === '/api/activity/stats' && req.method === 'GET') {
     const url = new URL(req.url, 'http://localhost');
     const windowHours = Math.max(1, Math.min(720, parseInt(url.searchParams.get('hours') || '24', 10) || 24));
-    // Cross-project aggregates are admin-only for now; per-project activity stats
-    // would require rewriting 9 UNION subqueries with project filters. MVP.
-    if (!req.user.admin) return json(res, { windowHours, rows: [] });
-    const cached = activityStatsCache.get(windowHours);
+    const rawProject = (url.searchParams.get('project') || '').trim();
+    // Resolve project scope: null = admin + all, [] = non-admin with no matching projects, otherwise a list.
+    const scopeList = auth.scopedProjects(req.user, rawProject || null);
+    if (scopeList !== null && scopeList.length === 0) {
+      return json(res, { windowHours, rows: [] });
+    }
+    // Cache key varies by scope so scoped users don't see admin's cached aggregate.
+    const scopeKey = scopeList === null ? 'all' : scopeList.slice().sort().join(',');
+    const cacheKey = windowHours + '|' + scopeKey;
+    const cached = activityStatsCache.get(cacheKey);
     // 5-min TTL. The 9-way UNION runs via execSync(psql), blocking Node's
     // event loop; caching prevents dashboard polling from stalling /api/status
     // and /api/activity behind it. 24h counts barely shift in 5 minutes.
     if (cached && Date.now() - cached.at < 300000) {
       return json(res, { windowHours, rows: cached.value, cachedAt: cached.at });
     }
-    // Precomputed snapshot (launchd com.m13v.social-precompute-stats).
-    const aSnap = await readSnapshotCached(`activity_stats_${windowHours}h.json`);
-    if (aSnap && aSnap.value && Array.isArray(aSnap.value.rows)) {
-      activityStatsCache.set(windowHours, { at: aSnap.at, value: aSnap.value.rows });
-      return json(res, { windowHours, rows: aSnap.value.rows, cachedAt: aSnap.at });
+    // Precomputed snapshot is a cross-project aggregate; only valid for admin+all.
+    if (scopeList === null) {
+      const aSnap = await readSnapshotCached(`activity_stats_${windowHours}h.json`);
+      if (aSnap && aSnap.value && Array.isArray(aSnap.value.rows)) {
+        activityStatsCache.set(cacheKey, { at: aSnap.at, value: aSnap.value.rows });
+        return json(res, { windowHours, rows: aSnap.value.rows, cachedAt: aSnap.at });
+      }
     }
+    // Per-subquery project filter clauses. Each uses the same scope but with the
+    // right column name for its table. octolens_mentions has no project column,
+    // so mentions are omitted when the user is scope-restricted (scopeList !== null).
+    const postsPc       = auth.projectClause(req.user, 'project_name',     rawProject || null);
+    const repliesPc     = auth.projectClause(req.user, 'project_name',     rawProject || null);
+    const dmsPc         = auth.projectClause(req.user, 'target_project',   rawProject || null);
+    const dmsAliasedPc  = auth.projectClause(req.user, 'd.target_project', rawProject || null);
+    const seoProdPc     = auth.projectClause(req.user, 'product',          rawProject || null);
     const win = `INTERVAL '${windowHours} hours'`;
     const norm = "CASE WHEN LOWER(pl) = 'x' THEN 'twitter' ELSE LOWER(pl) END";
+    const parts = [
+      "SELECT 'posted' AS type, platform AS pl FROM posts WHERE posted_at >= NOW() - " + win + postsPc.clause,
+      "SELECT 'replied' AS type, platform AS pl FROM replies WHERE status='replied' AND replied_at >= NOW() - " + win + repliesPc.clause,
+      "SELECT 'skipped' AS type, platform AS pl FROM replies WHERE status='skipped' AND COALESCE(processing_at, discovered_at) >= NOW() - " + win + repliesPc.clause,
+    ];
+    if (scopeList === null) {
+      parts.push("SELECT 'mention' AS type, platform AS pl FROM octolens_mentions WHERE COALESCE(source_timestamp, received_at) >= NOW() - " + win);
+    }
+    parts.push("SELECT 'dm_sent' AS type, platform AS pl FROM dms WHERE status='sent' AND sent_at >= NOW() - " + win + dmsPc.clause);
+    parts.push("SELECT 'dm_reply_sent' AS type, d.platform AS pl FROM dm_messages m JOIN dms d ON d.id = m.dm_id WHERE m.direction='outbound' AND m.message_at >= NOW() - " + win + " AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction='inbound' AND m2.message_at < m.message_at)" + dmsAliasedPc.clause);
+    parts.push("SELECT 'page_published_serp' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND COALESCE(source, '') <> 'reddit'" + seoProdPc.clause);
+    parts.push("SELECT 'page_published_gsc' AS type, 'seo' AS pl FROM gsc_queries WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL" + seoProdPc.clause);
+    parts.push("SELECT 'page_published_reddit' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='reddit'" + seoProdPc.clause);
+    parts.push("SELECT 'resurrected' AS type, platform AS pl FROM posts WHERE resurrected_at >= NOW() - " + win + postsPc.clause);
     const q = "SELECT json_agg(row_to_json(r)) FROM (" +
       "SELECT type, " + norm + " AS platform, COUNT(*)::int AS count FROM (" +
-        "SELECT 'posted' AS type, platform AS pl FROM posts WHERE posted_at >= NOW() - " + win + " " +
-        "UNION ALL SELECT 'replied', platform FROM replies WHERE status='replied' AND replied_at >= NOW() - " + win + " " +
-        "UNION ALL SELECT 'skipped', platform FROM replies WHERE status='skipped' AND COALESCE(processing_at, discovered_at) >= NOW() - " + win + " " +
-        "UNION ALL SELECT 'mention', platform FROM octolens_mentions WHERE COALESCE(source_timestamp, received_at) >= NOW() - " + win + " " +
-        "UNION ALL SELECT 'dm_sent', platform FROM dms WHERE status='sent' AND sent_at >= NOW() - " + win + " " +
-        "UNION ALL SELECT 'dm_reply_sent', d.platform FROM dm_messages m JOIN dms d ON d.id = m.dm_id WHERE m.direction='outbound' AND m.message_at >= NOW() - " + win + " AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction='inbound' AND m2.message_at < m.message_at) " +
-        "UNION ALL SELECT 'page_published_serp', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND COALESCE(source, '') <> 'reddit' " +
-        "UNION ALL SELECT 'page_published_gsc', 'seo' FROM gsc_queries WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL " +
-        "UNION ALL SELECT 'page_published_reddit', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='reddit' " +
-        "UNION ALL SELECT 'resurrected', platform FROM posts WHERE resurrected_at >= NOW() - " + win +
+        parts.join(' UNION ALL ') +
       ") u GROUP BY type, platform ORDER BY type, platform) r";
     return (async () => {
       const rows = await pq(q);
       const value = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
-      activityStatsCache.set(windowHours, { at: Date.now(), value });
+      activityStatsCache.set(cacheKey, { at: Date.now(), value });
       return json(res, { windowHours, rows: value });
     })().catch(e => json(res, { error: e.message }, 500));
   }
@@ -1367,7 +1388,19 @@ async function handleApi(req, res) {
           "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'inbound'))::int AS replied, " +
           "COUNT(*) FILTER (WHERE d.interest_level = 'hot')::int AS hot, " +
           "COUNT(*) FILTER (WHERE d.interest_level = 'warm')::int AS warm, " +
+          "COUNT(*) FILTER (WHERE d.interest_level = 'general_discussion')::int AS general_discussion, " +
+          "COUNT(*) FILTER (WHERE d.interest_level = 'cold')::int AS cold, " +
+          "COUNT(*) FILTER (WHERE d.interest_level = 'not_our_prospect')::int AS not_our_prospect, " +
+          "COUNT(*) FILTER (WHERE d.interest_level = 'declined')::int AS declined, " +
+          "COUNT(*) FILTER (WHERE d.interest_level = 'no_response')::int AS no_response, " +
+          "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(d.icp_matches) e WHERE e->>'project' = d.target_project AND e->>'label' = 'icp_match'))::int AS icp_match, " +
+          "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(d.icp_matches) e WHERE e->>'project' = d.target_project AND e->>'label' = 'icp_miss'))::int AS icp_miss, " +
+          "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(d.icp_matches) e WHERE e->>'project' = d.target_project AND e->>'label' = 'disqualified'))::int AS icp_disqualified, " +
+          "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(d.icp_matches) e WHERE e->>'project' = d.target_project AND e->>'label' = 'unknown'))::int AS icp_unknown, " +
+          "COUNT(*) FILTER (WHERE d.qualification_status = 'asked')::int AS asked, " +
+          "COUNT(*) FILTER (WHERE d.qualification_status = 'answered')::int AS answered, " +
           "COUNT(*) FILTER (WHERE d.qualification_status = 'qualified')::int AS qualified, " +
+          "COUNT(*) FILTER (WHERE d.qualification_status = 'disqualified')::int AS q_disqualified, " +
           "COUNT(*) FILTER (WHERE d.booking_link_sent_at IS NOT NULL)::int AS booking_sent, " +
           "COUNT(*) FILTER (WHERE d.conversation_status = 'converted')::int AS converted, " +
           "COUNT(*) FILTER (WHERE d.conversation_status = 'needs_human')::int AS needs_human " +
@@ -1963,8 +1996,10 @@ const HTML = `<!DOCTYPE html>
   .style-stats-table th:first-child, .style-stats-table td:first-child { text-align: left; color: var(--text); font-weight: 600; }
   .style-stats-table th:nth-child(1), .style-stats-table td:nth-child(1),
   .style-stats-table th:nth-child(2), .style-stats-table td:nth-child(2) { white-space: nowrap; }
-  .style-stats-table tr:last-child td { border-bottom: none; }
-  .style-stats-table tr:hover td { background: var(--bg-hover); }
+  .style-stats-table tbody tr:last-child td { border-bottom: none; }
+  .style-stats-table tbody tr:hover td { background: var(--bg-hover); }
+  .style-stats-table tfoot td { border-top: 2px solid var(--border-strong, var(--border)); border-bottom: none; background: var(--bg-subtle); font-weight: 600; color: var(--text); }
+  .style-stats-table tfoot td:first-child { text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; color: var(--text-secondary); }
   .style-stats-empty { padding: 16px 20px; color: var(--text-muted); font-size: 13px; border-top: 1px solid var(--border); }
   .style-stats-controls { padding: 10px 20px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-secondary); }
   .style-stats-pill-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
@@ -3129,6 +3164,10 @@ function mountSortableTable(opts) {
     )).join('') +
     '</tr>'
   );
+  const showTotals = !!opts.showTotals;
+  const footerRowHtml = showTotals
+    ? '<tr class="activity-total-row">' + cols.map(c => '<td data-footer-key="' + escapeHtml(c.key) + '"' + alignAttr(c) + '></td>').join('') + '</tr>'
+    : '';
   container.innerHTML =
     '<div class="style-stats-table-wrapper">' +
       '<table class="style-stats-table">' +
@@ -3138,9 +3177,11 @@ function mountSortableTable(opts) {
           filterRowHtml +
         '</thead>' +
         '<tbody></tbody>' +
+        (showTotals ? '<tfoot>' + footerRowHtml + '</tfoot>' : '') +
       '</table>' +
     '</div>';
   const tbody = container.querySelector('tbody');
+  const tfoot = showTotals ? container.querySelector('tfoot') : null;
   function cellValue(c, r) { return c.accessor ? c.accessor(r) : r[c.key]; }
   function cellDisplay(c, r) {
     const v = cellValue(c, r);
@@ -3191,6 +3232,43 @@ function mountSortableTable(opts) {
       const ridAttr = (rid !== null && rid !== undefined && rid !== '') ? ' data-row-id="' + escapeHtml(String(rid)) + '"' : '';
       return '<tr' + ridAttr + '>' + cols.map(c => '<td data-col-key="' + escapeHtml(c.key) + '"' + alignAttr(c) + '>' + cellDisplay(c, r) + '</td>').join('') + '</tr>';
     }).join('') || '<tr><td colspan="' + cols.length + '" style="text-align:center;color:var(--text-muted);padding:14px;">No rows match filters.</td></tr>';
+    if (tfoot) {
+      if (!sorted.length) {
+        tfoot.style.display = 'none';
+      } else {
+        tfoot.style.display = '';
+        // Build a synthetic "totals" row: sum each numeric field across all
+        // filtered rows. Formatters that read sibling keys (e.g. makeFunnelFmt
+        // reading r.domain_pageviews, makeFmtPerPost reading r.posts) then
+        // work uniformly against the summed totals.
+        const synth = {};
+        const numericKeys = new Set();
+        for (const c of cols) if (c.type === 'numeric') numericKeys.add(c.key);
+        for (const r of sorted) {
+          for (const k of Object.keys(r)) {
+            const n = Number(r[k]);
+            if (Number.isFinite(n)) synth[k] = (synth[k] || 0) + n;
+          }
+        }
+        let firstTextDone = false;
+        cols.forEach(c => {
+          const cell = tfoot.querySelector('td[data-footer-key="' + c.key.replace(/"/g, '\\"') + '"]');
+          if (!cell) return;
+          let html = '';
+          if (typeof c.footer === 'function') {
+            html = c.footer(sorted, synth);
+          } else if (c.type === 'numeric') {
+            const sum = synth[c.key];
+            if (c.formatter) html = c.formatter(Number.isFinite(sum) ? sum : 0, synth);
+            else html = String(Number.isFinite(sum) ? sum : 0);
+          } else if (!firstTextDone) {
+            html = 'Total';
+            firstTextDone = true;
+          }
+          cell.innerHTML = html == null ? '' : html;
+        });
+      }
+    }
     if (opts.onAfterRender) opts.onAfterRender(tbody, sorted);
     container.querySelectorAll('[data-sort-arrow-key]').forEach(el => {
       const k = el.getAttribute('data-sort-arrow-key');
@@ -3275,14 +3353,8 @@ function renderStyleStats(payload) {
     body.innerHTML = '<div class="style-stats-empty">' + escapeHtml(label) + '</div>';
     return;
   }
-  const totals = rows.reduce((a, r) => {
-    a.posts    += Number(r.posts)    || 0;
-    a.upvotes  += Number(r.upvotes)  || 0;
-    a.comments += Number(r.comments) || 0;
-    a.views    += Number(r.views)    || 0;
-    return a;
-  }, { posts: 0, upvotes: 0, comments: 0, views: 0 });
-  if (totalEl) totalEl.textContent = totals.posts + ' post' + (totals.posts === 1 ? '' : 's');
+  const totalPosts = rows.reduce((a, r) => a + (Number(r.posts) || 0), 0);
+  if (totalEl) totalEl.textContent = totalPosts.toLocaleString() + ' post' + (totalPosts === 1 ? '' : 's');
   const fmt = n => (Number(n) || 0).toLocaleString();
   const perPostStr = v => {
     if (!Number.isFinite(v)) return '0';
@@ -3338,13 +3410,20 @@ function renderStyleStats(payload) {
     containerId: 'style-stats-body',
     rows: normalized,
     state: _styleStatsTableState,
+    showTotals: true,
     columns: [
       { key: 'style',    label: 'Style',    type: 'text',    align: 'left',  formatter: v => escapeHtml(v) },
-      { key: 'score',    label: 'Score',    type: 'numeric', align: 'right', formatter: scoreFmt },
+      // Score isn't summable across styles: it's a per-post ratio derived
+      // from upvotes_discounted (which isn't available in the normalized
+      // rows), so blank the footer rather than show a misleading aggregate.
+      { key: 'score',    label: 'Score',    type: 'numeric', align: 'right', formatter: scoreFmt, footer: () => '' },
       { key: 'posts',    label: 'Posts',    type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'upvotes',  label: 'Upvotes',  type: 'numeric', align: 'right', accessor: perPostAccessor('upvotes'),  formatter: makeFmtPerPost('upvotes') },
-      { key: 'comments', label: 'Comments', type: 'numeric', align: 'right', accessor: perPostAccessor('comments'), formatter: makeFmtPerPost('comments') },
-      { key: 'views',    label: 'Views',    type: 'numeric', align: 'right', accessor: perPostAccessor('views'),    formatter: makeFmtPerPost('views') },
+      // makeFmtPerPost reads r.posts / r.views_posts as denominators. The
+      // synthetic footer row has summed posts and views_posts, so the same
+      // formatter computes sum(upvotes)/sum(posts) etc. automatically.
+      { key: 'upvotes',  label: 'Upvotes',  type: 'numeric', align: 'right', accessor: perPostAccessor('upvotes'),  formatter: makeFmtPerPost('upvotes'),  footer: (_rows, synth) => makeFmtPerPost('upvotes')(null, synth) },
+      { key: 'comments', label: 'Comments', type: 'numeric', align: 'right', accessor: perPostAccessor('comments'), formatter: makeFmtPerPost('comments'), footer: (_rows, synth) => makeFmtPerPost('comments')(null, synth) },
+      { key: 'views',    label: 'Views',    type: 'numeric', align: 'right', accessor: perPostAccessor('views'),    formatter: makeFmtPerPost('views'),    footer: (_rows, synth) => makeFmtPerPost('views')(null, synth) },
     ],
   });
 }
@@ -3406,14 +3485,10 @@ function renderFunnelStats(payload) {
     if (d === s) return fmt(s);
     return fmt(s) + ' (' + fmt(d) + ')';
   };
-  if (totalEl) {
-    totalEl.textContent = totals.posts + ' posts \u00b7 ' + totals.seo + ' pages \u00b7 ' +
-      pair(totals.pageviews, totals.d_pageviews) + ' pv \u00b7 ' +
-      pair(totals.email_signups, totals.d_email_signups) + ' signup \u00b7 ' +
-      pair(totals.schedule_clicks, totals.d_schedule_clicks) + ' sched \u00b7 ' +
-      pair(totals.get_started_clicks, totals.d_get_started_clicks) + ' gs \u00b7 ' +
-      totals.bookings + ' book';
-  }
+  if (totalEl) totalEl.textContent = projects.length + ' project' + (projects.length === 1 ? '' : 's');
+  // pair() is kept for potential future use but no longer emitted in the
+  // header; the footer row now carries per-column totals.
+  void pair;
   const normalized = projects.map(p => {
     const pst = p.posts || {};
     const seo = p.seo || {};
@@ -3476,6 +3551,7 @@ function renderFunnelStats(payload) {
     containerId: 'funnel-stats-body',
     rows: normalized,
     state: _funnelStatsTableState,
+    showTotals: true,
     columns: [
       { key: 'name',             label: 'Project',         type: 'text',    align: 'left',  formatter: fmtProjectName },
       { key: 'posts',            label: 'Posts',           type: 'numeric', align: 'right', formatter: fmt },
@@ -3483,6 +3559,9 @@ function renderFunnelStats(payload) {
       { key: 'comments',         label: 'Comments',        type: 'numeric', align: 'right', formatter: fmt },
       { key: 'views',            label: 'Views',           type: 'numeric', align: 'right', formatter: v => v == null ? '\u2014' : fmt(v) },
       { key: 'seo_pages',        label: 'SEO Pages',       type: 'numeric', align: 'right', formatter: fmt },
+      // Funnel cells use makeFunnelFmt, which reads a sibling "domain_*"
+      // field off the row. The synthetic footer row carries summed
+      // domain_* totals too, so the same formatter renders "<scoped> (<domain>)".
       { key: 'pageviews',        label: 'Pageviews',       type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_pageviews') },
       { key: 'email_signups',    label: 'Email Signups',   type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_email_signups') },
       { key: 'schedule_clicks',  label: 'Schedule Clicks', type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_schedule_clicks') },
@@ -3518,50 +3597,85 @@ function renderDmStats(payload) {
   }
   const fmt = n => (Number(n) || 0).toLocaleString();
   const totals = projects.reduce((a, p) => {
-    a.dms          += Number(p.dms)          || 0;
-    a.replied      += Number(p.replied)      || 0;
-    a.hot          += Number(p.hot)          || 0;
-    a.warm         += Number(p.warm)         || 0;
-    a.qualified    += Number(p.qualified)    || 0;
-    a.booking_sent += Number(p.booking_sent) || 0;
-    a.converted    += Number(p.converted)    || 0;
-    a.needs_human  += Number(p.needs_human)  || 0;
+    a.dms                += Number(p.dms)                || 0;
+    a.replied            += Number(p.replied)            || 0;
+    a.hot                += Number(p.hot)                || 0;
+    a.warm               += Number(p.warm)               || 0;
+    a.general_discussion += Number(p.general_discussion) || 0;
+    a.cold               += Number(p.cold)               || 0;
+    a.not_our_prospect   += Number(p.not_our_prospect)   || 0;
+    a.declined           += Number(p.declined)           || 0;
+    a.no_response        += Number(p.no_response)        || 0;
+    a.icp_match          += Number(p.icp_match)          || 0;
+    a.icp_miss           += Number(p.icp_miss)           || 0;
+    a.icp_disqualified   += Number(p.icp_disqualified)   || 0;
+    a.icp_unknown        += Number(p.icp_unknown)        || 0;
+    a.asked              += Number(p.asked)              || 0;
+    a.answered           += Number(p.answered)           || 0;
+    a.qualified          += Number(p.qualified)          || 0;
+    a.q_disqualified     += Number(p.q_disqualified)     || 0;
+    a.booking_sent       += Number(p.booking_sent)       || 0;
+    a.converted          += Number(p.converted)          || 0;
+    a.needs_human        += Number(p.needs_human)        || 0;
     return a;
-  }, { dms: 0, replied: 0, hot: 0, warm: 0, qualified: 0, booking_sent: 0, converted: 0, needs_human: 0 });
-  if (totalEl) {
-    totalEl.textContent = totals.dms + ' dms \u00b7 ' + totals.replied + ' replied \u00b7 ' +
-      totals.hot + ' hot \u00b7 ' + totals.warm + ' warm \u00b7 ' +
-      totals.qualified + ' qual \u00b7 ' + totals.booking_sent + ' booked \u00b7 ' +
-      totals.converted + ' conv';
-  }
+  }, { dms: 0, replied: 0, hot: 0, warm: 0, general_discussion: 0, cold: 0, not_our_prospect: 0, declined: 0, no_response: 0, icp_match: 0, icp_miss: 0, icp_disqualified: 0, icp_unknown: 0, asked: 0, answered: 0, qualified: 0, q_disqualified: 0, booking_sent: 0, converted: 0, needs_human: 0 });
+  if (totalEl) totalEl.textContent = projects.length + ' project' + (projects.length === 1 ? '' : 's');
   const normalized = projects.map(p => ({
-    name:         p.name || '',
-    dms:          Number(p.dms)          || 0,
-    replied:      Number(p.replied)      || 0,
-    reply_rate:   (Number(p.dms) || 0) > 0 ? (Number(p.replied) || 0) / Number(p.dms) : 0,
-    hot:          Number(p.hot)          || 0,
-    warm:         Number(p.warm)         || 0,
-    qualified:    Number(p.qualified)    || 0,
-    booking_sent: Number(p.booking_sent) || 0,
-    converted:    Number(p.converted)    || 0,
-    needs_human:  Number(p.needs_human)  || 0,
+    name:               p.name || '',
+    dms:                Number(p.dms)                || 0,
+    replied:            Number(p.replied)            || 0,
+    reply_rate:         (Number(p.dms) || 0) > 0 ? (Number(p.replied) || 0) / Number(p.dms) : 0,
+    hot:                Number(p.hot)                || 0,
+    warm:               Number(p.warm)               || 0,
+    general_discussion: Number(p.general_discussion) || 0,
+    cold:               Number(p.cold)               || 0,
+    not_our_prospect:   Number(p.not_our_prospect)   || 0,
+    declined:           Number(p.declined)           || 0,
+    no_response:        Number(p.no_response)        || 0,
+    icp_match:          Number(p.icp_match)          || 0,
+    icp_miss:           Number(p.icp_miss)           || 0,
+    icp_disqualified:   Number(p.icp_disqualified)   || 0,
+    icp_unknown:        Number(p.icp_unknown)        || 0,
+    asked:              Number(p.asked)              || 0,
+    answered:           Number(p.answered)           || 0,
+    qualified:          Number(p.qualified)          || 0,
+    q_disqualified:     Number(p.q_disqualified)     || 0,
+    booking_sent:       Number(p.booking_sent)       || 0,
+    converted:          Number(p.converted)          || 0,
+    needs_human:        Number(p.needs_human)        || 0,
   }));
   const pct = v => (Number(v) * 100).toFixed(0) + '%';
+  // Reply % must not sum per-row rates (that would produce nonsense like
+  // 380%). Recompute from the summed dms/replied in the synthetic totals row.
+  const replyRateFooter = (_rows, synth) => pct((synth.dms || 0) > 0 ? (synth.replied || 0) / synth.dms : 0);
   mountSortableTable({
     containerId: 'dm-stats-body',
     rows: normalized,
     state: _dmStatsTableState,
+    showTotals: true,
     columns: [
-      { key: 'name',         label: 'Project',      type: 'text',    align: 'left',  formatter: v => escapeHtml(v) },
-      { key: 'dms',          label: 'DMs',          type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'replied',      label: 'Replied',      type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'reply_rate',   label: 'Reply %',      type: 'numeric', align: 'right', formatter: pct },
-      { key: 'hot',          label: 'Hot',          type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'warm',         label: 'Warm',         type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'qualified',    label: 'Qualified',    type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'booking_sent', label: 'Booking Sent', type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'converted',    label: 'Converted',    type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'needs_human',  label: 'Needs Human',  type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'name',               label: 'Project',      type: 'text',    align: 'left',  formatter: v => escapeHtml(v) },
+      { key: 'dms',                label: 'DMs',          type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'replied',            label: 'Replied',      type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'reply_rate',         label: 'Reply %',      type: 'numeric', align: 'right', formatter: pct, footer: replyRateFooter },
+      { key: 'hot',                label: 'Hot',          type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'warm',               label: 'Warm',         type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'general_discussion', label: 'General',      type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'cold',               label: 'Cold',         type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'not_our_prospect',   label: 'NotProsp',     type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'declined',           label: 'Declined',     type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'no_response',        label: 'NoResp',       type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'icp_match',          label: 'ICP Match',    type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'icp_miss',           label: 'ICP Miss',     type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'icp_disqualified',   label: 'ICP Disq',     type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'icp_unknown',        label: 'ICP Unk',      type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'asked',              label: 'Asked',        type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'answered',           label: 'Answered',     type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'qualified',          label: 'Qualified',    type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'q_disqualified',     label: 'Disqual',      type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'booking_sent',       label: 'Booking Sent', type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'converted',          label: 'Converted',    type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'needs_human',        label: 'Needs Human',  type: 'numeric', align: 'right', formatter: fmt },
     ],
   });
 }
@@ -4750,13 +4864,20 @@ document.getElementById('save-settings').addEventListener('click', saveSettings)
 // Firebase hands us an ID token; in local mode it fires immediately.
 function saStartApp() {
   document.body.classList.remove('sa-authed-pending');
-  loadStatus();
+  const isCloud = document.body.classList.contains('sa-cloud');
+  const isAdmin = window.SA_IS_ADMIN !== false;
+  // Status + pending are local-only (UI hidden by body.sa-cloud). Endpoints
+  // are admin-only too, so skipping them on cloud also stops 403 spam for
+  // scoped clients.
+  if (!isCloud) {
+    loadStatus();
+    setInterval(loadStatus, 5000);
+  }
   loadActivityStats();
   loadStyleStats();
   // Deploy Health is inside the Status tab, which is local-only. On the
   // hosted client dashboard we skip the fetch entirely; Cloud Run has no
   // mirror for project_deploy_status.py, so polling it just spams 503.
-  const isCloud = document.body.classList.contains('sa-cloud');
   if (!isCloud) {
     loadDeployHealth();
     setInterval(loadDeployHealth, 60000);
@@ -4768,14 +4889,19 @@ function saStartApp() {
   if (funnelEl && funnelEl.open) loadFunnelStats();
   const dmEl = document.getElementById('dm-stats');
   if (dmEl && dmEl.open) loadDmStats();
-  setInterval(loadStatus, 5000);
   setInterval(loadActivityStats, 300000);
   setInterval(loadStyleStats, 300000);
   setTimeout(() => {
-    try { loadLogFiles(); _tabLoaded.logs = true; } catch {}
+    // Logs + Settings tabs are admin-only (hidden via body.sa-non-admin);
+    // their endpoints are admin-only too, so guard the preload for scoped users.
+    if (isAdmin) {
+      try { loadLogFiles(); _tabLoaded.logs = true; } catch {}
+    }
     try { buildActivityFilters(); loadActivity(); _tabLoaded.activity = true; } catch {}
     try { initTopFilters(); loadTopPosts(); _tabLoaded.top = true; } catch {}
-    try { loadSettings(); _tabLoaded.settings = true; } catch {}
+    if (isAdmin) {
+      try { loadSettings(); _tabLoaded.settings = true; } catch {}
+    }
   }, 100);
 }
 window.saStartApp = saStartApp;
@@ -4788,7 +4914,7 @@ window.saStartApp = saStartApp;
   var host = (window.location && window.location.hostname) || '';
   var isLocalhost = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '';
   if (!isLocalhost) document.body.classList.add('sa-cloud');
-  if (!cfg.clientMode) { saStartApp(); return; }
+  if (!cfg.clientMode) { window.SA_IS_ADMIN = true; saStartApp(); return; }
   if (!cfg.firebase || !cfg.firebase.apiKey) {
     document.getElementById('sa-login-error').textContent = 'Auth not configured';
     document.getElementById('sa-login-overlay').style.display = 'flex';
@@ -4862,6 +4988,7 @@ window.saStartApp = saStartApp;
     }).then(function(me) {
       var u = me && me.user;
       if (!u) throw new Error('no user');
+      window.SA_IS_ADMIN = !!u.admin;
       if (!u.admin) document.body.classList.add('sa-non-admin');
       var signoutBtn = document.getElementById('sa-signout-btn');
       if (signoutBtn) signoutBtn.style.display = '';
