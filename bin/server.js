@@ -1059,6 +1059,7 @@ async function handleApi(req, res) {
         "COALESCE(SUM(comments_count), 0)::int AS comments, " +
         "COALESCE(SUM(views) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues')), 0)::int AS views " +
       "FROM posts WHERE posted_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
+      "AND our_content <> '(mention - no original post)' " +
       platformFilter + projectFilter +
       "GROUP BY engagement_style ORDER BY posts DESC) r";
     // Return the full list of active platforms/projects in the window so the pill
@@ -1322,6 +1323,47 @@ async function handleApi(req, res) {
       json(res, { error: String(err && err.message || err) }, 500);
     });
     return;
+  }
+
+  // GET /api/dm/stats - per-project DM funnel (outreach, replies, interest tiers,
+  // qualification, bookings, conversions). Window is "active in last N days"
+  // (COALESCE(last_message_at, discovered_at)) to match /api/top/dms semantics.
+  if (p === '/api/dm/stats' && req.method === 'GET') {
+    const url = new URL(req.url, 'http://localhost');
+    const days = Math.max(1, Math.min(90, parseInt(url.searchParams.get('days') || '1', 10) || 1));
+    const windowHours = days * 24;
+    const dmPc = auth.projectClause(req.user, "COALESCE(p_direct.project_name, p_via_reply.project_name, d.target_project)", url.searchParams.get('project'));
+    if (!dmPc.ok) return json(res, { days, projects: [] });
+    const whereParts = [
+      "COALESCE(d.last_message_at, d.discovered_at) >= NOW() - INTERVAL '" + windowHours + " hours'",
+      "COALESCE(p_direct.project_name, p_via_reply.project_name, d.target_project) IS NOT NULL",
+    ];
+    if (dmPc.clause) whereParts.push(dmPc.clause.replace(/^\s*AND\s+/, ''));
+    const whereSql = 'WHERE ' + whereParts.join(' AND ');
+    const q =
+      "SELECT json_agg(row_to_json(r)) FROM (" +
+        "SELECT COALESCE(p_direct.project_name, p_via_reply.project_name, d.target_project) AS name, " +
+          "COUNT(*)::int AS dms, " +
+          "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'inbound'))::int AS replied, " +
+          "COUNT(*) FILTER (WHERE d.interest_level = 'hot')::int AS hot, " +
+          "COUNT(*) FILTER (WHERE d.interest_level = 'warm')::int AS warm, " +
+          "COUNT(*) FILTER (WHERE d.qualification_status = 'qualified')::int AS qualified, " +
+          "COUNT(*) FILTER (WHERE d.booking_link_sent_at IS NOT NULL)::int AS booking_sent, " +
+          "COUNT(*) FILTER (WHERE d.conversation_status = 'converted')::int AS converted, " +
+          "COUNT(*) FILTER (WHERE d.conversation_status = 'needs_human')::int AS needs_human " +
+        "FROM dms d " +
+        "LEFT JOIN posts   p_direct    ON p_direct.id    = d.post_id " +
+        "LEFT JOIN replies r_link      ON r_link.id      = d.reply_id " +
+        "LEFT JOIN posts   p_via_reply ON p_via_reply.id = r_link.post_id " +
+        whereSql + " " +
+        "GROUP BY name " +
+        "ORDER BY dms DESC, replied DESC" +
+      ") r";
+    return (async () => {
+      const rows = await pq(q);
+      const projects = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
+      return json(res, { days, projects });
+    })().catch(e => json(res, { error: e.message }, 500));
   }
 
   // GET /api/deploy/status - latest Vercel production deploy per project.
@@ -1740,11 +1782,21 @@ const HTML = `<!DOCTYPE html>
   .top-post-meta a { color: var(--text-muted); text-decoration: none; }
   .top-post-meta a:hover { color: var(--text-secondary); text-decoration: underline; }
   .top-post-parent-title { color: var(--text-secondary); font-style: italic; }
+  .top-project-cell { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; min-width: 0; }
+  .top-project-name { color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  .top-kind-pill { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid var(--border); line-height: 1.5; }
+  .top-kind-pill--thread { background: rgba(96, 165, 250, 0.12); color: #60a5fa; border-color: rgba(96, 165, 250, 0.35); }
+  .top-kind-pill--comment { background: rgba(167, 139, 250, 0.12); color: #a78bfa; border-color: rgba(167, 139, 250, 0.35); }
+  .top-stats-cell { display: flex; flex-direction: column; gap: 2px; font-variant-numeric: tabular-nums; font-size: 12px; }
+  .top-stats-bit { color: var(--text); white-space: nowrap; }
+  .top-stats-k { color: var(--text-muted); font-weight: 600; margin-right: 4px; }
   /* Top tab table: fixed layout so Content gets 50% and small columns truncate their headers */
   #top-table-container .style-stats-table { table-layout: fixed; }
   #top-table-container .style-stats-table th,
   #top-table-container .style-stats-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 10px 10px; }
   #top-table-container .style-stats-table td[data-col-key="our_content"] { white-space: normal; overflow: visible; text-overflow: clip; }
+  #top-table-container .style-stats-table td[data-col-key="project_name"],
+  #top-table-container .style-stats-table td[data-col-key="score"] { white-space: normal; overflow: visible; text-overflow: clip; vertical-align: top; }
   #top-table-container .style-stats-table th .activity-header-label { overflow: hidden; text-overflow: ellipsis; display: inline-block; max-width: 100%; vertical-align: bottom; }
   /* Inline header stack: sortable label on top, filter dropdown below */
   .activity-th-stack { display: flex; flex-direction: column; align-items: stretch; gap: 4px; min-width: 0; }
@@ -1915,7 +1967,7 @@ const HTML = `<!DOCTYPE html>
   .sa-login-card button:hover { background: #1d4ed8; }
   .sa-login-error { color: #dc2626; font-size: 13px; min-height: 18px; margin-top: 6px; }
   body.sa-non-admin .sa-admin-only { display: none !important; }
-  body:not(.sa-hosted) .sa-hosted-only { display: none !important; }
+  body.sa-cloud .sa-local-only { display: none !important; }
   body.sa-authed-pending .header, body.sa-authed-pending .tabs, body.sa-authed-pending .content { visibility: hidden; }
 </style>
 <script>
@@ -1967,7 +2019,7 @@ const HTML = `<!DOCTYPE html>
 </div>
 
 <div class="tabs">
-  <div class="tab sa-admin-only sa-hosted-only" data-tab="status">Status</div>
+  <div class="tab sa-local-only" data-tab="status">Status</div>
   <div class="tab active" data-tab="stats">Stats</div>
   <div class="tab" data-tab="activity">Activity</div>
   <div class="tab" data-tab="top">Top</div>
@@ -1975,7 +2027,16 @@ const HTML = `<!DOCTYPE html>
   <div class="tab sa-admin-only" data-tab="settings">Settings</div>
 </div>
 
-<div class="content hidden sa-admin-only sa-hosted-only" id="tab-status">
+<div class="content hidden sa-local-only" id="tab-status">
+  <details class="style-stats-section" id="deploy-health">
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span>Deploy Health</span>
+      <span class="style-stats-total" id="deploy-health-total"></span>
+    </summary>
+    <div id="deploy-health-body">
+      <div class="style-stats-empty">Loading\u2026</div>
+    </div>
+  </details>
   <div class="matrix-wrapper">
     <table class="matrix-table">
       <thead>
@@ -1997,16 +2058,23 @@ const HTML = `<!DOCTYPE html>
 </div>
 
 <div class="content" id="tab-stats">
+  <div class="style-stats-pill-row" id="stats-window-pills" data-selected="24h" style="margin-bottom:16px;">
+    <span class="label">Window</span>
+    <button type="button" class="style-stats-pill active" data-value="24h">Last 24h</button>
+    <button type="button" class="style-stats-pill" data-value="7d">Last 7d</button>
+    <button type="button" class="style-stats-pill" data-value="14d">Last 14d</button>
+    <button type="button" class="style-stats-pill" data-value="30d">Last 30d</button>
+  </div>
   <div class="stats-wrapper">
     <div class="stats-header">
-      <span class="stats-title">Last 24 hours</span>
+      <span class="stats-title" id="stats-title">Last 24 hours</span>
       <span class="stats-total" id="stats-total"></span>
     </div>
     <div class="stats-grid" id="stats-grid"></div>
   </div>
-  <details class="style-stats-section" id="style-stats">
+  <details class="style-stats-section" id="style-stats" open>
     <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span>Posts by Engagement Style (24h)</span>
+      <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="style-stats-heading">Posts by Engagement Style (24h)</span></span>
       <span class="style-stats-total" id="style-stats-total"></span>
     </summary>
     <div class="style-stats-controls">
@@ -2021,22 +2089,22 @@ const HTML = `<!DOCTYPE html>
       <div class="style-stats-empty">Loading\u2026</div>
     </div>
   </details>
-  <details class="style-stats-section" id="deploy-health">
+  <details class="style-stats-section" id="funnel-stats" open>
     <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span>Deploy Health</span>
-      <span class="style-stats-total" id="deploy-health-total"></span>
-    </summary>
-    <div id="deploy-health-body">
-      <div class="style-stats-empty">Loading\u2026</div>
-    </div>
-  </details>
-  <details class="style-stats-section" id="funnel-stats">
-    <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span>Project Funnel Stats (last 24 hours)</span>
+      <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="funnel-stats-heading">Project Funnel Stats (last 24 hours)</span></span>
       <span class="style-stats-total" id="funnel-stats-total"></span>
     </summary>
     <div id="funnel-stats-body">
       <div class="style-stats-empty">Click to load\u2026</div>
+    </div>
+  </details>
+  <details class="style-stats-section" id="dm-stats" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="dm-stats-heading">DM Funnel Stats (last 24 hours)</span></span>
+      <span class="style-stats-total" id="dm-stats-total"></span>
+    </summary>
+    <div id="dm-stats-body">
+      <div class="style-stats-empty">Loading\u2026</div>
     </div>
   </details>
 </div>
@@ -2147,6 +2215,12 @@ const HTML = `<!DOCTYPE html>
       <button type="button" class="style-stats-pill active" data-value="all">Threads &amp; comments</button>
       <button type="button" class="style-stats-pill" data-value="threads">Threads only</button>
       <button type="button" class="style-stats-pill" data-value="comments">Comments only</button>
+    </div>
+    <div class="style-stats-pill-row hidden" id="top-dm-dir-pills" data-selected="all">
+      <span class="label">Direction</span>
+      <button type="button" class="style-stats-pill active" data-value="all">All</button>
+      <button type="button" class="style-stats-pill" data-value="in">IN</button>
+      <button type="button" class="style-stats-pill" data-value="out">OUT</button>
     </div>
   </div>
   <div id="top-table-container">
@@ -2908,6 +2982,32 @@ function platformIconHtml(name) {
   return '<span class="activity-platform" title="' + key + '">' + icon + '</span>';
 }
 
+// Top-of-Stats-tab window selector. Controls all three sections
+// (activity counts, style stats, project funnel). Mapping matches the
+// windows precompute_dashboard_stats.py generates snapshots for.
+const STATS_WINDOWS = {
+  '24h': { hours: 24,  days: 1,  labelLong: 'last 24 hours', labelShort: '24h' },
+  '7d':  { hours: 168, days: 7,  labelLong: 'last 7 days',   labelShort: '7d'  },
+  '14d': { hours: 336, days: 14, labelLong: 'last 14 days',  labelShort: '14d' },
+  '30d': { hours: 720, days: 30, labelLong: 'last 30 days',  labelShort: '30d' },
+};
+let _statsWindow = '24h';
+function currentStatsWindow() {
+  return STATS_WINDOWS[_statsWindow] || STATS_WINDOWS['24h'];
+}
+function syncStatsHeadings() {
+  const win = currentStatsWindow();
+  const titleCased = win.labelLong.charAt(0).toUpperCase() + win.labelLong.slice(1);
+  const top = document.getElementById('stats-title');
+  if (top) top.textContent = titleCased;
+  const style = document.getElementById('style-stats-heading');
+  if (style) style.textContent = 'Posts by Engagement Style (' + win.labelShort + ')';
+  const funnel = document.getElementById('funnel-stats-heading');
+  if (funnel) funnel.textContent = 'Project Funnel Stats (' + win.labelLong + ')';
+  const dm = document.getElementById('dm-stats-heading');
+  if (dm) dm.textContent = 'DM Funnel Stats (' + win.labelLong + ')';
+}
+
 function renderActivityStats(payload) {
   const grid = document.getElementById('stats-grid');
   const totalEl = document.getElementById('stats-total');
@@ -2926,7 +3026,7 @@ function renderActivityStats(payload) {
     byType[t].platforms[pKey] = (byType[t].platforms[pKey] || 0) + n;
     grandTotal += n;
   });
-  if (totalEl) totalEl.textContent = grandTotal + ' events in last ' + hours + 'h';
+  if (totalEl) totalEl.textContent = grandTotal + ' events in ' + currentStatsWindow().labelLong;
   grid.innerHTML = EVENT_TYPES.map(t => {
     const bucket = byType[t];
     const total = bucket.total;
@@ -2949,7 +3049,8 @@ function renderActivityStats(payload) {
 
 async function loadActivityStats() {
   try {
-    const res = await fetch('/api/activity/stats?hours=24');
+    const hours = currentStatsWindow().hours;
+    const res = await fetch('/api/activity/stats?hours=' + hours);
     const data = await res.json();
     renderActivityStats(data);
   } catch {}
@@ -3148,7 +3249,8 @@ function renderStyleStats(payload) {
       selectedPlatform !== 'all' ? selectedPlatform : '',
       selectedProject  !== 'all' ? selectedProject  : '',
     ].filter(Boolean).join(' / ');
-    const label = scope ? 'No ' + scope + ' posts in the last 24 hours.' : 'No posts in the last 24 hours.';
+    const winLabel = currentStatsWindow().labelLong;
+    const label = scope ? 'No ' + scope + ' posts in the ' + winLabel + '.' : 'No posts in the ' + winLabel + '.';
     body.innerHTML = '<div class="style-stats-empty">' + escapeHtml(label) + '</div>';
     return;
   }
@@ -3232,7 +3334,8 @@ async function loadStyleStats() {
     const projectRow  = document.getElementById('style-stats-project-pills');
     const platform = (platformRow && platformRow.dataset.selected) || 'all';
     const project  = (projectRow  && projectRow.dataset.selected)  || 'all';
-    const params = ['hours=24'];
+    const hours = currentStatsWindow().hours;
+    const params = ['hours=' + hours];
     if (platform && platform !== 'all') params.push('platform=' + encodeURIComponent(platform));
     if (project  && project  !== 'all') params.push('project='  + encodeURIComponent(project));
     const res = await fetch('/api/style/stats?' + params.join('&'));
@@ -3264,11 +3367,12 @@ function renderFunnelStats(payload) {
     a.pageviews        += (p.funnel && p.funnel.pageviews)        || 0;
     a.email_signups    += (p.funnel && p.funnel.email_signups)    || 0;
     a.schedule_clicks  += (p.funnel && p.funnel.schedule_clicks)  || 0;
+    a.download_clicks  += (p.funnel && p.funnel.download_clicks)  || 0;
     a.bookings         += (p.funnel && p.funnel.real_bookings)    || 0;
     return a;
-  }, { posts: 0, seo: 0, pageviews: 0, email_signups: 0, schedule_clicks: 0, bookings: 0 });
+  }, { posts: 0, seo: 0, pageviews: 0, email_signups: 0, schedule_clicks: 0, download_clicks: 0, bookings: 0 });
   if (totalEl) {
-    totalEl.textContent = totals.posts + ' posts \u00b7 ' + totals.seo + ' pages \u00b7 ' + fmt(totals.pageviews) + ' pv \u00b7 ' + totals.email_signups + ' signup \u00b7 ' + totals.schedule_clicks + ' sched \u00b7 ' + totals.bookings + ' book';
+    totalEl.textContent = totals.posts + ' posts \u00b7 ' + totals.seo + ' pages \u00b7 ' + fmt(totals.pageviews) + ' pv \u00b7 ' + totals.email_signups + ' signup \u00b7 ' + totals.schedule_clicks + ' sched \u00b7 ' + totals.download_clicks + ' dl \u00b7 ' + totals.bookings + ' book';
   }
   const normalized = projects.map(p => {
     const pst = p.posts || {};
@@ -3285,13 +3389,14 @@ function renderFunnelStats(payload) {
       pageviews:        Number(f.pageviews)         || 0,
       email_signups:    Number(f.email_signups)     || 0,
       schedule_clicks:  Number(f.schedule_clicks)   || 0,
+      download_clicks:  Number(f.download_clicks)   || 0,
       bookings:         Number(f.real_bookings)     || 0,
     };
   });
   const fmtProjectName = (v, r) => {
     const name = escapeHtml(v);
     if (r && r.analytics_suspected_broken) {
-      const tip = escapeHtml('High pageviews but zero tracked signups or schedule clicks; posthog likely not wired on this site. See https://github.com/m13v/seo-components#posthog-setup');
+      const tip = escapeHtml('High pageviews but zero tracked signups, schedule clicks, or download clicks; posthog likely not wired on this site. See https://github.com/m13v/seo-components#posthog-setup');
       return name + ' <span title="' + tip + '" style="color:#dc2626;cursor:help;margin-left:4px;" aria-label="analytics suspected broken">\u26A0</span>';
     }
     return name;
@@ -3310,7 +3415,74 @@ function renderFunnelStats(payload) {
       { key: 'pageviews',        label: 'Pageviews',       type: 'numeric', align: 'right', formatter: fmt },
       { key: 'email_signups',    label: 'Email Signups',   type: 'numeric', align: 'right', formatter: fmt },
       { key: 'schedule_clicks',  label: 'Schedule Clicks', type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'download_clicks',  label: 'Download Clicks', type: 'numeric', align: 'right', formatter: fmt },
       { key: 'bookings',         label: 'Bookings',        type: 'numeric', align: 'right', formatter: fmt },
+    ],
+  });
+}
+
+let _dmStatsTableState = { sortField: 'dms', sortDir: 'desc', filters: {} };
+function renderDmStats(payload) {
+  const body = document.getElementById('dm-stats-body');
+  const totalEl = document.getElementById('dm-stats-total');
+  if (!body) return;
+  if (payload && payload.error) {
+    if (totalEl) totalEl.textContent = 'error';
+    body.innerHTML = '<div class="style-stats-empty">' + escapeHtml(payload.error) + '</div>';
+    return;
+  }
+  const projects = (payload && payload.projects) || [];
+  if (!projects.length) {
+    if (totalEl) totalEl.textContent = '0 projects';
+    body.innerHTML = '<div class="style-stats-empty">No DM activity in this window.</div>';
+    return;
+  }
+  const fmt = n => (Number(n) || 0).toLocaleString();
+  const totals = projects.reduce((a, p) => {
+    a.dms          += Number(p.dms)          || 0;
+    a.replied      += Number(p.replied)      || 0;
+    a.hot          += Number(p.hot)          || 0;
+    a.warm         += Number(p.warm)         || 0;
+    a.qualified    += Number(p.qualified)    || 0;
+    a.booking_sent += Number(p.booking_sent) || 0;
+    a.converted    += Number(p.converted)    || 0;
+    a.needs_human  += Number(p.needs_human)  || 0;
+    return a;
+  }, { dms: 0, replied: 0, hot: 0, warm: 0, qualified: 0, booking_sent: 0, converted: 0, needs_human: 0 });
+  if (totalEl) {
+    totalEl.textContent = totals.dms + ' dms \u00b7 ' + totals.replied + ' replied \u00b7 ' +
+      totals.hot + ' hot \u00b7 ' + totals.warm + ' warm \u00b7 ' +
+      totals.qualified + ' qual \u00b7 ' + totals.booking_sent + ' booked \u00b7 ' +
+      totals.converted + ' conv';
+  }
+  const normalized = projects.map(p => ({
+    name:         p.name || '',
+    dms:          Number(p.dms)          || 0,
+    replied:      Number(p.replied)      || 0,
+    reply_rate:   (Number(p.dms) || 0) > 0 ? (Number(p.replied) || 0) / Number(p.dms) : 0,
+    hot:          Number(p.hot)          || 0,
+    warm:         Number(p.warm)         || 0,
+    qualified:    Number(p.qualified)    || 0,
+    booking_sent: Number(p.booking_sent) || 0,
+    converted:    Number(p.converted)    || 0,
+    needs_human:  Number(p.needs_human)  || 0,
+  }));
+  const pct = v => (Number(v) * 100).toFixed(0) + '%';
+  mountSortableTable({
+    containerId: 'dm-stats-body',
+    rows: normalized,
+    state: _dmStatsTableState,
+    columns: [
+      { key: 'name',         label: 'Project',      type: 'text',    align: 'left',  formatter: v => escapeHtml(v) },
+      { key: 'dms',          label: 'DMs',          type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'replied',      label: 'Replied',      type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'reply_rate',   label: 'Reply %',      type: 'numeric', align: 'right', formatter: pct },
+      { key: 'hot',          label: 'Hot',          type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'warm',         label: 'Warm',         type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'qualified',    label: 'Qualified',    type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'booking_sent', label: 'Booking Sent', type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'converted',    label: 'Converted',    type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'needs_human',  label: 'Needs Human',  type: 'numeric', align: 'right', formatter: fmt },
     ],
   });
 }
@@ -3330,6 +3502,8 @@ let _topPagesLoading = false;
 let _topDmsTableState = { sortField: 'rank', sortDir: 'asc', filters: {} };
 let _topDmsLoaded = false;
 let _topDmsLoading = false;
+let _topDmsPayload = null;
+let _topDmDir = 'all';
 
 function parentLabel(post) {
   const plat = String(post.platform || '').toLowerCase();
@@ -3456,6 +3630,7 @@ function renderTopPosts(payload) {
     comments_count:Number(p.comments_count) || 0,
     views:         p.views == null ? null : Number(p.views),
     score:         Number(p.score)          || 0,
+    is_thread:     !!p.is_thread,
     posted_at:     p.posted_at || null,
     posted_ts:     p.posted_at ? new Date(p.posted_at).getTime() : 0,
     our_content:   p.our_content || '',
@@ -3477,37 +3652,35 @@ function renderTopPosts(payload) {
         filterMode: 'dropdown',
         filterOptions: distinctOptions(normalized, 'platform', 'All'),
         filterPredicate: filterPredicateExact },
-      { key: 'project_name',   label: 'Project',  type: 'text',    align: 'left',  widthPct: 10,
-        formatter: v => v ? escapeHtml(String(v)) : '',
+      { key: 'project_name',   label: 'Project',  type: 'text',    align: 'left',  widthPct: 12,
+        formatter: (v, r) => {
+          const name = v ? escapeHtml(String(v)) : '';
+          const kind = r.is_thread ? 'thread' : 'comment';
+          const pill = '<span class="top-kind-pill top-kind-pill--' + kind + '">' + kind + '</span>';
+          return '<div class="top-project-cell">' + (name ? '<div class="top-project-name">' + name + '</div>' : '') + pill + '</div>';
+        },
         filterMode: 'dropdown',
         filterOptions: distinctOptions(normalized, 'project_name', 'All'),
         filterPredicate: filterPredicateExact },
-      { key: 'score',          label: 'Score',    type: 'numeric', align: 'right', widthPct: 7,
-        formatter: fmt,
+      { key: 'score',          label: 'Stats',    type: 'numeric', align: 'left',  widthPct: 18,
+        formatter: (_v, r) => {
+          const parts = [
+            '<span class="top-stats-bit"><span class="top-stats-k">score</span>' + fmt(r.score) + '</span>',
+            '<span class="top-stats-bit"><span class="top-stats-k">upvotes</span>' + fmt(r.upvotes) + '</span>',
+            '<span class="top-stats-bit"><span class="top-stats-k">comments</span>' + fmt(r.comments_count) + '</span>',
+            '<span class="top-stats-bit"><span class="top-stats-k">views</span>' + (r.views == null ? '\u2014' : fmt(r.views)) + '</span>',
+          ];
+          return '<div class="top-stats-cell">' + parts.join('') + '</div>';
+        },
         filterMode: 'dropdown',
         filterOptions: numericThresholdOptions(normalized, 'score'),
-        filterPredicate: filterPredicateGte },
-      { key: 'upvotes',        label: 'Upvotes',  type: 'numeric', align: 'right', widthPct: 7,
-        formatter: fmt,
-        filterMode: 'dropdown',
-        filterOptions: numericThresholdOptions(normalized, 'upvotes'),
-        filterPredicate: filterPredicateGte },
-      { key: 'comments_count', label: 'Comments', type: 'numeric', align: 'right', widthPct: 7,
-        formatter: fmt,
-        filterMode: 'dropdown',
-        filterOptions: numericThresholdOptions(normalized, 'comments_count'),
-        filterPredicate: filterPredicateGte },
-      { key: 'views',          label: 'Views',    type: 'numeric', align: 'right', widthPct: 7,
-        formatter: v => v == null ? '\u2014' : fmt(v),
-        filterMode: 'dropdown',
-        filterOptions: numericThresholdOptions(normalized, 'views'),
         filterPredicate: filterPredicateGte },
       { key: 'posted_ts',      label: 'Posted',   type: 'numeric', align: 'right', widthPct: 6,
         formatter: (_v, r) => escapeHtml(relTime(r.posted_at)),
         filterMode: 'dropdown',
         filterOptions: ageThresholdOptions(),
         filterPredicate: filterPredicateAge },
-      { key: 'our_content',    label: 'Content',  type: 'text',    align: 'left',  widthPct: 50,
+      { key: 'our_content',    label: 'Content',  type: 'text',    align: 'left',  widthPct: 58,
         formatter: renderTopContentCell,
         filterMode: 'none' },
     ],
@@ -3563,10 +3736,12 @@ function initTopFilters() {
   const platRow = document.getElementById('top-platform-pills');
   const projRow = document.getElementById('top-project-pills');
   const kindRow = document.getElementById('top-kind-pills');
+  const dirRow  = document.getElementById('top-dm-dir-pills');
   if (winRow) setTopPillActive(winRow, _topWindow);
   if (platRow) setTopPillActive(platRow, _topPlatform);
   if (projRow) setTopPillActive(projRow, _topProject);
   if (kindRow) setTopPillActive(kindRow, _topKind);
+  if (dirRow) setTopPillActive(dirRow, _topDmDir);
   wireTopPillRow('top-window-pills', (v) => {
     _topWindow = v || '24h';
     if (_topSubtab === 'pages') loadTopPages(true);
@@ -3585,6 +3760,10 @@ function initTopFilters() {
   wireTopPillRow('top-kind-pills', (v) => {
     _topKind = v || 'all';
     loadTopPosts(true);
+  });
+  wireTopPillRow('top-dm-dir-pills', (v) => {
+    _topDmDir = v || 'all';
+    if (_topDmsPayload) renderTopDms(_topDmsPayload);
   });
   const searchEl = document.getElementById('top-search');
   if (searchEl && !searchEl._wired) {
@@ -3609,6 +3788,7 @@ function initTopFilters() {
       const platRowEl = document.getElementById('top-platform-pills');
       const projRowEl = document.getElementById('top-project-pills');
       const kindRowEl = document.getElementById('top-kind-pills');
+      const dirRowEl  = document.getElementById('top-dm-dir-pills');
       const totalEl = document.getElementById('top-total');
       if (sub === 'pages') {
         postsC.classList.add('hidden');
@@ -3618,6 +3798,7 @@ function initTopFilters() {
         if (platRowEl) platRowEl.classList.add('hidden');
         if (projRowEl) projRowEl.classList.remove('hidden');
         if (kindRowEl) kindRowEl.classList.add('hidden');
+        if (dirRowEl) dirRowEl.classList.add('hidden');
         if (totalEl) totalEl.textContent = '';
         loadTopPages();
       } else if (sub === 'dms') {
@@ -3628,6 +3809,7 @@ function initTopFilters() {
         if (platRowEl) platRowEl.classList.remove('hidden');
         if (projRowEl) projRowEl.classList.add('hidden');
         if (kindRowEl) kindRowEl.classList.add('hidden');
+        if (dirRowEl) dirRowEl.classList.remove('hidden');
         if (totalEl) totalEl.textContent = '';
         loadTopDms(true);
       } else {
@@ -3638,6 +3820,7 @@ function initTopFilters() {
         if (platRowEl) platRowEl.classList.remove('hidden');
         if (projRowEl) projRowEl.classList.add('hidden');
         if (kindRowEl) kindRowEl.classList.remove('hidden');
+        if (dirRowEl) dirRowEl.classList.add('hidden');
         if (totalEl) totalEl.textContent = '';
         loadTopPosts(true);
       }
@@ -3703,16 +3886,19 @@ function renderTopPages(payload) {
       const top = d.top_pages || {};
       const signupsByPath = d.top_pages_signups || {};
       const schedByPath = d.top_pages_schedule || {};
+      const downloadByPath = d.top_pages_download || {};
       const created = new Set((d.created_paths || []).map(normPath));
       const seenPaths = new Set([
         ...Object.keys(top),
         ...Object.keys(signupsByPath),
         ...Object.keys(schedByPath),
+        ...Object.keys(downloadByPath),
       ].map(normPath));
       const mkRow = (path) => {
         const pv = Number(top[path]) || 0;
         const signups = Number(signupsByPath[path]) || 0;
         const sched = Number(schedByPath[path]) || 0;
+        const dl = Number(downloadByPath[path]) || 0;
         const url = 'https://' + domain + path;
         return {
           project: p.name || '',
@@ -3722,6 +3908,7 @@ function renderTopPages(payload) {
           pageviews: pv,
           email_signups: signups,
           schedule_clicks: sched,
+          download_clicks: dl,
           bookings: projectBookings,
         };
       };
@@ -3731,7 +3918,8 @@ function renderTopPages(payload) {
         const pv = Number(top[path]) || 0;
         const signups = Number(signupsByPath[path]) || 0;
         const sched = Number(schedByPath[path]) || 0;
-        if (pv <= 0 && signups <= 0 && sched <= 0) continue;
+        const dl = Number(downloadByPath[path]) || 0;
+        if (pv <= 0 && signups <= 0 && sched <= 0 && dl <= 0) continue;
         unknownRows.push(mkRow(path));
       }
     }
@@ -3757,11 +3945,12 @@ function renderTopPages(payload) {
       + '</a>';
   };
   const columns = [
-    { key: 'project',         label: 'Project',         type: 'text',    align: 'left',  widthPct: 14, formatter: v => escapeHtml(v) },
-    { key: 'path',            label: 'Content',         type: 'text',    align: 'left',  widthPct: 48, formatter: fmtContent },
-    { key: 'pageviews',       label: 'Pageviews',       type: 'numeric', align: 'right', widthPct: 10, formatter: fmt },
-    { key: 'email_signups',   label: 'Email Signups',   type: 'numeric', align: 'right', widthPct: 10, formatter: fmt },
-    { key: 'schedule_clicks', label: 'Schedule Clicks', type: 'numeric', align: 'right', widthPct: 10, formatter: fmt },
+    { key: 'project',         label: 'Project',         type: 'text',    align: 'left',  widthPct: 12, formatter: v => escapeHtml(v) },
+    { key: 'path',            label: 'Content',         type: 'text',    align: 'left',  widthPct: 42, formatter: fmtContent },
+    { key: 'pageviews',       label: 'Pageviews',       type: 'numeric', align: 'right', widthPct: 9,  formatter: fmt },
+    { key: 'email_signups',   label: 'Email Signups',   type: 'numeric', align: 'right', widthPct: 9,  formatter: fmt },
+    { key: 'schedule_clicks', label: 'Schedule Clicks', type: 'numeric', align: 'right', widthPct: 9,  formatter: fmt },
+    { key: 'download_clicks', label: 'Download Clicks', type: 'numeric', align: 'right', widthPct: 9,  formatter: fmt },
     { key: 'bookings',        label: 'Bookings',        type: 'numeric', align: 'right', widthPct: 8,  formatter: fmt },
   ];
   if (!createdRows.length) {
@@ -3956,10 +4145,23 @@ function renderTopDms(payload) {
     if (totalEl) totalEl.textContent = '';
     return;
   }
-  const dms = (payload && payload.dms) || [];
-  if (totalEl) totalEl.textContent = dms.length + ' thread' + (dms.length === 1 ? '' : 's');
+  const allDms = (payload && payload.dms) || [];
+  const dms = _topDmDir === 'in'
+    ? allDms.filter(d => d.last_dir === 'inbound')
+    : (_topDmDir === 'out'
+      ? allDms.filter(d => d.last_dir === 'outbound')
+      : allDms);
+  if (totalEl) {
+    const suffix = _topDmDir === 'in' ? ' (IN)' : (_topDmDir === 'out' ? ' (OUT)' : '');
+    totalEl.textContent = dms.length + ' thread' + (dms.length === 1 ? '' : 's') + suffix;
+  }
   if (!dms.length) {
-    container.innerHTML = '<div class="style-stats-empty">No DM threads in this window.</div>';
+    const emptyMsg = _topDmDir === 'in'
+      ? 'No threads where the last message was inbound.'
+      : (_topDmDir === 'out'
+        ? 'No threads where the last message was outbound.'
+        : 'No DM threads in this window.');
+    container.innerHTML = '<div class="style-stats-empty">' + emptyMsg + '</div>';
     return;
   }
   const fmt = n => (Number(n) || 0).toLocaleString();
@@ -4129,6 +4331,7 @@ async function loadTopDms(force) {
     if (container && force) container.innerHTML = '<div class="style-stats-empty">Loading\u2026</div>';
     const res = await fetch('/api/top/dms?' + params.toString());
     const data = await res.json();
+    _topDmsPayload = data;
     renderTopDms(data);
     _topDmsLoaded = true;
   } catch (e) {
@@ -4232,27 +4435,51 @@ async function loadDeployHealth() {
   }
 }
 
-let _funnelStatsLoaded = false;
+let _funnelStatsLoadedFor = null;
 let _funnelStatsLoading = false;
 async function loadFunnelStats(force) {
   if (_funnelStatsLoading) return;
-  if (_funnelStatsLoaded && !force) return;
+  const days = currentStatsWindow().days;
+  if (_funnelStatsLoadedFor === days && !force) return;
   _funnelStatsLoading = true;
   const totalEl = document.getElementById('funnel-stats-total');
   const body = document.getElementById('funnel-stats-body');
-  if (totalEl && !totalEl.textContent) totalEl.textContent = 'loading\u2026';
-  if (body && body.querySelector('.style-stats-empty')) {
+  if (totalEl) totalEl.textContent = 'loading\u2026';
+  if (body) {
     body.innerHTML = '<div class="style-stats-empty">Loading\u2026 (first call can take 15\u201330s)</div>';
   }
   try {
-    const res = await fetch('/api/funnel/stats?days=1');
+    const res = await fetch('/api/funnel/stats?days=' + days);
     const data = await res.json();
     renderFunnelStats(data);
-    _funnelStatsLoaded = true;
+    _funnelStatsLoadedFor = days;
   } catch (e) {
     if (body) body.innerHTML = '<div class="style-stats-empty">Failed to load.</div>';
   } finally {
     _funnelStatsLoading = false;
+  }
+}
+
+let _dmStatsLoadedFor = null;
+let _dmStatsLoading = false;
+async function loadDmStats(force) {
+  if (_dmStatsLoading) return;
+  const days = currentStatsWindow().days;
+  if (_dmStatsLoadedFor === days && !force) return;
+  _dmStatsLoading = true;
+  const totalEl = document.getElementById('dm-stats-total');
+  const body = document.getElementById('dm-stats-body');
+  if (totalEl) totalEl.textContent = 'loading\u2026';
+  if (body) body.innerHTML = '<div class="style-stats-empty">Loading\u2026</div>';
+  try {
+    const res = await fetch('/api/dm/stats?days=' + days);
+    const data = await res.json();
+    renderDmStats(data);
+    _dmStatsLoadedFor = days;
+  } catch (e) {
+    if (body) body.innerHTML = '<div class="style-stats-empty">Failed to load.</div>';
+  } finally {
+    _dmStatsLoading = false;
   }
 }
 
@@ -4365,7 +4592,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     } else {
       stopActivityAutoRefresh();
     }
-    if (name === 'stats') { loadActivityStats(); loadStyleStats(); }
+    if (name === 'stats') { loadActivityStats(); loadStyleStats(); loadDmStats(); }
     if (name === 'top') {
       initTopFilters();
       if (_topSubtab === 'pages') {
@@ -4386,6 +4613,32 @@ document.querySelectorAll('.tab').forEach(tab => {
   });
 });
 
+// Top-of-tab window pills (24h / 7d / 14d / 30d). Selection drives all three
+// Stats-tab sections so the user switches them in one click.
+(function wireStatsWindowPills() {
+  const row = document.getElementById('stats-window-pills');
+  if (!row) return;
+  row.addEventListener('click', ev => {
+    const btn = ev.target.closest('.style-stats-pill');
+    if (!btn) return;
+    const v = btn.getAttribute('data-value') || '24h';
+    if (!STATS_WINDOWS[v] || v === _statsWindow) return;
+    _statsWindow = v;
+    row.dataset.selected = v;
+    row.querySelectorAll('.style-stats-pill').forEach(b => {
+      b.classList.toggle('active', b === btn);
+    });
+    syncStatsHeadings();
+    loadActivityStats();
+    loadStyleStats();
+    const funnelEl = document.getElementById('funnel-stats');
+    if (funnelEl && funnelEl.open) loadFunnelStats(true);
+    const dmEl = document.getElementById('dm-stats');
+    if (dmEl && dmEl.open) loadDmStats(true);
+  });
+  syncStatsHeadings();
+})();
+
 // Lazy-load funnel stats the first time the user opens the section. The fetch
 // shells out to PostHog and two Postgres DBs, so we don't want to run it on
 // every page load.
@@ -4395,6 +4648,16 @@ document.querySelectorAll('.tab').forEach(tab => {
   el.addEventListener('toggle', () => {
     if (el.open) loadFunnelStats();
   });
+  if (el.open) loadFunnelStats();
+})();
+
+(function wireDmStats() {
+  const el = document.getElementById('dm-stats');
+  if (!el) return;
+  el.addEventListener('toggle', () => {
+    if (el.open) loadDmStats();
+  });
+  if (el.open) loadDmStats();
 })();
 
 document.getElementById('log-job-filter').addEventListener('change', () => { loadLogFiles(); startLogAutoRefresh(); });
@@ -4428,7 +4691,9 @@ window.saStartApp = saStartApp;
 // for project-scoped users based on /api/me claims.
 (function saAuthBootstrap() {
   var cfg = window.SA_CONFIG || {};
-  if (cfg.clientMode) document.body.classList.add('sa-hosted');
+  var host = (window.location && window.location.hostname) || '';
+  var isLocalhost = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '';
+  if (!isLocalhost) document.body.classList.add('sa-cloud');
   if (!cfg.clientMode) { saStartApp(); return; }
   if (!cfg.firebase || !cfg.firebase.apiKey) {
     document.getElementById('sa-login-error').textContent = 'Auth not configured';
