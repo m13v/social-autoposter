@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Scan Twitter mentions via the browser (no API cost) and insert new replies.
+"""Scan Twitter notifications via the browser (no API cost) and insert new replies.
 
 Browser-based replacement for the old API-powered scan_twitter_mentions.py.
-Consumes JSON from `twitter_browser.py notifications` (which scrapes the
-x.com/notifications/mentions tab via the logged-in CDP session).
+Consumes JSON from `twitter_browser.py notifications [scroll] [tab]` which
+defaults to the /notifications (All) tab so we catch nested replies where the
+@-tag was dropped. Pass tab="mentions" to restrict to explicit @-mentions only.
+Companion: scan_twitter_thread_followups.py revisits our recent replies to
+pick up depth-2+ follow-ups that never surface in notifications at all.
 
 Usage:
-    python3 scripts/twitter_browser.py notifications > /tmp/twitter_notifs.json
+    python3 scripts/twitter_browser.py notifications 8 all > /tmp/twitter_notifs.json
     python3 scripts/scan_twitter_mentions_browser.py --json-file /tmp/twitter_notifs.json
 """
 
