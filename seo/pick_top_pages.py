@@ -340,12 +340,60 @@ def _enabled_products(cfg):
     return out
 
 
-def build_global_brief(days=1, top_n=10):
+def _recent_winner_keys(cooldown_days=7):
+    """Return set of (product, path) pairs that won within the cooldown
+    window. Used to rotate seeds so the same page doesn't reseed every day.
+    Failures return empty set (fail-open: better a repeat than a dark day)."""
+    try:
+        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT product, path FROM top_page_winners "
+            f"WHERE won_at >= NOW() - INTERVAL '{int(cooldown_days)} days'"
+        )
+        keys = {(r[0], r[1]) for r in cur.fetchall()}
+        cur.close(); conn.close()
+        return keys
+    except Exception as e:
+        print(f"  recent winners query failed (fail-open): {e}", file=sys.stderr)
+        return set()
+
+
+def _record_winner(winner, cooldown_days=7):
+    """Insert the picked winner into top_page_winners so future runs can
+    enforce the cooldown. Best-effort: if the insert fails, log but don't
+    fail the pipeline (the brief is already written)."""
+    try:
+        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO top_page_winners (product, path, page_url, score, metrics) "
+            "VALUES (%s, %s, %s, %s, %s::jsonb)",
+            (
+                winner["product"],
+                winner["path"],
+                winner["page_url"],
+                winner["score"],
+                json.dumps(winner["metrics"]),
+            ),
+        )
+        conn.commit()
+        cur.close(); conn.close()
+        print(f"  recorded winner: {winner['product']} {winner['path']}", file=sys.stderr)
+    except Exception as e:
+        print(f"  record winner failed: {e}", file=sys.stderr)
+
+
+def build_global_brief(days=1, top_n=10, cooldown_days=7):
     """Cross-project mode: rank all paths across every top_pages_enabled
     project by the same weighted score, pick ONE global winner, and list
     every enabled project as a replication target. The caller then asks
     Claude (per target) to propose an adjacent keyword/slug that adapts
-    the winner's concept to that project's audience."""
+    the winner's concept to that project's audience.
+
+    Rotation: any (product, path) that won within `cooldown_days` is
+    skipped when picking the winner; if every ranked row is in cooldown,
+    the oldest-cooldown row wins anyway (pipeline never goes dark)."""
     cfg = _load_config()
     enabled = [p for p in cfg.get("projects", []) if (p.get("landing_pages") or {}).get("top_pages_enabled")]
     if not enabled:
@@ -418,7 +466,35 @@ def build_global_brief(days=1, top_n=10):
         print(f"SKIP: no ranked activity in last {days}d across enabled projects", file=sys.stderr)
         sys.exit(2)
 
-    winner = all_rows[0]
+    # Rotation: skip any (product, path) that won within the cooldown window.
+    # Fall back to the top-scoring row if every ranked row is on cooldown so
+    # the pipeline never goes dark.
+    recent = _recent_winner_keys(cooldown_days=cooldown_days)
+    winner = None
+    skipped_on_cooldown = []
+    for r in all_rows:
+        key = (r["product"], r["path"])
+        if key in recent:
+            skipped_on_cooldown.append(key)
+            continue
+        winner = r
+        break
+    if winner is None:
+        print(
+            f"  all {len(all_rows)} candidates on {cooldown_days}d cooldown; "
+            f"falling back to top-scoring row",
+            file=sys.stderr,
+        )
+        winner = all_rows[0]
+    if skipped_on_cooldown:
+        print(
+            f"  rotation skipped {len(skipped_on_cooldown)} candidate(s) on cooldown: "
+            + ", ".join(f"{p}{pa}" for p, pa in skipped_on_cooldown[:5])
+            + ("..." if len(skipped_on_cooldown) > 5 else ""),
+            file=sys.stderr,
+        )
+
+    _record_winner(winner, cooldown_days=cooldown_days)
     history = _history_for_path(winner["product"], winner["path"])
 
     return {
@@ -448,6 +524,7 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--list-enabled", action="store_true")
     ap.add_argument("--global-mode", action="store_true", help="Cross-project: rank all enabled projects together, one global winner, every enabled project is a replication target.")
+    ap.add_argument("--cooldown-days", type=int, default=7, help="Global mode: skip any (product, path) that won within this many days. Falls back to top-scoring row if every candidate is on cooldown.")
     args = ap.parse_args()
 
     if args.list_enabled:
@@ -457,7 +534,7 @@ def main():
         return 0
 
     if args.global_mode:
-        brief = build_global_brief(days=args.days, top_n=args.top_n)
+        brief = build_global_brief(days=args.days, top_n=args.top_n, cooldown_days=args.cooldown_days)
     else:
         if not args.product:
             print("--product is required (or use --list-enabled / --global-mode)", file=sys.stderr)
