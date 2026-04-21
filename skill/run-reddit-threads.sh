@@ -21,8 +21,14 @@ LOG_FILE="$LOG_DIR/run-reddit-threads-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Reddit Threads Run: $(date) ===" | tee "$LOG_FILE"
 
+# Diagnostic: log the failing line and command before set -e kills the script.
+# Without this, silent deaths (e.g., Claude exits non-zero inside the $() below)
+# leave only the context block in the log with no clue what killed the run.
+trap 'rc=$?; echo "SCRIPT DIED line=$LINENO cmd=\"$BASH_COMMAND\" exit=$rc" | tee -a "$LOG_FILE" >&2' ERR
+
 # Serialize with other reddit-agent consumers
 source "$REPO_DIR/skill/lock.sh"
+acquire_lock "reddit-browser" 3600
 acquire_lock "reddit-threads" 600
 
 # Load engagement styles
@@ -174,7 +180,7 @@ RESULT_SCHEMA='{"type":"object","properties":{"research_files_read":{"type":"arr
 # Pre-generate session id so the prompt's inline INSERT can stamp it.
 export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
 
-CLAUDE_OUTPUT=$("$REPO_DIR/scripts/run_claude.sh" "run-reddit-threads" -p --output-format json --json-schema "$RESULT_SCHEMA" "You are posting an ORIGINAL thread to ${SUBREDDIT} for the ${PROJECT} project as u/${POST_ACCOUNT}.
+CLAUDE_OUTPUT=$("$REPO_DIR/scripts/run_claude.sh" "run-reddit-threads" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" -p --output-format json --json-schema "$RESULT_SCHEMA" "You are posting an ORIGINAL thread to ${SUBREDDIT} for the ${PROJECT} project as u/${POST_ACCOUNT}.
 
 ## Config & Rules
 Read $SKILL_FILE for content rules and anti-AI-detection checklist.
