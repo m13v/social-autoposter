@@ -4628,10 +4628,21 @@ async function loadDeployHealth() {
   }
 }
 
+// In CLIENT_MODE, /api/* calls need the Firebase ID token on Authorization.
+// Any fetch that fires before the fetch wrapper has a token returns
+// {error:"missing_token"}, which the section renderers display as-is.
+// Return true when we should skip the fetch outright (token missing in
+// CLIENT_MODE); saStartApp() re-fires these after auth settles.
+function saAuthNotReady() {
+  var cfg = window.SA_CONFIG || {};
+  return !!cfg.clientMode && !window.SA_ID_TOKEN;
+}
+
 let _funnelStatsLoadedFor = null;
 let _funnelStatsLoading = false;
 async function loadFunnelStats(force) {
   if (_funnelStatsLoading) return;
+  if (saAuthNotReady()) return;
   const days = currentStatsWindow().days;
   if (_funnelStatsLoadedFor === days && !force) return;
   _funnelStatsLoading = true;
@@ -4657,6 +4668,7 @@ let _dmStatsLoadedFor = null;
 let _dmStatsLoading = false;
 async function loadDmStats(force) {
   if (_dmStatsLoading) return;
+  if (saAuthNotReady()) return;
   const days = currentStatsWindow().days;
   if (_dmStatsLoadedFor === days && !force) return;
   _dmStatsLoading = true;
@@ -5052,7 +5064,15 @@ const server = http.createServer((req, res) => {
 
   const pathname = req.url.split('?')[0];
   if (pathname === '/' || pathname === '/index.html') {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
+    // Dashboard JS is inlined in the HTML, so any fix to client logic has to
+    // reach users on their next navigation. Without cache-control, Chrome's
+    // heuristic caching serves stale HTML for hours and clients end up running
+    // JS that no longer matches the server's auth contract.
+    res.writeHead(200, {
+      'Content-Type': 'text/html',
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Pragma': 'no-cache',
+    });
     res.end(renderHtml());
   } else if (pathname.startsWith('/api/')) {
     Promise.resolve(handleApi(req, res)).catch(e => {
