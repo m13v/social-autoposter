@@ -316,8 +316,8 @@ disabled stays disabled.
   `lib/platform.sh::platform_notify` are no-ops on Linux.
 - Any script that shells out to `open`, `pbcopy`, or `pbpaste` will
   fail. These are infrequent but not audited exhaustively.
-- The dashboard at `dashboard/` has only been smoke-tested on macOS;
-  the server side is plain Node and should work, but the
+- The dashboard at `bin/server.js` has only been smoke-tested on
+  macOS; the server side is plain Node and should work, but the
   launchd-specific labels in the UI may read oddly.
 
 File bugs against the repo when one of these bites.
