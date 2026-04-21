@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""Scan our recent X replies for new public follow-ups and ingest them.
+
+Companion to scan_twitter_mentions_browser.py. The mentions tab only surfaces
+explicit @-mentions, so replies to our replies without a retagged handle are
+invisible. This script compensates by revisiting each of our recent X replies
+and scraping the page for depth-2+ comments that aren't yet in the DB.
+
+Flow:
+  1. Query `replies` for our X replies in last N days (default 14) where
+     `our_reply_url IS NOT NULL`. These are the threads we're subscribing to.
+  2. Write those URLs to a temp file.
+  3. Invoke `twitter_browser.py thread-followups <file>`, which scrapes each
+     URL and returns a `{results: [{thread_url, anchor_tweet_id, followups}]}`
+     JSON blob.
+  4. For each followup not already in `replies` (by platform+their_comment_id),
+     insert a new `replies` row with:
+       - platform = 'x'
+       - parent_reply_id = id of the original reply (the anchor)
+       - post_id = anchor.post_id
+       - depth = anchor.depth + 1
+       - status = 'pending'
+     Tweets we posted ourselves are skipped (OUR_HANDLE check). Own-account
+     replies from us get status='replied' with our_reply_id populated, mirroring
+     the mentions scanner.
+
+Usage:
+    python3 scripts/scan_twitter_thread_followups.py [--days N] [--max-urls N]
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import db as dbmod
+
+CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
+OUR_HANDLE = "m13v_"
+DEFAULT_DAYS = 14
+DEFAULT_MAX_URLS = 40
+REPO_DIR = os.path.expanduser("~/social-autoposter")
+
+
+def load_config():
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    return {}
+
+
+def fetch_our_recent_x_replies(conn, days, max_urls):
+    """Return list of (reply_id, our_reply_url, post_id, depth) for our recent X replies."""
+    rows = conn.execute(
+        """
+        SELECT id, our_reply_url, post_id, depth
+        FROM replies
+        WHERE platform = 'x'
+          AND status = 'replied'
+          AND our_reply_url IS NOT NULL
+          AND our_reply_url != ''
+          AND replied_at >= NOW() - (INTERVAL '1 day' * %s)
+        ORDER BY replied_at DESC
+        LIMIT %s
+        """,
+        (days, max_urls),
+    ).fetchall()
+    out = []
+    for r in rows:
+        if isinstance(r, (list, tuple)):
+            rid, url, pid, depth = r[0], r[1], r[2], r[3]
+        else:
+            rid, url, pid, depth = r["id"], r["our_reply_url"], r["post_id"], r["depth"]
+        if url:
+            out.append((rid, url, pid, depth or 1))
+    return out
+
+
+def existing_comment_ids(conn):
+    rows = conn.execute(
+        "SELECT their_comment_id FROM replies WHERE platform = 'x'"
+    ).fetchall()
+    return {
+        (r[0] if isinstance(r, (list, tuple)) else r["their_comment_id"])
+        for r in rows
+    }
+
+
+def anchor_id_from_url(url):
+    m = re.search(r"/status/(\d+)", url or "")
+    return m.group(1) if m else None
+
+
+def run_browser_scrape(urls, scroll_count=3):
+    """Shell out to twitter_browser.py thread-followups and parse JSON."""
+    if not urls:
+        return {"results": [], "urls_visited": 0}
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        urls_path = f.name
+        for u in urls:
+            f.write(u + "\n")
+    try:
+        proc = subprocess.run(
+            ["python3", os.path.join(REPO_DIR, "scripts/twitter_browser.py"),
+             "thread-followups", urls_path, str(scroll_count)],
+            capture_output=True, text=True, timeout=1800,
+        )
+        if proc.returncode != 0:
+            print(f"ERROR: twitter_browser.py exited {proc.returncode}", file=sys.stderr)
+            print(proc.stderr[-2000:], file=sys.stderr)
+            return {"results": [], "error": "browser_failed"}
+        try:
+            return json.loads(proc.stdout)
+        except json.JSONDecodeError as e:
+            print(f"ERROR: could not parse browser output as JSON: {e}", file=sys.stderr)
+            print(proc.stdout[-2000:], file=sys.stderr)
+            return {"results": [], "error": "json_parse_failed"}
+    finally:
+        try:
+            os.unlink(urls_path)
+        except OSError:
+            pass
+
+
+def insert_followup(conn, followup, parent_reply_id, post_id, parent_depth):
+    """Insert one follow-up row. Returns True if inserted, False if skipped."""
+    tweet_id = followup.get("tweet_id") or ""
+    handle = (followup.get("handle") or "").lstrip("@")
+    text = followup.get("text") or ""
+    url = followup.get("tweet_url") or ""
+    if not tweet_id or not handle:
+        return False
+    if handle.lower() == OUR_HANDLE.lower():
+        return False
+    conn.execute(
+        """
+        INSERT INTO replies (post_id, platform, their_comment_id, their_author,
+            their_content, their_comment_url, depth, status, parent_reply_id)
+        VALUES (%s, 'x', %s, %s, %s, %s, %s, 'pending', %s)
+        ON CONFLICT (platform, their_comment_id) DO NOTHING
+        """,
+        (post_id, tweet_id, handle, text, url, (parent_depth or 1) + 1, parent_reply_id),
+    )
+    conn.commit()
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--days", type=int, default=DEFAULT_DAYS,
+                        help=f"Look back N days for our replies (default {DEFAULT_DAYS})")
+    parser.add_argument("--max-urls", type=int, default=DEFAULT_MAX_URLS,
+                        help=f"Max thread URLs to revisit per run (default {DEFAULT_MAX_URLS})")
+    parser.add_argument("--scroll-count", type=int, default=3,
+                        help="Scrolls per thread page (default 3)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print what would be inserted without writing")
+    args = parser.parse_args()
+
+    dbmod.load_env()
+    conn = dbmod.get_conn()
+
+    our_replies = fetch_our_recent_x_replies(conn, args.days, args.max_urls)
+    print(f"Revisiting {len(our_replies)} of our recent X replies (last {args.days}d)")
+    if not our_replies:
+        conn.close()
+        return 0
+
+    url_to_meta = {url: (rid, pid, depth) for rid, url, pid, depth in our_replies}
+    urls = list(url_to_meta.keys())
+
+    print(f"Invoking browser scraper for {len(urls)} URLs...")
+    data = run_browser_scrape(urls, scroll_count=args.scroll_count)
+
+    results = data.get("results", [])
+    known_ids = existing_comment_ids(conn)
+    new_count = 0
+    skip_own = 0
+    skip_existing = 0
+    skip_anchor = 0
+
+    for r in results:
+        thread_url = r.get("thread_url") or ""
+        anchor_id = r.get("anchor_tweet_id") or anchor_id_from_url(thread_url)
+        meta = url_to_meta.get(thread_url)
+        if not meta:
+            continue
+        parent_reply_id, post_id, parent_depth = meta
+
+        for fu in r.get("followups", []):
+            tid = fu.get("tweet_id")
+            handle = (fu.get("handle") or "").lstrip("@")
+            if not tid:
+                continue
+            if tid == anchor_id:
+                skip_anchor += 1
+                continue
+            if handle.lower() == OUR_HANDLE.lower():
+                skip_own += 1
+                continue
+            if tid in known_ids:
+                skip_existing += 1
+                continue
+            if args.dry_run:
+                print(f"  [DRY] @{handle} (tid={tid}) parent_reply={parent_reply_id} depth={(parent_depth or 1) + 1}: {(fu.get('text') or '')[:80]}")
+                new_count += 1
+                known_ids.add(tid)
+                continue
+            inserted = insert_followup(conn, fu, parent_reply_id, post_id, parent_depth)
+            if inserted:
+                new_count += 1
+                known_ids.add(tid)
+                print(f"  NEW follow-up: @{handle} (tid={tid}) parent_reply={parent_reply_id} depth={(parent_depth or 1) + 1}: {(fu.get('text') or '')[:80]}")
+
+    conn.close()
+    print(f"\nSummary: {new_count} new follow-ups ingested, "
+          f"{skip_existing} already tracked, {skip_own} own account, {skip_anchor} anchor skips")
+    return new_count
+
+
+if __name__ == "__main__":
+    rc = main()
+    sys.exit(0 if rc >= 0 else 1)
