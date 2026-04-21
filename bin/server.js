@@ -50,6 +50,7 @@ const JOBS = [
   // Check Replies row (discover new inbound replies; feeds Engage)
   { label: 'com.m13v.social-scan-reddit-replies', name: 'Check Replies Reddit', type: 'Check Replies', platform: 'Reddit', script: 'run-scan-reddit-replies.sh', logPrefix: 'run-scan-reddit-replies-', plist: 'com.m13v.social-scan-reddit-replies.plist' },
   { label: 'com.m13v.social-scan-moltbook-replies', name: 'Check Replies MoltBook', type: 'Check Replies', platform: 'MoltBook', script: 'run-scan-moltbook-replies.sh', logPrefix: 'run-scan-moltbook-replies-', plist: 'com.m13v.social-scan-moltbook-replies.plist' },
+  { label: 'com.m13v.social-scan-twitter-followups', name: 'Check Follow-ups Twitter', type: 'Check Replies', platform: 'Twitter', script: 'scan-twitter-followups.sh', logPrefix: 'scan-twitter-followups-', plist: 'com.m13v.social-scan-twitter-followups.plist' },
   // DM Outreach row (initiate DMs to engaged users)
   { label: 'com.m13v.social-dm-outreach-reddit', name: 'DM Outreach Reddit', type: 'DM Outreach', platform: 'Reddit', script: 'dm-outreach-reddit.sh', logPrefix: 'dm-outreach-reddit-', plist: 'com.m13v.social-dm-outreach-reddit.plist' },
   { label: 'com.m13v.social-dm-outreach-twitter', name: 'DM Outreach Twitter', type: 'DM Outreach', platform: 'Twitter', script: 'dm-outreach-twitter.sh', logPrefix: 'dm-outreach-twitter-', plist: 'com.m13v.social-dm-outreach-twitter.plist' },
