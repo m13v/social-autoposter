@@ -7,4 +7,8 @@ state/pieline/
 .refresh_timestamps/
 __pycache__/
 *.pyc
-run_gsc_pipeline.sh
+
+# Generated SEO content drafts (1,400+ files); the initial Apr-12 batch is
+# already tracked and stays tracked — this rule only affects new drafts.
+concepts/
+escalations.log

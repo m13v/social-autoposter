@@ -1,0 +1,130 @@
+#!/bin/bash
+#
+# Top-traffic page improvement pipeline.
+#
+# Every run:
+#   1. pick_top_page.py  -> builds a brief for the single highest-pageview
+#                           page on the project's domain in the last 24h
+#                           (exit 2 = no traffic, skip cleanly)
+#   2. improve_page.py   -> hands the brief to a Claude session running
+#                           inside the product's website repo, captures the
+#                           stream-json trace, records before/after metrics
+#                           and diff in seo_page_improvements
+#
+# If invoked with no argument, iterates every project where
+# landing_pages.improve_enabled == true in config.json.
+#
+# Usage:
+#   ./seo/run_improve_pipeline.sh                 # all enabled projects
+#   ./seo/run_improve_pipeline.sh PieLine         # one project
+#   ./seo/run_improve_pipeline.sh --list-enabled  # preview selection
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+CONFIG="$ROOT_DIR/config.json"
+PICK="python3 $SCRIPT_DIR/pick_top_page.py"
+IMPROVE="python3 $SCRIPT_DIR/improve_page.py"
+
+mkdir -p "$SCRIPT_DIR/.locks/improve" "$SCRIPT_DIR/logs"
+
+# Load .env for DATABASE_URL etc.
+[ -f "$ROOT_DIR/.env" ] && set -a && source "$ROOT_DIR/.env" && set +a
+
+# Pull PostHog personal key from keychain if not already in env
+if [ -z "${POSTHOG_PERSONAL_API_KEY:-}" ]; then
+    POSTHOG_PERSONAL_API_KEY=$(security find-generic-password -s "PostHog-Personal-API-Key-m13v" -w 2>/dev/null || true)
+    export POSTHOG_PERSONAL_API_KEY
+fi
+
+_enabled_products() {
+    python3 -c "
+import json
+with open('$CONFIG') as f:
+    c = json.load(f)
+for p in c.get('projects', []):
+    lp = p.get('landing_pages') or {}
+    if lp.get('improve_enabled'):
+        print(p.get('name'))
+"
+}
+
+_run_one() {
+    local PRODUCT="$1"
+    local LOWER
+    LOWER=$(echo "$PRODUCT" | tr '[:upper:]' '[:lower:]')
+    local LOCK_FILE="$SCRIPT_DIR/.locks/improve/${LOWER}.lock"
+    local LOG_DIR="$SCRIPT_DIR/logs/${LOWER}/improve"
+    mkdir -p "$LOG_DIR"
+    local TS
+    TS=$(date -u +%Y%m%d-%H%M%S)
+    local LOG_FILE="$LOG_DIR/${TS}.log"
+
+    log() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG_FILE" >&2; }
+
+    log "=== improve run: $PRODUCT ==="
+
+    if [ -f "$LOCK_FILE" ]; then
+        local LOCK_AGE
+        LOCK_AGE=$(( $(date +%s) - $(stat -f %m "$LOCK_FILE" 2>/dev/null || stat -c %Y "$LOCK_FILE" 2>/dev/null) ))
+        if [ "$LOCK_AGE" -gt 3600 ]; then
+            log "stale lock (${LOCK_AGE}s), removing"
+            rm -f "$LOCK_FILE"
+        else
+            log "already running for $PRODUCT (lock age ${LOCK_AGE}s); skipping"
+            return 0
+        fi
+    fi
+    echo "$$" > "$LOCK_FILE"
+    trap 'rm -f "$LOCK_FILE"' RETURN
+
+    local BRIEF="$LOG_DIR/${TS}_brief.json"
+    log "building brief -> $BRIEF"
+    if ! $PICK --product "$PRODUCT" --out "$BRIEF" 2>>"$LOG_FILE"; then
+        local code=$?
+        if [ "$code" = "2" ]; then
+            log "no 24h traffic; skipping"
+            rm -f "$LOCK_FILE"
+            trap - RETURN
+            return 0
+        fi
+        log "ERROR building brief (exit $code)"
+        rm -f "$LOCK_FILE"
+        trap - RETURN
+        return "$code"
+    fi
+
+    log "handing brief to Claude..."
+    $IMPROVE --brief "$BRIEF" 2>>"$LOG_FILE" | tee -a "$LOG_FILE"
+    local rc=${PIPESTATUS[0]}
+
+    log "=== done (exit $rc) ==="
+    rm -f "$LOCK_FILE"
+    trap - RETURN
+    return "$rc"
+}
+
+case "${1:-}" in
+    --list-enabled)
+        _enabled_products
+        exit 0
+        ;;
+    "")
+        PRODUCTS=$(_enabled_products)
+        if [ -z "$PRODUCTS" ]; then
+            echo "no projects have landing_pages.improve_enabled=true in $CONFIG" >&2
+            exit 0
+        fi
+        overall=0
+        while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            _run_one "$p" || overall=$?
+        done <<< "$PRODUCTS"
+        exit "$overall"
+        ;;
+    *)
+        _run_one "$1"
+        exit $?
+        ;;
+esac

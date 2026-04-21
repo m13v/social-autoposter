@@ -1,0 +1,295 @@
+#!/bin/bash
+#
+# Cross-project top-pages SEO generation pipeline.
+#
+# Strategy: pick ONE globally top-scoring page across every project with
+# landing_pages.top_pages_enabled = true, then REPLICATE that topical
+# momentum onto EVERY enabled project's website by asking Claude Opus to
+# propose a project-specific adjacent keyword/slug per target.
+#
+# Pipeline per invocation:
+#   1. pick_top_pages.py --global-mode -> single global winner (product,
+#       path, score) + targets[] list of every enabled project + top-N
+#       ranking across all projects.
+#   2. for each target project:
+#       a. claude (Opus) -> propose ONE adjacent keyword+slug adapted for
+#           THIS project's audience, riding the global winner's concept.
+#       b. seo_keywords row -> INSERT (product, keyword, slug,
+#           source='top_page', status='pending', score=2.0). UNIQUE is
+#           (product, keyword) so the same keyword on different products
+#           is fine.
+#       c. generate_page.py --trigger top_page --product <target> ...
+#
+# Pages produced here show up in the dashboard Activity tab as
+# 'page_published_top' (see the activity UNION in bin/server.js).
+#
+# Usage:
+#   ./seo/run_top_pages_pipeline.sh                 # global mode, all targets
+#   ./seo/run_top_pages_pipeline.sh --list-enabled  # preview target selection
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+CONFIG="$ROOT_DIR/config.json"
+PICK="python3 $SCRIPT_DIR/pick_top_pages.py"
+GENERATOR="python3 $SCRIPT_DIR/generate_page.py"
+DB="python3 $SCRIPT_DIR/db_helpers.py"
+
+LOG_ROOT="$SCRIPT_DIR/logs"
+LOCK_ROOT="$SCRIPT_DIR/.locks/top_pages"
+mkdir -p "$LOG_ROOT" "$LOCK_ROOT"
+
+# Load .env for DATABASE_URL, BOOKINGS_DATABASE_URL, OAuth, etc.
+[ -f "$ROOT_DIR/.env" ] && set -a && source "$ROOT_DIR/.env" && set +a
+
+# PostHog key comes from keychain if launchd didn't inject it.
+if [ -z "${POSTHOG_PERSONAL_API_KEY:-}" ]; then
+    POSTHOG_PERSONAL_API_KEY=$(security find-generic-password -s "PostHog-Personal-API-Key-m13v" -w 2>/dev/null || true)
+    export POSTHOG_PERSONAL_API_KEY
+fi
+
+_timestamp() { date -u +%Y-%m-%d_%H%M%S; }
+
+_insert_keyword() {
+    # Arg order: product, keyword, slug. source='top_page', status='pending',
+    # score=2.0. ON CONFLICT keeps the newest brief without nuking state.
+    PROD="$1" KW="$2" SLUG="$3" python3 - <<'PY'
+import os, sys
+sys.path.insert(0, os.environ['SEO_SCRIPT_DIR'])
+import db_helpers
+conn = db_helpers.get_conn()
+cur = conn.cursor()
+cur.execute(
+    "INSERT INTO seo_keywords (product, keyword, slug, source, status, score) "
+    "VALUES (%s, %s, %s, 'top_page', 'pending', 2.0) "
+    "ON CONFLICT (product, keyword) DO UPDATE SET "
+    "  slug = EXCLUDED.slug, "
+    "  source = 'top_page', "
+    "  status = CASE WHEN seo_keywords.status IN ('done','in_progress') "
+    "               THEN seo_keywords.status ELSE 'pending' END, "
+    "  score = GREATEST(seo_keywords.score, 2.0), "
+    "  updated_at = NOW()",
+    (os.environ['PROD'], os.environ['KW'], os.environ['SLUG']),
+)
+conn.commit()
+cur.close(); conn.close()
+print(f"inserted/updated seo_keywords: {os.environ['PROD']} / {os.environ['KW']}")
+PY
+}
+
+# List-enabled preview: delegates to picker.
+if [ "${1:-}" = "--list-enabled" ]; then
+    $PICK --list-enabled
+    exit 0
+fi
+
+# Global lock so two runs can't race the picker/generators.
+GLOBAL_LOCK="$LOCK_ROOT/_global.lock"
+if [ -f "$GLOBAL_LOCK" ]; then
+    AGE=$(( $(date +%s) - $(stat -f %m "$GLOBAL_LOCK" 2>/dev/null || stat -c %Y "$GLOBAL_LOCK" 2>/dev/null) ))
+    if [ "$AGE" -lt 3600 ]; then
+        echo "=== top-pages pipeline: global lock held (age ${AGE}s), skip"
+        exit 0
+    fi
+    rm -f "$GLOBAL_LOCK"
+fi
+echo "$$" > "$GLOBAL_LOCK"
+trap 'rm -f "$GLOBAL_LOCK"' EXIT
+
+TS=$(_timestamp)
+LOG_DIR="$LOG_ROOT/_global/top_pages"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/${TS}.log"
+
+echo "=== Top-Pages pipeline (cross-project): $TS ===" | tee -a "$LOG_FILE"
+
+# Pick global winner + full target list.
+BRIEF_FILE="$LOG_DIR/${TS}.brief.json"
+if ! $PICK --global-mode --days 14 --top-n 15 --out "$BRIEF_FILE" 2>>"$LOG_FILE"; then
+    RC=$?
+    if [ "$RC" -eq 2 ]; then
+        echo "  no signal in last 14d across enabled projects, skip" | tee -a "$LOG_FILE"
+        exit 0
+    fi
+    echo "  global picker failed (rc=$RC); see $LOG_FILE" | tee -a "$LOG_FILE"
+    exit 1
+fi
+
+# Echo winner summary.
+python3 - "$BRIEF_FILE" <<'PY' | tee -a "$LOG_FILE"
+import json, sys
+b = json.load(open(sys.argv[1]))
+w = b["winner"]
+print(f"  GLOBAL WINNER: {w['product']} {w['page_url']}")
+print(f"    score={w['score']} metrics={w['metrics']}")
+print(f"  targets={len(b.get('targets', []))}:")
+for t in b.get("targets", []):
+    print(f"    - {t['product']:20} {t['domain']}")
+PY
+
+# Extract target list (product name per line) for the fan-out loop.
+TARGETS=$(python3 - "$BRIEF_FILE" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1]))
+for t in b.get("targets", []):
+    print(t["product"])
+PY
+)
+
+OVERALL_RC=0
+while read -r TARGET_PRODUCT; do
+    [ -z "$TARGET_PRODUCT" ] && continue
+
+    LOWER=$(echo "$TARGET_PRODUCT" | tr '[:upper:]' '[:lower:]')
+    PER_LOCK="$LOCK_ROOT/${LOWER}.lock"
+    PER_LOG_DIR="$LOG_ROOT/${LOWER}/top_pages"
+    mkdir -p "$PER_LOG_DIR"
+    PER_LOG="$PER_LOG_DIR/${TS}.log"
+
+    # Per-project lock (30min stale).
+    if [ -f "$PER_LOCK" ]; then
+        PAGE_AGE=$(( $(date +%s) - $(stat -f %m "$PER_LOCK" 2>/dev/null || stat -c %Y "$PER_LOCK" 2>/dev/null) ))
+        if [ "$PAGE_AGE" -lt 1800 ]; then
+            echo "=== $TARGET_PRODUCT: per-project lock held (${PAGE_AGE}s), skip" | tee -a "$LOG_FILE" "$PER_LOG"
+            continue
+        fi
+        rm -f "$PER_LOCK"
+    fi
+    echo "$$" > "$PER_LOCK"
+
+    {
+    echo "=== Top-Pages target: $TARGET_PRODUCT (ts=$TS) ==="
+
+    # Build per-target prompt: global winner + target project config.
+    PROPOSAL_PROMPT="$PER_LOG_DIR/${TS}.proposal.prompt"
+    PROPOSAL_FILE="$PER_LOG_DIR/${TS}.proposal.json"
+
+    python3 - "$BRIEF_FILE" "$TARGET_PRODUCT" > "$PROPOSAL_PROMPT" <<'PY'
+import json, sys
+brief = json.load(open(sys.argv[1]))
+target_product = sys.argv[2]
+target = next((t for t in brief.get("targets", []) if t["product"] == target_product), None)
+if not target:
+    print(f"ERROR: target {target_product} not in brief", file=sys.stderr)
+    sys.exit(1)
+proj = target["project_config"]
+winner = brief["winner"]
+
+prompt = f"""You are a senior SEO strategist. A global ranking across multiple
+sibling products identified ONE top-performing page in the last 24h, scored by
+a weighted composite of pageviews, email_signups, schedule_clicks,
+get_started_clicks, and bookings.
+
+GLOBAL WINNER (source of topical momentum):
+  product: {winner['product']}
+  page:    {winner['page_url']}
+  score:   {winner['score']}
+  metrics: {json.dumps(winner['metrics'])}
+
+Your job: propose ONE NEW adjacent landing page for the TARGET PROJECT below
+that rides the same topical wave, adapted for that project's audience and
+positioning. Do NOT copy the winning slug verbatim — propose a slug and
+keyword that fits the target's voice and ICP.
+
+TARGET PROJECT:
+  name:        {target['product']}
+  domain:      {target['domain']}
+  website:     {target['website']}
+  positioning: {json.dumps(proj.get('qualification', {}), ensure_ascii=False)[:600]}
+  description: {proj.get('description', '')[:600]}
+
+TOP 10 RANKING (for context across all projects):
+"""
+for r in brief.get("ranking", [])[:10]:
+    prompt += f"  {r['score']:>6} {r['product']:20} {r['page_url']}\n"
+
+prompt += """
+Rules:
+- keyword must be a 3-8 word search phrase a human would actually type
+  for the TARGET project's audience.
+- slug must be kebab-case, ASCII, <= 64 chars, unique on the target site.
+- concept must be 1-2 sentences explaining the angle and how it adapts the
+  global winner's topic to the target's audience without being a trivial
+  rename.
+- Respond with a SINGLE JSON object on one line, nothing else:
+  {"keyword": "...", "slug": "...", "concept": "..."}
+"""
+sys.stdout.write(prompt)
+PY
+
+    # Use Opus for the per-project keyword/slug proposal (needs reasoning to
+    # translate the concept across different audiences/positioning).
+    if ! claude --model opus --print --output-format json < "$PROPOSAL_PROMPT" > "$PROPOSAL_FILE" 2>>"$PER_LOG"; then
+        echo "  claude opus proposal failed"
+        OVERALL_RC=1
+        rm -f "$PER_LOCK"
+        continue
+    fi
+
+    PARSED=$(python3 - "$PROPOSAL_FILE" <<'PY'
+import json, sys
+raw = open(sys.argv[1]).read().strip()
+try:
+    outer = json.loads(raw)
+except Exception as e:
+    print(f"ERR parse_outer: {e}", file=sys.stderr); sys.exit(1)
+if outer.get("is_error"):
+    print(f"ERR claude: {outer.get('result','unknown')}", file=sys.stderr); sys.exit(1)
+result_str = outer.get("result") if isinstance(outer.get("result"), str) else None
+blob = result_str if result_str else json.dumps(outer)
+start = blob.find("{"); end = blob.rfind("}") + 1
+if start < 0 or end <= start:
+    print("ERR no_json_object", file=sys.stderr); sys.exit(1)
+try:
+    inner = json.loads(blob[start:end])
+except Exception as e:
+    print(f"ERR parse_inner: {e}", file=sys.stderr); sys.exit(1)
+kw = (inner.get("keyword") or "").strip()
+slug = (inner.get("slug") or "").strip()
+concept = (inner.get("concept") or "").strip()
+if not kw or not slug:
+    print("ERR missing_fields", file=sys.stderr); sys.exit(1)
+print(f"{kw}\t{slug}\t{concept}")
+PY
+)
+    if [ -z "$PARSED" ]; then
+        echo "  proposal parse failed; see $PROPOSAL_FILE"
+        OVERALL_RC=1
+        rm -f "$PER_LOCK"
+        continue
+    fi
+
+    KEYWORD=$(printf '%s' "$PARSED" | awk -F'\t' '{print $1}')
+    SLUG=$(printf '%s' "$PARSED" | awk -F'\t' '{print $2}')
+    CONCEPT=$(printf '%s' "$PARSED" | awk -F'\t' '{print $3}')
+    echo "  keyword: $KEYWORD"
+    echo "  slug:    $SLUG"
+    echo "  concept: $CONCEPT"
+
+    # Guard: skip if generator already has a completed page with this slug.
+    SLUG_CHECK=$($DB check_slug "$TARGET_PRODUCT" "$SLUG")
+    if [ "$SLUG_CHECK" = "exists" ]; then
+        echo "  slug '$SLUG' already done on $TARGET_PRODUCT; skipping"
+        rm -f "$PER_LOCK"
+        continue
+    fi
+
+    SEO_SCRIPT_DIR="$SCRIPT_DIR" _insert_keyword "$TARGET_PRODUCT" "$KEYWORD" "$SLUG" 2>&1
+
+    echo "--- generate_page.py --trigger top_page ---"
+    $GENERATOR --product "$TARGET_PRODUCT" --keyword "$KEYWORD" --slug "$SLUG" --trigger top_page 2>&1
+    GEN_RC=${PIPESTATUS[0]}
+    if [ "$GEN_RC" -ne 0 ]; then
+        echo "  generator failed on $TARGET_PRODUCT (rc=$GEN_RC)"
+        OVERALL_RC=$GEN_RC
+    else
+        echo "=== $TARGET_PRODUCT ok ==="
+    fi
+    rm -f "$PER_LOCK"
+    } 2>&1 | tee -a "$PER_LOG" "$LOG_FILE"
+
+done <<< "$TARGETS"
+
+echo "=== Top-Pages pipeline finished rc=$OVERALL_RC ===" | tee -a "$LOG_FILE"
+exit "$OVERALL_RC"

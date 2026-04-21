@@ -1,0 +1,473 @@
+#!/usr/bin/env python3
+"""Pick the top-scoring page for a project using the composite formula:
+
+    score = pageviews*1
+          + email_signups*100
+          + schedule_clicks*500
+          + get_started_clicks*300
+          + bookings*1000
+
+Bookings are attributed to a path via cal_bookings.utm_campaign (the page
+path captured by withBookingAttribution on the CTA click).
+
+Writes a brief identical in shape to pick_top_page.py so the caller (or
+follow-up Claude step) can read it the same way. The difference is that
+this picker ranks by the full weighted formula, not pageviews alone, and
+exposes the top-N list alongside the single winner.
+
+Exits:
+  0 - brief written / printed
+  2 - no signal in the window (skip, same convention as pick_top_page.py)
+
+Usage:
+    python3 seo/pick_top_pages.py --product Fazm
+    python3 seo/pick_top_pages.py --product Fazm --out /tmp/brief.json
+    python3 seo/pick_top_pages.py --list-enabled
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT_DIR = SCRIPT_DIR.parent
+CONFIG_PATH = ROOT_DIR / "config.json"
+
+ENV_PATH = ROOT_DIR / ".env"
+if ENV_PATH.exists():
+    for line in ENV_PATH.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+import psycopg2  # noqa: E402
+
+
+WEIGHTS = {
+    "pageviews":          1,
+    "email_signups":      100,
+    "schedule_clicks":    500,
+    "get_started_clicks": 300,
+    "bookings":           1000,
+}
+
+GET_STARTED_EVENTS = ("get_started_click", "download_click", "cta_get_started_clicked")
+
+
+def _load_config():
+    return json.loads(CONFIG_PATH.read_text())
+
+
+def _find_project(cfg, product):
+    for p in cfg.get("projects", []):
+        if (p.get("name") or "").lower() == (product or "").lower():
+            return p
+    return None
+
+
+def _domain_from_url(url):
+    if not url:
+        return ""
+    return url.replace("https://", "").replace("http://", "").rstrip("/")
+
+
+def _posthog_api_key():
+    v = os.environ.get("POSTHOG_PERSONAL_API_KEY")
+    if v:
+        return v.strip()
+    try:
+        out = subprocess.check_output(
+            ["security", "find-generic-password", "-s", "PostHog-Personal-API-Key-m13v", "-w"],
+            stderr=subprocess.DEVNULL, timeout=10,
+        )
+        return out.decode().strip()
+    except Exception:
+        return ""
+
+
+def _hogql(api_key, project_id, query, timeout=60):
+    url = f"https://us.posthog.com/api/projects/{project_id}/query/"
+    body = json.dumps({"query": {"kind": "HogQLQuery", "query": query}}).encode("utf-8")
+    last_err = None
+    for wait in (0.0, 2.0, 5.0, 12.0):
+        if wait:
+            time.sleep(wait)
+        req = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read())
+                return data.get("results") or []
+        except urllib.error.HTTPError as e:
+            try:
+                body_txt = e.read().decode("utf-8", errors="replace")[:300]
+            except Exception:
+                body_txt = ""
+            last_err = f"HTTP {e.code}: {body_txt}"
+            if e.code not in (429,) and not (500 <= e.code < 600):
+                break
+        except urllib.error.URLError as e:
+            last_err = f"URLError: {e}"
+    raise RuntimeError(f"HogQL failed: {last_err}")
+
+
+def _event_counts_by_path(api_key, project_id, domain, event_clause, days, row_cap=2000):
+    q = (
+        "SELECT properties.$pathname AS path, count() AS n "
+        "FROM events "
+        f"WHERE {event_clause} "
+        f"AND properties.$host = '{domain}' "
+        f"AND timestamp >= now() - interval {int(days)} day "
+        "AND properties.$pathname IS NOT NULL "
+        "GROUP BY path "
+        f"ORDER BY n DESC LIMIT {int(row_cap)}"
+    )
+    rows = _hogql(api_key, project_id, q)
+    out = {}
+    for r in rows:
+        p = r[0] or ""
+        if not p:
+            continue
+        out[p] = int(r[1] or 0)
+    return out
+
+
+def _bookings_by_path(client_slug, days):
+    """Return {path: bookings} using cal_bookings.utm_campaign.
+
+    utm_campaign is populated by withBookingAttribution with the page path
+    (e.g. '/t/accessibility-api-ai-agents-vs-screenshots'). Test bookings
+    are filtered with the same heuristics as pick_top_page.py.
+    """
+    url = os.environ.get("BOOKINGS_DATABASE_URL")
+    if not url or not client_slug:
+        return {}
+    try:
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT utm_campaign, COUNT(*) "
+            "FROM cal_bookings "
+            "WHERE client_slug = %s "
+            f"AND created_at >= NOW() - INTERVAL '{int(days)} days' "
+            "AND utm_campaign IS NOT NULL "
+            "AND utm_campaign <> '' "
+            "AND attendee_email NOT LIKE '%%test%%' "
+            "AND attendee_email NOT LIKE '%%example%%' "
+            "AND attendee_name NOT LIKE '%%TEST%%' "
+            "AND attendee_name NOT LIKE '%%John Doe%%' "
+            "GROUP BY utm_campaign",
+            (client_slug,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return {(r[0] or ""): int(r[1] or 0) for r in rows if r[0]}
+    except Exception as e:
+        print(f"  bookings query failed: {e}", file=sys.stderr)
+        return {}
+
+
+def _client_slug(product_name):
+    # Mirror pick_top_page.py. Kept here so this file is self-contained.
+    return {
+        "Cyrano": "cyrano",
+        "PieLine": "pieline",
+        "fazm": "fazm",
+        "S4L": "s4l",
+        "fde10x": "fde10x",
+        "Assrt": "assrt",
+    }.get(product_name)
+
+
+def collect_metrics(api_key, project_id, domain, client_slug, days=1):
+    get_started_clause = "event IN (" + ",".join(f"'{e}'" for e in GET_STARTED_EVENTS) + ")"
+    pv       = _event_counts_by_path(api_key, project_id, domain, "event = '$pageview'",            days, row_cap=2000)
+    signups  = _event_counts_by_path(api_key, project_id, domain, "event = 'newsletter_subscribed'", days, row_cap=500)
+    sched    = _event_counts_by_path(api_key, project_id, domain, "event = 'schedule_click'",        days, row_cap=500)
+    gs       = _event_counts_by_path(api_key, project_id, domain, get_started_clause,                days, row_cap=500)
+    bookings = _bookings_by_path(client_slug, days)
+    paths = set().union(pv, signups, sched, gs, bookings)
+    out = []
+    for p in paths:
+        metrics = {
+            "pageviews":          pv.get(p, 0),
+            "email_signups":      signups.get(p, 0),
+            "schedule_clicks":    sched.get(p, 0),
+            "get_started_clicks": gs.get(p, 0),
+            "bookings":           bookings.get(p, 0),
+        }
+        score = sum(metrics[k] * WEIGHTS[k] for k in metrics)
+        out.append({"path": p, "score": score, "metrics": metrics})
+    out.sort(key=lambda r: r["score"], reverse=True)
+    return out
+
+
+def _created_paths_for_project(proj):
+    """Reuse the dashboard's `_created_paths_for_project` helper from
+    scripts/project_stats_json.py so this picker stays identical to the
+    Top -> Pages subtab's "created" set (filesystem scan of the landing
+    repo UNION seo_keywords UNION gsc_queries). That's the same filter
+    the dashboard uses to split real SEO pages from 404/unknown inbound
+    traffic, including pages committed by the auto-commit agent."""
+    try:
+        if "SCRIPTS_DIR" not in _created_paths_for_project.__dict__:
+            _created_paths_for_project.SCRIPTS_DIR = str(ROOT_DIR / "scripts")
+            sys.path.insert(0, _created_paths_for_project.SCRIPTS_DIR)
+        import project_stats_json as psj  # noqa: E402
+        import db as _db  # noqa: E402
+        _db.load_env()
+        conn = _db.get_conn()
+        try:
+            by_domain = psj._created_paths_for_project(conn, proj, days=None)
+        finally:
+            try: conn.close()
+            except Exception: pass
+        # Flatten into a single set of paths; the picker compares paths
+        # only (we already scope the PostHog query to the project's
+        # primary domain).
+        all_paths = set()
+        for paths in by_domain.values():
+            all_paths.update(paths)
+        return all_paths
+    except Exception as e:
+        print(f"  _created_paths_for_project failed: {e}", file=sys.stderr)
+        return set()
+
+
+def _history_for_path(product, page_path, limit=5):
+    try:
+        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT created_at, status, slug, keyword, page_url "
+            "FROM seo_keywords "
+            "WHERE product = %s AND (slug = %s OR page_url LIKE %s) "
+            "ORDER BY created_at DESC LIMIT %s",
+            (product, page_path.lstrip("/").split("/")[-1], f"%{page_path}%", limit),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [
+            {"at": r[0].isoformat() if r[0] else None, "status": r[1],
+             "slug": r[2], "keyword": r[3], "page_url": r[4]}
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"  history lookup failed: {e}", file=sys.stderr)
+        return []
+
+
+def build_brief(product, days=1, top_n=10):
+    cfg = _load_config()
+    proj = _find_project(cfg, product)
+    if not proj:
+        raise SystemExit(f"ERROR: product '{product}' not found in config.json")
+
+    website = proj.get("website") or ""
+    domain = _domain_from_url(website)
+    if not domain:
+        raise SystemExit(f"ERROR: product '{product}' has no website domain")
+
+    lp = proj.get("landing_pages") or {}
+    repo_raw = lp.get("repo") or ""
+    repo_abs = os.path.expanduser(repo_raw)
+    if not repo_abs or not os.path.isdir(repo_abs):
+        raise SystemExit(f"ERROR: repo path missing for '{product}': {repo_raw!r}")
+
+    ph = (proj.get("posthog") or {})
+    project_id = ph.get("project_id")
+    if not project_id:
+        raise SystemExit(f"ERROR: posthog.project_id not set for '{product}'")
+
+    api_key = _posthog_api_key()
+    if not api_key:
+        raise SystemExit("ERROR: PostHog API key not available")
+
+    client_slug = _client_slug(product)
+    ranking = collect_metrics(api_key, project_id, domain, client_slug, days=days)
+    if not ranking or ranking[0]["score"] <= 0:
+        print(f"SKIP: no ranked activity in last {days}d for {domain}", file=sys.stderr)
+        sys.exit(2)
+
+    winner = ranking[0]
+    base_url = (lp.get("base_url") or website).rstrip("/")
+    page_url = base_url + (winner["path"] if winner["path"].startswith("/") else "/" + winner["path"])
+    history = _history_for_path(product, winner["path"])
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "product": proj.get("name"),
+        "domain": domain,
+        "repo_path": repo_abs,
+        "window_days": days,
+        "weights": WEIGHTS,
+        "winner": {
+            "path": winner["path"],
+            "page_url": page_url,
+            "score": winner["score"],
+            "metrics": winner["metrics"],
+        },
+        "ranking": ranking[:top_n],
+        "history": history,
+        "project_config": proj,
+    }
+
+
+def _enabled_products(cfg):
+    out = []
+    for p in cfg.get("projects", []):
+        lp = p.get("landing_pages") or {}
+        if lp.get("top_pages_enabled"):
+            out.append(p.get("name"))
+    return out
+
+
+def build_global_brief(days=1, top_n=10):
+    """Cross-project mode: rank all paths across every top_pages_enabled
+    project by the same weighted score, pick ONE global winner, and list
+    every enabled project as a replication target. The caller then asks
+    Claude (per target) to propose an adjacent keyword/slug that adapts
+    the winner's concept to that project's audience."""
+    cfg = _load_config()
+    enabled = [p for p in cfg.get("projects", []) if (p.get("landing_pages") or {}).get("top_pages_enabled")]
+    if not enabled:
+        raise SystemExit("ERROR: no projects have landing_pages.top_pages_enabled=true")
+
+    api_key = _posthog_api_key()
+    if not api_key:
+        raise SystemExit("ERROR: PostHog API key not available")
+
+    # Filter to the same "created" set the dashboard uses for its
+    # Top -> Pages subtab: filesystem scan of each landing repo UNION
+    # seo_keywords UNION gsc_queries. This keeps the top-pages pipeline
+    # in sync with whatever the dashboard treats as a real SEO page, and
+    # includes pages committed by any pipeline (including the auto-commit
+    # agent) even if they aren't in seo_keywords yet.
+
+    all_rows = []
+    targets = []
+    dropped_counts = {}
+    for proj in enabled:
+        name = proj.get("name")
+        website = proj.get("website") or ""
+        domain = _domain_from_url(website)
+        lp = proj.get("landing_pages") or {}
+        repo_raw = lp.get("repo") or ""
+        repo_abs = os.path.expanduser(repo_raw)
+        base_url = (lp.get("base_url") or website).rstrip("/")
+        ph = (proj.get("posthog") or {})
+        project_id = ph.get("project_id")
+
+        if not domain or not project_id or not repo_abs or not os.path.isdir(repo_abs):
+            print(f"  skip {name}: missing domain/project_id/repo", file=sys.stderr)
+            continue
+
+        targets.append({
+            "product": name,
+            "domain": domain,
+            "website": website,
+            "base_url": base_url,
+            "repo_path": repo_abs,
+            "project_config": proj,
+        })
+
+        try:
+            ranking = collect_metrics(api_key, project_id, domain, _client_slug(name), days=days)
+        except Exception as e:
+            print(f"  {name} metrics failed: {e}", file=sys.stderr)
+            continue
+        allowed = _created_paths_for_project(proj)
+        kept = 0; dropped = 0
+        for r in ranking:
+            path = r["path"]
+            if path not in allowed:
+                dropped += 1
+                continue
+            kept += 1
+            r["product"] = name
+            r["domain"] = domain
+            r["page_url"] = base_url + (path if path.startswith("/") else "/" + path)
+            all_rows.append(r)
+        dropped_counts[name] = (kept, dropped)
+
+    print(
+        f"  seo-filtered counts: "
+        + ", ".join(f"{k}={v[0]}kept/{v[1]}dropped" for k, v in dropped_counts.items()),
+        file=sys.stderr,
+    )
+    all_rows.sort(key=lambda r: r["score"], reverse=True)
+    if not all_rows or all_rows[0]["score"] <= 0:
+        print(f"SKIP: no ranked activity in last {days}d across enabled projects", file=sys.stderr)
+        sys.exit(2)
+
+    winner = all_rows[0]
+    history = _history_for_path(winner["product"], winner["path"])
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "mode": "global",
+        "window_days": days,
+        "weights": WEIGHTS,
+        "winner": {
+            "product": winner["product"],
+            "domain": winner["domain"],
+            "path": winner["path"],
+            "page_url": winner["page_url"],
+            "score": winner["score"],
+            "metrics": winner["metrics"],
+        },
+        "ranking": all_rows[:top_n],
+        "history": history,
+        "targets": targets,
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--product")
+    ap.add_argument("--days", type=int, default=14)
+    ap.add_argument("--top-n", type=int, default=10)
+    ap.add_argument("--out")
+    ap.add_argument("--list-enabled", action="store_true")
+    ap.add_argument("--global-mode", action="store_true", help="Cross-project: rank all enabled projects together, one global winner, every enabled project is a replication target.")
+    args = ap.parse_args()
+
+    if args.list_enabled:
+        cfg = _load_config()
+        for name in _enabled_products(cfg):
+            print(name)
+        return 0
+
+    if args.global_mode:
+        brief = build_global_brief(days=args.days, top_n=args.top_n)
+    else:
+        if not args.product:
+            print("--product is required (or use --list-enabled / --global-mode)", file=sys.stderr)
+            return 1
+        brief = build_brief(args.product, days=args.days, top_n=args.top_n)
+
+    blob = json.dumps(brief, indent=2, ensure_ascii=False, default=str)
+    if args.out:
+        Path(args.out).write_text(blob)
+        print(f"wrote brief -> {args.out}")
+    else:
+        print(blob)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
