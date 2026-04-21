@@ -502,6 +502,7 @@ def build_global_brief(days=1, top_n=10, cooldown_days=7):
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "global",
         "window_days": days,
+        "cooldown_days": cooldown_days,
         "weights": WEIGHTS,
         "winner": {
             "product": winner["product"],
@@ -510,8 +511,12 @@ def build_global_brief(days=1, top_n=10, cooldown_days=7):
             "page_url": winner["page_url"],
             "score": winner["score"],
             "metrics": winner["metrics"],
+            "on_cooldown": bool(winner.get("on_cooldown")),
         },
         "ranking": all_rows[:top_n],
+        "skipped_on_cooldown": [
+            {"product": p, "path": pa} for p, pa in skipped_on_cooldown
+        ],
         "history": history,
         "targets": targets,
     }
