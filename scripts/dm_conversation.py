@@ -34,15 +34,20 @@ Usage:
 """
 
 import argparse
+import base64
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
+from email.mime.text import MIMEText
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
 
 CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
+GMAIL_TOKEN_PATH = os.path.expanduser("~/gmail-api/token_i_at_m13v.com.json")
+GMAIL_SCOPES = ["https://mail.google.com/"]
 
 
 def load_config():
@@ -279,8 +284,89 @@ def show_summary(conn):
             print(f"    DM #{r['id']} {r['their_author']} [{r['platform']}] - {r['message_count']} msgs, T{r['tier'] or 1}, {r['conversation_status']} (last: {ts})")
 
 
+def _gmail_service():
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+
+    creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_PATH, GMAIL_SCOPES)
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        with open(GMAIL_TOKEN_PATH, "w") as f:
+            f.write(creds.to_json())
+    return build("gmail", "v1", credentials=creds)
+
+
+def _scrub_dashes(s):
+    """Replace em/en dashes with commas. Em dashes in email subjects cause
+    UTF-8 garbling in some clients, and the user has a no-dashes preference."""
+    if not s:
+        return s
+    return s.replace("\u2014", ",").replace("\u2013", ",")
+
+
+def _send_escalation_email(conn, dm_id, platform, their_author, reason):
+    """Send an escalation email with conversation history.
+
+    Sends from i@m13v.com to NOTIFICATION_EMAIL (defaults to i@m13v.com).
+    Subject embeds [DM #N] so ingest can match the reply back to this thread.
+    """
+    to_email = os.environ.get("NOTIFICATION_EMAIL", "i@m13v.com")
+
+    dm = conn.execute("""
+        SELECT d.id, d.tier, d.chat_url, d.project_name, d.target_project,
+               d.human_reason, d.flagged_at
+        FROM dms d WHERE d.id = %s
+    """, (dm_id,)).fetchone()
+
+    messages = conn.execute("""
+        SELECT direction, author, content, message_at
+        FROM dm_messages WHERE dm_id = %s ORDER BY message_at ASC
+    """, (dm_id,)).fetchall()
+
+    history_lines = []
+    for msg in messages:
+        arrow = ">>" if msg["direction"] == "outbound" else "<<"
+        ts = msg["message_at"].strftime("%Y-%m-%d %H:%M") if msg["message_at"] else "?"
+        history_lines.append(f"  {arrow} [{ts}] {msg['author']}: {msg['content']}")
+    history_text = "\n".join(history_lines) if history_lines else "(no messages logged)"
+
+    project = (dm.get("target_project") or dm.get("project_name") or "unset") if dm else "unset"
+    tier = (dm.get("tier") if dm else None) or 1
+    chat_url_line = f"Chat URL: {dm['chat_url']}\n" if (dm and dm.get("chat_url")) else ""
+
+    body = (
+        f"DM #{dm_id} [{platform}] with {their_author} needs your attention.\n\n"
+        f"Reason: {reason}\n"
+        f"Tier: {tier}   Project: {project}\n"
+        f"{chat_url_line}\n"
+        f"=== Conversation History ===\n{history_text}\n\n"
+        f"---\n"
+        f"Reply to this email to respond. Your reply will be sent as a DM on {platform}.\n"
+        f"Keep the [DM #{dm_id}] token in the subject line so the pipeline can route it.\n"
+    )
+
+    subject = _scrub_dashes(f"[DM #{dm_id}] {their_author} [{platform}]: {(reason or '')[:120]}")
+    body = _scrub_dashes(body)
+
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["to"] = to_email
+    msg["subject"] = subject
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+
+    try:
+        service = _gmail_service()
+        result = service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        gmail_id = result.get("id", "")
+        print(f"  Escalation email sent for DM #{dm_id} to {to_email} (gmail id: {gmail_id})")
+        return gmail_id
+    except Exception as e:
+        print(f"  WARNING: Failed to send escalation email for DM #{dm_id}: {e}")
+        return None
+
+
 def flag_human(conn, dm_id, reason):
-    """Flag a conversation as needing human attention."""
+    """Flag a conversation as needing human attention and send escalation email."""
     row = conn.execute("SELECT platform, their_author, conversation_status FROM dms WHERE id = %s", (dm_id,)).fetchone()
     if not row:
         print(f"ERROR: DM #{dm_id} not found")
@@ -292,6 +378,8 @@ def flag_human(conn, dm_id, reason):
     """, (reason, dm_id))
     conn.commit()
     print(f"  FLAGGED DM #{dm_id} ({row['their_author']} [{row['platform']}]) for human attention: {reason}")
+
+    _send_escalation_email(conn, dm_id, row['platform'], row['their_author'], reason)
     return True
 
 
@@ -482,6 +570,10 @@ def main():
 
     sub.add_parser("show-flagged", help="Show conversations needing human attention")
 
+    p_resend = sub.add_parser("send-escalation-email",
+                              help="Re-send the escalation email for an already-flagged DM (for testing / manual retry)")
+    p_resend.add_argument("--dm-id", type=int, required=True)
+
     p_proj = sub.add_parser("set-project", help="Set project_name (project we recommended)")
     p_proj.add_argument("--dm-id", type=int, required=True)
     p_proj.add_argument("--project", required=True)
@@ -540,6 +632,20 @@ def main():
         flag_human(conn, args.dm_id, args.reason)
     elif args.command == "show-flagged":
         show_flagged(conn)
+    elif args.command == "send-escalation-email":
+        row = conn.execute("""
+            SELECT platform, their_author, human_reason, conversation_status
+            FROM dms WHERE id = %s
+        """, (args.dm_id,)).fetchone()
+        if not row:
+            print(f"ERROR: DM #{args.dm_id} not found")
+        elif row["conversation_status"] != "needs_human":
+            print(f"WARNING: DM #{args.dm_id} is '{row['conversation_status']}', not 'needs_human'. Sending anyway.")
+            _send_escalation_email(conn, args.dm_id, row["platform"], row["their_author"],
+                                   row["human_reason"] or "(no reason stored)")
+        else:
+            _send_escalation_email(conn, args.dm_id, row["platform"], row["their_author"],
+                                   row["human_reason"] or "(no reason stored)")
     elif args.command == "set-project":
         set_project(conn, args.dm_id, args.project)
     elif args.command == "set-target-project":
