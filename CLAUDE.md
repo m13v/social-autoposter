@@ -2,18 +2,36 @@
 
 ## Source of truth for active projects: config.json
 
-`~/social-autoposter/config.json` is the authoritative list of client websites. Every project entry has `landing_pages.repo`, `website`, `gsc_property`, and posting configuration. When writing any script, audit, or dashboard feature that needs to iterate over "all our websites," drive it from `projects[]` in `config.json` instead of hardcoding a list.
+**Before ANY cross-site work (marketing a new product on multiple sites, adding a CTA, running an audit, generating content), open `~/social-autoposter/config.json` first.** It is the authoritative list of every website we run. Do not `ls ~/` looking for site repos, do not guess domains, do not hardcode a "list of our sites" anywhere.
 
-- New website? Add it to `config.json` first; everything else (SEO pipeline, analytics checker, dashboard) picks it up automatically.
-- Never hardcode project names, repo paths, or domains anywhere outside `config.json`. Hardcoded lists drift; `config.json` does not.
+Each entry under `projects[]` exposes (at minimum):
+- `name` (e.g. `fazm`, `mediar`, `assrt`)
+- `website` production domain
+- `local_repo` path to the product repo (e.g. `~/fazm`)
+- `landing_pages.repo` path to the website repo (e.g. `~/fazm-website`) <- use this for marketing pages, blog posts, CTAs
+- `landing_pages.github_repo`, `landing_pages.base_url`, `landing_pages.gsc_property`
+- `posthog.project_id`, `booking_link`, `get_started_link`, `qualification`
+
+Rules:
+- New website? Add it to `config.json` first; SEO pipeline, analytics checker, dashboard, and cross-site marketing scripts pick it up automatically.
+- Never hardcode project names, repo paths, or domains outside `config.json`.
+- Any script that iterates over "all our websites" MUST read `projects[]`.
+
+## Shared UI library: @m13v/seo-components (~/seo-components)
+
+**`~/seo-components` is where cross-site UI lives.** Published as `@m13v/seo-components`, consumed by every website in `config.json`. Before building a new component on one site (CTA block, newsletter signup, comparison table, FAQ, proof band), check if it already exists in the library, and if not, **add it to the library instead of building it site-local**. One site-local copy today becomes four divergent copies next quarter.
+
+Already shipped (partial): `InlineCta`, `StickyBottomCta`, `BookCallCTA`, `GetStartedCTA`, `NewsletterSignup`, `FullSiteAnalytics`, `ComparisonTable`, `FaqSection`, `RelatedPostsGrid`, `ProofBand`, `GlowCard`, `ShimmerButton`, `BeforeAfter`, `AnimatedDemo`, `BentoGrid`, `Breadcrumbs`, `ArticleMeta`, `MetricsRow`, `TypingAnimation`.
+
+Consumer sites import via the `@seo/components` alias. When adding a new component: build in `~/seo-components/src/components/`, bump version, then update each consumer (the `bump:consumers` script automates this).
 
 ## Analytics wiring check
 
-`scripts/check_analytics_wiring.py` audits every project in `config.json` for correct PostHog + @m13v/seo-components wiring. It catches the class of silent-failure bug where `window.posthog` is never set and seo-components helpers (NewsletterSignup, trackScheduleClick, etc.) no-op.
+`scripts/check_analytics_wiring.py` audits every project in `config.json` for correct PostHog + `@m13v/seo-components` wiring. Catches silent-failure bugs where `window.posthog` is never set and helpers (NewsletterSignup, trackScheduleClick) no-op.
 
 - Run on demand: `python3 scripts/check_analytics_wiring.py`
-- Exits 1 on any BROKEN project; safe to wire into pre-commit or CI.
-- Preferred fix for new or failing sites: mount `<FullSiteAnalytics>` from `@m13v/seo-components` (handles init + `window.posthog` + `<SeoAnalyticsProvider>` in one component).
+- Exits 1 on any BROKEN project; safe for pre-commit or CI.
+- Preferred fix: mount `<FullSiteAnalytics>` from `@m13v/seo-components` (handles init + `window.posthog` + `<SeoAnalyticsProvider>`).
 
 ## SKILL.md - Single File, No Copies
 
