@@ -1310,6 +1310,30 @@ async function handleApi(req, res) {
           "pr.recent_activity AS prospect_recent_activity, " +
           "pr.notes AS prospect_notes, pr.profile_url AS prospect_profile_url, " +
           "pr.profile_fetched_at AS prospect_fetched_at, " +
+          // Context fields: the public post/thread and comment that preceded this DM.
+          // We COALESCE three sources: (1) direct (d.post_id), (2) via-reply
+          // (d.reply_id -> replies.post_id), (3) fallback — most recent replies
+          // row from the same (platform, author) when both post_id/reply_id are
+          // NULL. About 7% of reddit DMs have this orphan pattern (bug where
+          // the DM was stored without its reply_id link), and the fallback
+          // surfaces the prior public comment thread for them.
+          "COALESCE(p_direct.thread_title,   p_via_reply.thread_title,   p_via_fb.thread_title)   AS context_thread_title, " +
+          "COALESCE(p_direct.thread_url,     p_via_reply.thread_url,     p_via_fb.thread_url)     AS context_thread_url, " +
+          "COALESCE(p_direct.thread_content, p_via_reply.thread_content, p_via_fb.thread_content) AS context_thread_content, " +
+          "COALESCE(p_direct.thread_author,  p_via_reply.thread_author,  p_via_fb.thread_author)  AS context_thread_author, " +
+          "COALESCE(p_direct.our_content,    p_via_reply.our_content,    p_via_fb.our_content)    AS context_our_content, " +
+          "COALESCE(p_direct.our_url,        p_via_reply.our_url,        p_via_fb.our_url)        AS context_our_url, " +
+          "COALESCE(p_direct.posted_at,      p_via_reply.posted_at,      p_via_fb.posted_at)      AS context_posted_at, " +
+          "COALESCE(r_link.their_content,     r_fallback.their_content)     AS trigger_comment_content, " +
+          "COALESCE(r_link.their_comment_url, r_fallback.their_comment_url) AS trigger_comment_url, " +
+          "COALESCE(r_link.their_author,      r_fallback.their_author)      AS trigger_comment_author, " +
+          "COALESCE(r_link.our_reply_content, r_fallback.our_reply_content) AS trigger_our_reply_content, " +
+          "COALESCE(r_link.our_reply_url,     r_fallback.our_reply_url)     AS trigger_our_reply_url, " +
+          "COALESCE(r_link.replied_at,        r_fallback.replied_at)        AS trigger_our_reply_at, " +
+          "CASE WHEN r_fallback.id IS NOT NULL AND d.reply_id IS NULL AND d.post_id IS NULL THEN TRUE ELSE FALSE END AS context_is_fallback, " +
+          "d.comment_context  AS seed_comment_context, " +
+          "d.their_content    AS seed_their_content, " +
+          "d.our_dm_content   AS seed_our_dm_content, " +
           "(SELECT content   FROM dm_messages WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1) AS last_msg, " +
           "(SELECT direction FROM dm_messages WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1) AS last_dir, " +
           "(SELECT COALESCE(json_agg(json_build_object('id', m.id, 'direction', m.direction, 'author', m.author, 'content', m.content, 'message_at', m.message_at) ORDER BY m.message_at ASC), '[]'::json) FROM dm_messages m WHERE m.dm_id = d.id) AS messages, " +
@@ -1326,6 +1350,16 @@ async function handleApi(req, res) {
         "LEFT JOIN posts     p_direct    ON p_direct.id    = d.post_id " +
         "LEFT JOIN replies   r_link      ON r_link.id      = d.reply_id " +
         "LEFT JOIN posts     p_via_reply ON p_via_reply.id = r_link.post_id " +
+        // Fallback: when a DM has neither post_id nor reply_id linked, try to
+        // find the most recent replies row from the same (platform, author).
+        // Materialized as a LATERAL join so the subquery can reference d.
+        "LEFT JOIN LATERAL (" +
+          "SELECT r2.* FROM replies r2 " +
+          "WHERE d.reply_id IS NULL AND d.post_id IS NULL " +
+            "AND r2.platform = d.platform AND r2.their_author = d.their_author " +
+          "ORDER BY r2.discovered_at DESC LIMIT 1" +
+        ") r_fallback ON TRUE " +
+        "LEFT JOIN posts     p_via_fb    ON p_via_fb.id    = r_fallback.post_id " +
         "LEFT JOIN prospects pr          ON pr.id          = d.prospect_id " +
         whereSql + " " +
         "ORDER BY sort_bucket ASC, " +
@@ -2028,6 +2062,16 @@ const HTML = `<!DOCTYPE html>
   .dm-exp-msg-author { font-weight: 600; }
   .dm-exp-msg-time   { font-variant-numeric: tabular-nums; }
   .dm-exp-msg-body   { white-space: pre-wrap; word-break: break-word; }
+  .dm-exp-ctx        { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px dashed var(--border); }
+  .dm-exp-ctx-section { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; line-height: 1.45; }
+  .dm-exp-ctx-head   { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; font-size: 10px; text-transform: lowercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 600; }
+  .dm-exp-ctx-label  { color: var(--text-secondary); }
+  .dm-exp-ctx-author { color: var(--text-muted); font-weight: 500; }
+  .dm-exp-ctx-link   { margin-left: auto; color: var(--link); text-decoration: none; font-weight: 500; }
+  .dm-exp-ctx-link:hover { text-decoration: underline; }
+  .dm-exp-ctx-body   { white-space: pre-wrap; word-break: break-word; color: var(--text); }
+  .dm-exp-ctx-title  { font-weight: 600; color: var(--text); margin-bottom: 3px; }
+  .dm-exp-ctx-fallback { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; background: #fef3c7; color: #92400e; border: 1px solid #fde68a; margin-left: 4px; cursor: help; }
 
   .prospect-modal-overlay { position: fixed; inset: 0; background: var(--shadow-modal); display: flex; align-items: flex-start; justify-content: center; z-index: 9999; padding: 60px 20px 20px; overflow-y: auto; }
   .prospect-modal { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; max-width: 640px; width: 100%; padding: 24px 28px; color: var(--text); font-size: 13px; line-height: 1.5; }
@@ -4555,10 +4599,31 @@ function __showProspect(dmId) {
 window.__showProspect = __showProspect;
 window.__closeProspect = __closeProspect;
 
+function dmOpenUrl(dm) {
+  const raw = String((dm && dm.chat_url) || '').trim();
+  if (!raw) return null;
+  const p = String((dm && dm.platform) || '').toLowerCase();
+  if (p === 'reddit') {
+    if (raw.indexOf('/chat/room/') !== -1) return { url: raw, label: 'open chat' };
+    if (raw.indexOf('/message/messages/') !== -1) return { url: raw, label: 'open DM' };
+    return null;
+  }
+  if (p === 'twitter' || p === 'x') {
+    if (raw.indexOf('/i/chat/') !== -1 || raw.indexOf('/messages/') !== -1) return { url: raw, label: 'open chat' };
+    return null;
+  }
+  if (p === 'linkedin') {
+    if (raw.indexOf('/messaging/thread/') !== -1) return { url: raw, label: 'open chat' };
+    return null;
+  }
+  return null;
+}
+
 function renderDmThreadCell(dm) {
   const author = escapeHtml(dm.their_author || '');
   const tier = dm.tier ? '<span class="dm-thread-tier">T' + Number(dm.tier) + '</span>' : '';
-  const url = dm.chat_url ? escapeHtml(dm.chat_url) : '';
+  const linkInfo = dmOpenUrl(dm);
+  const url = linkInfo ? escapeHtml(linkInfo.url) : '';
   const nameHtml = url
     ? '<a class="dm-thread-author top-post-link" href="' + url + '" target="_blank" rel="noopener">' + author + '</a>'
     : '<span class="dm-thread-author">' + author + '</span>';
@@ -4716,8 +4781,10 @@ function buildDmExpansionRow(dm, colCount) {
   metaParts.push('<span class="dm-exp-meta-chip">' + total + ' message' + (total === 1 ? '' : 's') + '</span>');
   if (dm.conversation_status) metaParts.push('<span class="dm-exp-meta-chip">' + escapeHtml(dm.conversation_status) + '</span>');
   if (dm.interest_level) metaParts.push('<span class="dm-exp-meta-chip">' + escapeHtml(dm.interest_level) + '</span>');
-  if (dm.chat_url) metaParts.push('<a class="dm-exp-meta-link" href="' + escapeHtml(dm.chat_url) + '" target="_blank" rel="noopener">open chat</a>');
+  const linkInfo = dmOpenUrl(dm);
+  if (linkInfo) metaParts.push('<a class="dm-exp-meta-link" href="' + escapeHtml(linkInfo.url) + '" target="_blank" rel="noopener">' + escapeHtml(linkInfo.label) + '</a>');
   const metaHtml = '<div class="dm-exp-meta">' + metaParts.join('') + '</div>';
+  const contextHtml = renderDmContextBlock(dm);
   let bodyHtml;
   if (!total) {
     bodyHtml = '<div class="dm-exp-empty">(no messages recorded)</div>';
@@ -4728,9 +4795,106 @@ function buildDmExpansionRow(dm, colCount) {
   }
   return '<tr class="dm-exp-row" data-exp-for="' + Number(dm.id) + '">' +
     '<td colspan="' + colCount + '" class="dm-exp-cell">' +
-      '<div class="dm-exp-inner">' + metaHtml + bodyHtml + '</div>' +
+      '<div class="dm-exp-inner">' + metaHtml + contextHtml + bodyHtml + '</div>' +
     '</td>' +
   '</tr>';
+}
+
+// Renders the pre-DM context chain for any platform: the post we made, the
+// thread it lived in, the comment of theirs that triggered outreach, and our
+// public reply to that comment (if any). Each section is rendered only when
+// data exists, so cold DMs with no public-engagement trail stay empty.
+function renderDmContextBlock(dm) {
+  if (!dm) return '';
+  const sections = [];
+  const ourContent   = dm.context_our_content || '';
+  const ourUrl       = dm.context_our_url || '';
+  const threadTitle  = dm.context_thread_title || '';
+  const threadUrl    = dm.context_thread_url || '';
+  const threadText   = dm.context_thread_content || '';
+  const threadAuthor = dm.context_thread_author || '';
+  const theirComment = dm.trigger_comment_content || '';
+  const theirCommentUrl = dm.trigger_comment_url || '';
+  const theirCommentAuthor = dm.trigger_comment_author || dm.their_author || '';
+  const ourReply = dm.trigger_our_reply_content || '';
+  const ourReplyUrl = dm.trigger_our_reply_url || '';
+  const ourReplyAt = dm.trigger_our_reply_at || '';
+  const rawCommentCtx = dm.seed_comment_context || '';
+  const seedOurDm = dm.seed_our_dm_content || '';
+  const isFallback = !!dm.context_is_fallback;
+  const fbChip = isFallback
+    ? '<span class="dm-exp-ctx-fallback" title="DM row had no reply_id/post_id link; context inferred from most recent matching replies row for this (platform, author)">inferred</span>'
+    : '';
+
+  if (threadTitle || threadText) {
+    const head = '<span class="dm-exp-ctx-label">thread</span>' + fbChip +
+      (threadAuthor ? '<span class="dm-exp-ctx-author">@' + escapeHtml(threadAuthor) + '</span>' : '') +
+      (threadUrl ? '<a class="dm-exp-ctx-link" href="' + escapeHtml(threadUrl) + '" target="_blank" rel="noopener">open thread</a>' : '');
+    const title = threadTitle ? '<div class="dm-exp-ctx-title">' + escapeHtml(threadTitle) + '</div>' : '';
+    const body  = threadText ? '<div class="dm-exp-ctx-body">' + escapeHtml(threadText) + '</div>' : '';
+    sections.push('<div class="dm-exp-ctx-section">' +
+      '<div class="dm-exp-ctx-head">' + head + '</div>' +
+      title + body +
+    '</div>');
+  }
+
+  if (ourContent) {
+    const head = '<span class="dm-exp-ctx-label">our post / reply</span>' +
+      (ourUrl ? '<a class="dm-exp-ctx-link" href="' + escapeHtml(ourUrl) + '" target="_blank" rel="noopener">open</a>' : '');
+    sections.push('<div class="dm-exp-ctx-section">' +
+      '<div class="dm-exp-ctx-head">' + head + '</div>' +
+      '<div class="dm-exp-ctx-body">' + escapeHtml(ourContent) + '</div>' +
+    '</div>');
+  }
+
+  if (theirComment) {
+    const head = '<span class="dm-exp-ctx-label">their comment</span>' +
+      (theirCommentAuthor ? '<span class="dm-exp-ctx-author">@' + escapeHtml(theirCommentAuthor) + '</span>' : '') +
+      (theirCommentUrl ? '<a class="dm-exp-ctx-link" href="' + escapeHtml(theirCommentUrl) + '" target="_blank" rel="noopener">open comment</a>' : '');
+    sections.push('<div class="dm-exp-ctx-section">' +
+      '<div class="dm-exp-ctx-head">' + head + '</div>' +
+      '<div class="dm-exp-ctx-body">' + escapeHtml(theirComment) + '</div>' +
+    '</div>');
+  } else if (rawCommentCtx) {
+    sections.push('<div class="dm-exp-ctx-section">' +
+      '<div class="dm-exp-ctx-head"><span class="dm-exp-ctx-label">comment context</span></div>' +
+      '<div class="dm-exp-ctx-body">' + escapeHtml(rawCommentCtx) + '</div>' +
+    '</div>');
+  }
+
+  if (ourReply) {
+    const head = '<span class="dm-exp-ctx-label">our public reply</span>' +
+      (ourReplyAt ? '<span class="dm-exp-ctx-author">' + escapeHtml(relTime(ourReplyAt)) + '</span>' : '') +
+      (ourReplyUrl ? '<a class="dm-exp-ctx-link" href="' + escapeHtml(ourReplyUrl) + '" target="_blank" rel="noopener">open reply</a>' : '');
+    sections.push('<div class="dm-exp-ctx-section">' +
+      '<div class="dm-exp-ctx-head">' + head + '</div>' +
+      '<div class="dm-exp-ctx-body">' + escapeHtml(ourReply) + '</div>' +
+    '</div>');
+  }
+
+  // Only show the seed "our first DM" block if dm_messages is empty, otherwise
+  // it duplicates the thread view.
+  const hasMessages = Array.isArray(dm.messages) && dm.messages.length > 0;
+  if (!hasMessages && seedOurDm) {
+    sections.push('<div class="dm-exp-ctx-section">' +
+      '<div class="dm-exp-ctx-head"><span class="dm-exp-ctx-label">our opening dm (seed)</span></div>' +
+      '<div class="dm-exp-ctx-body">' + escapeHtml(seedOurDm) + '</div>' +
+    '</div>');
+  }
+
+  // Fallback: when no post/reply/seed context is linked (e.g. an escalation
+  // flagged without a replies row), the human_reason is often the only
+  // narrative describing what originally happened. Show it so the operator
+  // isn't flying blind.
+  if (!sections.length && dm.human_reason) {
+    sections.push('<div class="dm-exp-ctx-section">' +
+      '<div class="dm-exp-ctx-head"><span class="dm-exp-ctx-label">escalation note</span></div>' +
+      '<div class="dm-exp-ctx-body">' + escapeHtml(String(dm.human_reason)) + '</div>' +
+    '</div>');
+  }
+
+  if (!sections.length) return '';
+  return '<div class="dm-exp-ctx">' + sections.join('') + '</div>';
 }
 
 function renderDmExpansionMsg(m) {
