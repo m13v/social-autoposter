@@ -831,8 +831,12 @@ async function handleApi(req, res) {
     return;
   }
 
-  // GET /api/config
+  // GET /api/config. In CLIENT_MODE the container has no config.json
+  // (Dockerfile ships only config.example.json), and editing it in prod
+  // would write to ephemeral container disk anyway. Return an empty
+  // payload so the Settings tab degrades gracefully instead of 500.
   if (p === '/api/config' && req.method === 'GET') {
+    if (auth.CLIENT_MODE) return json(res, {});
     try {
       const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
       return json(res, config);
@@ -841,6 +845,7 @@ async function handleApi(req, res) {
 
   // POST /api/config
   if (p === '/api/config' && req.method === 'POST') {
+    if (auth.CLIENT_MODE) return json(res, { error: 'config_readonly_in_client_mode' }, 405);
     return readBody(req).then(body => {
       const config = JSON.parse(body);
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + '\n');
@@ -3367,12 +3372,12 @@ function renderFunnelStats(payload) {
     a.pageviews        += (p.funnel && p.funnel.pageviews)        || 0;
     a.email_signups    += (p.funnel && p.funnel.email_signups)    || 0;
     a.schedule_clicks  += (p.funnel && p.funnel.schedule_clicks)  || 0;
-    a.download_clicks  += (p.funnel && p.funnel.download_clicks)  || 0;
+    a.get_started_clicks += (p.funnel && p.funnel.get_started_clicks) || 0;
     a.bookings         += (p.funnel && p.funnel.real_bookings)    || 0;
     return a;
-  }, { posts: 0, seo: 0, pageviews: 0, email_signups: 0, schedule_clicks: 0, download_clicks: 0, bookings: 0 });
+  }, { posts: 0, seo: 0, pageviews: 0, email_signups: 0, schedule_clicks: 0, get_started_clicks: 0, bookings: 0 });
   if (totalEl) {
-    totalEl.textContent = totals.posts + ' posts \u00b7 ' + totals.seo + ' pages \u00b7 ' + fmt(totals.pageviews) + ' pv \u00b7 ' + totals.email_signups + ' signup \u00b7 ' + totals.schedule_clicks + ' sched \u00b7 ' + totals.download_clicks + ' dl \u00b7 ' + totals.bookings + ' book';
+    totalEl.textContent = totals.posts + ' posts \u00b7 ' + totals.seo + ' pages \u00b7 ' + fmt(totals.pageviews) + ' pv \u00b7 ' + totals.email_signups + ' signup \u00b7 ' + totals.schedule_clicks + ' sched \u00b7 ' + totals.get_started_clicks + ' gs \u00b7 ' + totals.bookings + ' book';
   }
   const normalized = projects.map(p => {
     const pst = p.posts || {};
@@ -3389,7 +3394,7 @@ function renderFunnelStats(payload) {
       pageviews:        Number(f.pageviews)         || 0,
       email_signups:    Number(f.email_signups)     || 0,
       schedule_clicks:  Number(f.schedule_clicks)   || 0,
-      download_clicks:  Number(f.download_clicks)   || 0,
+      get_started_clicks: Number(f.get_started_clicks) || 0,
       bookings:         Number(f.real_bookings)     || 0,
     };
   });
@@ -3415,7 +3420,7 @@ function renderFunnelStats(payload) {
       { key: 'pageviews',        label: 'Pageviews',       type: 'numeric', align: 'right', formatter: fmt },
       { key: 'email_signups',    label: 'Email Signups',   type: 'numeric', align: 'right', formatter: fmt },
       { key: 'schedule_clicks',  label: 'Schedule Clicks', type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'download_clicks',  label: 'Download Clicks', type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'get_started_clicks', label: 'Get Started', type: 'numeric', align: 'right', formatter: fmt },
       { key: 'bookings',         label: 'Bookings',        type: 'numeric', align: 'right', formatter: fmt },
     ],
   });
@@ -3886,19 +3891,19 @@ function renderTopPages(payload) {
       const top = d.top_pages || {};
       const signupsByPath = d.top_pages_signups || {};
       const schedByPath = d.top_pages_schedule || {};
-      const downloadByPath = d.top_pages_download || {};
+      const getStartedByPath = d.top_pages_get_started || {};
       const created = new Set((d.created_paths || []).map(normPath));
       const seenPaths = new Set([
         ...Object.keys(top),
         ...Object.keys(signupsByPath),
         ...Object.keys(schedByPath),
-        ...Object.keys(downloadByPath),
+        ...Object.keys(getStartedByPath),
       ].map(normPath));
       const mkRow = (path) => {
         const pv = Number(top[path]) || 0;
         const signups = Number(signupsByPath[path]) || 0;
         const sched = Number(schedByPath[path]) || 0;
-        const dl = Number(downloadByPath[path]) || 0;
+        const dl = Number(getStartedByPath[path]) || 0;
         const url = 'https://' + domain + path;
         return {
           project: p.name || '',
@@ -3908,7 +3913,7 @@ function renderTopPages(payload) {
           pageviews: pv,
           email_signups: signups,
           schedule_clicks: sched,
-          download_clicks: dl,
+          get_started_clicks: dl,
           bookings: projectBookings,
         };
       };
@@ -3918,7 +3923,7 @@ function renderTopPages(payload) {
         const pv = Number(top[path]) || 0;
         const signups = Number(signupsByPath[path]) || 0;
         const sched = Number(schedByPath[path]) || 0;
-        const dl = Number(downloadByPath[path]) || 0;
+        const dl = Number(getStartedByPath[path]) || 0;
         if (pv <= 0 && signups <= 0 && sched <= 0 && dl <= 0) continue;
         unknownRows.push(mkRow(path));
       }
@@ -3950,7 +3955,7 @@ function renderTopPages(payload) {
     { key: 'pageviews',       label: 'Pageviews',       type: 'numeric', align: 'right', widthPct: 9,  formatter: fmt },
     { key: 'email_signups',   label: 'Email Signups',   type: 'numeric', align: 'right', widthPct: 9,  formatter: fmt },
     { key: 'schedule_clicks', label: 'Schedule Clicks', type: 'numeric', align: 'right', widthPct: 9,  formatter: fmt },
-    { key: 'download_clicks', label: 'Download Clicks', type: 'numeric', align: 'right', widthPct: 9,  formatter: fmt },
+    { key: 'get_started_clicks', label: 'Get Started', type: 'numeric', align: 'right', widthPct: 9,  formatter: fmt },
     { key: 'bookings',        label: 'Bookings',        type: 'numeric', align: 'right', widthPct: 8,  formatter: fmt },
   ];
   if (!createdRows.length) {
@@ -4642,13 +4647,16 @@ document.querySelectorAll('.tab').forEach(tab => {
 // Lazy-load funnel stats the first time the user opens the section. The fetch
 // shells out to PostHog and two Postgres DBs, so we don't want to run it on
 // every page load.
+// Toggle listeners are wired immediately, but the initial "if open" load is
+// deferred to saStartApp() so it runs after Firebase has attached an ID
+// token. Otherwise, in CLIENT_MODE, these fire at script-parse time, hit
+// /api/* without auth, get 401, and never retry.
 (function wireFunnelStats() {
   const el = document.getElementById('funnel-stats');
   if (!el) return;
   el.addEventListener('toggle', () => {
     if (el.open) loadFunnelStats();
   });
-  if (el.open) loadFunnelStats();
 })();
 
 (function wireDmStats() {
@@ -4657,7 +4665,6 @@ document.querySelectorAll('.tab').forEach(tab => {
   el.addEventListener('toggle', () => {
     if (el.open) loadDmStats();
   });
-  if (el.open) loadDmStats();
 })();
 
 document.getElementById('log-job-filter').addEventListener('change', () => { loadLogFiles(); startLogAutoRefresh(); });
@@ -4672,8 +4679,21 @@ function saStartApp() {
   loadStatus();
   loadActivityStats();
   loadStyleStats();
-  loadDeployHealth();
-  setInterval(loadDeployHealth, 60000);
+  // Deploy Health is inside the Status tab, which is local-only. On the
+  // hosted client dashboard we skip the fetch entirely; Cloud Run has no
+  // mirror for project_deploy_status.py, so polling it just spams 503.
+  const isCloud = document.body.classList.contains('sa-cloud');
+  if (!isCloud) {
+    loadDeployHealth();
+    setInterval(loadDeployHealth, 60000);
+  }
+  // Funnel + DM stats sections are \`<details open>\` by default; load them
+  // here (post-auth) rather than in their wire IIFEs, which fire before
+  // the Firebase ID token is attached.
+  const funnelEl = document.getElementById('funnel-stats');
+  if (funnelEl && funnelEl.open) loadFunnelStats();
+  const dmEl = document.getElementById('dm-stats');
+  if (dmEl && dmEl.open) loadDmStats();
   setInterval(loadStatus, 5000);
   setInterval(loadActivityStats, 300000);
   setInterval(loadStyleStats, 300000);
