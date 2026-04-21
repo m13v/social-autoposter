@@ -205,6 +205,32 @@ CREATE TABLE IF NOT EXISTS dm_messages (
 CREATE INDEX IF NOT EXISTS idx_dm_messages_dm_id ON dm_messages(dm_id);
 CREATE INDEX IF NOT EXISTS idx_dm_messages_direction ON dm_messages(direction);
 
+-- human_dm_replies: stores human-authored replies to escalated DMs. The escalation
+-- pipeline ingests these from Gmail (matching [DM #N] in the subject) and Phase 0
+-- of engage-dm-replies.sh sends them as DMs on the target platform.
+-- Column 'resend_email_id' is historical; we now store the Gmail message id here.
+CREATE TABLE IF NOT EXISTS human_dm_replies (
+    id SERIAL PRIMARY KEY,
+    dm_id INTEGER NOT NULL REFERENCES dms(id),
+    platform TEXT NOT NULL,
+    their_author TEXT NOT NULL,
+    project_name TEXT,
+    reply_content TEXT NOT NULL,
+    email_subject TEXT,
+    resend_email_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    sent_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_human_dm_replies_status ON human_dm_replies(status);
+CREATE INDEX IF NOT EXISTS idx_human_dm_replies_dm_id ON human_dm_replies(dm_id);
+CREATE INDEX IF NOT EXISTS idx_human_dm_replies_project ON human_dm_replies(project_name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_human_dm_replies_gmail_id
+    ON human_dm_replies(resend_email_id) WHERE resend_email_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS thread_comments (
     id SERIAL PRIMARY KEY,
     thread_id INTEGER,
