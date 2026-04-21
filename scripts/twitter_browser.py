@@ -839,15 +839,26 @@ def send_dm(thread_url, message):
                 browser.close()
 
 
-def discover_notifications(scroll_count=8):
-    """Scrape mentions from https://x.com/notifications/mentions.
+def discover_notifications(scroll_count=8, tab="all"):
+    """Scrape tweet notifications from x.com/notifications[/{tab}].
 
-    Scrolls the mentions tab and extracts each tweet as a mention record.
+    tab:
+        "all"       -> /notifications       (default; includes replies to our tweets,
+                                             replies to our replies without @-tag,
+                                             plus mentions — superset of "mentions")
+        "mentions"  -> /notifications/mentions (only explicit @-mentions)
+        "verified"  -> /notifications/verified
+
+    Scrolls the selected tab and extracts each tweet as a notification record.
     No API cost (uses the logged-in session via CDP).
 
-    Returns: {"notifications": [...], "total": N} or {"error": "..."}
+    Returns: {"notifications": [...], "total": N, "tab": "..."} or {"error": "..."}
     """
-    print(f"[twitter_browser] discover_notifications called (scroll_count={scroll_count})", file=sys.stderr)
+    valid_tabs = {"all": "", "mentions": "/mentions", "verified": "/verified"}
+    if tab not in valid_tabs:
+        return {"error": f"invalid tab {tab!r}; valid: {sorted(valid_tabs)}"}
+    target_url = f"https://x.com/notifications{valid_tabs[tab]}"
+    print(f"[twitter_browser] discover_notifications called (scroll_count={scroll_count}, tab={tab}, url={target_url})", file=sys.stderr)
     from playwright.sync_api import sync_playwright
 
     EXTRACTOR_JS = r"""() => {
@@ -915,7 +926,7 @@ def discover_notifications(scroll_count=8):
     with sync_playwright() as p:
         browser, page, is_cdp = get_browser_and_page(p)
         try:
-            page.goto("https://x.com/notifications/mentions", wait_until="domcontentloaded")
+            page.goto(target_url, wait_until="domcontentloaded")
             page.wait_for_timeout(4000)
 
             seen = set()
@@ -938,7 +949,201 @@ def discover_notifications(scroll_count=8):
                 page.wait_for_timeout(1500)
                 _refresh_browser_lock()
 
-            return {"notifications": all_tweets, "total": len(all_tweets)}
+            return {"notifications": all_tweets, "total": len(all_tweets), "tab": tab}
+        finally:
+            if not is_cdp:
+                page.close()
+                browser.close()
+
+
+def scrape_thread_followups(thread_url, scroll_count=3):
+    """Navigate to a tweet's permalink and extract reply articles below it.
+
+    Used to detect depth-2+ replies to our own replies that the notifications
+    tab may not surface (X default behavior drops @-tags inside active threads).
+
+    Returns: {"thread_url": "...", "anchor_tweet_id": "...", "followups": [...]}
+             where each followup has the same shape as a notifications record.
+    """
+    print(f"[twitter_browser] scrape_thread_followups({thread_url!r}, scroll={scroll_count})", file=sys.stderr)
+    from playwright.sync_api import sync_playwright
+
+    anchor_match = re.search(r"/status/(\d+)", thread_url or "")
+    anchor_tweet_id = anchor_match.group(1) if anchor_match else ""
+
+    EXTRACTOR_JS = r"""() => {
+      const out = [];
+      for (const article of document.querySelectorAll('article[data-testid="tweet"]')) {
+        try {
+          let handle = '';
+          let displayName = '';
+          for (const link of article.querySelectorAll('a[role="link"]')) {
+            const href = link.getAttribute('href');
+            if (href && href.startsWith('/') && !href.includes('/status/') && !href.includes('/i/') && href.length > 1 && href.split('/').length === 2) {
+              handle = href.replace('/', '');
+              const nameEl = link.querySelector('span');
+              if (nameEl) displayName = nameEl.textContent || '';
+              break;
+            }
+          }
+          const tweetText = article.querySelector('[data-testid="tweetText"]');
+          const text = tweetText ? tweetText.textContent : '';
+          const timeEl = article.querySelector('time');
+          const timeParent = timeEl ? timeEl.closest('a') : null;
+          const tweetHref = timeParent ? timeParent.getAttribute('href') : '';
+          const tweetUrl = tweetHref ? ('https://x.com' + tweetHref) : '';
+          const datetime = timeEl ? timeEl.getAttribute('datetime') : '';
+          const idMatch = tweetHref ? tweetHref.match(/\/status\/(\d+)/) : null;
+          const tweetId = idMatch ? idMatch[1] : '';
+          // Detect reply-to target (article with "Replying to" block)
+          let replyingTo = '';
+          for (const span of article.querySelectorAll('a[href^="/"]')) {
+            const href = span.getAttribute('href') || '';
+            if (!href.includes('/status/') && span.textContent && span.textContent.trim().startsWith('@')) {
+              replyingTo = span.textContent.trim().replace(/^@/, '');
+              break;
+            }
+          }
+          if (tweetId && handle) {
+            out.push({
+              tweet_id: tweetId,
+              handle: handle,
+              display_name: displayName.trim(),
+              text: (text || '').substring(0, 1000),
+              tweet_url: tweetUrl,
+              datetime: datetime,
+              replying_to: replyingTo
+            });
+          }
+        } catch(e) {}
+      }
+      return out;
+    }"""
+
+    with sync_playwright() as p:
+        browser, page, is_cdp = get_browser_and_page(p)
+        try:
+            page.goto(thread_url, wait_until="domcontentloaded")
+            page.wait_for_timeout(3500)
+
+            seen = set()
+            all_tweets = []
+            for i in range(scroll_count):
+                try:
+                    new_tweets = page.evaluate(EXTRACTOR_JS)
+                except Exception as e:
+                    print(f"[thread_followups] extractor error on scroll {i}: {e}", file=sys.stderr)
+                    new_tweets = []
+                for t in new_tweets:
+                    tid = t.get('tweet_id')
+                    if tid and tid not in seen:
+                        seen.add(tid)
+                        all_tweets.append(t)
+                page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
+                page.wait_for_timeout(1200)
+                _refresh_browser_lock()
+
+            followups = [t for t in all_tweets if t.get('tweet_id') != anchor_tweet_id]
+            return {
+                "thread_url": thread_url,
+                "anchor_tweet_id": anchor_tweet_id,
+                "followups": followups,
+                "total": len(followups),
+            }
+        finally:
+            if not is_cdp:
+                page.close()
+                browser.close()
+
+
+def scrape_many_thread_followups(thread_urls, scroll_count=3, per_url_delay_ms=2500):
+    """Iterate scrape_thread_followups over a list of URLs.
+
+    Keeps one browser session open (cheaper) and applies a polite delay between URLs.
+    """
+    from playwright.sync_api import sync_playwright
+
+    results = []
+    with sync_playwright() as p:
+        browser, page, is_cdp = get_browser_and_page(p)
+        try:
+            for url in thread_urls:
+                try:
+                    page.goto(url, wait_until="domcontentloaded")
+                    page.wait_for_timeout(3500)
+                    anchor_match = re.search(r"/status/(\d+)", url or "")
+                    anchor_tweet_id = anchor_match.group(1) if anchor_match else ""
+
+                    EXTRACTOR_JS = r"""() => {
+                      const out = [];
+                      for (const article of document.querySelectorAll('article[data-testid="tweet"]')) {
+                        try {
+                          let handle = '';
+                          let displayName = '';
+                          for (const link of article.querySelectorAll('a[role="link"]')) {
+                            const href = link.getAttribute('href');
+                            if (href && href.startsWith('/') && !href.includes('/status/') && !href.includes('/i/') && href.length > 1 && href.split('/').length === 2) {
+                              handle = href.replace('/', '');
+                              const nameEl = link.querySelector('span');
+                              if (nameEl) displayName = nameEl.textContent || '';
+                              break;
+                            }
+                          }
+                          const tweetText = article.querySelector('[data-testid="tweetText"]');
+                          const text = tweetText ? tweetText.textContent : '';
+                          const timeEl = article.querySelector('time');
+                          const timeParent = timeEl ? timeEl.closest('a') : null;
+                          const tweetHref = timeParent ? timeParent.getAttribute('href') : '';
+                          const tweetUrl = tweetHref ? ('https://x.com' + tweetHref) : '';
+                          const datetime = timeEl ? timeEl.getAttribute('datetime') : '';
+                          const idMatch = tweetHref ? tweetHref.match(/\/status\/(\d+)/) : null;
+                          const tweetId = idMatch ? idMatch[1] : '';
+                          let replyingTo = '';
+                          for (const span of article.querySelectorAll('a[href^="/"]')) {
+                            const href = span.getAttribute('href') || '';
+                            if (!href.includes('/status/') && span.textContent && span.textContent.trim().startsWith('@')) {
+                              replyingTo = span.textContent.trim().replace(/^@/, '');
+                              break;
+                            }
+                          }
+                          if (tweetId && handle) {
+                            out.push({tweet_id: tweetId, handle, display_name: displayName.trim(),
+                                      text: (text || '').substring(0, 1000), tweet_url: tweetUrl,
+                                      datetime, replying_to: replyingTo});
+                          }
+                        } catch(e) {}
+                      }
+                      return out;
+                    }"""
+
+                    seen = set()
+                    collected = []
+                    for i in range(scroll_count):
+                        try:
+                            new_tweets = page.evaluate(EXTRACTOR_JS)
+                        except Exception:
+                            new_tweets = []
+                        for t in new_tweets:
+                            tid = t.get('tweet_id')
+                            if tid and tid not in seen:
+                                seen.add(tid)
+                                collected.append(t)
+                        page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
+                        page.wait_for_timeout(1200)
+                        _refresh_browser_lock()
+
+                    followups = [t for t in collected if t.get('tweet_id') != anchor_tweet_id]
+                    print(f"[thread_followups] {url}: {len(followups)} candidate follow-ups", file=sys.stderr)
+                    results.append({
+                        "thread_url": url,
+                        "anchor_tweet_id": anchor_tweet_id,
+                        "followups": followups,
+                    })
+                except Exception as e:
+                    print(f"[thread_followups] error on {url}: {e}", file=sys.stderr)
+                    results.append({"thread_url": url, "error": str(e), "followups": []})
+                page.wait_for_timeout(per_url_delay_ms)
+            return {"results": results, "urls_visited": len(thread_urls)}
         finally:
             if not is_cdp:
                 page.close()
@@ -1015,13 +1220,40 @@ def main():
 
     elif cmd == "notifications":
         scroll_count = 8
+        tab = "all"
         if len(sys.argv) >= 3:
             try:
                 scroll_count = int(sys.argv[2])
             except ValueError:
                 print(f"notifications: scroll_count must be int, got {sys.argv[2]!r}", file=sys.stderr)
                 sys.exit(1)
-        result = discover_notifications(scroll_count=scroll_count)
+        if len(sys.argv) >= 4:
+            tab = sys.argv[3]
+        result = discover_notifications(scroll_count=scroll_count, tab=tab)
+        print(json.dumps(result, indent=2))
+
+    elif cmd == "thread-followups":
+        if len(sys.argv) < 3:
+            print(
+                "Usage: twitter_browser.py thread-followups <urls_file.txt>\n"
+                "  urls_file.txt: one tweet permalink per line (our reply URLs)",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        urls_path = sys.argv[2]
+        scroll_count = 3
+        if len(sys.argv) >= 4:
+            try:
+                scroll_count = int(sys.argv[3])
+            except ValueError:
+                print(f"thread-followups: scroll_count must be int, got {sys.argv[3]!r}", file=sys.stderr)
+                sys.exit(1)
+        with open(urls_path) as f:
+            urls = [line.strip() for line in f if line.strip()]
+        if not urls:
+            print(json.dumps({"results": [], "urls_visited": 0}, indent=2))
+            sys.exit(0)
+        result = scrape_many_thread_followups(urls, scroll_count=scroll_count)
         print(json.dumps(result, indent=2))
 
     else:
