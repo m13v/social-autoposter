@@ -2034,6 +2034,7 @@ const HTML = `<!DOCTYPE html>
     </button>
     <button class="btn sa-local-only" id="pause-btn" onclick="togglePause()" style="font-weight:600;"></button>
     <span class="pending sa-local-only" id="pending-badge">-- pending</span>
+    <span class="sa-user-badge" id="sa-user-badge" style="display:none;font-size:12px;color:var(--text-muted);padding:4px 10px;border:1px solid var(--border);border-radius:999px;background:var(--bg-subtle);"></span>
     <button class="btn sa-client-only" id="sa-signout-btn" onclick="saSignOut()" style="font-weight:600;display:none;">Sign out</button>
   </div>
 </div>
@@ -4861,10 +4862,17 @@ window.saStartApp = saStartApp;
     }).then(function(me) {
       var u = me && me.user;
       if (!u) throw new Error('no user');
-      if (!u.admin) {
-        document.body.classList.add('sa-non-admin');
-        var btn = document.getElementById('sa-signout-btn');
-        if (btn) btn.style.display = '';
+      if (!u.admin) document.body.classList.add('sa-non-admin');
+      var signoutBtn = document.getElementById('sa-signout-btn');
+      if (signoutBtn) signoutBtn.style.display = '';
+      var badge = document.getElementById('sa-user-badge');
+      if (badge) {
+        var who = u.email || u.uid || 'unknown';
+        var projList = Array.isArray(u.projects) && u.projects.length ? u.projects.join(', ') : '';
+        var tag = u.admin ? 'admin' : (projList || 'no projects');
+        badge.textContent = who + ' · ' + tag;
+        badge.title = 'uid: ' + (u.uid || '') + (projList ? '\nprojects: ' + projList : '');
+        badge.style.display = '';
       }
       overlay.style.display = 'none';
       saStartApp();
