@@ -11,7 +11,9 @@
 #
 # Phase 2 (t=5m):
 #   - re-fetch the same candidates via fxtwitter -> T1 snapshot + delta_score
-#   - Claude reads top 5 by delta, drops unsuitable, posts top 3
+#   - SQL gate: only candidates with delta_score >= 1 (skip zero-momentum duds)
+#   - Claude reads top 10 by delta, drops unsuitable, posts top N where N is
+#     adaptive: 3 if ≥3 candidates cleared Δ≥10 (strong momentum), else 1
 #   - mark remaining batch rows as expired
 #
 # Launchd cadence: every 20 minutes. One combined job, one browser lock.
@@ -32,6 +34,13 @@ RAW_FILE="/tmp/twitter_cycle_raw_$(date +%s).json"
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 
 log "=== Twitter Cycle (batch=$BATCH_ID): $(date) ==="
+
+# Serialize with other twitter-agent consumers (engage-twitter,
+# dm-outreach-twitter, link-edit-twitter, engage-dm-replies --platform twitter,
+# stats.sh Step 3). Without this, concurrent pipelines collide on the shared
+# twitter-agent browser profile and scraping/posting aborts mid-run.
+source "$REPO_DIR/skill/lock.sh"
+acquire_lock "twitter-browser" 3600
 
 # --- Weighted project sample -------------------------------------------------
 PROJECTS_JSON=$(python3 - <<'PY'
@@ -69,9 +78,13 @@ TOP_COUNT=$(echo "$TOP_QUERIES_JSON" | python3 -c 'import json,sys; print(len(js
 log "Top past queries loaded: $TOP_COUNT"
 
 # --- Phase 1: Claude drafts queries, scrapes tweets -------------------------
+# JSON schema forces structured output. Eliminates the prose-drift failure mode
+# where the scanner summarized instead of dumping the JSON array.
+SCAN_SCHEMA='{"type":"object","properties":{"tweets":{"type":"array","items":{"type":"object","properties":{"handle":{"type":"string"},"text":{"type":"string"},"tweetUrl":{"type":"string"},"datetime":{"type":"string"},"replies":{"type":"integer"},"retweets":{"type":"integer"},"likes":{"type":"integer"},"views":{"type":"integer"},"bookmarks":{"type":"integer"},"search_topic":{"type":"string"},"matched_project":{"type":"string"}},"required":["handle","text","tweetUrl","datetime","replies","retweets","likes","views","bookmarks","search_topic","matched_project"]}}},"required":["tweets"]}'
+
 log "Phase 1: drafting queries and scraping tweets..."
 
-claude -p "You are a Twitter hot-tweet scanner. Your ONLY job is to find high-engagement tweets happening RIGHT NOW that are relevant to one of our projects. Do NOT post anything.
+SCAN_OUTPUT=$("$REPO_DIR/scripts/run_claude.sh" "run-twitter-cycle-scan" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" -p --output-format json --json-schema "$SCAN_SCHEMA" "You are a Twitter hot-tweet scanner. Your ONLY job is to find high-engagement tweets happening RIGHT NOW that are relevant to one of our projects. Do NOT post anything.
 
 ## Step 1: Draft one search query per project
 
@@ -84,6 +97,7 @@ Past top-performing query STYLES (use these only as inspiration for phrasing, op
 $TOP_QUERIES_JSON
 
 Query guidelines:
+- MANDATORY: every query MUST include the operator \`since:$(date -u -v-1d +%Y-%m-%d)\` so X returns only tweets from the last ~24h. Evergreen tweets waste budget — we want momentum, not history.
 - Favor high engagement: include 'min_faves:50' for broad terms, 'min_faves:20' for narrower ones
 - Favor discussions/opinions (people sharing experience, asking questions), not news/promos/giveaways
 - Pick a query likely to surface tweets RELEVANT to that project's actual domain
@@ -134,36 +148,42 @@ async (page) => {
   return JSON.stringify(tweets);
 }
 
-3. Combine ALL extracted tweets from ALL queries into a single JSON array at the end.
+3. After scanning all projects, return EVERY extracted tweet via the structured 'tweets' field. Each tweet object MUST include 'search_topic' (the query that found it) and 'matched_project' (the project name whose query found it).
 
 CRITICAL RULES:
 - Use ONLY mcp__twitter-agent__* tools for scraping
 - Do NOT post, reply, like, or interact with any tweet
 - Do NOT generate any reply content
-- Output the final combined JSON array wrapped in a code block tagged \`\`\`json
-- Each tweet object MUST include 'search_topic' (the query that found it) and 'matched_project' (the project name whose query found it)
-- If a search fails or times out, skip it and continue to the next" 2>&1 | tee -a "$LOG_FILE" | python3 -c "
-import sys, json, re
-text = sys.stdin.read()
-matches = re.findall(r'\`\`\`json\s*(\[.*?\])\s*\`\`\`', text, re.DOTALL)
-if matches:
-    tweets = json.loads(matches[-1])
-    json.dump(tweets, open('$RAW_FILE', 'w'))
-    print(f'Extracted {len(tweets)} tweets to $RAW_FILE', file=sys.stderr)
-else:
-    m = re.search(r'\[[\s\S]*\"tweetUrl\"[\s\S]*\]', text)
-    if m:
-        try:
-            tweets = json.loads(m.group())
-            json.dump(tweets, open('$RAW_FILE', 'w'))
-            print(f'Extracted {len(tweets)} tweets to $RAW_FILE', file=sys.stderr)
-        except:
-            print('No valid JSON found', file=sys.stderr); exit(1)
-    else:
-        print('No tweet data found in output', file=sys.stderr); exit(1)
-" 2>&1 | tee -a "$LOG_FILE"
+- If a search fails or times out, skip it and continue to the next" 2>&1)
 
-EXTRACT_EXIT=${PIPESTATUS[2]:-1}
+# Dump the captured envelope to the cycle log for offline inspection.
+echo "$SCAN_OUTPUT" >> "$LOG_FILE"
+
+# Parse the structured-output envelope and write the tweets array to $RAW_FILE.
+# claude -p --output-format json wraps results as {"structured_output": {...}, ...}.
+python3 -c "
+import json, sys
+text = sys.stdin.read().strip()
+# raw_decode reads the first complete JSON object and stops, so the trailing
+# run_claude.sh cost-log JSON line on stdout/stderr does not cause 'Extra data'.
+try:
+    env, _ = json.JSONDecoder().raw_decode(text)
+except Exception as e:
+    print(f'No tweet data found in output (envelope parse error: {e})', file=sys.stderr); sys.exit(1)
+so = env.get('structured_output')
+if so is None:
+    so = env.get('result')
+if isinstance(so, str):
+    try: so = json.loads(so)
+    except Exception: pass
+tweets = so.get('tweets', []) if isinstance(so, dict) else []
+if not tweets:
+    print('No tweets in structured_output.tweets', file=sys.stderr); sys.exit(1)
+json.dump(tweets, open('$RAW_FILE', 'w'))
+print(f'Extracted {len(tweets)} tweets to $RAW_FILE', file=sys.stderr)
+" <<< "$SCAN_OUTPUT" 2>&1 | tee -a "$LOG_FILE"
+
+EXTRACT_EXIT=${PIPESTATUS[0]:-1}
 if [ "$EXTRACT_EXIT" -ne 0 ] || [ ! -f "$RAW_FILE" ]; then
     log "No tweets extracted in Phase 1. Aborting cycle."
     exit 0
@@ -193,7 +213,7 @@ sleep 300
 log "Phase 2a: re-polling fxtwitter for T1 engagement..."
 python3 "$REPO_DIR/scripts/fetch_twitter_t1.py" --batch-id "$BATCH_ID" 2>&1 | tee -a "$LOG_FILE"
 
-# --- Phase 2b: Claude reads top 5 by delta, posts top 3 ---------------------
+# --- Phase 2b: top 10 by delta (Δ≥1 floor), adaptive post cap 1 or 3 --------
 CANDIDATES=$(psql "$DATABASE_URL" -t -A -F '|' -c "
     SELECT id, tweet_url, author_handle,
            REPLACE(REPLACE(COALESCE(tweet_text, ''), E'\n', ' '), E'\r', ' '),
@@ -202,9 +222,9 @@ CANDIDATES=$(psql "$DATABASE_URL" -t -A -F '|' -c "
            likes_t1, retweets_t1, replies_t1, views_t1, author_followers,
            EXTRACT(EPOCH FROM (NOW() - tweet_posted_at))/3600
     FROM twitter_candidates
-    WHERE batch_id='$BATCH_ID' AND status='pending' AND delta_score IS NOT NULL
+    WHERE batch_id='$BATCH_ID' AND status='pending' AND delta_score >= 1
     ORDER BY delta_score DESC
-    LIMIT 5;
+    LIMIT 10;
 " 2>/dev/null || echo "")
 
 if [ -z "$CANDIDATES" ]; then
@@ -215,6 +235,16 @@ fi
 
 CANDIDATE_COUNT=$(printf '%s\n' "$CANDIDATES" | grep -c '^[0-9]')
 log "Top $CANDIDATE_COUNT candidates by delta selected for post review."
+
+# Adaptive post cap: if ≥3 candidates cleared Δ≥10 (strong momentum), allow up to 3
+# posts; otherwise cap at 1 so we don't burn reply budget on marginal cycles.
+HIGH_DELTA_COUNT=$(printf '%s\n' "$CANDIDATES" | awk -F'|' '$1 ~ /^[0-9]+$/ && $6+0 >= 10 {n++} END {print n+0}')
+if [ "$HIGH_DELTA_COUNT" -ge 3 ]; then
+    POST_LIMIT=3
+else
+    POST_LIMIT=1
+fi
+log "Adaptive post cap: $HIGH_DELTA_COUNT candidates with Δ≥10 → POST_LIMIT=$POST_LIMIT"
 
 CANDIDATE_BLOCK=""
 while IFS='|' read -r cid curl cauthor ctext cscore cdelta cproject ctopic clikes crts creplies cviews cfollowers cage; do
@@ -241,9 +271,9 @@ TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter 2>
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block twitter posting)
 
-log "Phase 2b: Claude reviewing top candidates and posting up to 3..."
+log "Phase 2b: Claude reviewing top candidates and posting up to $POST_LIMIT..."
 
-claude -p "You are the Social Autoposter.
+"$REPO_DIR/scripts/run_claude.sh" "run-twitter-cycle-post" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
 Read $REPO_DIR/config.json for account handle.
@@ -263,7 +293,7 @@ $TOP_REPORT
 $STYLES_BLOCK
 
 ## WORKFLOW
-Reply to up to 3 candidates (post limit). Pick the 3 with the strongest combination of high delta + genuinely relevant thread. Skip any candidate whose thread is off-topic, toxic, or low-quality.
+Reply to AT MOST $POST_LIMIT candidate(s) this cycle (post limit). Pick the ones with the strongest combination of high delta + genuinely relevant thread. Skip any candidate whose thread is off-topic, toxic, or low-quality. If fewer than $POST_LIMIT candidates are truly on-brand, post fewer; do not force posts.
 
 For each chosen candidate:
 1. Navigate to the candidate URL via mcp__twitter-agent__browser_navigate (read-only, to understand context)
@@ -272,13 +302,16 @@ For each chosen candidate:
 4. Post via the CDP script:
      python3 $REPO_DIR/scripts/twitter_browser.py reply \"CANDIDATE_URL\" \"YOUR_REPLY_TEXT\"
    It returns JSON. Parse reply_url. If reply_url is missing/invalid/doesn't match x.com/m13v_/status/, treat as FAILED: do NOT log, mark candidate 'failed' not 'posted'. NEVER use the parent URL as our_url.
-5. Self-reply with project link:
+5. Log the primary reply to the database FIRST, BEFORE attempting the self-reply. This guarantees the row exists even if the self-reply crashes; the link-edit-twitter sweep will pick it up later. Parse post_id from the JSON output:
+     python3 $REPO_DIR/scripts/log_post.py --platform twitter --thread-url CANDIDATE_URL --our-url REPLY_URL --our-content 'YOUR_REPLY_TEXT' --project MATCHED_PROJECT --thread-author AUTHOR --thread-title 'TWEET_TEXT' --engagement-style STYLE --language LANG
+6. Self-reply with project link:
      python3 $REPO_DIR/scripts/twitter_browser.py self-reply \"YOUR_REPLY_URL\" \"FOLLOW_UP_TEXT\" \"PROJECT_URL\"
    FOLLOW_UP_TEXT: 1 short casual sentence, lowercase, no hard sell, no em dashes. Match parent tweet's language.
-   PROJECT_URL: exact URL from the project's config. Skip this step entirely if the matched project has no URL.
-6. Log to database:
-     python3 $REPO_DIR/scripts/log_post.py --platform twitter --thread-url CANDIDATE_URL --our-url REPLY_URL --our-content 'YOUR_REPLY_TEXT' --project MATCHED_PROJECT --thread-author AUTHOR --thread-title 'TWEET_TEXT' --engagement-style STYLE --language LANG
-7. Parse post_id from log_post.py JSON output, then mark candidate:
+   PROJECT_URL: exact URL from the project's config. If the matched project has no URL, skip this step AND step 7 (the sweep will also skip it since there's no URL to add).
+   On success, immediately record the self-reply on the parent post so the sweep doesn't re-attempt:
+     python3 $REPO_DIR/scripts/log_post.py --mark-self-reply --post-id POST_ID --self-reply-url SELF_REPLY_URL --self-reply-content 'FOLLOW_UP_TEXT_WITH_URL'
+   On failure: do NOT mark; leave link_edited_at NULL so link-edit-twitter picks it up on the next sweep.
+7. Mark candidate:
      UPDATE twitter_candidates SET status='posted', posted_at=NOW(), post_id=POST_ID WHERE id=CANDIDATE_ID
 
 If a thread is unfit: UPDATE twitter_candidates SET status='skipped' WHERE id=CANDIDATE_ID
