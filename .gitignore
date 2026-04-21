@@ -4,6 +4,7 @@ skill/cache/
 .env
 node_modules/
 config.json
+config.json.bak.*
 .playwright-mcp/
 __pycache__/
 *.db
@@ -21,6 +22,7 @@ scripts/twitter_compose_dm.py
 
 # Claude agent runtime files
 .claude/
+scripts/claude_user_messages_*.md
 
 # Agents keep recreating skill/SKILL.md — ignore it so auto_commit doesn't commit stale copies
 skill/SKILL.md
