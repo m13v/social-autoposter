@@ -479,6 +479,21 @@ function findJob(label) {
 
 // --- API Routes ---
 
+// Strip cross-project data from a funnel_stats payload for non-admin users.
+// Admin: passthrough. Non-admin: keep only projects in their claim and drop
+// org-wide aggregates (overall) that would otherwise leak totals across
+// every tenant on the dashboard.
+function scopeFunnelStatsPayload(payload, user) {
+  if (!payload || typeof payload !== 'object') return payload;
+  if (!user || user.admin) return payload;
+  const allowed = new Set(Array.isArray(user.projects) ? user.projects : []);
+  const projects = Array.isArray(payload.projects)
+    ? payload.projects.filter(p => p && allowed.has(p.name))
+    : [];
+  const { overall, ...rest } = payload;
+  return { ...rest, projects };
+}
+
 async function handleApi(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
@@ -1286,16 +1301,16 @@ async function handleApi(req, res) {
     const entry = funnelStatsCache.get(days);
     const TTL_MS = 600000;
     if (entry && entry.value && Date.now() - entry.at < TTL_MS) {
-      return json(res, { days, ...entry.value, cachedAt: entry.at });
+      return json(res, scopeFunnelStatsPayload({ days, ...entry.value, cachedAt: entry.at }, req.user));
     }
     const snap = await readSnapshotCached(`funnel_stats_${days}d.json`);
     if (snap && snap.value && !snap.value.error) {
       // Warm the in-memory cache so subsequent hits skip the disk read too.
       funnelStatsCache.set(days, { at: snap.at, value: snap.value });
-      return json(res, { ...snap.value, cachedAt: snap.at });
+      return json(res, scopeFunnelStatsPayload({ ...snap.value, cachedAt: snap.at }, req.user));
     }
     if (entry && entry.pending) {
-      entry.pending.then(val => json(res, { days, ...val, cachedAt: Date.now() }))
+      entry.pending.then(val => json(res, scopeFunnelStatsPayload({ days, ...val, cachedAt: Date.now() }, req.user)))
                    .catch(err => json(res, { error: String(err && err.message || err) }, 500));
       return;
     }
@@ -1322,7 +1337,7 @@ async function handleApi(req, res) {
     funnelStatsCache.set(days, { at: Date.now(), pending });
     pending.then(val => {
       funnelStatsCache.set(days, { at: Date.now(), value: val });
-      json(res, { days, ...val, cachedAt: Date.now() });
+      json(res, scopeFunnelStatsPayload({ days, ...val, cachedAt: Date.now() }, req.user));
     }).catch(err => {
       funnelStatsCache.delete(days);
       json(res, { error: String(err && err.message || err) }, 500);
@@ -2017,8 +2032,8 @@ const HTML = `<!DOCTYPE html>
       <span class="theme-icon moon-icon">\u{1F319}</span>
       <span class="theme-icon sun-icon">\u2600\uFE0F</span>
     </button>
-    <button class="btn sa-admin-only" id="pause-btn" onclick="togglePause()" style="font-weight:600;"></button>
-    <span class="pending sa-admin-only" id="pending-badge">-- pending</span>
+    <button class="btn sa-local-only" id="pause-btn" onclick="togglePause()" style="font-weight:600;"></button>
+    <span class="pending sa-local-only" id="pending-badge">-- pending</span>
     <button class="btn sa-client-only" id="sa-signout-btn" onclick="saSignOut()" style="font-weight:600;display:none;">Sign out</button>
   </div>
 </div>
@@ -2561,10 +2576,10 @@ function updatePauseBtn() {
   const btn = document.getElementById('pause-btn');
   if (_paused) {
     btn.textContent = '\\u25B6 Resume All';
-    btn.className = 'btn primary';
+    btn.className = 'btn primary sa-local-only';
   } else {
     btn.textContent = '\\u23F8 Pause All';
-    btn.className = 'btn danger';
+    btn.className = 'btn danger sa-local-only';
   }
 }
 
@@ -3367,44 +3382,94 @@ function renderFunnelStats(payload) {
   }
   const fmt = n => (Number(n) || 0).toLocaleString();
   const totals = projects.reduce((a, p) => {
+    const f = p.funnel || {};
     a.posts            += (p.posts && p.posts.recent)             || 0;
     a.seo              += (p.seo && p.seo.pages_recent)           || 0;
-    a.pageviews        += (p.funnel && p.funnel.pageviews)        || 0;
-    a.email_signups    += (p.funnel && p.funnel.email_signups)    || 0;
-    a.schedule_clicks  += (p.funnel && p.funnel.schedule_clicks)  || 0;
-    a.get_started_clicks += (p.funnel && p.funnel.get_started_clicks) || 0;
-    a.bookings         += (p.funnel && p.funnel.real_bookings)    || 0;
+    a.pageviews        += Number(f.pageviews)        || 0;
+    a.email_signups    += Number(f.email_signups)    || 0;
+    a.schedule_clicks  += Number(f.schedule_clicks)  || 0;
+    a.get_started_clicks += Number(f.get_started_clicks) || 0;
+    a.d_pageviews      += Number(f.domain_pageviews) || 0;
+    a.d_email_signups  += Number(f.domain_email_signups) || 0;
+    a.d_schedule_clicks += Number(f.domain_schedule_clicks) || 0;
+    a.d_get_started_clicks += Number(f.domain_get_started_clicks) || 0;
+    a.bookings         += Number(f.real_bookings)    || 0;
     return a;
-  }, { posts: 0, seo: 0, pageviews: 0, email_signups: 0, schedule_clicks: 0, get_started_clicks: 0, bookings: 0 });
+  }, { posts: 0, seo: 0, pageviews: 0, email_signups: 0, schedule_clicks: 0, get_started_clicks: 0, d_pageviews: 0, d_email_signups: 0, d_schedule_clicks: 0, d_get_started_clicks: 0, bookings: 0 });
+  // Compact cell: "<scoped> (<domain>)" when they differ, just "<scoped>"
+  // when equal. Keeps the table scannable while still exposing domain-wide
+  // traffic that doesn't happen to land on pages generated this window.
+  const pair = (scoped, domain) => {
+    const s = Number(scoped) || 0;
+    const d = Number(domain) || 0;
+    if (d === s) return fmt(s);
+    return fmt(s) + ' (' + fmt(d) + ')';
+  };
   if (totalEl) {
-    totalEl.textContent = totals.posts + ' posts \u00b7 ' + totals.seo + ' pages \u00b7 ' + fmt(totals.pageviews) + ' pv \u00b7 ' + totals.email_signups + ' signup \u00b7 ' + totals.schedule_clicks + ' sched \u00b7 ' + totals.get_started_clicks + ' gs \u00b7 ' + totals.bookings + ' book';
+    totalEl.textContent = totals.posts + ' posts \u00b7 ' + totals.seo + ' pages \u00b7 ' +
+      pair(totals.pageviews, totals.d_pageviews) + ' pv \u00b7 ' +
+      pair(totals.email_signups, totals.d_email_signups) + ' signup \u00b7 ' +
+      pair(totals.schedule_clicks, totals.d_schedule_clicks) + ' sched \u00b7 ' +
+      pair(totals.get_started_clicks, totals.d_get_started_clicks) + ' gs \u00b7 ' +
+      totals.bookings + ' book';
   }
   const normalized = projects.map(p => {
     const pst = p.posts || {};
     const seo = p.seo || {};
     const f = p.funnel || {};
+    // When the PostHog fetch failed, the backend sends analytics_error
+    // plus null funnel counters. Preserve null so we can render 'err' on
+    // those cells instead of silently reporting 0.
+    const asNum = v => (v == null ? null : (Number(v) || 0));
     return {
       name:             p.name || '',
       analytics_suspected_broken: !!p.analytics_suspected_broken,
+      analytics_error:  p.analytics_error || null,
       posts:            Number(pst.recent) || 0,
       upvotes:          Number(pst.upvotes_recent)  || 0,
       comments:         Number(pst.comments_recent) || 0,
       views:            pst.views_recent == null ? null : Number(pst.views_recent),
       seo_pages:        Number(seo.pages_recent)    || 0,
-      pageviews:        Number(f.pageviews)         || 0,
-      email_signups:    Number(f.email_signups)     || 0,
-      schedule_clicks:  Number(f.schedule_clicks)   || 0,
-      get_started_clicks: Number(f.get_started_clicks) || 0,
+      pageviews:        asNum(f.pageviews),
+      email_signups:    asNum(f.email_signups),
+      schedule_clicks:  asNum(f.schedule_clicks),
+      get_started_clicks: asNum(f.get_started_clicks),
+      // Domain-wide counterparts, rendered in parens next to the scoped value.
+      domain_pageviews:        asNum(f.domain_pageviews),
+      domain_email_signups:    asNum(f.domain_email_signups),
+      domain_schedule_clicks:  asNum(f.domain_schedule_clicks),
+      domain_get_started_clicks: asNum(f.domain_get_started_clicks),
       bookings:         Number(f.real_bookings)     || 0,
     };
   });
   const fmtProjectName = (v, r) => {
     const name = escapeHtml(v);
+    if (r && r.analytics_error) {
+      const tip = escapeHtml('PostHog fetch failed: ' + String(r.analytics_error));
+      return name + ' <span title="' + tip + '" style="color:#dc2626;cursor:help;margin-left:4px;" aria-label="analytics fetch error">\u26A0</span>';
+    }
     if (r && r.analytics_suspected_broken) {
-      const tip = escapeHtml('High pageviews but zero tracked signups, schedule clicks, or download clicks; posthog likely not wired on this site. See https://github.com/m13v/seo-components#posthog-setup');
+      const tip = escapeHtml('High pageviews but zero tracked signups, schedule clicks, or get-started clicks; posthog likely not wired on this site. See https://github.com/m13v/seo-components#posthog-setup');
       return name + ' <span title="' + tip + '" style="color:#dc2626;cursor:help;margin-left:4px;" aria-label="analytics suspected broken">\u26A0</span>';
     }
     return name;
+  };
+  // Funnel cell formatter factory: takes the sibling domain-wide field
+  // name and returns a (value, row) formatter. Renders "<scoped>
+  // (<domain>)" when they differ, "err" on fetch failure, and just
+  // "<scoped>" when the two match. Keeps a genuine 0 distinguishable
+  // from a missing-analytics 0.
+  const makeFunnelFmt = domainKey => (v, r) => {
+    if (r && r.analytics_error) {
+      const tip = escapeHtml('PostHog fetch failed: ' + String(r.analytics_error));
+      return '<span title="' + tip + '" style="color:#dc2626;cursor:help;" aria-label="analytics fetch error">err</span>';
+    }
+    if (v == null) return '\u2014';
+    const d = r && r[domainKey];
+    if (d != null && Number(d) !== Number(v)) {
+      return fmt(v) + ' <span style="color:var(--text-muted);">(' + fmt(d) + ')</span>';
+    }
+    return fmt(v);
   };
   mountSortableTable({
     containerId: 'funnel-stats-body',
@@ -3417,13 +3482,21 @@ function renderFunnelStats(payload) {
       { key: 'comments',         label: 'Comments',        type: 'numeric', align: 'right', formatter: fmt },
       { key: 'views',            label: 'Views',           type: 'numeric', align: 'right', formatter: v => v == null ? '\u2014' : fmt(v) },
       { key: 'seo_pages',        label: 'SEO Pages',       type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'pageviews',        label: 'Pageviews',       type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'email_signups',    label: 'Email Signups',   type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'schedule_clicks',  label: 'Schedule Clicks', type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'get_started_clicks', label: 'Get Started', type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'pageviews',        label: 'Pageviews',       type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_pageviews') },
+      { key: 'email_signups',    label: 'Email Signups',   type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_email_signups') },
+      { key: 'schedule_clicks',  label: 'Schedule Clicks', type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_schedule_clicks') },
+      { key: 'get_started_clicks', label: 'Get Started',   type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_get_started_clicks') },
       { key: 'bookings',         label: 'Bookings',        type: 'numeric', align: 'right', formatter: fmt },
     ],
   });
+  // Inline legend below the table explaining the "N (M)" cell format.
+  // Must come after mountSortableTable, which replaces container innerHTML.
+  body.insertAdjacentHTML('beforeend',
+    '<div style="font-size:11px;color:var(--text-muted);padding:6px 2px 2px;">' +
+      'Pageviews, email signups, schedule, and get-started cells show ' +
+      '<b>scoped</b> (only traffic on pages generated in the selected window), ' +
+      'followed by <b>(domain-wide)</b> totals in parentheses when the two differ.' +
+    '</div>');
 }
 
 let _dmStatsTableState = { sortField: 'dms', sortDir: 'desc', filters: {} };
