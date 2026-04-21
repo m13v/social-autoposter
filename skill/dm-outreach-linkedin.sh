@@ -50,6 +50,7 @@ log "LinkedIn: $DM_PENDING DMs to send"
 DM_DATA=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT d.id, d.platform, d.their_author, d.their_content, d.comment_context,
+               d.target_project, d.prospect_id,
                r.their_comment_url, r.our_reply_content,
                p.thread_title, p.our_content as our_post_content
         FROM dms d
@@ -58,6 +59,21 @@ DM_DATA=$(psql "$DATABASE_URL" -t -A -c "
         WHERE d.status='pending' AND d.platform='linkedin'
         ORDER BY d.discovered_at ASC
     ) q;")
+
+# Per-project qualification context for ICP pre-check
+PROJECTS_QUALIFICATION=$(python3 -c "
+import json
+c = json.load(open('$REPO_DIR/config.json'))
+for p in c.get('projects', []):
+    q = p.get('qualification') or {}
+    if not q:
+        continue
+    print(f\"- {p['name']}:\")
+    if q.get('must_have'):
+        print(f\"    must_have: {' ; '.join(q['must_have'])}\")
+    if q.get('disqualify'):
+        print(f\"    disqualify: {' ; '.join(q['disqualify'])}\")
+" 2>/dev/null || echo "")
 
 export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
 
@@ -99,6 +115,46 @@ DM EXAMPLES (bad):
 
 ## Users to DM:
 $DM_DATA
+
+## Per-project ICP criteria (used for the pre-check step, NOT to skip sending):
+$PROJECTS_QUALIFICATION
+
+## Pre-send profile fetch + ICP pre-check (MANDATORY per DM, no filter)
+
+For each DM row, BEFORE you compose or send, do this in order. USE mcp__linkedin-agent__* tools ONLY; NEVER call /voyager/api/; NEVER run Python CDP scripts against LinkedIn.
+
+1. Look at the row's \`target_project\`. If it's NULL, set icp_precheck=unknown with notes="no_target_project" and proceed to step 4 — but still try to capture profile basics.
+
+2. Fetch the prospect's LinkedIn profile:
+   - From the original comment thread (r.their_comment_url), click into THEIR_AUTHOR's profile link, OR
+   - Search LinkedIn for THEIR_AUTHOR from the messaging UI once you have them open.
+   - browser_snapshot on their profile header. Extract: headline, current company, current role, a short summary of their About/experience top section, and (if visible) 1-2 recent posts/activity items.
+   - If you hit a login/checkpoint, STOP and print SESSION_INVALID; do NOT attempt to log in.
+   - If the profile is private or shows only a minimal header, record what you can and note "profile_limited".
+
+3. Persist the profile fields:
+   \`\`\`bash
+   python3 $REPO_DIR/scripts/fetch_prospect_profile.py upsert \\
+       --platform linkedin --author "THEIR_AUTHOR" \\
+       --profile-url "PROFILE_URL" \\
+       --headline "HEADLINE_FROM_PROFILE" \\
+       --company "CURRENT_COMPANY" \\
+       --role "CURRENT_ROLE" \\
+       --bio "SHORT_ABOUT_OR_SUMMARY" \\
+       --recent-activity "1-2 LINE RECENT ACTIVITY SUMMARY" \\
+       --notes "ANY_SIGNAL_WORTH_REMEMBERING" \\
+       --link-dm DM_ID
+   \`\`\`
+   Omit any flag whose value is empty or unknown. \`--link-dm\` also wires dms.prospect_id.
+
+4. Evaluate ICP match against EVERY project listed in "Per-project ICP criteria" above (not only target_project). For each project compare the profile + their_content + comment_context against its must_have (satisfy at least one) and disqualify (trigger ANY = fail), and pick one label: icp_match, icp_miss, disqualified, or unknown. Upsert one entry per project:
+   \`\`\`bash
+   python3 $REPO_DIR/scripts/dm_conversation.py set-icp-precheck \\
+       --dm-id DM_ID --project PROJECT_NAME --label LABEL --notes "SHORT_RATIONALE"
+   \`\`\`
+   Run this once per project from the list. Each call upserts one entry in dms.icp_matches (JSONB array) keyed by project.
+
+5. PROCEED TO SEND THE DM regardless of the ICP labels. The labels are informational; they do NOT gate outreach at this phase.
 
 ## How to send messages on LinkedIn (use mcp__linkedin-agent__* tools):
 1. Navigate to https://www.linkedin.com/messaging/

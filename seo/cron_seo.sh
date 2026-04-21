@@ -38,6 +38,18 @@ echo "[$(ts)] cron_seo tick $TICK_ID starting (parallel per-product)" >> "$TICK_
 # --- Reap stuck rows once per tick (shared state) ---
 python3 "$SCRIPT_DIR/reap_stuck.py" >> "$TICK_LOG" 2>&1 || true
 
+# --- Ingest any human replies to escalation emails into seo_escalations ---
+# Polls i@m13v.com inbox for `Re: [SEO #N]`, flips matching rows to
+# status='replied' with the human reply attached. See
+# scripts/ingest_human_seo_replies.py.
+python3 "$REPO_DIR/scripts/ingest_human_seo_replies.py" >> "$TICK_LOG" 2>&1 || true
+
+# --- Resume any escalations whose human replies just landed ---
+# Re-invokes generate_page.py --resume-escalation <id> for each row in
+# 'replied' state. Failures leave the row in 'replied' so the next tick
+# retries; cancel via `python3 seo/escalate.py cancel --id N` to stop.
+python3 "$SCRIPT_DIR/resume_escalations.py" >> "$TICK_LOG" 2>&1 || true
+
 # --- Enumerate eligible products from config ---
 PRODUCTS=()
 while IFS= read -r line; do
@@ -46,6 +58,8 @@ done < <(python3 -c "
 import json, os
 c = json.load(open('$REPO_DIR/config.json'))
 for p in c.get('projects', []):
+    if p.get('paused'):
+        continue
     lp = p.get('landing_pages', {}) or {}
     repo = lp.get('repo', '')
     if repo and os.path.isdir(os.path.expanduser(repo)):
