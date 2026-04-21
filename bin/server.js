@@ -4871,7 +4871,7 @@ window.saStartApp = saStartApp;
         var projList = Array.isArray(u.projects) && u.projects.length ? u.projects.join(', ') : '';
         var tag = u.admin ? 'admin' : (projList || 'no projects');
         badge.textContent = who + ' · ' + tag;
-        badge.title = 'uid: ' + (u.uid || '') + (projList ? '\nprojects: ' + projList : '');
+        badge.title = 'uid: ' + (u.uid || '') + (projList ? ' | projects: ' + projList : '');
         badge.style.display = '';
       }
       overlay.style.display = 'none';
