@@ -24,6 +24,8 @@ import re
 import subprocess
 import sys
 import time
+import uuid
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
@@ -217,7 +219,7 @@ The orchestrator posts the reply via gh CLI and updates the database. You only d
 """
 
 
-def run_claude(prompt, timeout=300):
+def run_claude(prompt, timeout=300, session_id=None):
     """Run claude -p with the given prompt. Returns (success, output, usage_dict).
 
     Streams output in real time to stderr for log visibility. Mirrors
@@ -227,9 +229,13 @@ def run_claude(prompt, timeout=300):
     import select
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+    if session_id:
+        cmd += ["--session-id", session_id]
     cmd += ["--tools", "Read"]
     env = os.environ.copy()
     env.pop("ANTHROPIC_API_KEY", None)  # use OAuth, not API key
+    if session_id:
+        env["CLAUDE_SESSION_ID"] = session_id
     try:
         proc = subprocess.Popen(
             cmd, env=env, stdin=subprocess.PIPE,
@@ -438,11 +444,21 @@ def main():
             break
 
         reply_start = time.time()
+        session_id = str(uuid.uuid4())
+        os.environ["CLAUDE_SESSION_ID"] = session_id
+        session_started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         print(f"[engage_github] Processing #{reply['id']} from @{reply['their_author']} "
               f"on {owner}/{repo}#{number}")
 
-        ok, output, usage = run_claude(prompt, timeout=args.per_reply_timeout)
+        ok, output, usage = run_claude(prompt, timeout=args.per_reply_timeout, session_id=session_id)
         reply_elapsed = time.time() - reply_start
+        session_ended_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        subprocess.run(
+            ["python3", os.path.join(REPO_DIR, "scripts", "log_claude_session.py"),
+             "--session-id", session_id, "--script", "engage_github",
+             "--started-at", session_started_at, "--ended-at", session_ended_at],
+            capture_output=True,
+        )
 
         for k in total_usage:
             total_usage[k] += usage[k]

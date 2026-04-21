@@ -6,8 +6,9 @@
 
 set -euo pipefail
 
-# Platform lock: wait up to 45min for any previous link-edit-reddit run, then skip
+# Browser-profile lock first (shared with other reddit pipelines), then pipeline lock.
 source "$(dirname "$0")/lock.sh"
+acquire_lock "reddit-browser" 3600
 acquire_lock "link-edit-reddit" 2700
 
 # Load secrets
@@ -66,22 +67,20 @@ $EDITABLE
 
 Process ALL of them. For each post:
 1. Read ~/social-autoposter/config.json to get the projects list.
-2. Pick the project whose topics are the CLOSEST match to thread_title + our_content. Check the project_name column first; if set, use that project directly. Otherwise match by topics. Be generous: if the thread touches agents, automation, desktop, memory, or anything related to the project descriptions, it's a match. If truly nothing fits, mark it skipped (see step 9) and move on. Frame it as recommending a cool tool you've come across, NOT as something you built.
-3. If the matched project has a landing_pages config (with repo, base_url):
-   a. Think about what SEO-optimized guide page would fit this specific thread naturally. Consider the thread's audience, their pain points, industry jargon, and what they'd actually find useful. The page should NOT feel like a landing page; it should feel like a genuine 1000-2000 word guide or resource.
-   b. cd into the project repo (landing_pages.repo)
-   c. Look at existing pages under src/app/t/ to understand the site's style, layout components (Navbar, Footer), and theme
-   d. Create a NEW standalone page as src/app/t/{seo-friendly-slug}/page.tsx; this is a real Next.js page with its own Metadata export, not a JSON entry. Include:
-      - Proper <Metadata> with title, description, openGraph, twitter tags
-      - Reuse the site's Navbar and Footer components (import or inline them)
-      - Use the CTAButton component from @/components/cta-button for ALL call-to-action buttons (it tracks clicks in PostHog automatically). Import: import { CTAButton } from "@/components/cta-button";
-      - A full article-style page: hero headline, table of contents, 5-7 content sections, comparison tables with real numbers, bullet lists with specific data points, and a CTA section at the bottom
-      - The content must be 1000-2000 words. Pull real context from the project's config (pricing, features, proof_points, competitive_positioning) and from web research to make it concrete and authoritative
-      - Naturally mention the product as ONE solution among the options discussed; don't make the whole page a sales pitch
-   e. git add the new page && git commit -m "Add guide: SHORT_DESCRIPTION" && git push
-   f. Wait ~35s for Vercel deploy, then curl -sI {base_url}/t/{slug} to verify HTTP 200
-   g. Use THAT page URL in the link edit. If deploy fails, fall back to the project's website URL.
-   If no landing_pages config: use website if available, otherwise github.
+2. Pick the project whose topics are the CLOSEST match to thread_title + our_content.
+   a. First check the project_name column. If it is set AND its topics/description fit the thread, use it.
+   b. If project_name is set but CLEARLY does not fit the thread (e.g. Cyrano tagged to a law firm billing thread), treat it as a bad upstream tag and scan config.json for a project that DOES fit. If you find one, use that project instead and also run: psql "\$DATABASE_URL" -c "UPDATE posts SET project_name='BETTER_PROJECT' WHERE id=POST_ID" so the correction is persisted.
+   c. If project_name is NOT set, match by topics. Be generous: if the thread touches agents, automation, desktop, memory, or anything related to the project descriptions, it's a match.
+   d. ONLY if no project in config.json fits at all, mark it skipped (see step 9) and move on. Frame it as recommending a cool tool you've come across, NOT as something you built.
+3. If the matched project has a landing_pages config (with repo, base_url), generate a fresh SEO page for this thread by delegating to the unified generator:
+   a. Decide a SHORT keyword phrase (3-6 words) that captures what page would help this thread's audience. Think SEO intent, not headline copy. Examples: "local ai agent", "macos accessibility automation", "self hosted llm inference".
+   b. Derive a URL slug from the keyword: lowercase, kebab-case, alphanumeric and hyphens only, max 50 chars. Examples: "local-ai-agent", "macos-accessibility-automation".
+   c. Run the unified SEO page generator (it loads the @m13v/seo-components palette, picks content type, builds the page, commits, pushes, verifies the live URL, and writes the seo_keywords row that surfaces in the dashboard activity feed). Use the Bash tool:
+        python3 ~/social-autoposter/seo/generate_page.py --product PROJECT_NAME --keyword "KEYWORD_PHRASE" --slug "url-slug" --trigger reddit
+      This call can take 10-20 minutes per page. The final stdout is a JSON object; parse it. On success it contains "success": true and "page_url": "https://...". On failure it contains "success": false and "error": "...".
+   d. If success, use \`page_url\` from the JSON output for the Reddit link edit.
+   e. If failure, DO NOT fall back to a bare project website or github URL. DO NOT edit the Reddit comment. DO NOT update link_edited_at on the post. Log the error in your output and move to the next post. The post will stay eligible and be retried on the next scheduled run (every 6h). A custom landing page per thread is a hard requirement; a bare homepage link is never acceptable.
+   If the matched project has NO landing_pages config at all (not a generation failure, genuinely unconfigured), then and only then use the project's website URL.
 4. Write 1 casual sentence + project link.
    - For Reddit (first person): "fwiw there's a tool that does this - URL"
 5. Append it to our_content with a blank line separator.
@@ -97,7 +96,7 @@ Process ALL of them. For each post:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='SKIPPED: REASON' WHERE id=POST_ID"
 PROMPT_EOF
 
-gtimeout 2700 claude --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Reddit link-edit claude exited with code $?"
+gtimeout 2700 "$REPO_DIR/scripts/run_claude.sh" "link-edit-reddit" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Reddit link-edit claude exited with code $?"
 rm -f "$PROMPT_FILE"
 
 EDITED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE platform='reddit' AND link_edited_at IS NOT NULL;" 2>/dev/null || echo "0")

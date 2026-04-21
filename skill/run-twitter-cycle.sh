@@ -304,10 +304,12 @@ For each chosen candidate:
    It returns JSON. Parse reply_url. If reply_url is missing/invalid/doesn't match x.com/m13v_/status/, treat as FAILED: do NOT log, mark candidate 'failed' not 'posted'. NEVER use the parent URL as our_url.
 5. Log the primary reply to the database FIRST, BEFORE attempting the self-reply. This guarantees the row exists even if the self-reply crashes; the link-edit-twitter sweep will pick it up later. Parse post_id from the JSON output:
      python3 $REPO_DIR/scripts/log_post.py --platform twitter --thread-url CANDIDATE_URL --our-url REPLY_URL --our-content 'YOUR_REPLY_TEXT' --project MATCHED_PROJECT --thread-author AUTHOR --thread-title 'TWEET_TEXT' --engagement-style STYLE --language LANG
-6. Self-reply with project link:
+6. Self-reply with project link.
+   LANDING-PAGE GATE: if the matched project has a landing_pages config in config.json (repo + base_url set), SKIP this step entirely. Do not post a bare-URL self-reply. The link-edit-twitter sweep (runs every 6h) will generate a custom per-thread landing page via seo/generate_page.py and post the self-reply with that URL. A bare homepage link would permanently mark the post as link-edited and lock out the custom page. Proceed directly to step 7.
+   If the matched project has NO landing_pages config, post the inline self-reply with the plain project URL:
      python3 $REPO_DIR/scripts/twitter_browser.py self-reply \"YOUR_REPLY_URL\" \"FOLLOW_UP_TEXT\" \"PROJECT_URL\"
    FOLLOW_UP_TEXT: 1 short casual sentence, lowercase, no hard sell, no em dashes. Match parent tweet's language.
-   PROJECT_URL: exact URL from the project's config. If the matched project has no URL, skip this step AND step 7 (the sweep will also skip it since there's no URL to add).
+   PROJECT_URL: exact website URL from the project's config. If the matched project has no URL, skip this step AND leave link_edited_at NULL (the sweep will also skip it since there's no URL to add).
    On success, immediately record the self-reply on the parent post so the sweep doesn't re-attempt:
      python3 $REPO_DIR/scripts/log_post.py --mark-self-reply --post-id POST_ID --self-reply-url SELF_REPLY_URL --self-reply-content 'FOLLOW_UP_TEXT_WITH_URL'
    On failure: do NOT mark; leave link_edited_at NULL so link-edit-twitter picks it up on the next sweep.

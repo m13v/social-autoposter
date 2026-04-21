@@ -78,6 +78,8 @@ const JOBS = [
   { label: 'com.m13v.social-octolens-reddit', name: 'Octolens Reddit', type: 'Octolens', platform: 'Reddit', script: 'octolens-reddit.sh', logPrefix: 'octolens-reddit-', plist: 'com.m13v.social-octolens-reddit.plist' },
   { label: 'com.m13v.social-octolens-twitter', name: 'Octolens Twitter', type: 'Octolens', platform: 'Twitter', script: 'octolens-twitter.sh', logPrefix: 'octolens-twitter-', plist: 'com.m13v.social-octolens-twitter.plist' },
   { label: 'com.m13v.social-octolens-linkedin', name: 'Octolens LinkedIn', type: 'Octolens', platform: 'LinkedIn', script: 'octolens-linkedin.sh', logPrefix: 'octolens-linkedin-', plist: 'com.m13v.social-octolens-linkedin.plist' },
+
+  { label: 'com.m13v.social-seo-top-pages', name: 'SEO Top Pages', type: 'SEO', platform: 'SEO', script: 'run_top_pages_pipeline.sh', logPrefix: 'launchd-seo-top-pages-', plist: 'com.m13v.social-seo-top-pages.plist' },
 ];
 
 // --- Helpers ---
@@ -443,6 +445,17 @@ function getPlistSchedule(unitPath) {
   } catch { return null; }
 }
 
+// Returns the next scheduled fire time (ISO string in server/local tz) for a
+// unit, or null when it can't be computed (no StartInterval, no calendar
+// Hour/Minute).
+function getPlistNextRun(unitPath) {
+  try {
+    const text = fs.readFileSync(unitPath, 'utf8');
+    const d = driver.nextRunFromUnit && driver.nextRunFromUnit(text);
+    return d ? d.toISOString() : null;
+  } catch { return null; }
+}
+
 // Resolve a job label to a normalized descriptor usable by every per-job
 // endpoint. Looks up static JOBS first (for matrix metadata) and falls back to
 // discovered plists so newly added jobs work without touching JOBS.
@@ -560,6 +573,7 @@ async function handleApi(req, res) {
         let plistPath = path.join(UNIT_DIR, driver.unitFileName(d.plist));
         if (!fs.existsSync(plistPath)) plistPath = getLaunchAgentPath(d.plist);
         const schedule = getPlistSchedule(plistPath);
+        const nextRun = loaded ? getPlistNextRun(plistPath) : null;
         return {
           label: d.label,
           name: deriveName(d.label),
@@ -569,6 +583,7 @@ async function handleApi(req, res) {
           pids,
           status,
           schedule,
+          nextRun,
           lastRun: lastLog.time,
           lastLogFile: lastLog.file,
           plistFile: d.plist,
@@ -1001,9 +1016,10 @@ async function handleApi(req, res) {
       "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text, NULL::numeric FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
       "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || dms.id), NULL::text, sc.per_row_cost FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
       "UNION ALL SELECT * FROM (SELECT m.message_at, 'dm_reply_sent', d.platform, d.their_author, LEFT(m.content, 140), NULL::text, d.chat_url, ('dr' || m.id), NULL::text, sc.per_row_cost FROM dm_messages m JOIN dms d ON d.id = m.dm_id LEFT JOIN session_cost sc ON sc.session_id = m.claude_session_id WHERE m.direction = 'outbound' AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction = 'inbound' AND m2.message_at < m.message_at) ORDER BY m.message_at DESC LIMIT 150) x5b " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || sk.id), product, sc.per_row_cost FROM seo_keywords sk LEFT JOIN session_cost sc ON sc.session_id = sk.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') <> 'reddit' ORDER BY completed_at DESC LIMIT 150) x6 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || sk.id), product, sc.per_row_cost FROM seo_keywords sk LEFT JOIN session_cost sc ON sc.session_id = sk.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page') ORDER BY completed_at DESC LIMIT 150) x6 " +
       "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || gq.id), product, sc.per_row_cost FROM gsc_queries gq LEFT JOIN session_cost sc ON sc.session_id = gq.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
       "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || sk2.id), product, sc.per_row_cost FROM seo_keywords sk2 LEFT JOIN session_cost sc ON sc.session_id = sk2.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_top', 'seo', product, keyword, slug, page_url, ('kt' || sk3.id), product, sc.per_row_cost FROM seo_keywords sk3 LEFT JOIN session_cost sc ON sc.session_id = sk3.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'top_page' ORDER BY completed_at DESC LIMIT 150) x8b " +
       "UNION ALL SELECT * FROM (SELECT resurrected_at AS occurred_at, 'resurrected' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, NULL::text AS detail, our_url AS link, ('rr' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id WHERE resurrected_at IS NOT NULL ORDER BY resurrected_at DESC LIMIT 150) x9 " +
       "ORDER BY 1 DESC LIMIT 500) r";
     return (async () => {
@@ -1151,9 +1167,10 @@ async function handleApi(req, res) {
     }
     parts.push("SELECT 'dm_sent' AS type, platform AS pl FROM dms WHERE status='sent' AND sent_at >= NOW() - " + win + dmsPc.clause);
     parts.push("SELECT 'dm_reply_sent' AS type, d.platform AS pl FROM dm_messages m JOIN dms d ON d.id = m.dm_id WHERE m.direction='outbound' AND m.message_at >= NOW() - " + win + " AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction='inbound' AND m2.message_at < m.message_at)" + dmsAliasedPc.clause);
-    parts.push("SELECT 'page_published_serp' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND COALESCE(source, '') <> 'reddit'" + seoProdPc.clause);
+    parts.push("SELECT 'page_published_serp' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page')" + seoProdPc.clause);
     parts.push("SELECT 'page_published_gsc' AS type, 'seo' AS pl FROM gsc_queries WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL" + seoProdPc.clause);
     parts.push("SELECT 'page_published_reddit' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='reddit'" + seoProdPc.clause);
+    parts.push("SELECT 'page_published_top' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='top_page'" + seoProdPc.clause);
     parts.push("SELECT 'resurrected' AS type, platform AS pl FROM posts WHERE resurrected_at >= NOW() - " + win + postsPc.clause);
     const q = "SELECT json_agg(row_to_json(r)) FROM (" +
       "SELECT type, " + norm + " AS platform, COUNT(*)::int AS count FROM (" +
@@ -1164,6 +1181,89 @@ async function handleApi(req, res) {
       const value = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
       activityStatsCache.set(cacheKey, { at: Date.now(), value });
       return json(res, { windowHours, rows: value });
+    })().catch(e => json(res, { error: e.message }, 500));
+  }
+
+  // GET /api/cost/stats - per-activity-type count + total cost over a trailing
+  // window. Types: thread (posts.posted_at), comment (replies.replied),
+  // page (seo_keywords + gsc_queries), dm_thread (dms.sent_at). Cost is
+  // session.total_cost_usd split evenly across rows_in_session, same model
+  // as /api/activity. Admin-only: cost is operator-internal, not exposed to
+  // scoped clients.
+  if (p === '/api/cost/stats' && req.method === 'GET') {
+    if (!req.user.admin) return json(res, { error: 'forbidden' }, 403);
+    const url = new URL(req.url, 'http://localhost');
+    const windowHours = Math.max(1, Math.min(720, parseInt(url.searchParams.get('hours') || '24', 10) || 24));
+    const rawProject = (url.searchParams.get('project') || '').trim();
+    const ALLOWED_COST_PLATFORMS = new Set(['reddit', 'twitter', 'linkedin', 'moltbook', 'github', 'seo', 'email']);
+    let rawPlat = String(url.searchParams.get('platform') || '').toLowerCase().trim();
+    if (rawPlat === 'x') rawPlat = 'twitter';
+    const plat = ALLOWED_COST_PLATFORMS.has(rawPlat) ? rawPlat : '';
+    const postsPc    = auth.projectClause(req.user, 'project_name',   rawProject || null);
+    const repliesPc  = auth.projectClause(req.user, 'project_name',   rawProject || null);
+    const dmsPc      = auth.projectClause(req.user, 'target_project', rawProject || null);
+    const seoProdPc  = auth.projectClause(req.user, 'product',        rawProject || null);
+    const win = "INTERVAL '" + windowHours + " hours'";
+    const platNorm = col => "CASE WHEN LOWER(" + col + ") = 'x' THEN 'twitter' ELSE LOWER(" + col + ") END";
+    const platClause = col => plat ? (" AND " + platNorm(col) + " = '" + plat + "'") : '';
+    const includeThread  = !plat || plat !== 'seo';
+    const includeComment = !plat || plat !== 'seo';
+    const includePage    = !plat || plat === 'seo';
+    const includeDm      = !plat || plat !== 'seo';
+    const parts = [
+      "SELECT claude_session_id FROM posts WHERE claude_session_id IS NOT NULL AND posted_at IS NOT NULL",
+      "SELECT claude_session_id FROM replies WHERE claude_session_id IS NOT NULL AND status IN ('replied','skipped')",
+      "SELECT claude_session_id FROM dms WHERE claude_session_id IS NOT NULL AND status='sent' AND sent_at IS NOT NULL",
+      "SELECT m.claude_session_id FROM dm_messages m WHERE m.claude_session_id IS NOT NULL AND m.direction='outbound'",
+      "SELECT claude_session_id FROM posts WHERE claude_session_id IS NOT NULL AND resurrected_at IS NOT NULL",
+      "SELECT claude_session_id FROM seo_keywords WHERE claude_session_id IS NOT NULL AND completed_at IS NOT NULL AND page_url IS NOT NULL",
+      "SELECT claude_session_id FROM gsc_queries WHERE claude_session_id IS NOT NULL AND completed_at IS NOT NULL AND page_url IS NOT NULL",
+    ];
+    const rowQueries = [];
+    if (includeThread) {
+      rowQueries.push(
+        "SELECT 'thread' AS type, COUNT(*)::int AS count, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) AS total_cost_usd " +
+        "FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id " +
+        "WHERE posted_at >= NOW() - " + win + platClause('posts.platform') + postsPc.clause
+      );
+    }
+    if (includeComment) {
+      rowQueries.push(
+        "SELECT 'comment' AS type, COUNT(*)::int, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) " +
+        "FROM replies LEFT JOIN session_cost sc ON sc.session_id = replies.claude_session_id " +
+        "WHERE replies.status='replied' AND replies.replied_at >= NOW() - " + win + platClause('replies.platform') + repliesPc.clause
+      );
+    }
+    if (includePage) {
+      rowQueries.push(
+        "SELECT 'page' AS type, COUNT(*)::int, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) " +
+        "FROM (" +
+          "SELECT claude_session_id FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL" + seoProdPc.clause +
+          " UNION ALL " +
+          "SELECT claude_session_id FROM gsc_queries WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL" + seoProdPc.clause +
+        ") pg LEFT JOIN session_cost sc ON sc.session_id = pg.claude_session_id"
+      );
+    }
+    if (includeDm) {
+      rowQueries.push(
+        "SELECT 'dm_thread' AS type, COUNT(*)::int, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) " +
+        "FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id " +
+        "WHERE dms.status='sent' AND dms.sent_at >= NOW() - " + win + platClause('dms.platform') + dmsPc.clause
+      );
+    }
+    if (!rowQueries.length) {
+      return json(res, { windowHours, platform: plat || 'all', rows: [] });
+    }
+    const q =
+      "WITH src AS (" + parts.join(' UNION ALL ') + "), " +
+      "session_counts AS (SELECT claude_session_id, COUNT(*)::int AS rows_in_session FROM src GROUP BY claude_session_id), " +
+      "session_cost AS (SELECT cs.session_id, (cs.total_cost_usd / NULLIF(sc.rows_in_session, 0))::numeric(12,6) AS per_row_cost " +
+        "FROM claude_sessions cs JOIN session_counts sc ON sc.claude_session_id = cs.session_id) " +
+      "SELECT json_agg(row_to_json(r)) FROM (" + rowQueries.join(' UNION ALL ') + ") r";
+    return (async () => {
+      const dbRows = await pq(q);
+      const value = (dbRows && dbRows.length && dbRows[0].json_agg) ? dbRows[0].json_agg : [];
+      return json(res, { windowHours, platform: plat || 'all', rows: value });
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
@@ -1678,6 +1778,7 @@ const HTML = `<!DOCTYPE html>
   .activity-chip.active.ev-page_published_serp   { background: #422006; border-color: #f59e0b; color: #fcd34d; }
   .activity-chip.active.ev-page_published_gsc    { background: #134e4a; border-color: #14b8a6; color: #5eead4; }
   .activity-chip.active.ev-page_published_reddit { background: #7c2d12; border-color: #f97316; color: #fdba74; }
+  .activity-chip.active.ev-page_published_top    { background: #4a044e; border-color: #d946ef; color: #f5d0fe; }
   .activity-chip.active.ev-resurrected { background: #1e3a8a; border-color: #3b82f6; color: #93c5fd; }
 
   .activity-status { display: flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: var(--cyan); }
@@ -1734,6 +1835,7 @@ const HTML = `<!DOCTYPE html>
   .ev-pill.ev-page_published_serp   { background: #422006; color: #fcd34d; border: 1px solid #f59e0b; }
   .ev-pill.ev-page_published_gsc    { background: #134e4a; color: #5eead4; border: 1px solid #14b8a6; }
   .ev-pill.ev-page_published_reddit { background: #7c2d12; color: #fdba74; border: 1px solid #f97316; }
+  .ev-pill.ev-page_published_top    { background: #4a044e; color: #f5d0fe; border: 1px solid #d946ef; }
   .ev-pill.ev-resurrected { background: #1e3a8a; color: #93c5fd; border: 1px solid #3b82f6; }
 
   .activity-search {
@@ -1960,6 +2062,7 @@ const HTML = `<!DOCTYPE html>
   .stat-card.ev-page_published_serp   { border-left: 3px solid #f59e0b; }
   .stat-card.ev-page_published_gsc    { border-left: 3px solid #14b8a6; }
   .stat-card.ev-page_published_reddit { border-left: 3px solid #f97316; }
+  .stat-card.ev-page_published_top    { border-left: 3px solid #d946ef; }
   .stat-card.ev-resurrected         { border-left: 3px solid #3b82f6; }
   .stat-card-breakdown { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--text); }
   .stat-plat { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
@@ -2163,6 +2266,28 @@ const HTML = `<!DOCTYPE html>
       <div class="style-stats-empty">Loading\u2026</div>
     </div>
   </details>
+  <details class="style-stats-section sa-local-only" id="cost-stats">
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">&#9654;</span><span id="cost-stats-heading">Cost per Activity (last 24 hours)</span></span>
+      <span class="style-stats-total" id="cost-stats-total"></span>
+    </summary>
+    <div class="style-stats-controls">
+      <div class="style-stats-pill-row" id="cost-stats-platform-pills" data-selected="all">
+        <span class="label">Platform</span>
+        <button type="button" class="style-stats-pill active" data-value="all">All</button>
+        <button type="button" class="style-stats-pill" data-value="reddit">Reddit</button>
+        <button type="button" class="style-stats-pill" data-value="twitter">Twitter / X</button>
+        <button type="button" class="style-stats-pill" data-value="linkedin">LinkedIn</button>
+        <button type="button" class="style-stats-pill" data-value="moltbook">MoltBook</button>
+        <button type="button" class="style-stats-pill" data-value="github">GitHub</button>
+        <button type="button" class="style-stats-pill" data-value="seo">SEO</button>
+        <button type="button" class="style-stats-pill" data-value="email">Email</button>
+      </div>
+    </div>
+    <div id="cost-stats-body">
+      <div class="style-stats-empty">Click to load&hellip;</div>
+    </div>
+  </details>
 </div>
 
 <div class="content hidden" id="tab-activity">
@@ -2235,7 +2360,8 @@ const HTML = `<!DOCTYPE html>
 <div class="content hidden" id="tab-top">
   <div class="top-header">
     <div class="top-subtabs">
-      <span class="top-subtab active" data-subtab="posts">Posts</span>
+      <span class="top-subtab active" data-subtab="threads">Threads</span>
+      <span class="top-subtab" data-subtab="comments">Comments</span>
       <span class="top-subtab" data-subtab="pages">Pages</span>
       <span class="top-subtab" data-subtab="dms">DMs</span>
     </div>
@@ -2266,11 +2392,10 @@ const HTML = `<!DOCTYPE html>
       <span class="label">Project</span>
       <button type="button" class="style-stats-pill active" data-value="all">All</button>
     </div>
-    <div class="style-stats-pill-row" id="top-kind-pills" data-selected="all">
-      <span class="label">Kind</span>
-      <button type="button" class="style-stats-pill active" data-value="all">Threads &amp; comments</button>
-      <button type="button" class="style-stats-pill" data-value="threads">Threads only</button>
-      <button type="button" class="style-stats-pill" data-value="comments">Comments only</button>
+    <div class="style-stats-pill-row hidden" id="top-pages-source-pills" data-selected="seo">
+      <span class="label">Source</span>
+      <button type="button" class="style-stats-pill active" data-value="seo">SEO only</button>
+      <button type="button" class="style-stats-pill" data-value="all">All</button>
     </div>
     <div class="style-stats-pill-row hidden" id="top-dm-dir-pills" data-selected="all">
       <span class="label">Direction</span>
@@ -2362,6 +2487,21 @@ function relTime(iso) {
   if (hrs < 24) return hrs + 'h ' + (mins % 60) + 'm ago';
   const days = Math.floor(hrs / 24);
   return days + 'd ago';
+}
+
+function formatNextRun(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startTarget = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const dayDelta = Math.round((startTarget.getTime() - startToday.getTime()) / 86400000);
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (dayDelta === 0) return 'today at ' + time;
+  if (dayDelta === 1) return 'tomorrow at ' + time;
+  const mon = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return mon + ' at ' + time;
 }
 
 function nextRunTime(lastRunIso, intervalSecs) {
@@ -2475,12 +2615,21 @@ function renderOtherJobRow(job) {
   const runStopBtn = job.running
     ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
     : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
+  const nextLine = job.nextRun ? formatNextRun(job.nextRun) : '';
   return '<tr data-other-job="' + job.label + '">' +
     '<td style="text-align:left;padding-left:16px;">' + job.name + '</td>' +
-    '<td style="color:var(--text);font-size:12px;">' + (job.schedule || '--') + '</td>' +
+    '<td style="color:var(--text);font-size:12px;">' +
+      '<div style="display:flex;align-items:center;justify-content:center;gap:8px;">' +
+        renderToggle(job.label, job.loaded) +
+        '<div style="display:flex;flex-direction:column;line-height:1.3;">' +
+          '<span>' + (job.schedule || '--') + '</span>' +
+          '<span data-field="nextrun" style="color:var(--muted);font-size:11px;">' + nextLine + '</span>' +
+        '</div>' +
+      '</div>' +
+    '</td>' +
     '<td style="color:var(--text);font-size:12px;" data-field="lastrun">' + relTime(job.lastRun) + '</td>' +
     '<td><span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span></td>' +
-    '<td><div class="cell-actions" style="justify-content:center;">' + renderToggle(job.label, job.loaded) + runStopBtn + '</div></td>' +
+    '<td><div class="cell-actions" style="justify-content:center;">' + runStopBtn + '</div></td>' +
   '</tr>';
 }
 
@@ -2508,6 +2657,8 @@ function updateOtherJobsInPlace(jobs) {
     if (badge) { badge.textContent = statusLabel; badge.className = 'badge ' + job.status; }
     const lastrun = tr.querySelector('[data-field="lastrun"]');
     if (lastrun) lastrun.textContent = relTime(job.lastRun);
+    const nextrun = tr.querySelector('[data-field="nextrun"]');
+    if (nextrun) nextrun.textContent = job.nextRun ? formatNextRun(job.nextRun) : '';
     const toggleInput = tr.querySelector('[data-field="toggle"] input');
     if (toggleInput && toggleInput.checked !== !!job.loaded) toggleInput.checked = !!job.loaded;
     const actions = tr.querySelector('.cell-actions');
@@ -2833,8 +2984,8 @@ async function saveSettings() {
 }
 
 // Activity tab
-const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'dm_reply_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit', 'resurrected'];
-const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', dm_reply_sent: 'dm reply', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)', resurrected: 'resurrected' };
+const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'dm_reply_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit', 'page_published_top', 'resurrected'];
+const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', dm_reply_sent: 'dm reply', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)', page_published_top: 'page (top)', resurrected: 'resurrected' };
 const ACTIVITY_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github', 'seo'];
 let _activitySeen = new Set();
 let _activityFirstLoad = true;
@@ -3062,6 +3213,8 @@ function syncStatsHeadings() {
   if (funnel) funnel.textContent = 'Project Funnel Stats (' + win.labelLong + ')';
   const dm = document.getElementById('dm-stats-heading');
   if (dm) dm.textContent = 'DM Funnel Stats (' + win.labelLong + ')';
+  const cost = document.getElementById('cost-stats-heading');
+  if (cost) cost.textContent = 'Cost per Activity (' + win.labelLong + ')';
 }
 
 function renderActivityStats(payload) {
@@ -3680,18 +3833,114 @@ function renderDmStats(payload) {
   });
 }
 
+// Cost Stats: per-activity-type count + total cost + cost-per-activity, driven
+// by /api/cost/stats. Types are the four the user cares about: thread (posts),
+// comment (replies), page (SEO pages), dm_thread (DMs). Section is closed by
+// default and lazy-loaded on first open; platform pills and window pills
+// trigger refetches. Admin-only (hidden via sa-local-only on cloud).
+const COST_TYPE_LABELS = { thread: 'Thread', comment: 'Comment', page: 'Page', dm_thread: 'DM Thread' };
+const COST_TYPE_ORDER = ['thread', 'comment', 'page', 'dm_thread'];
+function renderCostStats(payload) {
+  const body = document.getElementById('cost-stats-body');
+  const totalEl = document.getElementById('cost-stats-total');
+  if (!body) return;
+  if (payload && payload.error) {
+    if (totalEl) totalEl.textContent = 'error';
+    body.innerHTML = '<div class="style-stats-empty">' + escapeHtml(payload.error) + '</div>';
+    return;
+  }
+  const rows = (payload && payload.rows) || [];
+  const byType = {};
+  rows.forEach(r => { byType[r.type] = r; });
+  const merged = COST_TYPE_ORDER.map(t => {
+    const r = byType[t] || { count: 0, total_cost_usd: 0 };
+    const count = Number(r.count) || 0;
+    const total = Number(r.total_cost_usd) || 0;
+    return { type: t, label: COST_TYPE_LABELS[t], count: count, total: total, avg: count > 0 ? total / count : 0 };
+  });
+  const totalCount = merged.reduce(function (a, r) { return a + r.count; }, 0);
+  const totalCost  = merged.reduce(function (a, r) { return a + r.total; }, 0);
+  if (totalEl) {
+    totalEl.textContent = '$' + totalCost.toFixed(2) + ' · ' + totalCount.toLocaleString() + ' activit' + (totalCount === 1 ? 'y' : 'ies');
+  }
+  function fmtMoney(v) {
+    var n = Number(v) || 0;
+    if (n === 0) return '$0.00';
+    if (n < 1) return '$' + n.toFixed(4);
+    return '$' + n.toFixed(2);
+  }
+  function fmtCount(v) { return (Number(v) || 0).toLocaleString(); }
+  const rowsHtml = merged.map(function (r) {
+    return '<tr>' +
+      '<td>' + escapeHtml(r.label) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + fmtCount(r.count) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + fmtMoney(r.total) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-muted);">' + (r.count > 0 ? fmtMoney(r.avg) : '&mdash;') + '</td>' +
+    '</tr>';
+  }).join('');
+  const footerHtml =
+    '<tr style="border-top:2px solid var(--border);font-weight:600;background:var(--bg-subtle);">' +
+      '<td>Total</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + fmtCount(totalCount) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + fmtMoney(totalCost) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (totalCount > 0 ? fmtMoney(totalCost / totalCount) : '&mdash;') + '</td>' +
+    '</tr>';
+  body.innerHTML =
+    '<table class="style-stats-table">' +
+      '<thead><tr>' +
+        '<th style="text-align:left;">Type</th>' +
+        '<th style="text-align:right;">Activities</th>' +
+        '<th style="text-align:right;">Total Cost</th>' +
+        '<th style="text-align:right;">Cost per Activity</th>' +
+      '</tr></thead>' +
+      '<tbody>' + rowsHtml + footerHtml + '</tbody>' +
+    '</table>' +
+    '<div style="font-size:11px;color:var(--text-muted);padding:8px 2px 2px;">' +
+      'Cost is Claude session spend split evenly across the activity rows each session produced. ' +
+      'Totals here exclude skipped replies, resurrected posts, DM replies, and mentions.' +
+    '</div>';
+}
+
+let _costStatsLoadedFor = null;
+let _costStatsLoading = false;
+async function loadCostStats(force) {
+  if (_costStatsLoading) return;
+  const hours = currentStatsWindow().hours;
+  const row = document.getElementById('cost-stats-platform-pills');
+  const platform = (row && row.dataset.selected) || 'all';
+  const key = hours + '|' + platform;
+  if (_costStatsLoadedFor === key && !force) return;
+  _costStatsLoading = true;
+  const totalEl = document.getElementById('cost-stats-total');
+  const body = document.getElementById('cost-stats-body');
+  if (totalEl) totalEl.textContent = 'loading…';
+  if (body) body.innerHTML = '<div class="style-stats-empty">Loading…</div>';
+  try {
+    const params = ['hours=' + hours];
+    if (platform && platform !== 'all') params.push('platform=' + encodeURIComponent(platform));
+    const res = await fetch('/api/cost/stats?' + params.join('&'));
+    const data = await res.json();
+    renderCostStats(data);
+    _costStatsLoadedFor = key;
+  } catch (e) {
+    if (body) body.innerHTML = '<div class="style-stats-empty">Failed to load.</div>';
+  } finally {
+    _costStatsLoading = false;
+  }
+}
+
 let _topTableState = { sortField: 'score', sortDir: 'desc', filters: {}, globalQuery: '' };
 let _topTableHandle = null;
 let _topLoaded = false;
 let _topLoading = false;
 let _topWindow = '24h';
 let _topPlatform = 'all';
-let _topKind = 'all';
-let _topSubtab = 'posts';
+let _topSubtab = 'threads';
 let _topProject = 'all';
 let _topPagesTableState = { sortField: 'pageviews', sortDir: 'desc', filters: {} };
 let _topPagesLoaded = false;
 let _topPagesLoading = false;
+let _topPagesSource = 'seo';
 let _topDmsTableState = { sortField: 'rank', sortDir: 'asc', filters: {} };
 let _topDmsLoaded = false;
 let _topDmsLoading = false;
@@ -3887,7 +4136,7 @@ async function loadTopPosts(force) {
   try {
     const params = new URLSearchParams({ limit: '200', window: _topWindow });
     if (_topPlatform && _topPlatform !== 'all') params.set('platform', _topPlatform);
-    if (_topKind && _topKind !== 'all') params.set('kind', _topKind);
+    if (_topSubtab === 'threads' || _topSubtab === 'comments') params.set('kind', _topSubtab);
     const container = document.getElementById('top-table-container');
     if (container && force) container.innerHTML = '<div class="style-stats-empty">Loading\u2026</div>';
     const res = await fetch('/api/top?' + params.toString());
@@ -3928,12 +4177,12 @@ function initTopFilters() {
   const winRow  = document.getElementById('top-window-pills');
   const platRow = document.getElementById('top-platform-pills');
   const projRow = document.getElementById('top-project-pills');
-  const kindRow = document.getElementById('top-kind-pills');
+  const srcRow  = document.getElementById('top-pages-source-pills');
   const dirRow  = document.getElementById('top-dm-dir-pills');
   if (winRow) setTopPillActive(winRow, _topWindow);
   if (platRow) setTopPillActive(platRow, _topPlatform);
   if (projRow) setTopPillActive(projRow, _topProject);
-  if (kindRow) setTopPillActive(kindRow, _topKind);
+  if (srcRow) setTopPillActive(srcRow, _topPagesSource);
   if (dirRow) setTopPillActive(dirRow, _topDmDir);
   wireTopPillRow('top-window-pills', (v) => {
     _topWindow = v || '24h';
@@ -3950,9 +4199,9 @@ function initTopFilters() {
     _topProject = v || 'all';
     renderTopPagesFromCache();
   });
-  wireTopPillRow('top-kind-pills', (v) => {
-    _topKind = v || 'all';
-    loadTopPosts(true);
+  wireTopPillRow('top-pages-source-pills', (v) => {
+    _topPagesSource = v || 'seo';
+    renderTopPagesFromCache();
   });
   wireTopPillRow('top-dm-dir-pills', (v) => {
     _topDmDir = v || 'all';
@@ -3970,7 +4219,7 @@ function initTopFilters() {
   document.querySelectorAll('.top-subtab').forEach(el => {
     if (el._wired) return;
     el.addEventListener('click', () => {
-      const sub = el.dataset.subtab || 'posts';
+      const sub = el.dataset.subtab || 'threads';
       if (sub === _topSubtab) return;
       _topSubtab = sub;
       document.querySelectorAll('.top-subtab').forEach(s => s.classList.toggle('active', s.dataset.subtab === sub));
@@ -3980,7 +4229,7 @@ function initTopFilters() {
       const dmsC   = document.getElementById('top-dms-container');
       const platRowEl = document.getElementById('top-platform-pills');
       const projRowEl = document.getElementById('top-project-pills');
-      const kindRowEl = document.getElementById('top-kind-pills');
+      const srcRowEl  = document.getElementById('top-pages-source-pills');
       const dirRowEl  = document.getElementById('top-dm-dir-pills');
       const totalEl = document.getElementById('top-total');
       if (sub === 'pages') {
@@ -3990,7 +4239,7 @@ function initTopFilters() {
         if (pagesUnknownC) pagesUnknownC.classList.remove('hidden');
         if (platRowEl) platRowEl.classList.add('hidden');
         if (projRowEl) projRowEl.classList.remove('hidden');
-        if (kindRowEl) kindRowEl.classList.add('hidden');
+        if (srcRowEl) srcRowEl.classList.remove('hidden');
         if (dirRowEl) dirRowEl.classList.add('hidden');
         if (totalEl) totalEl.textContent = '';
         loadTopPages();
@@ -4001,7 +4250,7 @@ function initTopFilters() {
         if (dmsC) dmsC.classList.remove('hidden');
         if (platRowEl) platRowEl.classList.remove('hidden');
         if (projRowEl) projRowEl.classList.add('hidden');
-        if (kindRowEl) kindRowEl.classList.add('hidden');
+        if (srcRowEl) srcRowEl.classList.add('hidden');
         if (dirRowEl) dirRowEl.classList.remove('hidden');
         if (totalEl) totalEl.textContent = '';
         loadTopDms(true);
@@ -4012,7 +4261,7 @@ function initTopFilters() {
         postsC.classList.remove('hidden');
         if (platRowEl) platRowEl.classList.remove('hidden');
         if (projRowEl) projRowEl.classList.add('hidden');
-        if (kindRowEl) kindRowEl.classList.remove('hidden');
+        if (srcRowEl) srcRowEl.classList.add('hidden');
         if (dirRowEl) dirRowEl.classList.add('hidden');
         if (totalEl) totalEl.textContent = '';
         loadTopPosts(true);
@@ -4117,9 +4366,11 @@ function renderTopPages(payload) {
       }
     }
   }
+  const showAll = _topPagesSource === 'all';
+  const mainRows = showAll ? createdRows.concat(unknownRows) : createdRows;
   if (totalEl) {
-    const totalPv = createdRows.reduce((a, r) => a + r.pageviews, 0);
-    totalEl.textContent = createdRows.length + ' page' + (createdRows.length === 1 ? '' : 's') + ' \u00b7 ' + fmt(totalPv) + ' pv';
+    const totalPv = mainRows.reduce((a, r) => a + r.pageviews, 0);
+    totalEl.textContent = mainRows.length + ' page' + (mainRows.length === 1 ? '' : 's') + '\u00b7 ' + fmt(totalPv) + ' pv';
   }
   const humanizeSlug = (pth) => {
     let raw = String(pth || '/').split('?')[0].split('#')[0];
@@ -4146,18 +4397,18 @@ function renderTopPages(payload) {
     { key: 'get_started_clicks', label: 'Get Started', type: 'numeric', align: 'right', widthPct: 9,  formatter: fmt },
     { key: 'bookings',        label: 'Bookings',        type: 'numeric', align: 'right', widthPct: 8,  formatter: fmt },
   ];
-  if (!createdRows.length) {
+  if (!mainRows.length) {
     container.innerHTML = '<div class="style-stats-empty">No pages found in this project.</div>';
   } else {
     mountSortableTable({
       containerId: 'top-pages-container',
-      rows: createdRows,
+      rows: mainRows,
       state: _topPagesTableState,
       columns,
     });
   }
   if (unknownContainer) {
-    if (!unknownRows.length) {
+    if (showAll || !unknownRows.length) {
       unknownContainer.innerHTML = '';
     } else {
       const unkPv = unknownRows.reduce((a, r) => a + r.pageviews, 0);
@@ -4840,6 +5091,8 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (funnelEl && funnelEl.open) loadFunnelStats(true);
     const dmEl = document.getElementById('dm-stats');
     if (dmEl && dmEl.open) loadDmStats(true);
+    const costEl = document.getElementById('cost-stats');
+    if (costEl && costEl.open) loadCostStats(true);
   });
   syncStatsHeadings();
 })();
@@ -4865,6 +5118,28 @@ document.querySelectorAll('.tab').forEach(tab => {
   el.addEventListener('toggle', () => {
     if (el.open) loadDmStats();
   });
+})();
+
+(function wireCostStats() {
+  const el = document.getElementById('cost-stats');
+  if (!el) return;
+  el.addEventListener('toggle', () => {
+    if (el.open) loadCostStats();
+  });
+  const row = document.getElementById('cost-stats-platform-pills');
+  if (row) {
+    row.addEventListener('click', ev => {
+      const btn = ev.target.closest('.style-stats-pill');
+      if (!btn) return;
+      const v = btn.getAttribute('data-value') || 'all';
+      if (row.dataset.selected === v) return;
+      row.dataset.selected = v;
+      row.querySelectorAll('.style-stats-pill').forEach(b => {
+        b.classList.toggle('active', b === btn);
+      });
+      if (el.open) loadCostStats(true);
+    });
+  }
 })();
 
 document.getElementById('log-job-filter').addEventListener('change', () => { loadLogFiles(); startLogAutoRefresh(); });

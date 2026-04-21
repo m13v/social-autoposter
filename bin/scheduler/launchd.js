@@ -223,6 +223,50 @@ function scheduleFromUnit(xml) {
   } catch { return { intervalSecs: null, kind: null }; }
 }
 
+// Returns a Date for the next scheduled fire in the host's local timezone, or
+// null if the unit has no settable schedule (e.g. KeepAlive-only, or a calendar
+// entry we can't reduce to a concrete next-fire). Handles:
+//   - StartInterval: now + intervalSecs
+//   - StartCalendarInterval with a single Hour/Minute dict: next occurrence
+//     today at HH:MM (or tomorrow if HH:MM has already passed)
+//   - StartCalendarInterval as an array of Hour/Minute dicts: earliest upcoming
+//     entry across today/tomorrow
+function nextRunFromUnit(xml) {
+  try {
+    const si = xml.match(/<key>StartInterval<\/key>\s*<integer>(\d+)<\/integer>/);
+    if (si) {
+      const secs = parseInt(si[1], 10);
+      if (!secs) return null;
+      return new Date(Date.now() + secs * 1000);
+    }
+    let entries = null;
+    const arrM = xml.match(/<key>StartCalendarInterval<\/key>\s*<array>([\s\S]*?)<\/array>/);
+    if (arrM) {
+      entries = [...arrM[1].matchAll(/<dict>([\s\S]*?)<\/dict>/g)].map(m => m[1]);
+    } else {
+      const dictM = xml.match(/<key>StartCalendarInterval<\/key>\s*<dict>([\s\S]*?)<\/dict>/);
+      if (dictM) entries = [dictM[1]];
+    }
+    if (!entries || !entries.length) return null;
+    const hhmms = [];
+    for (const body of entries) {
+      const h = body.match(/<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/);
+      const m = body.match(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/);
+      if (h) hhmms.push({ hour: parseInt(h[1], 10), minute: m ? parseInt(m[1], 10) : 0 });
+    }
+    if (!hhmms.length) return null;
+    const now = new Date();
+    let best = null;
+    for (const { hour, minute } of hhmms) {
+      const today = new Date(now);
+      today.setHours(hour, minute, 0, 0);
+      const cand = today > now ? today : new Date(today.getTime() + 86400000);
+      if (!best || cand < best) best = cand;
+    }
+    return best;
+  } catch { return null; }
+}
+
 // In-place edit StartInterval on a plist. Returns true if updated, false if
 // the unit uses a calendar schedule (not settable here).
 function updateInterval(unitPath, seconds) {
@@ -252,5 +296,6 @@ module.exports = {
   discoverJobs,
   parseUnit,
   scheduleFromUnit,
+  nextRunFromUnit,
   updateInterval,
 };

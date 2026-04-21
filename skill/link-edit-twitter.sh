@@ -102,13 +102,43 @@ For each post:
    b. If project_name is set but CLEARLY does not fit, pick a better project
       from the config and run:
         psql "\$DATABASE_URL" -c "UPDATE posts SET project_name='BETTER_PROJECT' WHERE id=POST_ID"
-   c. If no project fits at all, mark skipped (step 5) and continue.
-2. Look up the project URL from the config.
-   - If the project has NO URL configured, mark skipped with
-     SKIPPED: no_project_url and continue.
+   c. If no project fits at all, mark skipped (step 6) and continue.
+2. Decide PROJECT_URL for this post.
+   a. If the matched project has a landing_pages config (with repo, base_url),
+      generate a fresh SEO page for this thread by delegating to the unified
+      generator:
+        i. Decide a SHORT keyword phrase (3-6 words) that captures what page
+           would help this thread's audience. Think SEO intent, not headline
+           copy. Examples: "local ai agent", "macos accessibility automation",
+           "self hosted llm inference".
+       ii. Derive a URL slug from the keyword: lowercase, kebab-case,
+           alphanumeric and hyphens only, max 50 chars. Examples:
+           "local-ai-agent", "macos-accessibility-automation".
+      iii. Run the unified SEO page generator (it loads the @m13v/seo-components
+           palette, picks content type, builds the page, commits, pushes,
+           verifies the live URL, and writes the seo_keywords row that surfaces
+           in the dashboard activity feed). Use the Bash tool:
+                python3 $REPO_DIR/seo/generate_page.py --product PROJECT_NAME --keyword "KEYWORD_PHRASE" --slug "url-slug" --trigger twitter
+           This call can take 10-20 minutes per page. The final stdout is a
+           JSON object; parse it. On success it contains "success": true and
+           "page_url": "https://...". On failure it contains "success": false
+           and "error": "...".
+       iv. On success, set PROJECT_URL = page_url from the JSON output.
+        v. On failure, DO NOT fall back to a bare project website URL. DO NOT
+           post the self-reply. DO NOT update link_edited_at on the post. Log
+           the error in your output and move to the next post. The post will
+           stay eligible and be retried on the next scheduled run (every 6h).
+           A custom landing page per thread is a hard requirement when
+           landing_pages is configured; a bare homepage link is never
+           acceptable in that case.
+   b. If the matched project has NO landing_pages config at all (not a
+      generation failure, genuinely unconfigured), use the project's plain
+      website URL as PROJECT_URL.
+   c. If the project has no URL of any kind, mark skipped with
+      SKIPPED: no_project_url (step 6) and continue.
 3. Draft FOLLOW_UP_TEXT: 1 short casual sentence, lowercase, no hard sell,
    no em dashes. Match the parent tweet's language. Do NOT include the URL
-   in FOLLOW_UP_TEXT — the tool appends it automatically and will reject
+   in FOLLOW_UP_TEXT; the tool appends it automatically and will reject
    anything that starts with http/https.
 4. Post the self-reply via the CDP script:
      python3 $REPO_DIR/scripts/twitter_browser.py self-reply \\
@@ -122,7 +152,7 @@ For each post:
        --post-id POST_ID \\
        --self-reply-url REPLY_URL \\
        --self-reply-content 'FINAL_TEXT'
-   On SKIP (no project match / no project URL / comment removed), mark so
+6. On SKIP (no project match / no project URL / comment removed), mark so
    it won't be retried:
      psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='SKIPPED: REASON' WHERE id=POST_ID"
 

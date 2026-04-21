@@ -25,7 +25,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
 
 CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
-MIN_WORDS = 10
+# Min-word floor to promote a public reply into a DM candidate.
+# X replies are natively shorter (quote-tweets, @-mentions), so the bar is lower.
+MIN_WORDS_BY_PLATFORM = {"reddit": 10, "linkedin": 10, "x": 4}
+MIN_WORDS_DEFAULT = 10
+# Wait this long after our public reply before DMing, so the DM doesn't
+# feel like a double-tap on the same day. Next scan picks it up.
+POST_REPLY_COOLDOWN_HOURS = 5
 MAX_AGE_DAYS = 7
 DEFAULT_MAX_CANDIDATES = 100
 PLATFORMS = ["reddit", "linkedin", "x"]
@@ -156,8 +162,9 @@ def scan_platform(conn, config, platform, max_candidates, dry_run):
           AND r.our_reply_content != ''
           AND d.id IS NULL
           AND r.replied_at >= NOW() - INTERVAL '%s days'
+          AND r.replied_at <= NOW() - (INTERVAL '1 hour' * %s)
         ORDER BY r.replied_at DESC
-    """, (platform, platform, MAX_AGE_DAYS)).fetchall()
+    """, (platform, platform, MAX_AGE_DAYS, POST_REPLY_COOLDOWN_HOURS)).fetchall()
 
     inserted = 0
     skipped_reasons = {}
@@ -175,8 +182,9 @@ def scan_platform(conn, config, platform, max_candidates, dry_run):
             skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
             continue
 
-        # Skip low-substance comments
-        if word_count(content) < MIN_WORDS:
+        # Skip low-substance comments (platform-specific floor)
+        min_words = MIN_WORDS_BY_PLATFORM.get(platform, MIN_WORDS_DEFAULT)
+        if word_count(content) < min_words:
             reason = "too_short"
             skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
             continue

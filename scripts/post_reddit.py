@@ -26,7 +26,6 @@ import db as dbmod
 
 REPO_DIR = os.path.expanduser("~/social-autoposter")
 CONFIG_PATH = os.path.join(REPO_DIR, "config.json")
-API_KEY_KEYCHAIN_SERVICE = "Anthropic API Key Fazm"
 REDDIT_BROWSER = os.path.join(REPO_DIR, "scripts", "reddit_browser.py")
 REDDIT_TOOLS = os.path.join(REPO_DIR, "scripts", "reddit_tools.py")
 RATELIMIT_FILE = "/tmp/reddit_ratelimit.json"
@@ -139,19 +138,6 @@ def mark_comment_blocked(thread_url: str) -> None:
 def load_config():
     with open(CONFIG_PATH) as f:
         return json.load(f)
-
-
-def get_api_key():
-    try:
-        result = subprocess.run(
-            ["security", "find-generic-password", "-s", API_KEY_KEYCHAIN_SERVICE, "-w"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return None
 
 
 def pick_project(platform="reddit", exclude=None):

@@ -14,9 +14,12 @@ Usage:
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+import uuid
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
@@ -162,7 +165,7 @@ def ensure_mcp_config():
     return None
 
 
-def run_claude(prompt, timeout=300):
+def run_claude(prompt, timeout=300, session_id=None):
     """Run claude -p with the given prompt. Returns (success, output, usage_dict).
 
     Streams output in real time to stderr for log visibility.
@@ -171,10 +174,14 @@ def run_claude(prompt, timeout=300):
     import select
     usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+    if session_id:
+        cmd += ["--session-id", session_id]
     # --bare removed: it blocks OAuth auth which we need
     cmd += ["--tools", "Bash,Read"]
     env = os.environ.copy()
     env.pop("ANTHROPIC_API_KEY", None)  # ensure claude uses OAuth, not API key
+    if session_id:
+        env["CLAUDE_SESSION_ID"] = session_id
     try:
         proc = subprocess.Popen(
             cmd, env=env, stdin=subprocess.PIPE,
@@ -309,11 +316,21 @@ def main():
 
         # Run Claude session for this one reply (Claude decides + drafts, we post)
         reply_start = time.time()
+        session_id = str(uuid.uuid4())
+        os.environ["CLAUDE_SESSION_ID"] = session_id
+        session_started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         print(f"[engage_reddit] Processing #{reply['id']} ({reply['platform']}) "
               f"from {reply['their_author']}: {(reply['their_content'] or '')[:60]}...")
 
-        ok, output, usage = run_claude(prompt, timeout=args.per_reply_timeout)
+        ok, output, usage = run_claude(prompt, timeout=args.per_reply_timeout, session_id=session_id)
         reply_elapsed = time.time() - reply_start
+        session_ended_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        subprocess.run(
+            ["python3", os.path.join(REPO_DIR, "scripts", "log_claude_session.py"),
+             "--session-id", session_id, "--script", "engage_reddit",
+             "--started-at", session_started_at, "--ended-at", session_ended_at],
+            capture_output=True,
+        )
 
         # Accumulate usage
         for k in total_usage:
@@ -358,22 +375,54 @@ def main():
                     # Mark as processing
                     subprocess.run(["python3", REPLY_DB, "processing", str(reply["id"])])
 
-                    # Post via CDP
+                    # Post via CDP (reddit) or Moltbook API (moltbook)
                     post_result = None
-                    for attempt in range(3):
-                        try:
-                            cdp_out = subprocess.check_output(
-                                ["python3", os.path.join(REPO_DIR, "scripts", "reddit_browser.py"),
-                                 "reply", reply["their_comment_url"], reply_text],
-                                text=True, timeout=120, stderr=subprocess.DEVNULL,
-                            )
-                            post_result = json.loads(cdp_out)
-                            if post_result.get("ok"):
-                                break
-                        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, json.JSONDecodeError) as e:
-                            print(f"[engage_reddit] #{reply['id']} CDP attempt {attempt+1} failed: {e}")
-                            if attempt < 2:
-                                time.sleep(10)
+                    if reply["platform"] == "moltbook":
+                        m = re.search(
+                            r"/post/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+                            reply.get("their_comment_url") or "",
+                        )
+                        if not m:
+                            post_result = {"ok": False, "error": "missing_moltbook_post_uuid"}
+                        else:
+                            post_uuid = m.group(1)
+                            parent_id = reply.get("their_comment_id") or ""
+                            for attempt in range(3):
+                                try:
+                                    out = subprocess.check_output(
+                                        ["python3", os.path.join(REPO_DIR, "scripts", "moltbook_post.py"),
+                                         "comment",
+                                         "--post-id", post_uuid,
+                                         "--parent-id", parent_id,
+                                         "--content", reply_text,
+                                         "--no-upvote"],
+                                        text=True, timeout=120, stderr=subprocess.DEVNULL,
+                                    )
+                                    # moltbook_post.py prints logs + a final JSON line
+                                    json_line = next((ln for ln in reversed(out.splitlines())
+                                                      if ln.strip().startswith("{")), "")
+                                    post_result = json.loads(json_line) if json_line else None
+                                    if post_result and post_result.get("ok"):
+                                        break
+                                except (subprocess.TimeoutExpired, subprocess.CalledProcessError, json.JSONDecodeError, StopIteration) as e:
+                                    print(f"[engage_reddit] #{reply['id']} moltbook attempt {attempt+1} failed: {e}")
+                                    if attempt < 2:
+                                        time.sleep(10)
+                    else:
+                        for attempt in range(3):
+                            try:
+                                cdp_out = subprocess.check_output(
+                                    ["python3", os.path.join(REPO_DIR, "scripts", "reddit_browser.py"),
+                                     "reply", reply["their_comment_url"], reply_text],
+                                    text=True, timeout=120, stderr=subprocess.DEVNULL,
+                                )
+                                post_result = json.loads(cdp_out)
+                                if post_result.get("ok"):
+                                    break
+                            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, json.JSONDecodeError) as e:
+                                print(f"[engage_reddit] #{reply['id']} CDP attempt {attempt+1} failed: {e}")
+                                if attempt < 2:
+                                    time.sleep(10)
 
                     if post_result and post_result.get("ok"):
                         # Check if already replied (dedup)

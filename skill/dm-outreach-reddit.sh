@@ -53,7 +53,24 @@ DM_DATA=$(psql "$DATABASE_URL" -t -A -c "
         SELECT d.id, d.platform, d.their_author, d.their_content, d.comment_context,
                d.target_project, d.prospect_id,
                r.their_comment_url, r.our_reply_content,
-               p.thread_title, p.our_content as our_post_content
+               p.thread_title, p.our_content as our_post_content,
+               (SELECT json_agg(e) FROM (
+                   SELECT p2.thread_title,
+                          LEFT(r2.their_content, 220) AS their_content,
+                          LEFT(COALESCE(r2.our_reply_content, ''), 220) AS our_reply_content,
+                          r2.status,
+                          r2.depth,
+                          r2.their_comment_url,
+                          r2.replied_at
+                   FROM replies r2
+                   LEFT JOIN posts p2 ON r2.post_id = p2.id
+                   WHERE r2.their_author = d.their_author
+                     AND r2.platform = d.platform
+                     AND r2.id != d.reply_id
+                     AND r2.discovered_at >= NOW() - INTERVAL '60 days'
+                   ORDER BY r2.discovered_at DESC
+                   LIMIT 8
+               ) e) AS other_engagement
         FROM dms d
         JOIN replies r ON d.reply_id = r.id
         JOIN posts p ON d.post_id = p.id
@@ -116,6 +133,14 @@ DM EXAMPLES (bad):
 
 ## Users to DM:
 $DM_DATA
+
+## Cross-thread engagement awareness
+Each row may include an \`other_engagement\` array: this user's other recent (60-day) interactions with our posts on the same platform. Each entry has thread_title, their_content snippet, our_reply_content snippet, depth (>1 = public follow-up to our reply in a thread), status, replied_at.
+
+Use it as context for the DM:
+- If the most recent other_engagement entry is on the SAME thread with depth>1 and replied_at < 6 hours ago, they're actively continuing the public conversation. Prefer a lighter-touch DM, or open with an acknowledgment of the ongoing thread instead of introducing a new angle.
+- If they've engaged on multiple other threads, it signals genuine interest. The DM can be slightly more direct without feeling cold.
+- Do NOT quote their other comments back at them or enumerate their history. It's context, not content.
 
 ## Per-project ICP criteria (used for the pre-check step, NOT to skip sending):
 $PROJECTS_QUALIFICATION

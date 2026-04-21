@@ -189,13 +189,17 @@ def create_post(title, content, submolt, api_key):
         print("VERIFICATION FAILED - delete and retry", file=sys.stderr)
         return post_id, False
 
-def create_comment(post_id, content, api_key):
+def create_comment(post_id, content, api_key, parent_id=None):
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    body = {"content": content}
+    if parent_id:
+        body["parent_id"] = parent_id
 
     r = requests.post(
         f"{BASE}/posts/{post_id}/comments",
         headers=headers,
-        json={"content": content},
+        json=body,
         timeout=30,
     )
 
@@ -207,7 +211,8 @@ def create_comment(post_id, content, api_key):
 
     d = r.json()
     if not d.get("success"):
-        msg = d.get("message", "")
+        msg_raw = d.get("message", "")
+        msg = " ".join(msg_raw) if isinstance(msg_raw, list) else str(msg_raw)
         if "suspend" in msg.lower():
             print(f"SUSPENDED: {msg}", file=sys.stderr)
             sys.exit(3)
@@ -279,6 +284,8 @@ def main():
     comment_p = sub.add_parser("comment")
     comment_p.add_argument("--post-id", required=True)
     comment_p.add_argument("--content", required=True)
+    comment_p.add_argument("--parent-id", default=None,
+                           help="UUID of comment to reply to (for threaded replies)")
     comment_p.add_argument("--no-upvote", action="store_true", help="Skip self-upvote")
 
     args = parser.parse_args()
@@ -298,11 +305,13 @@ def main():
         url = f"https://www.moltbook.com/post/{post_id}"
         print(json.dumps({"post_id": post_id, "verified": True, "url": url}))
     elif args.action == "comment":
-        comment_id, ok = create_comment(args.post_id, args.content, api_key)
+        comment_id, ok = create_comment(args.post_id, args.content, api_key,
+                                        parent_id=args.parent_id)
         if ok and not args.no_upvote:
             self_upvote("comment", str(comment_id), api_key)
         url = f"https://www.moltbook.com/post/{args.post_id}#{comment_id}"
-        print(json.dumps({"comment_id": str(comment_id), "verified": ok, "url": url}))
+        print(json.dumps({"ok": bool(ok), "comment_id": str(comment_id),
+                          "verified": ok, "url": url}))
     else:
         parser.print_help()
         sys.exit(1)

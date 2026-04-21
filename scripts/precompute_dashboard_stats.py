@@ -131,9 +131,10 @@ def precompute_activity(hours=24):
         "UNION ALL SELECT 'mention', platform FROM octolens_mentions WHERE COALESCE(source_timestamp, received_at) >= NOW() - " + win + " "
         "UNION ALL SELECT 'dm_sent', platform FROM dms WHERE status='sent' AND sent_at >= NOW() - " + win + " "
         "UNION ALL SELECT 'dm_reply_sent', d.platform FROM dm_messages m JOIN dms d ON d.id = m.dm_id WHERE m.direction='outbound' AND m.message_at >= NOW() - " + win + " AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction='inbound' AND m2.message_at < m.message_at) "
-        "UNION ALL SELECT 'page_published_serp', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND COALESCE(source, '') <> 'reddit' "
+        "UNION ALL SELECT 'page_published_serp', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page') "
         "UNION ALL SELECT 'page_published_gsc', 'seo' FROM gsc_queries WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL "
         "UNION ALL SELECT 'page_published_reddit', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='reddit' "
+        "UNION ALL SELECT 'page_published_top', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='top_page' "
         "UNION ALL SELECT 'resurrected', platform FROM posts WHERE resurrected_at >= NOW() - " + win +
         ") u GROUP BY type, platform ORDER BY type, platform) r"
     )

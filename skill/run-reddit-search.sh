@@ -20,6 +20,13 @@ LOG_FILE="$LOG_DIR/run-reddit-search-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Reddit Search Post Run: $(date) ===" | tee "$LOG_FILE"
 
+# Serialize with other reddit-agent consumers (run-reddit-threads, stats,
+# engage-dm-replies, audit-reddit*). Without this, concurrent pipelines hit
+# the MCP hook mid-post and fail CDP navigation with "Reddit browser locked
+# by session <uuid>" after exhausting retries.
+source "$REPO_DIR/skill/lock.sh"
+acquire_lock "reddit-browser" 3600
+
 cd "$REPO_DIR"
 python3 scripts/post_reddit.py --iterations 5 --limit 1 2>&1 | tee -a "$LOG_FILE"
 

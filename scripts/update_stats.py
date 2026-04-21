@@ -548,10 +548,13 @@ def update_moltbook(db, api_key, quiet=False):
         return {"skipped": True, "reason": "no_api_key"}
 
     posts = db.execute(
-        "SELECT id, our_url, thread_url FROM posts WHERE platform='moltbook' AND status='active' AND our_url IS NOT NULL ORDER BY id"
+        "SELECT id, our_url, thread_url, upvotes, comments_count, "
+        "COALESCE(scan_no_change_count, 0) AS scan_no_change_count, posted_at "
+        "FROM posts WHERE platform='moltbook' AND status='active' AND our_url IS NOT NULL "
+        "ORDER BY engagement_updated_at ASC NULLS FIRST, id DESC"
     ).fetchall()
 
-    total = updated = deleted = errors = 0
+    total = updated = deleted = errors = skipped = 0
     results = []
     rate_limited = False
 
@@ -560,6 +563,15 @@ def update_moltbook(db, api_key, quiet=False):
             break
         total += 1
         post_id, our_url, thread_url = post[0], post[1], post[2]
+        prev_upvotes, prev_comments = post[3], post[4]
+        no_change = post[5]
+        posted_at = post[6]
+
+        if no_change >= 3 and posted_at:
+            pa = posted_at.replace(tzinfo=timezone.utc) if posted_at.tzinfo is None else posted_at
+            if datetime.now(timezone.utc) - pa > timedelta(days=3):
+                skipped += 1
+                continue
 
         # Extract post UUID and optional comment UUID from our_url
         # Format: https://www.moltbook.com/post/{post_uuid}#{comment_uuid}
@@ -706,7 +718,9 @@ def update_moltbook(db, api_key, quiet=False):
             # Comment-specific engagement
             comment_upvotes = our_comment.get("upvotes", 0)
             comment_score = our_comment.get("score", 0)
-            comment_replies = our_comment.get("reply_count", len(our_comment.get("replies", [])))
+            # Server's `reply_count` is stale/zero on many comments; len(replies) is authoritative.
+            replies_list = our_comment.get("replies") or []
+            comment_replies = max(our_comment.get("reply_count") or 0, len(replies_list))
             verification = our_comment.get("verification_status", "unknown")
             thread_comment_count = data.get("count", 0)
 
@@ -716,6 +730,10 @@ def update_moltbook(db, api_key, quiet=False):
                 [comment_upvotes, comment_replies, post_id],
             )
             updated += 1
+            if comment_upvotes == prev_upvotes and comment_replies == prev_comments:
+                db.execute("UPDATE posts SET scan_no_change_count = COALESCE(scan_no_change_count, 0) + 1 WHERE id=%s", [post_id])
+            else:
+                db.execute("UPDATE posts SET scan_no_change_count = 0 WHERE id=%s", [post_id])
             results.append({"id": post_id, "upvotes": comment_upvotes,
                             "replies": comment_replies, "verification": verification})
         else:
@@ -778,11 +796,18 @@ def update_moltbook(db, api_key, quiet=False):
                 [upvotes, comment_count, views, post_id],
             )
             updated += 1
+            if upvotes == prev_upvotes and comment_count == prev_comments:
+                db.execute("UPDATE posts SET scan_no_change_count = COALESCE(scan_no_change_count, 0) + 1 WHERE id=%s", [post_id])
+            else:
+                db.execute("UPDATE posts SET scan_no_change_count = 0 WHERE id=%s", [post_id])
             results.append({"id": post_id, "upvotes": upvotes, "score": score,
                             "comments": comment_count})
 
     db.commit()
-    return {"total": total, "updated": updated, "deleted": deleted, "errors": errors, "results": results}
+    if skipped and not quiet:
+        print(f"  Skipped {skipped} stable Moltbook posts (3+ scans unchanged, older than 3 days)")
+    return {"total": total, "updated": updated, "deleted": deleted, "errors": errors,
+            "skipped": skipped, "results": results}
 
 
 def update_github(db, quiet=False, limit=None):

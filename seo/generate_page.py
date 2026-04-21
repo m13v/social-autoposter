@@ -487,12 +487,16 @@ Every page MUST render exactly TWO `BookCallCTA` instances from `@seo/components
    ```
 
 Do NOT hard-code `href="https://cal.com/..."` in a raw `<a>` tag or copy the booking URL into a custom button; always use `BookCallCTA` so the PostHog event fires with the canonical shape. Do NOT render more than two BookCallCTA instances per page.
+
+**Booking attribution is automatic.** `BookCallCTA` (and `InlineCta` / `StickyBottomCta` with `trackAs="schedule"`) rewrite the Cal.com URL at click time, appending `metadata[utm_source]=<hostname>`, `metadata[utm_medium]=schedule_click`, and `metadata[utm_campaign]=<pathname>`. Cal.com mirrors those into the booking payload, our webhook writes them to `cal_bookings.utm_source / utm_medium / utm_campaign`, and the top-pages pipeline uses `utm_campaign` to score bookings per landing page. If you build a custom Book-a-Call CTA for any reason, you MUST route its href through `withBookingAttribution` from `@seo/components` or page-level booking attribution breaks.
 """
 
 
 def build_prompt(product: str, keyword: str, slug: str, trigger: str,
                  product_cfg: dict, source_block: str,
-                 content_type: str = "guide") -> str:
+                 content_type: str = "guide",
+                 human_guidance: str | None = None,
+                 setup_missing: list[str] | None = None) -> str:
     repo = os.path.expanduser(product_cfg.get("landing_pages", {}).get("repo", ""))
     website = (product_cfg.get("landing_pages", {}).get("base_url")
                or product_cfg.get("website", ""))
@@ -532,7 +536,90 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
         "use_case": f"This is a use-case page describing one concrete job {product} does. Readers want to know whether {product} can handle their specific workflow. Show them, with at least one anchor_fact drawn from real product source. If a UseCasePageShell exists in `{repo}/src/components/seo/`, prefer it; otherwise compose raw sections.",
     }.get(content_type, "")
 
-    return f"""You are building one SEO page for {product}. You decide the angle and the content. Your one job is to find something real about the product that no competitor page mentions, and build a page around that.
+    guidance_block = ""
+    if human_guidance:
+        # Prepended at the very top so the model cannot miss it. The reply
+        # came from a human after a previous escalation; treat it as binding
+        # context, not a suggestion. The text is verbatim; do not summarize
+        # or interpret -- just follow the instructions.
+        guidance_block = (
+            "=== HUMAN GUIDANCE (escalation reply) ===\n"
+            "A previous attempt to build this page was blocked and escalated\n"
+            "to a human. The human's reply is below. Treat it as a binding\n"
+            "instruction. If it tells you to apply a specific phase of\n"
+            "setup-client-website, do that first. If it says 'skip', mark the\n"
+            "row done with notes='skipped per human guidance' and exit\n"
+            "without writing any page.\n\n"
+            f"{human_guidance}\n"
+            "=== END HUMAN GUIDANCE ===\n\n"
+        )
+
+    setup_self_heal_block = ""
+    if setup_missing:
+        # Injected when the consumer-site setup gate found a small number of
+        # missing pieces (below the escalation threshold). The model is
+        # expected to apply the relevant phases of the setup-client-website
+        # skill before doing anything else, then continue with the page
+        # build. Hard-cap the tool budget so a broken setup can't burn the
+        # whole page-gen budget on yak-shaving.
+        bullet_lines = "\n".join(f"  - {item}" for item in setup_missing)
+        setup_self_heal_block = (
+            "=== SETUP SELF-HEAL (do this BEFORE Step 1) ===\n"
+            f"This consumer site is missing {len(setup_missing)} piece(s) of\n"
+            "@seo/components / analytics setup. Fix them before writing the\n"
+            "page. Budget: <=30 tool calls for setup work. If you can't fix\n"
+            "it within that budget, escalate (see ESCALATION RUBRIC below)\n"
+            "instead of half-fixing it.\n\n"
+            "Missing:\n"
+            f"{bullet_lines}\n\n"
+            "How: invoke the `setup-client-website` skill and apply only\n"
+            "the phases that match the missing items above (typically\n"
+            "Phase 2c/2d for mounts and Phase 4a/4d/4e for analytics).\n"
+            "Verify with `python3 ~/social-autoposter/scripts/check_analytics_wiring.py`\n"
+            "(must show this product as OK) before continuing.\n"
+            "=== END SETUP SELF-HEAL ===\n\n"
+        )
+
+    escalation_rubric_block = (
+        "=== ESCALATION RUBRIC ===\n"
+        "If you hit a wall this prompt cannot solve, escalate to a human.\n"
+        "DO NOT silently give up, write a stub, or invent facts.\n\n"
+        "How to escalate (single shell command, then exit cleanly):\n"
+        "  python3 ~/social-autoposter/seo/escalate.py open \\\n"
+        f"    --product \"{product}\" \\\n"
+        f"    --keyword \"{keyword}\" \\\n"
+        f"    --slug \"{slug}\" \\\n"
+        "    --trigger model_initiated \\\n"
+        "    --reason \"<one to three sentences: what you tried, what's blocking>\"\n\n"
+        "After escalating, exit. The pipeline will pause this row and resume\n"
+        "it once a human replies (their reply lands as HUMAN GUIDANCE on the\n"
+        "next attempt).\n\n"
+        "VALID reasons to escalate:\n"
+        "  - The keyword and product are semantically incompatible and no\n"
+        "    honest angle exists (e.g. keyword is about a topic the product\n"
+        "    genuinely does not address).\n"
+        "  - Required source files / scripts referenced in this prompt do\n"
+        "    not exist on disk and you cannot find equivalents.\n"
+        "  - The repo is broken in a way the setup-client-website skill\n"
+        "    cannot repair (e.g. unknown framework, corrupted package.json,\n"
+        "    custom build system you don't understand).\n"
+        "  - You hit a real auth/API wall (missing credential, revoked token,\n"
+        "    403 from an external service that requires human intervention).\n"
+        "  - Setup self-heal is required and you cannot complete it within\n"
+        "    the 30 tool-call budget.\n\n"
+        "INVALID reasons (push through instead):\n"
+        "  - 'I'm not sure which file to read' -> read more files.\n"
+        "  - 'The first SERP search returned weak results' -> try other queries.\n"
+        "  - 'A tool returned an error once' -> retry, read the error, adapt.\n"
+        "  - 'This is taking many tool calls' -> volume alone is not a block.\n"
+        "  - 'I want to confirm the angle is good' -> commit and ship.\n\n"
+        "Threshold: only escalate after you have made at least 10 substantive\n"
+        "tool calls trying to make forward progress on the actual blocker.\n"
+        "Process noise (linting, log reads, unrelated failures) does not count.\n"
+        "=== END ESCALATION RUBRIC ===\n\n"
+    )
+
+    return f"""{guidance_block}{setup_self_heal_block}{escalation_rubric_block}You are building one SEO page for {product}. You decide the angle and the content. Your one job is to find something real about the product that no competitor page mentions, and build a page around that.
 
 CONTENT TYPE: {content_type} ({ct['description']})
 {type_context}
@@ -978,6 +1065,59 @@ def verify_commit_landed(repo_path: str, expected_file: str) -> dict:
     return {"ok": True, "commit_sha": sha, "ref": ref}
 
 
+def typecheck_and_cleanup(repo_path: str, expected_file_candidates: list[str]) -> dict:
+    """Run `npx tsc --noEmit` in the repo to catch type errors the inner Claude
+    session may have left behind. If typecheck fails, restore/remove any
+    uncommitted page files under expected_file_candidates so the background
+    auto-commit daemon cannot push broken work to main.
+
+    Returns {ok: bool, error?: str, cleaned?: list[str], skipped?: str}.
+    Skipped if the repo is not a TypeScript project.
+    """
+    root = Path(repo_path)
+    if not (root / "package.json").exists() or not (root / "tsconfig.json").exists():
+        return {"ok": True, "skipped": "not a TypeScript project"}
+
+    try:
+        r = subprocess.run(
+            ["npx", "--no-install", "tsc", "--noEmit"],
+            cwd=repo_path, capture_output=True, text=True, timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "tsc --noEmit timed out after 300s"}
+    except FileNotFoundError:
+        return {"ok": True, "skipped": "npx not on PATH"}
+
+    if r.returncode == 0:
+        return {"ok": True}
+
+    tsc_output = (r.stdout + r.stderr).strip()
+    cleaned: list[str] = []
+    for rel in expected_file_candidates:
+        abs_path = root / rel
+        if not abs_path.exists():
+            continue
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", rel],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+        if tracked.returncode == 0:
+            subprocess.run(["git", "restore", "--", rel],
+                           cwd=repo_path, capture_output=True, text=True)
+            cleaned.append(f"{rel} (restored)")
+        else:
+            try:
+                abs_path.unlink()
+                parent = abs_path.parent
+                if parent.is_dir() and parent != root and not any(parent.iterdir()):
+                    parent.rmdir()
+                cleaned.append(f"{rel} (removed)")
+            except OSError:
+                pass
+
+    return {"ok": False, "error": tsc_output, "cleaned": cleaned}
+
+
 def probe_url_live(url: str, timeout: int = 15, retries: int = 30,
                    interval: int = 10) -> dict:
     """HEAD-then-GET probe with fixed-interval retries. Returns {ok, status, error}.
@@ -1112,6 +1252,37 @@ def update_state(trigger: str, product: str, keyword: str, status: str,
         conn.commit()
         cur.close()
         conn.close()
+    elif trigger == "top_page":
+        conn = db_helpers.get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO seo_keywords (product, keyword, slug, source, status) "
+            "VALUES (%s, %s, %s, 'top_page', %s) "
+            "ON CONFLICT (product, keyword) DO NOTHING",
+            (product, keyword, slug or "", status),
+        )
+        sets = ["status = %s", "updated_at = NOW()"]
+        vals: list = [status]
+        if page_url is not None:
+            sets.append("page_url = %s"); vals.append(page_url)
+        if slug is not None:
+            sets.append("slug = %s"); vals.append(slug)
+        if notes is not None:
+            sets.append("notes = %s"); vals.append(notes)
+        if content_type is not None:
+            sets.append("content_type = %s"); vals.append(content_type)
+        if claude_session_id is not None:
+            sets.append("claude_session_id = %s"); vals.append(claude_session_id)
+        if status == "done":
+            sets.append("completed_at = NOW()")
+        vals.extend([product, keyword])
+        cur.execute(
+            f"UPDATE seo_keywords SET {', '.join(sets)} WHERE product = %s AND keyword = %s",
+            vals,
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
     elif trigger == "manual":
         pass  # caller manages state
 
@@ -1135,7 +1306,9 @@ def find_existing_target_path(repo_path: str, content_type: str,
 
 
 def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
-             content_type: str | None = None, force: bool = False) -> dict:
+             content_type: str | None = None, force: bool = False,
+             escalation_id: int | None = None,
+             human_guidance: str | None = None) -> dict:
     """
     Full generation lifecycle. Caller already marked the row in_progress.
     Returns a structured result; also updates state on success/failure.
@@ -1144,6 +1317,11 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
     force: if True, overwrite an existing target file. Default False — abort
            with overwrite_blocked status so hand-edited pages are never
            clobbered by a cron tick.
+    escalation_id / human_guidance: set by --resume-escalation. When
+           escalation_id is provided, on success we shell out to
+           seo/escalate.py mark-resumed so the escalation row flips
+           from 'replied' to 'resumed'. human_guidance is prepended at
+           the very top of the prompt as binding context.
     """
     if content_type is None:
         content_type = classify_content_type(keyword)
@@ -1175,26 +1353,39 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
                 "existing_path": existing}
 
     setup = check_consumer_setup(repo_path)
-    if not setup["ok"]:
+    # The 1-3 missing branch ("soft") will not return early; we inject
+    # setup_missing into the prompt and let the model self-heal as part of
+    # the normal page-build run. Track that here so build_prompt can grow
+    # a SETUP SELF-HEAL block.
+    setup_missing_for_prompt: list[str] | None = None
+    # On a resume, trust the human guidance: they have presumably told the
+    # model which setup-client-website phases to apply. The model will run
+    # those before writing the page; we cannot enforce setup pre-flight or
+    # we will re-escalate before Claude is even spawned. If the model fails
+    # to fix setup, the downstream build/verification will catch it and
+    # leave the escalation in 'replied' for the next tick to retry.
+    if not setup["ok"] and escalation_id is not None:
+        print(f"  [resume #{escalation_id}] setup gate has "
+              f"{len(setup['missing'])} missing items; skipping pre-flight "
+              f"because human guidance is binding context")
+    elif not setup["ok"]:
+        # Self-heal is the ONLY default path. Pass the missing pieces to the
+        # model via build_prompt; the SETUP SELF-HEAL block tells it to
+        # invoke the setup-client-website skill (Phase 2c/2d/4a/4d/4e etc.)
+        # before writing the page, with a 30 tool-call budget. If the model
+        # decides setup is genuinely unfixable mid-run, it can call
+        # escalate.py itself with trigger=model_initiated.
         reason = "; ".join(setup["missing"])[:400]
-        notes = f"consumer setup incomplete: {reason}"
-        update_state(trigger, product, keyword, "pending",
-                     notes=notes, slug=slug, content_type=content_type)
-        return {
-            "success": False,
-            "error": (
-                f"consumer site {repo_path} is missing @seo/components setup. "
-                f"Run the setup-client-website skill (Phase 2c/2d/4a/4d/4e) "
-                f"before generating pages. Missing: {reason}"
-            ),
-            "content_type": content_type,
-            "setup_missing": setup["missing"],
-        }
+        setup_missing_for_prompt = setup["missing"]
+        print(f"  [setup-self-heal] {len(setup['missing'])} missing piece(s); "
+              f"injecting into prompt: {reason}")
 
     sources = resolve_source_paths(product_cfg)
     source_block = format_source_block(sources)
     prompt = build_prompt(product, keyword, slug, trigger, product_cfg,
-                          source_block, content_type=content_type)
+                          source_block, content_type=content_type,
+                          human_guidance=human_guidance,
+                          setup_missing=setup_missing_for_prompt)
 
     log_dir = SCRIPT_DIR / "logs" / product.lower()
     concepts_dir = SCRIPT_DIR / "concepts" / product.lower()
@@ -1235,6 +1426,29 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
         tmpl.format(slug=slug)
         for tmpl in CONTENT_TYPES[content_type]["path_candidates"]
     ]
+
+    # Pipeline-side typecheck gate. The prompt asks the inner session to run
+    # `npx tsc --noEmit`; this enforces it. If the session skipped typecheck
+    # and left broken TS in the working tree, the ~/git-dashboard auto-commit
+    # cron would otherwise push it to main within ~60s and break the deploy
+    # (PieLine aiphoneordering.com incident, 2026-04-21). On failure we
+    # restore/remove the candidate page files so auto-commit has nothing to
+    # push, then mark the row pending.
+    tc = typecheck_and_cleanup(repo_path, expected_file_candidates)
+    if not tc["ok"]:
+        tsc_err = tc.get("error", "")[-800:]
+        cleaned = tc.get("cleaned", [])
+        note = f"typecheck_failed; cleaned={cleaned}; tsc_tail={tsc_err}"[:500]
+        update_state(trigger, product, keyword, "pending",
+                     notes=note, slug=slug,
+                     content_type=content_type,
+                     claude_session_id=session_id)
+        return {"success": False,
+                "error": f"typecheck failed: {tsc_err}",
+                "content_type": content_type,
+                "cleaned": cleaned,
+                "stream_log": stream["stream_log_path"],
+                "tool_summary": stream["tool_summary"]}
     verify = {"ok": False, "error": f"no candidate matched: {expected_file_candidates}"}
     last_verify_err = ""
     for candidate in expected_file_candidates:
@@ -1293,6 +1507,21 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
                  notes=salvage_note or None,
                  claude_session_id=session_id)
 
+    # Close out an escalation if this run was a resume. Best-effort: a
+    # mark-resumed failure should not flip the page success to failure.
+    if escalation_id is not None:
+        try:
+            subprocess.run(
+                [sys.executable, str(SCRIPT_DIR / "escalate.py"), "mark-resumed",
+                 "--id", str(escalation_id),
+                 "--log-path", stream["stream_log_path"],
+                 "--outcome", "success"],
+                check=False, timeout=30,
+            )
+        except Exception as e:
+            print(f"  WARN: mark-resumed failed for #{escalation_id}: {e}",
+                  file=sys.stderr)
+
     return {
         "success": True,
         "page_url": page_url,
@@ -1304,25 +1533,79 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
         "stream_log": stream["stream_log_path"],
         "salvaged": bool(salvage_note),
         "salvage_note": salvage_note,
+        "escalation_id": escalation_id,
     }
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--product", required=True)
-    ap.add_argument("--keyword", required=True)
-    ap.add_argument("--slug", required=True)
-    ap.add_argument("--trigger", choices=["serp", "gsc", "manual", "reddit"], default="manual")
+    # When --resume-escalation is given, product/keyword/slug are loaded
+    # from the seo_escalations row, so they are not required on the CLI.
+    ap.add_argument("--product")
+    ap.add_argument("--keyword")
+    ap.add_argument("--slug")
+    ap.add_argument("--trigger", choices=["serp", "gsc", "manual", "reddit", "top_page"], default="manual")
     ap.add_argument("--content-type", choices=list(CONTENT_TYPES.keys()), default=None,
                     help="Override the regex classifier. Default: auto-classify from keyword.")
     ap.add_argument("--force", action="store_true",
                     help="Overwrite an existing page at the target path. Default: abort if the target file already exists.")
+    ap.add_argument("--resume-escalation", type=int, default=None,
+                    help="Resume from a replied seo_escalations row. "
+                         "Loads product/keyword/slug from the row, prepends "
+                         "the human reply into the prompt as binding "
+                         "guidance, and on success calls escalate.py "
+                         "mark-resumed.")
     args = ap.parse_args()
 
-    result = generate(product=args.product, keyword=args.keyword,
-                      slug=args.slug, trigger=args.trigger,
+    escalation_id = args.resume_escalation
+    human_guidance = None
+    trigger = args.trigger
+    product = args.product
+    keyword = args.keyword
+    slug = args.slug
+
+    if escalation_id is not None:
+        import db_helpers as _db
+        conn = _db.get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT product, keyword, slug, status, human_reply, source_table "
+            "FROM seo_escalations WHERE id = %s",
+            (escalation_id,),
+        )
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        if not row:
+            print(f"ERROR: escalation #{escalation_id} not found", file=sys.stderr)
+            return 1
+        e_product, e_keyword, e_slug, e_status, e_reply, e_source_table = row
+        if e_status != "replied":
+            print(f"ERROR: escalation #{escalation_id} status={e_status} (expected 'replied')",
+                  file=sys.stderr)
+            return 1
+        if not e_reply or not e_reply.strip():
+            print(f"ERROR: escalation #{escalation_id} has empty human_reply",
+                  file=sys.stderr)
+            return 1
+        product = product or e_product
+        keyword = keyword or e_keyword
+        slug = slug or e_slug
+        # Pick trigger from the source table if caller did not specify
+        if args.trigger == "manual":
+            trigger = "gsc" if e_source_table == "gsc_queries" else "serp"
+        human_guidance = e_reply
+
+    if not (product and keyword and slug):
+        print("ERROR: --product, --keyword, --slug are required (or use --resume-escalation)",
+              file=sys.stderr)
+        return 2
+
+    result = generate(product=product, keyword=keyword,
+                      slug=slug, trigger=trigger,
                       content_type=args.content_type,
-                      force=args.force)
+                      force=args.force,
+                      escalation_id=escalation_id,
+                      human_guidance=human_guidance)
     print(json.dumps(result, indent=2, default=str))
     return 0 if result.get("success") else 1
 

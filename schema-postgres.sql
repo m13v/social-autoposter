@@ -149,6 +149,7 @@ ALTER TABLE dms ADD COLUMN IF NOT EXISTS target_project TEXT;              -- pr
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS qualification_status TEXT DEFAULT 'pending';  -- pending | asked | answered | qualified | disqualified
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS qualification_notes TEXT;
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS booking_link_sent_at TIMESTAMP;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS first_product_mention_at TIMESTAMP;  -- stamped by set-tier on first transition to tier >= 2 (Tier 1 -> Tier 2 pivot)
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS icp_precheck TEXT;                -- DEPRECATED: superseded by icp_matches; kept during transition
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS icp_matches JSONB NOT NULL DEFAULT '[]'::jsonb;  -- [{project,label,notes,at}, ...] per-project ICP verdicts
 CREATE INDEX IF NOT EXISTS idx_dms_icp_matches ON dms USING gin (icp_matches);

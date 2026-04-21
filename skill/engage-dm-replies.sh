@@ -175,6 +175,15 @@ if [ -n "$PLATFORM" ]; then
     HR_PLATFORM_FILTER="h.platform = '$_HR_P'"
 fi
 
+# Ingest any human replies that have landed in the i@m13v.com inbox since the
+# last run. Parses [DM #N] from the subject, strips quoted history, inserts
+# into human_dm_replies with status='pending'. Safe to run every cycle (no-op
+# when inbox is empty; deduped by Gmail message id).
+log "Phase 0: ingesting human DM replies from Gmail inbox..."
+python3 "$REPO_DIR/scripts/ingest_human_dm_replies.py" 2>&1 | while IFS= read -r _line; do
+    log "  [ingest] $_line"
+done || true
+
 HUMAN_REPLIES=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT h.id, h.dm_id, h.platform, h.their_author, h.reply_content,
@@ -314,23 +323,34 @@ if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ]; then
 
 2. For Reddit Chat conversations (new reddit SPA), use the reddit-agent browser (mcp__reddit-agent__* tools):
    a. Navigate to https://www.reddit.com/chat
-   b. Look for chat rooms with unread indicators
-   c. Click into each unread chat room and read messages
+   b. Extract the full sidebar with mcp__reddit-agent__browser_run_code using scripts/browser/scan_reddit_chat.js. Save the returned `conversations` array to /tmp/reddit_chat_scan.json.
+   c. **Backfill chat URLs for any existing DM rows that still have chat_url=NULL**, using every conversation in that scan (read AND unread). This is cheap, idempotent, and fills buttons for historical rows whose chat is still in the sidebar:
+      ```bash
+      python3 -c "import json; d=json.load(open('/tmp/reddit_chat_scan.json')); print(json.dumps(d.get('conversations', d) if isinstance(d, dict) else d))" \
+        | python3 scripts/dm_conversation.py backfill-urls --platform reddit
+      ```
+      The validator drops anything that's not a real chat-room URL.
+   d. Then look for chat rooms with unread indicators and click into each unread chat room to read messages.
 
 3. For each conversation with new inbound messages:
    a. Identify the sender username
-   b. Log inbound messages:
+   b. **First, ensure a DM row exists.** ALWAYS run this before log-inbound — it is idempotent (returns existing id if present, creates one if missing) and auto-links reply_id/post_id from their most recent public comment on our posts, so the dashboard shows the full context chain instead of an orphan record:
       ```bash
-      cd ~/social-autoposter && python3 scripts/dm_conversation.py log-inbound --author "USERNAME" --content "MESSAGE_TEXT"
+      cd ~/social-autoposter && python3 scripts/dm_conversation.py ensure-dm --platform reddit --author "USERNAME" --chat-url "CHAT_ROOM_URL"
       ```
-   c. If no existing DM record exists for this user, the script will tell you. Create one:
+      It prints `DM_ID=<n>` on stdout. Capture that id for the next call.
+
+      `CHAT_ROOM_URL` must be the URL of the DM thread itself, NOT the post URL. Valid shapes:
+      - `https://www.reddit.com/chat/room/!<id>%3Areddit.com` (new Reddit chat)
+      - `https://www.reddit.com/message/messages/<id>` (legacy Reddit PM)
+      When you are inside the chat room in the reddit-agent browser, use the browser's current URL (address bar). Do NOT pass the post/comment URL, do NOT pass the subreddit URL. If you genuinely don't have one, omit `--chat-url` entirely; a validator rejects non-thread URLs anyway.
+   c. Log inbound messages (use the dm-id printed above):
       ```bash
-      source ~/social-autoposter/.env
-      psql "\$DATABASE_URL" -c "INSERT INTO dms (platform, their_author, status, conversation_status, tier, project_name) VALUES ('reddit', 'USERNAME', 'sent', 'active', 1, NULL) RETURNING id;"
+      python3 scripts/dm_conversation.py log-inbound --dm-id DM_ID --author "USERNAME" --content "MESSAGE_TEXT"
       ```
-      Then set the chat URL:
+   d. If you didn't have the chat URL at step b, stamp it now:
       ```bash
-      python3 scripts/dm_conversation.py set-url --author "USERNAME" --url "CHAT_URL"
+      python3 scripts/dm_conversation.py set-url --dm-id DM_ID --url "CHAT_URL"
       ```
 PHASE_A_EOF
 fi
@@ -345,7 +365,7 @@ CRITICAL: use mcp__linkedin-agent__* tools for ALL LinkedIn browser work. Do NOT
 1. Navigate to https://www.linkedin.com/messaging/ using mcp__linkedin-agent__browser_navigate.
    Take a browser_snapshot. If the page is a login/checkpoint/verification challenge, STOP and print SESSION_INVALID, do not attempt to log in.
 
-2. Extract the list of unread conversations with a single mcp__linkedin-agent__browser_run_code call:
+2. Extract the FULL list of conversations (read AND unread) with a single mcp__linkedin-agent__browser_run_code call. We need every visible thread's URL so we can backfill chat_url for historical DM rows, not just the unread cohort:
 
    ```javascript
    async (page) => {
@@ -370,17 +390,24 @@ CRITICAL: use mcp__linkedin-agent__* tools for ALL LinkedIn browser work. Do NOT
    }
    ```
 
+   Save the entire returned array (not just unread) to /tmp/linkedin_threads.json, then backfill chat URLs for any existing DM row still missing one (uses `author=partner`, `chat_url=thread_url`):
+   ```bash
+   python3 -c "import json,sys; d=json.load(open('/tmp/linkedin_threads.json')); print(json.dumps([{'author': r['partner'], 'chat_url': r['thread_url']} for r in d]))" \
+     | python3 scripts/dm_conversation.py backfill-urls --platform linkedin
+   ```
+
 3. For each thread where unread is true:
    a. Navigate to thread_url (mcp__linkedin-agent__browser_navigate).
    b. Take a browser_snapshot. Read the last ~5 messages. Determine which are inbound vs from us.
    c. Identify the sender from the partner name.
-   d. Check if this person is in our DM database:
+   d. Ensure a DM row exists (idempotent, auto-links their prior LinkedIn comment engagement if any):
       ```bash
-      cd ~/social-autoposter && python3 scripts/dm_conversation.py find --author "PERSON_NAME"
+      cd ~/social-autoposter && python3 scripts/dm_conversation.py ensure-dm --platform linkedin --author "PERSON_NAME" --chat-url "THREAD_URL"
       ```
-   e. Log inbound messages the same way as Reddit:
+      Capture the `DM_ID=<n>` line for the next step. `THREAD_URL` must be `https://www.linkedin.com/messaging/thread/<id>/` (the value we scraped from `thread_url` in step 2, never a profile or feed URL). The validator refuses anything else.
+   e. Log inbound messages:
       ```bash
-      python3 scripts/dm_conversation.py log-inbound --author "PERSON_NAME" --content "MESSAGE_TEXT"
+      python3 scripts/dm_conversation.py log-inbound --dm-id DM_ID --author "PERSON_NAME" --content "MESSAGE_TEXT"
       ```
 
 4. Do NOT aggressively scroll or click "Load earlier messages" in every thread. Only read what's immediately visible after the initial navigation. If the most recent inbound message is not visible, move on.
@@ -392,12 +419,18 @@ if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ]; t
     IFS= read -r -d '' PHASE_C_BLOCK <<'PHASE_C_EOF' || true
 ## PHASE C: Scan X/Twitter DMs for new messages
 
-1. Get unread Twitter DM conversations using the Python CDP script (no browser MCP needed):
+1. Get ALL Twitter DM conversations visible in the sidebar (the script returns the full list, not only unread) and write them to /tmp/twitter_threads.json:
    ```bash
-   python3 scripts/twitter_browser.py unread-dms
+   python3 scripts/twitter_browser.py unread-dms > /tmp/twitter_threads.json
    ```
    This handles the encrypted DM passcode automatically (loaded from .env TWITTER_DM_PASSCODE).
    Returns JSON array with: author, handle, preview, time, thread_url, is_from_us.
+
+1a. Backfill chat URLs for any existing X DM row still missing one. Cheap, idempotent, fills buttons for historical rows whose chat is still in the sidebar:
+   ```bash
+   python3 -c "import json,sys; d=json.load(open('/tmp/twitter_threads.json')); print(json.dumps([{'author': r.get('handle') or r.get('author'), 'chat_url': r['thread_url']} for r in (d if isinstance(d, list) else [])]))" \
+     | python3 scripts/dm_conversation.py backfill-urls --platform x
+   ```
 
 2. For each conversation where is_from_us is false (has unread inbound messages), read the full messages:
    ```bash
@@ -408,7 +441,15 @@ if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ]; t
 3. For each conversation:
    a. Identify the sender from the partner_name/partner_handle
    b. **CRITICAL: Only log messages where is_from_us is false as inbound.** Skip our own messages.
-   c. Check if this person is in our DM database and log inbound messages the same way as Reddit.
+   c. Ensure a DM row exists (idempotent, auto-links any prior public reply on X from this handle):
+      ```bash
+      cd ~/social-autoposter && python3 scripts/dm_conversation.py ensure-dm --platform x --author "PARTNER_HANDLE" --chat-url "THREAD_URL"
+      ```
+      Use the printed `DM_ID=<n>` for every subsequent log-inbound on this conversation. `THREAD_URL` must be `https://x.com/i/chat/<ids>` (the value from `thread_url` returned by `twitter_browser.py unread-dms`, never the tweet URL or the profile URL). The validator refuses anything else.
+   d. Log inbound messages:
+      ```bash
+      python3 scripts/dm_conversation.py log-inbound --dm-id DM_ID --author "PARTNER_HANDLE" --content "MESSAGE_TEXT"
+      ```
 PHASE_C_EOF
 fi
 
@@ -511,7 +552,7 @@ If the conversation's matched project has a \`booking_link\` but \`booking_link_
 - They asked to move to another platform (Telegram, email, etc.)
 - They need a specific personal commitment ("when are you free?", "can you demo this?") that isn't a booking link scenario
 - They asked about pricing or business terms (UNLESS config has pricing for that project — then answer from config)
-- They're frustrated or upset
+- Their LATEST inbound message expresses distress about themselves (e.g., "I'm burned out", "nothing works for me"). Philosophical or polemical arguments do not qualify even if the surrounding thread title uses dark language. Subreddit titles, other users' comments, and the broader thread context never trigger this rule on their own.
 - The conversation is 8+ messages deep and going really well (high-value relationship) AND isn't a booking link scenario
 - You're not sure how to respond authentically
 
@@ -521,6 +562,7 @@ If the conversation's matched project has a \`booking_link\` but \`booking_link_
 - They offered a call/demo/meeting but the call is about THEIR work, THEIR product, or THEIR workflow — not a buying interest in one of our products
 - They work in an unrelated domain with no realistic fit to our project list
 - Peer/colleague chatter with no buyer signal
+- Philosophical, political, or polemical pushback about ideas (meditation, productivity, AI, religion, etc.). Human escalation is for actionable requests (calls, business proposals, personal decisions we have to make), not a prospect disagreeing with an idea. Classify under general_discussion or declined and let Step 2 compose a rapport reply, or skip if not our prospect.
 These waste inbox attention. Set `--interest not_our_prospect`, skip the reply, and move on.
 
 \`\`\`bash
@@ -713,6 +755,130 @@ Mark as stale if:
 \`\`\`bash
 python3 scripts/dm_conversation.py set-status --dm-id DM_ID --status stale
 \`\`\`
+
+## REPLY EXAMPLES BY INBOUND TYPE
+
+Use these as tone/shape references, not templates. Every reply must reference a specific detail from the inbound. Adapt to the conversation, don't copy the wording.
+
+### Type 1: Simple positive ("yeah", "sure", "cool, tell me more")
+
+Short acknowledgment plus ONE substantive continuation. No product name unless 2+ messages in. No link unless qualified.
+
+GOOD: "nice, what's the stack you're running it on? curious how it handles the auth flow"
+GOOD: "yeah same, we spent a week last month on a bug where the action completed but the state never flushed"
+BAD: "Great to hear! I'd love to tell you more about our solution. Here's a link: ..." (product-first, formal register, no hook)
+BAD: "btw I built something for that" (self-promo, banned phrase per HARD RULES)
+
+### Type 2: Engaged with detail (they describe their setup or ask a specific question)
+
+Answer the specific thing first, then ONE follow-up. Reference a concrete detail they mentioned.
+
+GOOD: "the parallel agents thing is what got us too, ended up scoping each one to its own worktree so they can't step on each other. how many do you run at once?"
+GOOD: "yeah 30s polling is rough, we moved to event-driven with a tiny socket listener and the cost dropped like 80%"
+BAD: "Thanks for sharing! That sounds really interesting. Would you like to hop on a call to discuss further?" (generic, unearned call offer, violates COMMITMENT GUARDRAILS)
+BAD: "Your question about X is really good. Here's what we do: [paragraph of marketing copy]" (essay-style, not texting register)
+
+### Type 2b: Folding the qualifying_question into a rapport reply (Step 2.5 \`pending\` -> \`asked\`)
+
+When the thread has 2+ messages AND a relevant topic has surfaced AND \`qualification_status = pending\`, paraphrase the matched project's \`qualifying_question\` as ONE natural sentence inside your normal rapport reply. Never paste it verbatim. Never stack two questions. Never make it feel like a form.
+
+GOOD (qualifying_question: "How many hours per week do your agents run unattended?"): "the orchestration drift thing killed us too, ended up with one worktree per agent just to stop them fighting. are yours running mostly in bursts or more like 24/7 in the background?"
+GOOD (qualifying_question: "Are you a B2B founder or running paid acquisition?"): "yeah the CAC math on cold outbound is brutal right now. are you running paid channels or mostly product-led?"
+BAD: "How many hours per week do your agents run unattended?" (verbatim paste, interrogation register)
+BAD: "Quick question: what's your team size, industry, and current tooling?" (multiple questions stacked, form-style)
+
+After sending, mark status as \`asked\` with a one-line paraphrase of what we asked (see Step 2.5 item 1).
+
+### Type 3: Direct question ("what tool do you use for X?", "how do you handle Y?")
+
+Answer the question directly. Only name a product if it's genuinely relevant AND the thread is 2+ messages in. Embed any link in a natural sentence, never lead with it.
+
+GOOD: "we use terminator for the desktop automation side, github.com/mediar-ai/terminator. went with the accessibility API approach after screenshot-based kept flaking on retina displays"
+GOOD: "honestly still figuring it out, ended up with a cron that fires every 4h and posts to a slack channel, not pretty but it works"
+BAD: "Check out our amazing product at [link]! It does exactly what you need." (sales register)
+BAD: "Great question! Before I answer, can I ask what your use case is?" (dodge, no answer given)
+
+### Type 4: Hesitant or skeptical ("not sure", "we tried something like this before", "probably won't work for us")
+
+Validate the hesitation, don't argue. Low-pressure continuation. No link, no product name.
+
+GOOD: "yeah same reason we kept putting it off, the last tool we tried ate our logs and we spent two weeks recovering. what happened when you tried it before?"
+GOOD: "makes sense, the ROI math only works past a certain team size. what's your setup now?"
+BAD: "But our solution is different! Here's why you should reconsider: ..." (defensive, pushy)
+BAD: "No worries, if you change your mind, here's my calendar: ..." (premature calendar share, they didn't ask)
+
+### Type 4b: One-shot clarifier after an ambiguous answer (Step 2.5 \`asked\` -> \`answered\`)
+
+We already folded the qualifying_question into a prior turn. Their latest reply is vague, partial, or off-topic. Compose ONE narrow clarifier that references their actual words. Do NOT ask a second distinct question. Do NOT press a third time on a later turn; if it's still ambiguous after this, let it rest and evaluate based on what you have.
+
+GOOD (they said "yeah we use some automation stuff"): "got it, when you say automation is that mostly CI scripts or also stuff that drives the desktop/browser UI?"
+GOOD (they said "kinda both I guess"): "fair, is the team already paying for something for this or still stitching it together in-house?"
+BAD: "Can you clarify? Also, what's your budget, team size, and timeline?" (stacked questions, interrogation)
+BAD: "To qualify you properly I need to know X, Y, Z" (form register, exposes the sales machinery)
+
+After sending, mark status as \`answered\` with a one-line rationale (see Step 2.5 item 2). On the next turn, land on \`qualified\` or \`disqualified\` based on the full picture; do not ask a third time.
+
+### Type 5: They asked for a call, demo, or meeting
+
+BOOKING LINK LOGIC: only share the link if (a) matched project has booking_link_auto_share: true in config.json, (b) qualification_status is already qualified, (c) booking_link_sent_at is NULL. Otherwise either qualify first (Step 2.5) or flag for human.
+
+GOOD (qualified, config allows auto-share): "yeah for sure, grab a time here: <booking_link verbatim from config>"
+GOOD (not yet qualified, folding in qualifying_question naturally): "happy to dig in, what's the team size you're running this across?"
+GOOD (project has no auto-share, or they fail disqualify list): flag for human, do NOT reply in this run.
+BAD: "Absolutely! Here's my calendar: calendly.com/my-made-up-link" (fabricated link, never invent one)
+BAD: "Let's do Thursday at 2pm!" (time-bound commitment, violates COMMITMENT GUARDRAILS)
+
+### Type 6: They're pitching US (agency, service, their product, their workflow)
+
+Set interest to not_our_prospect. Short polite reply or skip. Do NOT flag for human. Do NOT pitch back.
+
+GOOD: "appreciate it, not a fit right now but good luck with it"
+GOOD: skip entirely (if their message doesn't warrant a reply)
+BAD: "Thanks for reaching out! Here's what WE do: ..." (turning their pitch into ours)
+BAD: flagging for human (wastes inbox attention for non-buyer)
+
+### Type 7: Philosophical disagreement or polemic (meditation, AI doomerism, productivity takes)
+
+Rapport reply, no product, no booking link, no human flag. Keep it conversational.
+
+GOOD: "yeah the framing where everyone gets enlightened in 10 days feels like a marketing thing to me too. 7 courses in and the gains are subtle, mostly in how i notice reactivity before it flares"
+BAD: "Would you like to try vipassana.cool? It's designed for people like you." (forcing product into an unrelated philosophical thread)
+BAD: flagging for human (escalation is for actionable requests, not disagreements about ideas)
+
+## PIVOT EXAMPLES (Tier 1 -> Tier 2): general chat -> product mention
+
+The single most consequential move in a thread. Before composing any pivot, verify ALL four Step 3 criteria: 2+ total messages, they either surfaced a problem a project solves OR explicitly asked for tools, the product fits naturally in the reply with no "btw" register, and you'd genuinely recommend it to a friend in their situation. If any one is false, stay in Tier 1 rapport.
+
+At the pivot turn, fire these writes together (alongside Step 5b's \`set-interest\`):
+\`\`\`bash
+python3 scripts/dm_conversation.py set-project   --dm-id ID --project "PROJECT_NAME_FROM_CONFIG"
+python3 scripts/dm_conversation.py set-tier      --dm-id ID --tier 2
+python3 scripts/dm_conversation.py set-interest  --dm-id ID --interest warm
+\`\`\`
+\`set-tier\` automatically stamps \`first_product_mention_at = NOW()\` on the first transition to tier >= 2. Do not set that column by hand.
+
+### Trigger A: they explicitly asked for a tool
+
+GOOD (Terminator, asked about desktop automation): "we use terminator for the desktop automation side, github.com/mediar-ai/terminator. went with the accessibility API approach after screenshot-based kept flaking on retina displays"
+GOOD (Octolens, asked about mention tracking): "honestly octolens has been the one that stuck, octolens.com. picks up reddit/x/youtube/hn mentions in one feed so i stopped running manual searches"
+
+### Trigger B: they described a pain a project solves (no explicit tool ask)
+
+GOOD (Terminator, they described retina/screenshot flake): "yeah the retina flake was our whole week last month. ended up on terminator, github.com/mediar-ai/terminator, since it drives the accessibility tree directly, killed the flake in one afternoon"
+GOOD (Octolens, they described manual search pain): "that's the exact reason we stopped doing it manually. octolens.com catches reddit/x/youtube/hn mentions in one feed, daily email is enough that i barely check the dashboard"
+
+### Soft pivot: category first, name next turn if they bite
+
+GOOD (desktop automation, no product name yet): "yeah the retina flake was our whole week last month. ended up moving to an accessibility-API runner instead of screenshots, solved it immediately"
+
+For the soft-pivot turn, do NOT set tier to 2 yet. Keep tier at 1 and do NOT call \`set-project\`. If they reply asking "what tool?", the NEXT turn becomes Type 3 and completes the pivot with \`set-tier 2\` + \`set-project\` + \`set-interest warm\` together.
+
+### BAD examples
+
+BAD: "btw I built a tool for that, check out github.com/mediar-ai/terminator if you're curious" (HARD RULE 3, "btw I built" is banned self-promo)
+BAD: "What you're describing is exactly what Terminator solves. Would you like to try it? Here's the link: ..." (sales register, product-first, unearned pivot)
+BAD: pivoting on the very first outbound (HARD RULE 4, need 2+ total messages in the thread)
+BAD: pivoting to Terminator when the pain is about brand mentions (HARD RULE 5, product must fit the actual pain)
 
 ## ANTI-PATTERNS TO AVOID (learned from past mistakes)
 - Sending two messages before getting a reply (got us called out as AI)
