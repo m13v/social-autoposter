@@ -215,13 +215,17 @@ def collect_metrics(api_key, project_id, domain, client_slug, days=1):
     return out
 
 
-def _created_paths_for_project(proj):
+def _created_paths_for_project(proj, days=None):
     """Reuse the dashboard's `_created_paths_for_project` helper from
     scripts/project_stats_json.py so this picker stays identical to the
-    Top -> Pages subtab's "created" set (filesystem scan of the landing
-    repo UNION seo_keywords UNION gsc_queries). That's the same filter
-    the dashboard uses to split real SEO pages from 404/unknown inbound
-    traffic, including pages committed by the auto-commit agent."""
+    Top -> Pages subtab's "created" set.
+
+    With `days=None`, includes the filesystem scan of the landing repo (which
+    leaks the homepage and every other ambient marketing page — every Next.js
+    app ships `src/app/page.tsx`). The dashboard always passes a window, which
+    skips the FS scan and restricts to seo_keywords UNION gsc_queries rows
+    whose `completed_at` falls inside the window. Pass the same window here
+    to match."""
     try:
         if "SCRIPTS_DIR" not in _created_paths_for_project.__dict__:
             _created_paths_for_project.SCRIPTS_DIR = str(ROOT_DIR / "scripts")
@@ -231,7 +235,7 @@ def _created_paths_for_project(proj):
         _db.load_env()
         conn = _db.get_conn()
         try:
-            by_domain = psj._created_paths_for_project(conn, proj, days=None)
+            by_domain = psj._created_paths_for_project(conn, proj, days=days)
         finally:
             try: conn.close()
             except Exception: pass
@@ -390,7 +394,7 @@ def build_global_brief(days=1, top_n=10):
         except Exception as e:
             print(f"  {name} metrics failed: {e}", file=sys.stderr)
             continue
-        allowed = _created_paths_for_project(proj)
+        allowed = _created_paths_for_project(proj, days=days)
         kept = 0; dropped = 0
         for r in ranking:
             path = r["path"]
