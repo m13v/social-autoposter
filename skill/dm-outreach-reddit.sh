@@ -147,13 +147,14 @@ For each DM row, BEFORE you compose or send, do this in order:
    \`\`\`
    Omit any flag whose value is empty or unknown. \`--link-dm\` also wires dms.prospect_id.
 
-4. Evaluate ICP match: compare the profile + their_content + comment_context against the target_project's must_have (satisfy at least one) and disqualify (trigger ANY = fail). Pick one label: icp_match, icp_miss, disqualified, or unknown.
+4. Evaluate ICP match against EVERY project listed in "Per-project ICP criteria" above (not only target_project). For each project compare the profile + their_content + comment_context against its must_have (satisfy at least one) and disqualify (trigger ANY = fail), and pick one label: icp_match, icp_miss, disqualified, or unknown. Upsert one entry per project:
    \`\`\`bash
    python3 $REPO_DIR/scripts/dm_conversation.py set-icp-precheck \\
-       --dm-id DM_ID --label LABEL --notes "SHORT_RATIONALE"
+       --dm-id DM_ID --project PROJECT_NAME --label LABEL --notes "SHORT_RATIONALE"
    \`\`\`
+   Run this once per project from the list. Each call upserts one entry in dms.icp_matches (JSONB array) keyed by project.
 
-5. PROCEED TO SEND THE DM regardless of the ICP label. The label is informational; it does NOT gate outreach at this phase. Do not skip a DM because of \`icp_miss\` or \`disqualified\`.
+5. PROCEED TO SEND THE DM regardless of the ICP labels. The labels are informational; they do NOT gate outreach at this phase. Do not skip a DM because of \`icp_miss\` or \`disqualified\`.
 
 ## How to send DMs on Reddit (use mcp__reddit-agent__* tools):
 1. Navigate to https://www.reddit.com/message/compose/?to=THEIR_AUTHOR
