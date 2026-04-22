@@ -55,6 +55,7 @@ if ENV_PATH.exists():
 
 sys.path.insert(0, str(SCRIPT_DIR))
 import db_helpers  # noqa: E402
+from claude_wait import wait_for_claude  # noqa: E402
 
 
 CLAUDE_TIMEOUT_SECONDS = 1200  # 20 minutes, generous for research + generation
@@ -878,6 +879,13 @@ def run_claude_stream(prompt: str, cwd: str, log_dir: Path, slug: str) -> dict:
     tool_calls: list[dict] = []
     final_text = ""
     start = time.time()
+
+    # Bridge the Claude Code auto-update unlink window before spawning.
+    if not wait_for_claude():
+        return {"exit_code": 127, "final_result_text": "",
+                "tool_summary": {}, "stream_log_path": str(stream_log),
+                "session_id": session_id,
+                "error": "claude CLI not on PATH after wait_for_claude timeout"}
 
     with open(stream_log, "w") as log_f:
         try:
