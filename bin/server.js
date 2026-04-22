@@ -3695,13 +3695,14 @@ function renderFunnelStats(payload) {
     a.email_signups    += Number(f.email_signups)    || 0;
     a.schedule_clicks  += Number(f.schedule_clicks)  || 0;
     a.get_started_clicks += Number(f.get_started_clicks) || 0;
+    a.cross_product_clicks += Number(f.cross_product_clicks) || 0;
     a.d_pageviews      += Number(f.domain_pageviews) || 0;
     a.d_email_signups  += Number(f.domain_email_signups) || 0;
     a.d_schedule_clicks += Number(f.domain_schedule_clicks) || 0;
     a.d_get_started_clicks += Number(f.domain_get_started_clicks) || 0;
     a.bookings         += Number(f.real_bookings)    || 0;
     return a;
-  }, { posts: 0, seo: 0, pageviews: 0, email_signups: 0, schedule_clicks: 0, get_started_clicks: 0, d_pageviews: 0, d_email_signups: 0, d_schedule_clicks: 0, d_get_started_clicks: 0, bookings: 0 });
+  }, { posts: 0, seo: 0, pageviews: 0, email_signups: 0, schedule_clicks: 0, get_started_clicks: 0, cross_product_clicks: 0, d_pageviews: 0, d_email_signups: 0, d_schedule_clicks: 0, d_get_started_clicks: 0, bookings: 0 });
   // Compact cell: "<scoped> (<domain>)" when they differ, just "<scoped>"
   // when equal. Keeps the table scannable while still exposing domain-wide
   // traffic that doesn't happen to land on pages generated this window.
@@ -3736,6 +3737,7 @@ function renderFunnelStats(payload) {
       email_signups:    asNum(f.email_signups),
       schedule_clicks:  asNum(f.schedule_clicks),
       get_started_clicks: asNum(f.get_started_clicks),
+      cross_product_clicks: asNum(f.cross_product_clicks),
       // Domain-wide counterparts, rendered in parens next to the scoped value.
       domain_pageviews:        asNum(f.domain_pageviews),
       domain_email_signups:    asNum(f.domain_email_signups),
@@ -3793,6 +3795,10 @@ function renderFunnelStats(payload) {
       { key: 'schedule_clicks',  label: 'Schedule Clicks', type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_schedule_clicks') },
       { key: 'get_started_clicks', label: 'Get Started',   type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_get_started_clicks') },
       { key: 'bookings',         label: 'Bookings',        type: 'numeric', align: 'right', formatter: fmt },
+      // Cross-product: clicks on CTAs that promote a sibling product (e.g.
+      // Claude Meter CTA on Fazm blog posts). Fires `cross_product_click`
+      // via @m13v/seo-components' trackCrossProductClick.
+      { key: 'cross_product_clicks', label: 'Cross Product', type: 'numeric', align: 'right', formatter: v => v == null ? '—' : fmt(v) },
     ],
   });
   // Inline legend below the table explaining the "N (M)" cell format.
