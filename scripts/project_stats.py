@@ -133,14 +133,18 @@ def get_posthog_stats(api_key, project_id, domains, days):
     return stats
 
 
-def get_booking_stats(bookings_db_url, client_slug, days):
-    """Get booking stats from the separate bookings DB."""
+def get_booking_stats(bookings_db_url, client_slug, days, table="cal_bookings"):
+    """Get booking stats from the separate bookings DB.
+    `table` is `cal_bookings` (Cal.com) or `calendly_bookings` (Calendly).
+    Both tables share the columns used here."""
     if not bookings_db_url:
         return None
     try:
         import psycopg2
         conn = psycopg2.connect(bookings_db_url)
         cur = conn.cursor()
+        if table not in {"cal_bookings", "calendly_bookings"}:
+            raise ValueError(f"unsupported booking table: {table}")
         cur.execute(
             "SELECT COUNT(*), "
             "COUNT(*) FILTER (WHERE status = 'created'), "
@@ -150,7 +154,7 @@ def get_booking_stats(bookings_db_url, client_slug, days):
             "AND attendee_email NOT LIKE '%%example%%' "
             "AND attendee_name NOT LIKE '%%TEST%%' "
             "AND attendee_name NOT LIKE '%%John Doe%%') "
-            "FROM cal_bookings WHERE client_slug = %s "
+            "FROM " + table + " WHERE client_slug = %s "
             "AND created_at >= NOW() - INTERVAL '" + str(days) + " days'",
             (client_slug,),
         )
@@ -160,7 +164,7 @@ def get_booking_stats(bookings_db_url, client_slug, days):
 
         cur.execute(
             "SELECT attendee_name, attendee_email, status, start_time, created_at "
-            "FROM cal_bookings WHERE client_slug = %s "
+            "FROM " + table + " WHERE client_slug = %s "
             "AND created_at >= NOW() - INTERVAL '" + str(days) + " days' "
             "ORDER BY created_at DESC LIMIT 5",
             (client_slug,),
@@ -202,8 +206,14 @@ def get_project_domains(project):
 
 
 def get_client_slug(project_name):
-    """Map project name to cal_bookings client_slug."""
-    return {"Cyrano": "cyrano", "PieLine": "pieline", "fazm": "fazm", "S4L": "s4l", "fde10x": "fde10x", "tenxats": "tenxats"}.get(project_name)
+    """Map project name to cal_bookings / calendly_bookings client_slug."""
+    return {"Cyrano": "cyrano", "PieLine": "pieline", "fazm": "fazm", "S4L": "s4l", "fde10x": "fde10x", "tenxats": "tenxats", "Clone": "clone", "mk0r": "mk0r", "paperbackexpert": "paperbackexpert"}.get(project_name)
+
+
+def get_booking_table(project_name):
+    """Return the booking table to query for a project.
+    Calendly clients write to calendly_bookings; everyone else writes to cal_bookings."""
+    return "calendly_bookings" if project_name in {"paperbackexpert"} else "cal_bookings"
 
 
 def print_project_report(name, post_stats, platforms, posthog, bookings, quiet=False):
