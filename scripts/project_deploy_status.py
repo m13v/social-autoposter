@@ -10,8 +10,10 @@ bin/server.js at /api/deploy/status. Also safe to run ad-hoc:
 """
 from __future__ import annotations
 
+import atexit
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -21,6 +23,24 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 REPO = Path(__file__).resolve().parent.parent
+
+_RUN_START = time.time()
+
+
+def _emit_run_log() -> None:
+    elapsed = max(0, int(time.time() - _RUN_START))
+    subprocess.run(
+        [
+            "python3", str(REPO / "scripts" / "log_run.py"),
+            "--script", "deploy_status",
+            "--posted", "0", "--skipped", "0", "--failed", "0",
+            "--cost", "0", "--elapsed", str(elapsed),
+        ],
+        check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+
+atexit.register(_emit_run_log)
 CONFIG_PATH = REPO / "config.json"
 CACHE_DIR = REPO / "skill" / "cache"
 OUTPUT = CACHE_DIR / "deploy_status.json"
