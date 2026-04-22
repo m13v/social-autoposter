@@ -4241,16 +4241,7 @@ function renderTopPosts(payload) {
         filterMode: 'dropdown',
         filterOptions: ageThresholdOptions(),
         filterPredicate: filterPredicateAge },
-      { key: 'engagement_ts',  label: 'Last activity', type: 'numeric', align: 'right', widthPct: 7,
-        formatter: (_v, r) => {
-          const abs = r.engagement_updated_at ? new Date(r.engagement_updated_at).toLocaleString() : '';
-          const tip = abs ? abs + ' — last time our stats poller saw new upvote/comment/view numbers' : 'never refreshed';
-          return '<span title="' + escapeHtml(tip) + '">' + escapeHtml(relTime(r.engagement_updated_at)) + '</span>';
-        },
-        filterMode: 'dropdown',
-        filterOptions: ageThresholdOptions(),
-        filterPredicate: filterPredicateAge },
-      { key: 'our_content',    label: 'Content',  type: 'text',    align: 'left',  widthPct: 51,
+      { key: 'our_content',    label: 'Content',  type: 'text',    align: 'left',  widthPct: 58,
         formatter: renderTopContentCell,
         filterMode: 'none' },
     ],
@@ -4795,8 +4786,11 @@ function renderTopDms(payload) {
     { key: 'message_count',  label: 'Msgs',     type: 'numeric', align: 'right', widthPct: 5,  formatter: fmt },
     { key: 'interest_level', label: 'Class',    type: 'text',    align: 'left',  widthPct: 13,
       formatter: (_v, r) => dmClassBadge(r) },
-    { key: 'last_ts',        label: 'Last activity', type: 'numeric', align: 'right', widthPct: 10,
-      formatter: (_v, r) => escapeHtml(relTime(r.last_message_at)) },
+    { key: 'last_ts',        label: 'Last message', type: 'numeric', align: 'right', widthPct: 10,
+      formatter: (_v, r) => {
+        const abs = r.last_message_at ? new Date(r.last_message_at).toLocaleString() : '';
+        return '<span title="' + escapeHtml(abs) + '">' + escapeHtml(relTime(r.last_message_at)) + '</span>';
+      } },
   ];
   const colCount = columns.length;
   mountSortableTable({
