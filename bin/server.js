@@ -4303,7 +4303,9 @@ function initTopFilters() {
   });
   wireTopPillRow('top-project-pills', (v) => {
     _topProject = v || 'all';
-    renderTopPagesFromCache();
+    if (_topSubtab === 'pages') renderTopPagesFromCache();
+    else if (_topSubtab === 'dms') { if (_topDmsPayload) renderTopDms(_topDmsPayload); }
+    else { if (_topPostsPayload) renderTopPosts(_topPostsPayload); }
   });
   wireTopPillRow('top-pages-source-pills', (v) => {
     _topPagesSource = v || 'seo';
@@ -4338,13 +4340,13 @@ function initTopFilters() {
       const srcRowEl  = document.getElementById('top-pages-source-pills');
       const dirRowEl  = document.getElementById('top-dm-dir-pills');
       const totalEl = document.getElementById('top-total');
+      if (projRowEl) projRowEl.classList.remove('hidden');
       if (sub === 'pages') {
         postsC.classList.add('hidden');
         if (dmsC) dmsC.classList.add('hidden');
         pagesC.classList.remove('hidden');
         if (pagesUnknownC) pagesUnknownC.classList.remove('hidden');
         if (platRowEl) platRowEl.classList.add('hidden');
-        if (projRowEl) projRowEl.classList.remove('hidden');
         if (srcRowEl) srcRowEl.classList.remove('hidden');
         if (dirRowEl) dirRowEl.classList.add('hidden');
         if (totalEl) totalEl.textContent = '';
@@ -4355,7 +4357,6 @@ function initTopFilters() {
         if (pagesUnknownC) pagesUnknownC.classList.add('hidden');
         if (dmsC) dmsC.classList.remove('hidden');
         if (platRowEl) platRowEl.classList.remove('hidden');
-        if (projRowEl) projRowEl.classList.add('hidden');
         if (srcRowEl) srcRowEl.classList.add('hidden');
         if (dirRowEl) dirRowEl.classList.remove('hidden');
         if (totalEl) totalEl.textContent = '';
@@ -4366,7 +4367,6 @@ function initTopFilters() {
         if (dmsC) dmsC.classList.add('hidden');
         postsC.classList.remove('hidden');
         if (platRowEl) platRowEl.classList.remove('hidden');
-        if (projRowEl) projRowEl.classList.add('hidden');
         if (srcRowEl) srcRowEl.classList.add('hidden');
         if (dirRowEl) dirRowEl.classList.add('hidden');
         if (totalEl) totalEl.textContent = '';
