@@ -35,6 +35,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 PROFILE_DIR = os.path.expanduser("~/.claude/browser-profiles/reddit")
 LOCK_FILE = os.path.expanduser("~/.claude/reddit-agent-lock.json")
@@ -286,6 +287,143 @@ def list_unread(hydration_wait_ms=8000, nav_retries=2):
         _release_lock()
 
 
+def ingest_unread(hydration_wait_ms=8000, dry_run=False):
+    """Scan every unread Reddit chat room, upsert a dms row (backfilling
+    chat_url), and log each inbound m.room.message to dm_messages with its
+    Matrix event_id as the dedup key.
+
+    Returns a structured summary of what happened.
+    """
+    # Lazy imports so list-unread doesn't require DB connectivity.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import db as dbmod  # noqa: E402
+    import dm_conversation as dmc  # noqa: E402
+
+    scan = list_unread(hydration_wait_ms=hydration_wait_ms)
+    if not scan.get("ok"):
+        return scan
+
+    conn = dbmod.get_conn()
+
+    stats = {
+        "rooms_scanned": len(scan["unread"]),
+        "rooms_new_dms": 0,
+        "rooms_existing_dms": 0,
+        "chat_urls_backfilled": 0,
+        "inbound_inserted": 0,
+        "inbound_deduped": 0,
+        "skipped_non_message_events": 0,
+        "skipped_our_events": 0,
+        "rooms_without_partner": 0,
+        "errors": [],
+    }
+    per_room = []
+
+    for room in scan["unread"]:
+        partner = room.get("partner_username")
+        chat_url = room.get("chat_url")
+        if not partner:
+            stats["rooms_without_partner"] += 1
+            continue
+
+        # Track whether this dm was already in the table (for stats) and
+        # whether its chat_url was NULL beforehand (to count backfills).
+        existing = conn.execute(
+            "SELECT id, chat_url FROM dms WHERE platform='reddit' AND their_author=%s ORDER BY id DESC LIMIT 1",
+            (partner,),
+        ).fetchone()
+        had_chat_url = bool(existing and existing["chat_url"])
+
+        if dry_run:
+            dm_id = existing["id"] if existing else None
+            created = not existing
+        else:
+            try:
+                dm_id, created, _ = dmc.ensure_dm(
+                    conn, "reddit", partner, chat_url=chat_url,
+                )
+            except Exception as e:
+                stats["errors"].append({"room_id": room["room_id"], "ensure_dm_error": str(e)})
+                continue
+
+        if existing and not had_chat_url and chat_url:
+            stats["chat_urls_backfilled"] += 1
+        if created:
+            stats["rooms_new_dms"] += 1
+        else:
+            stats["rooms_existing_dms"] += 1
+
+        inserted_this_room = 0
+        deduped_this_room = 0
+        for ev in room.get("timeline", []):
+            if ev.get("type") != "m.room.message":
+                stats["skipped_non_message_events"] += 1
+                continue
+            if ev.get("from_us"):
+                stats["skipped_our_events"] += 1
+                continue
+            body = ev.get("body")
+            if not body:
+                continue
+            ts_ms = ev.get("ts")
+            message_at_iso = None
+            if ts_ms:
+                message_at_iso = datetime.fromtimestamp(
+                    ts_ms / 1000.0, tz=timezone.utc
+                ).isoformat()
+            event_id = ev.get("event_id")
+
+            if dry_run:
+                # Simulate the dedup check that log_inbound runs.
+                if event_id:
+                    dup = conn.execute(
+                        "SELECT id FROM dm_messages WHERE event_id = %s LIMIT 1",
+                        (event_id,),
+                    ).fetchone()
+                else:
+                    dup = conn.execute(
+                        "SELECT id FROM dm_messages WHERE dm_id=%s AND direction='inbound' AND author=%s AND content=%s LIMIT 1",
+                        (dm_id, partner, body) if dm_id else (None, partner, body),
+                    ).fetchone()
+                if dup:
+                    deduped_this_room += 1
+                else:
+                    inserted_this_room += 1
+                continue
+
+            ok = dmc.log_inbound(
+                conn, dm_id, partner, body,
+                message_at=message_at_iso, event_id=event_id,
+            )
+            if ok:
+                inserted_this_room += 1
+            else:
+                deduped_this_room += 1
+
+        stats["inbound_inserted"] += inserted_this_room
+        stats["inbound_deduped"] += deduped_this_room
+        per_room.append({
+            "room_id": room["room_id"],
+            "partner": partner,
+            "unread_count_matrix": room["unread_count"],
+            "inserted": inserted_this_room,
+            "deduped": deduped_this_room,
+            "created_new_dm": created if not dry_run else (not existing),
+            "chat_url_backfilled": bool(existing and not had_chat_url and chat_url),
+        })
+
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "matrix_total_joined": scan.get("total_joined"),
+        "matrix_unread_rooms": scan.get("unread_room_count"),
+        "matrix_total_unread_messages": scan.get("total_unread_messages"),
+        "matrix_next_batch": scan.get("next_batch"),
+        "stats": stats,
+        "per_room": per_room,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="command")
@@ -306,18 +444,29 @@ def main():
         help="Milliseconds to wait after /chat navigation for matrix-js-sdk to incremental-sync (default 8000).",
     )
 
+    p_ing = sub.add_parser(
+        "ingest-unread",
+        help="Upsert every unread Reddit chat room into dms + log each new inbound message into dm_messages.",
+    )
+    p_ing.add_argument("--dry-run", action="store_true", help="Simulate only; no DB writes.")
+    p_ing.add_argument("--pretty", action="store_true")
+    p_ing.add_argument("--hydration-ms", type=int, default=8000)
+
     args = ap.parse_args()
 
     if args.command == "list-unread":
         result = list_unread(hydration_wait_ms=args.hydration_ms)
-        if args.pretty:
-            print(json.dumps(result, indent=2, ensure_ascii=False))
-        else:
-            print(json.dumps(result, ensure_ascii=False))
-        sys.exit(0 if result.get("ok") else 1)
+    elif args.command == "ingest-unread":
+        result = ingest_unread(hydration_wait_ms=args.hydration_ms, dry_run=args.dry_run)
+    else:
+        ap.print_help()
+        sys.exit(2)
 
-    ap.print_help()
-    sys.exit(2)
+    if args.pretty:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(json.dumps(result, ensure_ascii=False))
+    sys.exit(0 if result.get("ok") else 1)
 
 
 if __name__ == "__main__":
