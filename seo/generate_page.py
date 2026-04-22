@@ -245,8 +245,34 @@ def check_consumer_setup(repo_path: str) -> dict:
         root / "app" / "api" / "guide-chat" / "route.ts",
         root / "src" / "app" / "api" / "guide-chat" / "route.tsx",
     ]
-    if not any(p.exists() for p in api_route_candidates):
+    api_route = next((p for p in api_route_candidates if p.exists()), None)
+    if not api_route:
         missing.append("src/app/api/guide-chat/route.ts not found (Phase 4e)")
+
+    # Phase 4a/4e: contentDir in next.config.* (withSeoContent wrapper) and
+    # api/guide-chat/route.ts (createGuideChatHandler) must match. If they drift
+    # (e.g. route group added to one but not the other), the chat claims "no
+    # guides" at runtime and the page-gen pipeline writes MDX to a dir the
+    # runtime never scans.
+    content_dir_re = re.compile(r'contentDir\s*:\s*"([^"]+)"')
+    cfg_dir = None
+    route_dir = None
+    if next_cfg and next_cfg.exists():
+        m = content_dir_re.search(next_cfg.read_text(errors="ignore"))
+        if m:
+            cfg_dir = m.group(1)
+    if api_route and api_route.exists():
+        m = content_dir_re.search(api_route.read_text(errors="ignore"))
+        if m:
+            route_dir = m.group(1)
+    if cfg_dir and route_dir and cfg_dir != route_dir:
+        missing.append(
+            f"contentDir mismatch (Phase 4a/4e): "
+            f"{next_cfg.name} has {cfg_dir!r} but "
+            f"{api_route.relative_to(root)} has {route_dir!r}. "
+            "Both must point to the same directory for withSeoContent's "
+            "build-time manifest to match the runtime guide-chat handler."
+        )
 
     return {"ok": len(missing) == 0, "missing": missing}
 
