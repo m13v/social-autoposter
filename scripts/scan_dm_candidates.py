@@ -141,10 +141,11 @@ def get_excluded_authors(config, platform):
     return excluded
 
 
-def scan_platform(conn, config, platform, max_candidates, dry_run):
+def scan_platform(conn, config, platform, max_candidates, dry_run, max_age_days=None):
     """Scan for DM candidates on a single platform."""
     excluded = get_excluded_authors(config, platform)
     topic_index = build_project_topic_index(config, platform)
+    age_days = max_age_days if max_age_days is not None else MAX_AGE_DAYS
 
     candidates = conn.execute("""
         SELECT r.id as reply_id, r.post_id, r.platform, r.their_author, r.their_content,
@@ -164,7 +165,7 @@ def scan_platform(conn, config, platform, max_candidates, dry_run):
           AND r.replied_at >= NOW() - INTERVAL '%s days'
           AND r.replied_at <= NOW() - (INTERVAL '1 hour' * %s)
         ORDER BY r.replied_at DESC
-    """, (platform, platform, MAX_AGE_DAYS, POST_REPLY_COOLDOWN_HOURS)).fetchall()
+    """, (platform, platform, age_days, POST_REPLY_COOLDOWN_HOURS)).fetchall()
 
     inserted = 0
     skipped_reasons = {}
@@ -250,6 +251,8 @@ def main():
     parser.add_argument("--max", type=int, default=DEFAULT_MAX_CANDIDATES, help="Max candidates per platform")
     parser.add_argument("--platform", default="all", choices=PLATFORMS + ["all"],
                         help="Platform to scan (default: all)")
+    parser.add_argument("--days", type=int, default=None,
+                        help=f"Override MAX_AGE_DAYS (default {MAX_AGE_DAYS}). Use for one-shot backfills after threshold changes.")
     args = parser.parse_args()
 
     config = load_config()
@@ -261,7 +264,7 @@ def main():
 
     for platform in platforms:
         print(f"\nScanning {platform} for DM candidates...")
-        count = scan_platform(conn, config, platform, args.max, args.dry_run)
+        count = scan_platform(conn, config, platform, args.max, args.dry_run, max_age_days=args.days)
         total += count
 
     conn.close()
