@@ -1211,6 +1211,61 @@ RAW_BOOKING_HREF_RE = re.compile(
 )
 
 
+# Tailwind classes that produce light-only surfaces/text. On a dark consumer
+# (fazm, mediar, assrt, cyrano), every occurrence of a bare class listed here
+# must be paired with a `dark:*` variant on the SAME className attribute so
+# the element reads correctly in dark mode. A `bg-white` without `dark:bg-*`
+# prints a bright component block on a dark page; `text-gray-900` prints
+# dark-on-dark; `text-blue-600` links are illegible; `bg-{accent}-50` pastel
+# bands disappear. Fazm guide regression, 2026-04-22.
+#
+# Each entry maps a bare-class regex to the `dark:` prefix that must appear
+# somewhere in the same className to pass. Pattern uses a `(?<![:\w])`
+# lookbehind so `dark:bg-white/[0.05]` and `hover:bg-gray-50` don't count as
+# bare matches — only truly unprefixed occurrences are flagged.
+_THEME_LINT_RULES: list[tuple[str, str]] = [
+    (r"(?<![:\w])bg-white\b", "dark:bg-"),
+    (r"(?<![:\w])bg-gray-50\b", "dark:bg-"),
+    (r"(?<![:\w])bg-gray-100\b", "dark:bg-"),
+    (r"(?<![:\w])bg-slate-50\b", "dark:bg-"),
+    (r"(?<![:\w])bg-zinc-50\b", "dark:bg-"),
+    (r"(?<![:\w])bg-neutral-50\b", "dark:bg-"),
+    # pastel accent bands (bg-<accent>-50 reads as a washed-out block on dark)
+    (r"(?<![:\w])bg-(?:blue|purple|pink|red|orange|amber|yellow|green|"
+     r"emerald|teal|cyan|sky|indigo|violet|fuchsia|rose)-50\b", "dark:bg-"),
+    # body/heading text
+    (r"(?<![:\w])text-gray-900\b", "dark:text-"),
+    (r"(?<![:\w])text-gray-800\b", "dark:text-"),
+    (r"(?<![:\w])text-gray-700\b", "dark:text-"),
+    (r"(?<![:\w])text-gray-600\b", "dark:text-"),
+    (r"(?<![:\w])text-slate-900\b", "dark:text-"),
+    (r"(?<![:\w])text-slate-800\b", "dark:text-"),
+    (r"(?<![:\w])text-slate-700\b", "dark:text-"),
+    (r"(?<![:\w])text-slate-600\b", "dark:text-"),
+    (r"(?<![:\w])text-zinc-900\b", "dark:text-"),
+    (r"(?<![:\w])text-zinc-800\b", "dark:text-"),
+    (r"(?<![:\w])text-zinc-700\b", "dark:text-"),
+    (r"(?<![:\w])text-zinc-600\b", "dark:text-"),
+    # link color
+    (r"(?<![:\w])text-blue-600\b", "dark:text-"),
+    # borders
+    (r"(?<![:\w])border-gray-200\b", "dark:border-"),
+    (r"(?<![:\w])border-gray-300\b", "dark:border-"),
+    (r"(?<![:\w])border-slate-200\b", "dark:border-"),
+    (r"(?<![:\w])border-zinc-200\b", "dark:border-"),
+]
+
+_THEME_LINT_COMPILED: list[tuple[re.Pattern, str]] = [
+    (re.compile(pat), dark_prefix) for pat, dark_prefix in _THEME_LINT_RULES
+]
+
+# Matches className="...", className={`...`}, and className={"..."}.
+# Captures the inner classes string in one of the three alternation groups.
+_CLASSNAME_ATTR_RE = re.compile(
+    r'className\s*=\s*(?:"([^"]*)"|\{`([^`]*)`\}|\{"([^"]*)"\})'
+)
+
+
 def validate_booking_attribution(repo_path: str,
                                  expected_file_candidates: list[str]) -> dict:
     """Fail the run if any generated page file contains a raw Cal.com or
@@ -1271,6 +1326,95 @@ def validate_booking_attribution(repo_path: str,
         "ok": False,
         "error": "raw booking href (must use BookCallCTA): "
                  + " | ".join(findings[:3]),
+        "cleaned": cleaned,
+    }
+
+
+def validate_theme_classes(repo_path: str,
+                           expected_file_candidates: list[str]) -> dict:
+    """Fail the run if a generated page ships light-only Tailwind on a dark
+    consumer. Catches the failure mode where the inner Claude session writes
+    `bg-gray-50`, `text-gray-900`, `text-blue-600`, or a `bg-{accent}-50`
+    band without a paired `dark:*` variant, producing a bright component
+    block on fazm/mediar/assrt/cyrano's dark theme (Fazm guide pages
+    regression, 2026-04-22).
+
+    Heuristic: for each forbidden bare class found inside a `className=...`
+    attribute, require that the matching `dark:` prefix (e.g. `dark:bg-`,
+    `dark:text-`, `dark:border-`) appear somewhere in the SAME className
+    string. This catches the overwhelmingly common failure mode (the LLM
+    wrote zero dark: variants on an element); it intentionally does not
+    count every pair individually, because that's enough to retry the
+    generation with actionable feedback.
+
+    Skipped on light consumers (bg-white there is correct). Cleanup path
+    mirrors validate_booking_attribution / typecheck_and_cleanup: restore
+    tracked files, remove untracked ones, so the ~/git-dashboard auto-commit
+    cron cannot push the bad page while we retry.
+    """
+    if detect_consumer_theme(repo_path) != "dark":
+        return {"ok": True, "skipped": "consumer theme is light"}
+
+    root = Path(repo_path)
+    findings: list[str] = []
+
+    for rel in expected_file_candidates:
+        abs_path = root / rel
+        if not abs_path.exists():
+            continue
+        try:
+            text = abs_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            findings.append(f"{rel}: read failed: {e}")
+            continue
+
+        for m in _CLASSNAME_ATTR_RE.finditer(text):
+            classes = m.group(1) or m.group(2) or m.group(3) or ""
+            if not classes.strip():
+                continue
+            for rx, dark_prefix in _THEME_LINT_COMPILED:
+                bare = rx.search(classes)
+                if not bare:
+                    continue
+                if dark_prefix in classes:
+                    continue
+                line_no = text.count("\n", 0, m.start()) + 1
+                findings.append(
+                    f"{rel}:L{line_no} '{bare.group(0)}' needs paired "
+                    f"{dark_prefix}* on dark consumer"
+                )
+
+    if not findings:
+        return {"ok": True}
+
+    cleaned: list[str] = []
+    for rel in expected_file_candidates:
+        abs_path = root / rel
+        if not abs_path.exists():
+            continue
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", rel],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+        if tracked.returncode == 0:
+            subprocess.run(["git", "restore", "--", rel],
+                           cwd=repo_path, capture_output=True, text=True)
+            cleaned.append(f"{rel} (restored)")
+        else:
+            try:
+                abs_path.unlink()
+                parent = abs_path.parent
+                if parent.is_dir() and parent != root and not any(parent.iterdir()):
+                    parent.rmdir()
+                cleaned.append(f"{rel} (removed)")
+            except OSError:
+                pass
+
+    return {
+        "ok": False,
+        "error": "theme lint (light-only Tailwind on dark consumer; pair "
+                 "with dark:* or drop the class): "
+                 + " | ".join(findings[:5]),
         "cleaned": cleaned,
     }
 
@@ -1706,6 +1850,28 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
                 "cleaned": cleaned,
                 "stream_log": stream["stream_log_path"],
                 "tool_summary": stream["tool_summary"]}
+
+    # Theme lint. Rejects pages that ship light-only Tailwind (bg-white,
+    # bg-gray-50, text-gray-900, text-blue-600, bg-{accent}-50, etc.) on a
+    # dark consumer without a paired dark:* variant. Skipped on light
+    # consumers. Same restore/remove cleanup as the gates above so the
+    # auto-commit cron can't push the bad page while we retry.
+    theme = validate_theme_classes(repo_path, expected_file_candidates)
+    if not theme["ok"]:
+        theme_err = theme.get("error", "")[:800]
+        cleaned = theme.get("cleaned", [])
+        note = f"theme_lint_failed; cleaned={cleaned}; {theme_err}"[:500]
+        update_state(trigger, product, keyword, "pending",
+                     notes=note, slug=slug,
+                     content_type=content_type,
+                     claude_session_id=session_id)
+        return {"success": False,
+                "error": theme_err,
+                "content_type": content_type,
+                "cleaned": cleaned,
+                "stream_log": stream["stream_log_path"],
+                "tool_summary": stream["tool_summary"]}
+
     verify = {"ok": False, "error": f"no candidate matched: {expected_file_candidates}"}
     last_verify_err = ""
     for candidate in expected_file_candidates:
