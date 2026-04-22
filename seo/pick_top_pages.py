@@ -50,6 +50,9 @@ if ENV_PATH.exists():
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip())
 
+sys.path.insert(0, str(ROOT_DIR / "scripts"))
+from project_slugs import get_client_slug as _client_slug  # noqa: E402
+
 import psycopg2  # noqa: E402
 
 
@@ -178,20 +181,6 @@ def _bookings_by_path(client_slug, days):
     except Exception as e:
         print(f"  bookings query failed: {e}", file=sys.stderr)
         return {}
-
-
-def _client_slug(product_name):
-    # Mirror pick_top_page.py. Kept here so this file is self-contained.
-    return {
-        "Cyrano": "cyrano",
-        "PieLine": "pieline",
-        "fazm": "fazm",
-        "S4L": "s4l",
-        "fde10x": "fde10x",
-        "Assrt": "assrt",
-        "Clone": "clone",
-        "mk0r": "mk0r",
-    }.get(product_name)
 
 
 def collect_metrics(api_key, project_id, domain, client_slug, days=1):
