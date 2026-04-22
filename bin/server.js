@@ -269,12 +269,18 @@ const PLATFORM_LABELS = {
 
 function classifyScript(script) {
   const norm = script.replace(/-/g, '_').toLowerCase();
-  const match = (re, type, humanPrefix) => {
+  const match = (re, type, label) => {
     const m = norm.match(re);
     if (!m) return null;
     const slug = m[1];
-    const label = PLATFORM_LABELS[slug] || slug;
-    return { job_type: type, platform: label, platform_key: slug, human_name: `${humanPrefix} · ${label}` };
+    const platform = PLATFORM_LABELS[slug] || slug;
+    return {
+      job_type: type,
+      job_label: label,
+      platform,
+      platform_key: slug,
+      human_name: `${label} · ${platform}`,
+    };
   };
   return (
     match(/^link_edit_(\w+)$/, 'link-edit', 'Link Edit') ||
@@ -285,7 +291,7 @@ function classifyScript(script) {
     match(/^octolens_(\w+)$/, 'octolens', 'Octolens') ||
     match(/^stats_(\w+)$/, 'stats', 'Stats') ||
     match(/^audit_(\w+)$/, 'audit', 'Audit') ||
-    { job_type: 'other', platform: null, platform_key: null, human_name: script }
+    { job_type: 'other', job_label: script, platform: null, platform_key: null, human_name: script }
   );
 }
 
@@ -311,6 +317,7 @@ function parseRunMonitorLog(maxLines) {
     runs.push({
       script,
       job_type: cls.job_type,
+      job_label: cls.job_label,
       platform: cls.platform,
       platform_key: cls.platform_key,
       human_name: cls.human_name,
