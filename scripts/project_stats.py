@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
+from project_slugs import get_client_slug, get_booking_table  # noqa: E402
 
 ENV_PATH = os.path.expanduser("~/social-autoposter/.env")
 CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
@@ -203,17 +204,6 @@ def get_project_domains(project):
             domains.append(domain)
 
     return domains
-
-
-def get_client_slug(project_name):
-    """Map project name to cal_bookings / calendly_bookings client_slug."""
-    return {"Cyrano": "cyrano", "PieLine": "pieline", "fazm": "fazm", "S4L": "s4l", "fde10x": "fde10x", "tenxats": "tenxats", "Clone": "clone", "mk0r": "mk0r", "paperbackexpert": "paperbackexpert"}.get(project_name)
-
-
-def get_booking_table(project_name):
-    """Return the booking table to query for a project.
-    Calendly clients write to calendly_bookings; everyone else writes to cal_bookings."""
-    return "calendly_bookings" if project_name in {"paperbackexpert"} else "cal_bookings"
 
 
 def print_project_report(name, post_stats, platforms, posthog, bookings, quiet=False):
