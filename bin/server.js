@@ -267,8 +267,28 @@ const PLATFORM_LABELS = {
   hackernews: 'HackerNews', youtube: 'YouTube',
 };
 
+// Standalone jobs with no platform axis. script_name -> display label.
+const STANDALONE_JOBS = {
+  serp_seo: { job_type: 'seo', job_label: 'SERP SEO' },
+  gsc_seo: { job_type: 'seo', job_label: 'GSC SEO' },
+  seo_improve: { job_type: 'seo', job_label: 'SEO Improve' },
+  daily_report: { job_type: 'report', job_label: 'Daily Report' },
+  deploy_status: { job_type: 'report', job_label: 'Deploy Status' },
+  precompute_stats: { job_type: 'report', job_label: 'Precompute Stats' },
+};
+
 function classifyScript(script) {
   const norm = script.replace(/-/g, '_').toLowerCase();
+  const standalone = STANDALONE_JOBS[norm];
+  if (standalone) {
+    return {
+      job_type: standalone.job_type,
+      job_label: standalone.job_label,
+      platform: null,
+      platform_key: null,
+      human_name: standalone.job_label,
+    };
+  }
   const match = (re, type, label) => {
     const m = norm.match(re);
     if (!m) return null;
@@ -2490,6 +2510,8 @@ const HTML = `<!DOCTYPE html>
           <button type="button" class="style-stats-pill" data-value="octolens">Octolens</button>
           <button type="button" class="style-stats-pill" data-value="stats">Stats</button>
           <button type="button" class="style-stats-pill" data-value="audit">Audit</button>
+          <button type="button" class="style-stats-pill" data-value="seo">SEO</button>
+          <button type="button" class="style-stats-pill" data-value="report">Report</button>
           <button type="button" class="style-stats-pill" data-value="other">Other</button>
         </div>
       </div>
