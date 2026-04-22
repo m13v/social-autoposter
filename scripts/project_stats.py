@@ -203,7 +203,7 @@ def get_project_domains(project):
 
 def get_client_slug(project_name):
     """Map project name to cal_bookings client_slug."""
-    return {"Cyrano": "cyrano", "PieLine": "pieline", "fazm": "fazm", "S4L": "s4l", "fde10x": "fde10x"}.get(project_name)
+    return {"Cyrano": "cyrano", "PieLine": "pieline", "fazm": "fazm", "S4L": "s4l", "fde10x": "fde10x", "tenxats": "tenxats"}.get(project_name)
 
 
 def print_project_report(name, post_stats, platforms, posthog, bookings, quiet=False):
