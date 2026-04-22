@@ -1434,7 +1434,7 @@ async function handleApi(req, res) {
             "ELSE COALESCE(upvotes,0) * 5 END " +
           "+ COALESCE(views,0) / 100)::int AS score, " +
         "(our_url IS NOT NULL AND thread_url = our_url) AS is_thread, " +
-        "posted_at, our_content, our_url, thread_url, thread_title, " +
+        "posted_at, engagement_updated_at, our_content, our_url, thread_url, thread_title, " +
         "LEFT(COALESCE(thread_content, ''), 400) AS thread_content, " +
         "our_account, project_name, engagement_style " +
       "FROM posts " +
@@ -4126,6 +4126,8 @@ function renderTopPosts(payload) {
     is_thread:     !!p.is_thread,
     posted_at:     p.posted_at || null,
     posted_ts:     p.posted_at ? new Date(p.posted_at).getTime() : 0,
+    engagement_updated_at: p.engagement_updated_at || null,
+    engagement_ts: p.engagement_updated_at ? new Date(p.engagement_updated_at).getTime() : 0,
     our_content:   p.our_content || '',
     our_url:       p.our_url || '',
     thread_url:    p.thread_url || '',
@@ -4169,11 +4171,23 @@ function renderTopPosts(payload) {
         filterOptions: numericThresholdOptions(normalized, 'score'),
         filterPredicate: filterPredicateGte },
       { key: 'posted_ts',      label: 'Posted',   type: 'numeric', align: 'right', widthPct: 6,
-        formatter: (_v, r) => escapeHtml(relTime(r.posted_at)),
+        formatter: (_v, r) => {
+          const abs = r.posted_at ? new Date(r.posted_at).toLocaleString() : '';
+          return '<span title="' + escapeHtml(abs) + '">' + escapeHtml(relTime(r.posted_at)) + '</span>';
+        },
         filterMode: 'dropdown',
         filterOptions: ageThresholdOptions(),
         filterPredicate: filterPredicateAge },
-      { key: 'our_content',    label: 'Content',  type: 'text',    align: 'left',  widthPct: 58,
+      { key: 'engagement_ts',  label: 'Last activity', type: 'numeric', align: 'right', widthPct: 7,
+        formatter: (_v, r) => {
+          const abs = r.engagement_updated_at ? new Date(r.engagement_updated_at).toLocaleString() : '';
+          const tip = abs ? abs + ' — last time our stats poller saw new upvote/comment/view numbers' : 'never refreshed';
+          return '<span title="' + escapeHtml(tip) + '">' + escapeHtml(relTime(r.engagement_updated_at)) + '</span>';
+        },
+        filterMode: 'dropdown',
+        filterOptions: ageThresholdOptions(),
+        filterPredicate: filterPredicateAge },
+      { key: 'our_content',    label: 'Content',  type: 'text',    align: 'left',  widthPct: 51,
         formatter: renderTopContentCell,
         filterMode: 'none' },
     ],
