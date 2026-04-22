@@ -91,6 +91,24 @@ def recent_posts_by_sub(max_days):
     return latest
 
 
+def recent_posts_by_project(days=7):
+    """Return dict: project_name -> count of original threads posted in last N days."""
+    conn = dbmod.get_conn()
+    rows = conn.execute(
+        """
+        SELECT project_name, COUNT(*)
+        FROM posts
+        WHERE platform='reddit'
+          AND thread_url = our_url
+          AND posted_at > NOW() - INTERVAL '%s days'
+          AND project_name IS NOT NULL
+        GROUP BY project_name
+        """ % days
+    ).fetchall()
+    conn.close()
+    return {name: int(cnt) for name, cnt in rows}
+
+
 def build_candidates(config):
     recent = recent_posts_by_sub(max_days=max(
         DEFAULT_OWN_FLOOR_DAYS, DEFAULT_EXTERNAL_FLOOR_DAYS, 14))
@@ -127,18 +145,27 @@ def build_candidates(config):
     return candidates, recent, thread_blocked
 
 
-def pick(candidates):
+def pick(candidates, recent_project_counts=None):
     own_candidates = [c for c in candidates if c[2]]
     if own_candidates:
         return random.choice(own_candidates)
     if not candidates:
         return None
+    recent_project_counts = recent_project_counts or {}
     by_project = {}
     for p, sub, is_own, floor, last in candidates:
         by_project.setdefault(p["name"], {"project": p, "entries": []})
         by_project[p["name"]]["entries"].append((sub, is_own, floor, last))
     names = list(by_project.keys())
-    weights = [by_project[n]["project"].get("weight", 1) for n in names]
+    # Inverse recent-share weighting: keep config weight as the prior, but
+    # penalise projects that already posted a lot in the last 7 days.
+    # effective = base_weight / (1 + posts_last_7d). 0 posts => no change,
+    # each recent post halves the odds relative to a never-posted peer at 1.
+    weights = [
+        by_project[n]["project"].get("weight", 1)
+        / (1 + recent_project_counts.get(n, 0))
+        for n in names
+    ]
     chosen_name = random.choices(names, weights=weights, k=1)[0]
     proj = by_project[chosen_name]["project"]
     sub, is_own, floor, last = random.choice(by_project[chosen_name]["entries"])
@@ -153,12 +180,25 @@ def main():
 
     config = load_config()
     candidates, recent, thread_blocked = build_candidates(config)
+    recent_project_counts = recent_posts_by_project(days=7)
 
     if args.show_all:
         print(f"Thread-blocked subs ({len(thread_blocked)}): {sorted(thread_blocked)}")
         print(f"Recent thread subs: {len(recent)}")
         for sub, days in sorted(recent.items(), key=lambda x: x[1]):
             print(f"  {sub}: {days:.2f}d ago")
+        eligible_projects = {}
+        for p, sub, is_own, floor, last in candidates:
+            eligible_projects.setdefault(p["name"], p)
+        print(f"\nProject weights (base / posts_7d / effective):")
+        rows = []
+        for name, p in eligible_projects.items():
+            base = p.get("weight", 1)
+            posts_7d = recent_project_counts.get(name, 0)
+            eff = base / (1 + posts_7d)
+            rows.append((name, base, posts_7d, eff))
+        for name, base, posts_7d, eff in sorted(rows, key=lambda r: -r[3]):
+            print(f"  {name:25} base={base:>3}  posts_7d={posts_7d:>2}  effective={eff:.3f}")
         print(f"\nEligible candidates: {len(candidates)}")
         for p, sub, is_own, floor, last in candidates:
             tag = "OWN" if is_own else "ext"
@@ -166,7 +206,7 @@ def main():
             print(f"  [{tag}] {p['name']:25} {sub:30} floor={floor}d {last_str}")
         return
 
-    choice = pick(candidates)
+    choice = pick(candidates, recent_project_counts=recent_project_counts)
     if not choice:
         print("NO_ELIGIBLE_TARGET", file=sys.stderr)
         sys.exit(2)
