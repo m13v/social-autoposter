@@ -400,6 +400,78 @@ async function enrichLinkEditRuns(runs) {
   }
 }
 
+// engage_* runs: per-run counts from log_run.py are frequently wrong (twitter
+// and linkedin shells log cumulative totals; reddit is accurate but shows
+// blank when the queue was empty). Enrich from the `replies` table over the
+// run's [started_at, finished_at] window so the Result column reflects what
+// the run actually did, and include a pending-queue snapshot so "no work"
+// runs are distinguishable from broken ones.
+async function enrichEngageRuns(runs) {
+  const engageRuns = runs.filter(r => r.job_type === 'engage' && r.platform_key);
+  if (!engageRuns.length) return;
+  let oldestMs = Infinity;
+  for (const r of engageRuns) {
+    const ms = new Date(r.started_at).getTime();
+    if (ms < oldestMs) oldestMs = ms;
+  }
+  const since = new Date(oldestMs - 2 * 60 * 1000).toISOString();
+  const rows = await pq(
+    "SELECT platform, status, replied_at, processing_at FROM replies " +
+    "WHERE (replied_at >= $1::timestamp OR processing_at >= $1::timestamp)",
+    [since]
+  );
+  if (!rows) return;
+  // Same UTC/local correction as enrichLinkEditRuns: pg parses `timestamp
+  // without time zone` as local, but rows are stored UTC.
+  const normRows = rows.map(r => {
+    const toMs = (d) => {
+      if (!d) return null;
+      const dt = d instanceof Date ? d : new Date(d);
+      return dt.getTime() - dt.getTimezoneOffset() * 60 * 1000;
+    };
+    // platform_key for engage_reddit is 'reddit'; DB platforms are
+    // 'reddit', 'x', 'linkedin', 'github', 'moltbook'. Map twitter->x.
+    return {
+      platform: (r.platform || '').toLowerCase(),
+      status: r.status,
+      repliedMs: toMs(r.replied_at),
+      processingMs: toMs(r.processing_at),
+    };
+  });
+  const pendingByPlatform = {};
+  const pendingRows = await pq(
+    "SELECT platform, COUNT(*)::int AS n FROM replies WHERE status='pending' GROUP BY platform"
+  );
+  if (pendingRows) {
+    for (const r of pendingRows) pendingByPlatform[(r.platform || '').toLowerCase()] = r.n;
+  }
+  for (const run of engageRuns) {
+    const startMs = new Date(run.started_at).getTime();
+    const endMs = new Date(run.finished_at).getTime() + 60 * 1000;
+    // engage_twitter job → DB platform 'x'
+    const dbPlatform = run.platform_key === 'twitter' ? 'x' : run.platform_key;
+    let replied = 0, skipped = 0, errored = 0, processed = 0;
+    for (const p of normRows) {
+      if (p.platform !== dbPlatform) continue;
+      const actedMs = p.repliedMs != null ? p.repliedMs : p.processingMs;
+      if (actedMs == null || actedMs < startMs || actedMs > endMs) continue;
+      processed++;
+      if (p.status === 'replied') replied++;
+      else if (p.status === 'skipped') skipped++;
+      else if (p.status === 'error') errored++;
+    }
+    run.result = {
+      type: 'engage',
+      processed,
+      replied,
+      skipped,
+      errored,
+      pending_now: pendingByPlatform[dbPlatform] || 0,
+      cost_usd: run.result && run.result.cost_usd ? run.result.cost_usd : 0,
+    };
+  }
+}
+
 // 5s TTL cache so /api/status polling (typically every 1-2s) doesn't spawn
 // a psql subprocess on every hit. Stale-by-5s is fine for the pending-reply
 // counter since it only affects the dashboard badge.
@@ -1099,6 +1171,7 @@ async function handleApi(req, res) {
       const limit = Math.min(Math.max(limitRaw, 1), 500);
       const runs = parseRunMonitorLog(Math.max(limit * 3, 300)).slice(0, limit);
       await enrichLinkEditRuns(runs);
+      await enrichEngageRuns(runs);
       return json(res, { runs });
     })().catch(e => json(res, { error: e.message }, 500));
   }
