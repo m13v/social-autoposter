@@ -235,11 +235,9 @@ PY
 
     # Use Opus for the per-project keyword/slug proposal (needs reasoning to
     # translate the concept across different audiences/positioning).
-    if ! claude --model opus --print --output-format json < "$PROPOSAL_PROMPT" > "$PROPOSAL_FILE" 2>>"$PER_LOG"; then
-        echo "  claude opus proposal failed"
-        OVERALL_RC=1
-        rm -f "$PER_LOCK"
-        continue
+    if ! claude_with_retry --model opus --print --output-format json < "$PROPOSAL_PROMPT" > "$PROPOSAL_FILE" 2>>"$PER_LOG"; then
+        echo "  claude opus proposal failed (after retries)"
+        exit 10
     fi
 
     PARSED=$(python3 - "$PROPOSAL_FILE" <<'PY'
@@ -270,9 +268,7 @@ PY
 )
     if [ -z "$PARSED" ]; then
         echo "  proposal parse failed; see $PROPOSAL_FILE"
-        OVERALL_RC=1
-        rm -f "$PER_LOCK"
-        continue
+        exit 11
     fi
 
     KEYWORD=$(printf '%s' "$PARSED" | awk -F'\t' '{print $1}')
@@ -286,25 +282,40 @@ PY
     SLUG_CHECK=$($DB check_slug "$TARGET_PRODUCT" "$SLUG")
     if [ "$SLUG_CHECK" = "exists" ]; then
         echo "  slug '$SLUG' already done on $TARGET_PRODUCT; skipping"
-        rm -f "$PER_LOCK"
-        continue
+        exit 12
     fi
 
     SEO_SCRIPT_DIR="$SCRIPT_DIR" _insert_keyword "$TARGET_PRODUCT" "$KEYWORD" "$SLUG" 2>&1
 
     echo "--- generate_page.py --trigger top_page ---"
     $GENERATOR --product "$TARGET_PRODUCT" --keyword "$KEYWORD" --slug "$SLUG" --trigger top_page 2>&1
-    GEN_RC=${PIPESTATUS[0]}
+    GEN_RC=$?
     if [ "$GEN_RC" -ne 0 ]; then
         echo "  generator failed on $TARGET_PRODUCT (rc=$GEN_RC)"
-        OVERALL_RC=$GEN_RC
-    else
-        echo "=== $TARGET_PRODUCT ok ==="
+        exit "$GEN_RC"
     fi
-    rm -f "$PER_LOCK"
+    exit 0
     } 2>&1 | tee -a "$PER_LOG" "$LOG_FILE"
+    TARGET_RC=${PIPESTATUS[0]}
+    rm -f "$PER_LOCK"
+
+    case "$TARGET_RC" in
+        0|12)
+            echo "=== $TARGET_PRODUCT ok ===" | tee -a "$LOG_FILE"
+            OK_TARGETS+=("$TARGET_PRODUCT")
+            ;;
+        *)
+            echo "=== $TARGET_PRODUCT failed (rc=$TARGET_RC) ===" | tee -a "$LOG_FILE"
+            FAIL_TARGETS+=("$TARGET_PRODUCT(rc=$TARGET_RC)")
+            OVERALL_RC="$TARGET_RC"
+            ;;
+    esac
 
 done <<< "$TARGETS"
 
-echo "=== Top-Pages pipeline finished rc=$OVERALL_RC ===" | tee -a "$LOG_FILE"
+{
+    echo "=== Top-Pages pipeline finished rc=$OVERALL_RC ==="
+    echo "  ok    (${#OK_TARGETS[@]}): ${OK_TARGETS[*]:-none}"
+    echo "  fail  (${#FAIL_TARGETS[@]}): ${FAIL_TARGETS[*]:-none}"
+} | tee -a "$LOG_FILE"
 exit "$OVERALL_RC"
