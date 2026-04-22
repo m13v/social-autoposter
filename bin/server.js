@@ -3110,22 +3110,44 @@ function fmtElapsed(s) {
 
 function renderResult(run) {
   const r = run.result || {};
+  const pill = (label, n, color) =>
+    '<span style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
+    label + ' <span style="color:' + color + ';font-weight:600;">' + n + '</span></span>';
   if (r.type === 'link-edit') {
-    const pill = (label, n, color) =>
-      '<span style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
-      label + ' <span style="color:' + color + ';font-weight:600;">' + n + '</span></span>';
     return (
       pill('touched', r.total, 'var(--text)') +
       pill('success', r.success, '#22c55e') +
       pill('skipped', r.skipped, '#eab308')
     );
   }
+  if (r.type === 'engage') {
+    // Per-run DB-derived counts (see enrichEngageRuns in server.js).
+    // Empty-queue runs show "queue empty" so the operator can tell a
+    // successful no-op apart from a broken run.
+    const processed = r.processed || 0;
+    const replied = r.replied || 0;
+    const skipped = r.skipped || 0;
+    const errored = r.errored || 0;
+    const pending = r.pending_now || 0;
+    const cost = r.cost_usd || 0;
+    if (!processed && !pending) {
+      return '<span style="color:var(--muted);font-size:12px;">queue empty</span>';
+    }
+    if (!processed) {
+      return pill('queue', pending, 'var(--text)') +
+        '<span style="color:var(--muted);font-size:12px;">nothing processed</span>';
+    }
+    return (
+      pill('replied', replied, '#22c55e') +
+      (skipped ? pill('skipped', skipped, '#eab308') : '') +
+      (errored ? pill('errored', errored, '#ef4444') : '') +
+      (pending ? pill('queue', pending, 'var(--muted)') : '') +
+      (cost ? '<span style="font-size:12px;color:var(--muted);">$' + cost.toFixed(2) + '</span>' : '')
+    );
+  }
   // Generic fallback: posted/skipped/failed from run_monitor.log
   const posted = r.posted || 0, skipped = r.skipped || 0, failed = r.failed || 0;
   if (!posted && !skipped && !failed) return '<span style="color:var(--muted);font-size:12px;">—</span>';
-  const pill = (label, n, color) =>
-    '<span style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
-    label + ' <span style="color:' + color + ';font-weight:600;">' + n + '</span></span>';
   return (
     pill('posted', posted, '#22c55e') +
     pill('skipped', skipped, '#eab308') +
