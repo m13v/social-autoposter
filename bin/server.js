@@ -1085,14 +1085,14 @@ async function handleApi(req, res) {
     // Moltbook and GitHub have no views metric; keep those rows in posts/upvotes/comments
     // totals but exclude them from views sum AND the views-per-post denominator so they
     // don't dilute other styles' averages.
-    // upvotes_discounted applies the Reddit -1 clamp per row (self-upvote default)
-    // before summing, matching top_performers.SCORE_SQL so the UI score aligns with
-    // the Python feedback report. Per-post score is computed client-side.
+    // upvotes_discounted applies the Reddit/Moltbook -1 clamp per row (OP self-upvote
+    // is on by default for both platforms) before summing, matching top_performers.SCORE_SQL
+    // so the UI score aligns with the Python feedback report. Per-post score is computed client-side.
     const q = "SELECT json_agg(row_to_json(r)) FROM (" +
       "SELECT COALESCE(engagement_style, '(none)') AS style, COUNT(*)::int AS posts, " +
         "COUNT(*) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues'))::int AS views_posts, " +
         "COALESCE(SUM(upvotes), 0)::int AS upvotes, " +
-        "COALESCE(SUM(CASE WHEN LOWER(platform) = 'reddit' " +
+        "COALESCE(SUM(CASE WHEN LOWER(platform) IN ('reddit', 'moltbook') " +
           "THEN GREATEST(0, COALESCE(upvotes,0) - 1) " +
           "ELSE COALESCE(upvotes,0) END), 0)::int AS upvotes_discounted, " +
         "COALESCE(SUM(comments_count), 0)::int AS comments, " +
@@ -1432,11 +1432,12 @@ async function handleApi(req, res) {
         "CASE WHEN LOWER(platform) IN ('moltbook', 'github', 'github_issues') " +
           "THEN NULL ELSE COALESCE(views, 0)::int END AS views, " +
         // Score weights comments highest (real discussion > passive upvote > glance).
-        // Reddit bakes the OP's self-upvote into the API's `score` field, so a fresh
-        // post shows upvotes=1; discount 1 for Reddit, clamped at 0 so downvoted
-        // posts don't go negative.
+        // Reddit bakes the OP's self-upvote into the API's `score` field, and our
+        // moltbook_post.py self_upvote() call does the same for Moltbook, so a fresh
+        // post on either platform shows upvotes=1; discount 1, clamped at 0 so
+        // downvoted posts don't go negative.
         "(COALESCE(comments_count,0) * 15 " +
-          "+ CASE WHEN LOWER(platform) = 'reddit' " +
+          "+ CASE WHEN LOWER(platform) IN ('reddit', 'moltbook') " +
             "THEN GREATEST(0, COALESCE(upvotes,0) - 1) * 5 " +
             "ELSE COALESCE(upvotes,0) * 5 END " +
           "+ COALESCE(views,0) / 100)::int AS score, " +
