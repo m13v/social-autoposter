@@ -50,6 +50,9 @@ if ENV_PATH.exists():
 import psycopg2  # noqa: E402
 from psycopg2.extras import Json  # noqa: E402
 
+sys.path.insert(0, str(SCRIPT_DIR))
+from claude_wait import wait_for_claude  # noqa: E402
+
 
 CLAUDE_TIMEOUT_SECONDS = 1800  # 30 minutes; research + multiple edits + commit
 
@@ -244,6 +247,12 @@ def _run_claude(prompt: str, cwd: str, log_path: Path, session_id: str) -> dict:
     tool_counts: dict[str, int] = {}
     final_text = ""
     start = time.time()
+
+    # Bridge the Claude Code auto-update unlink window before spawning.
+    if not wait_for_claude():
+        return {"exit_code": 127, "final_text": "", "tool_counts": {},
+                "error": "claude CLI not on PATH after wait_for_claude timeout"}
+
     with open(log_path, "w") as log_f:
         try:
             proc = subprocess.Popen(
