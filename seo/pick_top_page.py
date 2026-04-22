@@ -45,6 +45,9 @@ if ENV_PATH.exists():
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip())
 
+sys.path.insert(0, str(ROOT_DIR / "scripts"))
+from project_slugs import get_client_slug as _client_slug  # noqa: E402
+
 import psycopg2  # noqa: E402
 
 
@@ -165,19 +168,6 @@ def _metric_counts_for_path(api_key, project_id, domain, path, days):
         rows = _hogql(api_key, project_id, q)
         out[metric] = int(rows[0][0]) if rows and rows[0] else 0
     return out
-
-
-def _client_slug(product_name):
-    return {
-        "Cyrano": "cyrano",
-        "PieLine": "pieline",
-        "fazm": "fazm",
-        "S4L": "s4l",
-        "fde10x": "fde10x",
-        "Assrt": "assrt",
-        "Clone": "clone",
-        "mk0r": "mk0r",
-    }.get(product_name)
 
 
 def _bookings_counts(client_slug, days):
