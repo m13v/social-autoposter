@@ -25,11 +25,12 @@ MIN_CONTENT_LEN = 30  # skip posts with empty/placeholder content
 
 # Composite score: comments are the strongest imitation signal (real discussion),
 # upvotes are second, views deliberately excluded (viral-by-algorithm ≠ a pattern
-# worth imitating). Reddit upvotes get -1 because the OP's self-upvote inflates
-# `score` returned by the API. SQL expression is reused across queries.
+# worth imitating). Reddit and Moltbook upvotes get -1 because the OP's self-upvote
+# inflates the score (Reddit via API default, Moltbook via our own moltbook_post.py
+# self_upvote() call after every create). SQL expression is reused across queries.
 SCORE_SQL = (
     "(COALESCE(comments_count,0) * 3 + "
-    "CASE WHEN LOWER(platform) = 'reddit' "
+    "CASE WHEN LOWER(platform) IN ('reddit', 'moltbook') "
     "THEN GREATEST(0, COALESCE(upvotes,0) - 1) "
     "ELSE COALESCE(upvotes,0) END)"
 )
