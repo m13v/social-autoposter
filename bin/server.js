@@ -2457,6 +2457,24 @@ const HTML = `<!DOCTYPE html>
     </table>
   </div>
   <div id="other-jobs-section" style="margin-top: 24px;"></div>
+  <div id="jobs-history-section" style="margin-top: 24px;">
+    <div class="card">
+      <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <span class="card-title">Job History</span>
+        <div class="style-stats-pill-row" id="jobs-history-pills" data-selected="all" style="margin:0;">
+          <button type="button" class="style-stats-pill active" data-value="all">All</button>
+          <button type="button" class="style-stats-pill" data-value="reddit">Reddit</button>
+          <button type="button" class="style-stats-pill" data-value="twitter">Twitter</button>
+          <button type="button" class="style-stats-pill" data-value="linkedin">LinkedIn</button>
+          <button type="button" class="style-stats-pill" data-value="moltbook">MoltBook</button>
+          <button type="button" class="style-stats-pill" data-value="github">GitHub</button>
+        </div>
+      </div>
+      <div id="jobs-history-body">
+        <div class="style-stats-empty" style="padding:16px;">Loading…</div>
+      </div>
+    </div>
+  </div>
   <div id="pending-section" style="margin-top: 16px;"></div>
 </div>
 
@@ -2933,6 +2951,137 @@ function updateFreqCells(jobs) {
   }
 }
 
+// Job history state ---------------------------------------------------------
+let _jobHistoryRuns = [];
+let _jobHistoryFilter = 'all';
+
+function fmtRelTime(iso) {
+  if (!iso) return '—';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's ago';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 48) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
+
+function fmtLocalTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return '—';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const da = String(d.getDate()).padStart(2, '0');
+  return mo + '-' + da + ' ' + hh + ':' + mm;
+}
+
+function fmtElapsed(s) {
+  if (!Number.isFinite(s) || s <= 0) return '—';
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return m + 'm' + (rs ? ' ' + rs + 's' : '');
+  const h = Math.floor(m / 60);
+  return h + 'h ' + (m % 60) + 'm';
+}
+
+function renderResult(run) {
+  const r = run.result || {};
+  if (r.type === 'link-edit') {
+    const pill = (label, n, color) =>
+      '<span style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
+      label + ' <span style="color:' + color + ';font-weight:600;">' + n + '</span></span>';
+    return (
+      pill('touched', r.total, 'var(--text)') +
+      pill('success', r.success, '#22c55e') +
+      pill('skipped', r.skipped, '#eab308')
+    );
+  }
+  // Generic fallback: posted/skipped/failed from run_monitor.log
+  const posted = r.posted || 0, skipped = r.skipped || 0, failed = r.failed || 0;
+  if (!posted && !skipped && !failed) return '<span style="color:var(--muted);font-size:12px;">—</span>';
+  const pill = (label, n, color) =>
+    '<span style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
+    label + ' <span style="color:' + color + ';font-weight:600;">' + n + '</span></span>';
+  return (
+    pill('posted', posted, '#22c55e') +
+    pill('skipped', skipped, '#eab308') +
+    (failed ? pill('failed', failed, '#ef4444') : '')
+  );
+}
+
+function buildJobsHistoryTable(runs) {
+  if (!runs || !runs.length) {
+    return '<div class="style-stats-empty" style="padding:16px;">No runs in history.</div>';
+  }
+  const rows = runs.slice(0, 100).map(r => (
+    '<tr>' +
+      '<td style="text-align:left;padding-left:16px;">' + r.human_name + '</td>' +
+      '<td>' + fmtLocalTime(r.started_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtRelTime(r.started_at) + ')</span></td>' +
+      '<td>' + fmtLocalTime(r.finished_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtElapsed(r.elapsed_s) + ')</span></td>' +
+      '<td style="text-align:left;">' + renderResult(r) + '</td>' +
+    '</tr>'
+  )).join('');
+  return (
+    '<table class="matrix-table" style="margin-top:0;">' +
+      '<thead><tr>' +
+        '<th style="text-align:left;padding-left:16px;">Job</th>' +
+        '<th>Kicked off</th>' +
+        '<th>Finished</th>' +
+        '<th style="text-align:left;">Result</th>' +
+      '</tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table>'
+  );
+}
+
+function applyJobsHistoryFilter() {
+  const body = document.getElementById('jobs-history-body');
+  if (!body) return;
+  const filter = _jobHistoryFilter;
+  const filtered = filter === 'all'
+    ? _jobHistoryRuns
+    : _jobHistoryRuns.filter(r => r.platform_key === filter);
+  body.innerHTML = buildJobsHistoryTable(filtered);
+}
+
+function initJobsHistoryPills() {
+  const pillRow = document.getElementById('jobs-history-pills');
+  if (!pillRow || pillRow._wired) return;
+  pillRow._wired = true;
+  pillRow.addEventListener('click', (e) => {
+    const btn = e.target.closest('.style-stats-pill');
+    if (!btn) return;
+    pillRow.querySelectorAll('.style-stats-pill').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    _jobHistoryFilter = btn.getAttribute('data-value');
+    pillRow.setAttribute('data-selected', _jobHistoryFilter);
+    applyJobsHistoryFilter();
+  });
+}
+
+let _jobHistoryLoadedAt = 0;
+async function loadJobsHistory() {
+  // Throttle to once per 20s. Job history changes on the order of minutes,
+  // but loadStatus() polls every 5s.
+  if (Date.now() - _jobHistoryLoadedAt < 20000) return;
+  _jobHistoryLoadedAt = Date.now();
+  try {
+    const res = await fetch('/api/job-runs?limit=200');
+    const data = await res.json();
+    _jobHistoryRuns = Array.isArray(data.runs) ? data.runs : [];
+    initJobsHistoryPills();
+    applyJobsHistoryFilter();
+  } catch (e) {
+    const body = document.getElementById('jobs-history-body');
+    if (body) body.innerHTML = '<div class="style-stats-empty" style="padding:16px;color:#ef4444;">Failed: ' + e.message + '</div>';
+  }
+}
+
 async function loadStatus() {
   try {
     const [statusRes, pendingRes] = await Promise.all([
@@ -2941,6 +3090,7 @@ async function loadStatus() {
     ]);
     const data = await statusRes.json();
     const pending = await pendingRes.json();
+    loadJobsHistory();
 
     _paused = !!data.paused;
     updatePauseBtn();
