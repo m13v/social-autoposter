@@ -1205,6 +1205,76 @@ def verify_commit_landed(repo_path: str, expected_file: str) -> dict:
     return {"ok": True, "commit_sha": sha, "ref": ref}
 
 
+RAW_BOOKING_HREF_RE = re.compile(
+    r"""href\s*=\s*\{?\s*["'`][^"'`]*?(cal\.com|calendly\.com)""",
+    re.IGNORECASE,
+)
+
+
+def validate_booking_attribution(repo_path: str,
+                                 expected_file_candidates: list[str]) -> dict:
+    """Fail the run if any generated page file contains a raw Cal.com or
+    Calendly href. Booking CTAs must go through `BookCallCTA`, which rewrites
+    the URL at click time via `withBookingAttribution` (utm_* + metadata[utm_*]).
+    A raw `<a href="https://cal.com/...">` bypasses that rewrite, so the
+    resulting booking lands in `cal_bookings` with empty utm columns and
+    never attributes back to its source page (PieLine/Clone/mk0r 84-page
+    incident, 2026-04-22).
+
+    On failure, restores tracked files and removes untracked ones so the
+    background auto-commit daemon has nothing to push, mirroring
+    `typecheck_and_cleanup`'s cleanup path.
+    """
+    root = Path(repo_path)
+    findings: list[str] = []
+    for rel in expected_file_candidates:
+        abs_path = root / rel
+        if not abs_path.exists():
+            continue
+        try:
+            text = abs_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            findings.append(f"{rel}: read failed: {e}")
+            continue
+        for m in RAW_BOOKING_HREF_RE.finditer(text):
+            line_no = text.count("\n", 0, m.start()) + 1
+            snippet = text[max(0, m.start() - 10):m.end() + 40].replace("\n", " ")
+            findings.append(f"{rel}:L{line_no} {snippet!r}")
+
+    if not findings:
+        return {"ok": True}
+
+    cleaned: list[str] = []
+    for rel in expected_file_candidates:
+        abs_path = root / rel
+        if not abs_path.exists():
+            continue
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", rel],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+        if tracked.returncode == 0:
+            subprocess.run(["git", "restore", "--", rel],
+                           cwd=repo_path, capture_output=True, text=True)
+            cleaned.append(f"{rel} (restored)")
+        else:
+            try:
+                abs_path.unlink()
+                parent = abs_path.parent
+                if parent.is_dir() and parent != root and not any(parent.iterdir()):
+                    parent.rmdir()
+                cleaned.append(f"{rel} (removed)")
+            except OSError:
+                pass
+
+    return {
+        "ok": False,
+        "error": "raw booking href (must use BookCallCTA): "
+                 + " | ".join(findings[:3]),
+        "cleaned": cleaned,
+    }
+
+
 def typecheck_and_cleanup(repo_path: str, expected_file_candidates: list[str]) -> dict:
     """Run `npx tsc --noEmit` in the repo to catch type errors the inner Claude
     session may have left behind. If typecheck fails, restore/remove any
@@ -1616,6 +1686,22 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
                      claude_session_id=session_id)
         return {"success": False,
                 "error": f"typecheck failed: {tsc_err}",
+                "content_type": content_type,
+                "cleaned": cleaned,
+                "stream_log": stream["stream_log_path"],
+                "tool_summary": stream["tool_summary"]}
+
+    attr = validate_booking_attribution(repo_path, expected_file_candidates)
+    if not attr["ok"]:
+        attr_err = attr.get("error", "")[:800]
+        cleaned = attr.get("cleaned", [])
+        note = f"booking_attribution_failed; cleaned={cleaned}; {attr_err}"[:500]
+        update_state(trigger, product, keyword, "pending",
+                     notes=note, slug=slug,
+                     content_type=content_type,
+                     claude_session_id=session_id)
+        return {"success": False,
+                "error": attr_err,
                 "content_type": content_type,
                 "cleaned": cleaned,
                 "stream_log": stream["stream_log_path"],
