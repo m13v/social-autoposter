@@ -345,11 +345,20 @@ async function enrichLinkEditRuns(runs) {
     [since]
   );
   if (!rows) return;
-  const normRows = rows.map(r => ({
-    platform: (r.platform || '').toLowerCase(),
-    editedMs: new Date(r.link_edited_at).getTime(),
-    skip: !!r.is_skip,
-  }));
+  // pg parses `timestamp without time zone` columns as local time, but
+  // Neon stores these rows in UTC (session tz=UTC). The Date we get back has
+  // epoch = UTC-for-local-at-those-digits, 7h ahead of true UTC in PDT. Subtract
+  // the local offset to recover the true UTC epoch so the bucket comparison
+  // against run.started_at (true UTC epoch from log_run.py local-time ISO) is
+  // apples-to-apples.
+  const normRows = rows.map(r => {
+    const d = r.link_edited_at instanceof Date ? r.link_edited_at : new Date(r.link_edited_at);
+    return {
+      platform: (r.platform || '').toLowerCase(),
+      editedMs: d.getTime() - d.getTimezoneOffset() * 60 * 1000,
+      skip: !!r.is_skip,
+    };
+  });
   for (const run of linkRuns) {
     const startMs = new Date(run.started_at).getTime();
     const endMs = new Date(run.finished_at).getTime() + 60 * 1000; // 60s trailing buffer
