@@ -36,6 +36,10 @@ PICK="python3 $SCRIPT_DIR/pick_top_pages.py"
 GENERATOR="python3 $SCRIPT_DIR/generate_page.py"
 DB="python3 $SCRIPT_DIR/db_helpers.py"
 
+# Retry wrapper for `claude` (guards against auto-update unlink window).
+# shellcheck source=./claude_helpers.sh
+source "$SCRIPT_DIR/claude_helpers.sh"
+
 LOG_ROOT="$SCRIPT_DIR/logs"
 LOCK_ROOT="$SCRIPT_DIR/.locks/top_pages"
 mkdir -p "$LOG_ROOT" "$LOCK_ROOT"
@@ -138,6 +142,8 @@ PY
 )
 
 OVERALL_RC=0
+OK_TARGETS=()
+FAIL_TARGETS=()
 while read -r TARGET_PRODUCT; do
     [ -z "$TARGET_PRODUCT" ] && continue
 
@@ -158,6 +164,15 @@ while read -r TARGET_PRODUCT; do
     fi
     echo "$$" > "$PER_LOCK"
 
+    # Brace group is a subshell because of the pipe to tee. Any assignment
+    # to OVERALL_RC inside it is lost, and `continue` only breaks out of the
+    # subshell, never the outer while. So we exit the subshell with a
+    # distinct rc and let the outer loop tally via PIPESTATUS.
+    #   0     ok
+    #   10    claude proposal failed (after retries)
+    #   11    proposal parse failed
+    #   12    slug already exists (treated as ok / no work)
+    #   other generator rc passthrough
     {
     echo "=== Top-Pages target: $TARGET_PRODUCT (ts=$TS) ==="
 
