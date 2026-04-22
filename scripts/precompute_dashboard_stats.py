@@ -158,14 +158,15 @@ def precompute_style(hours=24):
     for the default all/all filter the dashboard asks for on load."""
     conn = get_conn()
     t0 = time.time()
-    # upvotes_discounted applies the Reddit -1 clamp per row before summing, so the
-    # per-post score computed client-side matches top_performers.SCORE_SQL.
+    # upvotes_discounted applies the Reddit/Moltbook -1 clamp per row before summing,
+    # so the per-post score computed client-side matches top_performers.SCORE_SQL.
+    # Both platforms have a default OP self-upvote that inflates the raw count.
     q_rows = (
         "SELECT json_agg(row_to_json(r)) FROM ("
         "SELECT COALESCE(engagement_style, '(none)') AS style, COUNT(*)::int AS posts, "
         "COUNT(*) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues'))::int AS views_posts, "
         "COALESCE(SUM(upvotes), 0)::int AS upvotes, "
-        "COALESCE(SUM(CASE WHEN LOWER(platform) = 'reddit' "
+        "COALESCE(SUM(CASE WHEN LOWER(platform) IN ('reddit', 'moltbook') "
         "THEN GREATEST(0, COALESCE(upvotes,0) - 1) "
         "ELSE COALESCE(upvotes,0) END), 0)::int AS upvotes_discounted, "
         "COALESCE(SUM(comments_count), 0)::int AS comments, "
