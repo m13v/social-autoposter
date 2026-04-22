@@ -1273,8 +1273,14 @@ async function handleApi(req, res) {
 
   // GET /api/top/dms - DM threads ranked by hotness.
   // Ordering: needs_human first (human escalation), then by interest_level
-  // (hot > warm > general > cold), converted/closed/declined/not_our_prospect
+  // (hot > warm > general > cold). Threads we've effectively stopped engaging
+  // (converted/closed/declined/not_our_prospect/stale-without-warm-interest)
   // sink to the bottom. Tie-break on last_message_at DESC.
+  //
+  // A stale thread keeps its interest bucket if interest_level is hot/warm/
+  // general (the CASE hits the interest WHENs first), so a still-hot lead
+  // that just went quiet stays visible at the top. Only "stale + nothing
+  // interesting" gets sunk.
   if (p === '/api/top/dms' && req.method === 'GET') {
     const url = new URL(req.url, 'http://localhost');
     const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get('limit') || '200', 10) || 200));
@@ -1348,6 +1354,7 @@ async function handleApi(req, res) {
                "WHEN d.interest_level = 'cold' THEN 40 " +
                "WHEN d.interest_level = 'declined' THEN 80 " +
                "WHEN d.interest_level = 'not_our_prospect' THEN 85 " +
+               "WHEN d.conversation_status = 'stale' THEN 70 " +
                "ELSE 50 END AS sort_bucket " +
         "FROM dms d " +
         "LEFT JOIN posts     p_direct    ON p_direct.id    = d.post_id " +
