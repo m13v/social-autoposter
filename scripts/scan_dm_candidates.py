@@ -27,7 +27,10 @@ import db as dbmod
 CONFIG_PATH = os.path.expanduser("~/social-autoposter/config.json")
 # Min-word floor to promote a public reply into a DM candidate.
 # X replies are natively shorter (quote-tweets, @-mentions), so the bar is lower.
-MIN_WORDS_BY_PLATFORM = {"reddit": 10, "linkedin": 10, "x": 4}
+# Reddit floor lowered to 4 on 2026-04-21 after data showed 4-9 word Reddit
+# replies are often direct questions and strong opinions, not filler; the
+# previous 10-word floor was leaving ~66 eligible candidates/30d on the table.
+MIN_WORDS_BY_PLATFORM = {"reddit": 4, "linkedin": 10, "x": 4}
 MIN_WORDS_DEFAULT = 10
 # Wait this long after our public reply before DMing, so the DM doesn't
 # feel like a double-tap on the same day. Next scan picks it up.
