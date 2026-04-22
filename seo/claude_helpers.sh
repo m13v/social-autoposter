@@ -42,7 +42,11 @@ claude_with_retry() {
     local max_tries="${CLAUDE_MAX_TRIES:-3}"
     local sleep_s="${CLAUDE_RETRY_SLEEP:-30}"
     local stdin_buf=""
-    if [ ! -t 0 ]; then
+    # Buffer stdin only when it's a real pipe (|) or file redirect (< file).
+    # Do NOT buffer for TTY or /dev/null-style char devices — `cat > buf`
+    # would otherwise block forever waiting for input that will never come
+    # (or read garbage from the parent shell's stdin).
+    if [ -p /dev/stdin ] || [ -f /dev/stdin ]; then
         stdin_buf=$(mktemp -t claude_stdin)
         cat > "$stdin_buf"
     fi
