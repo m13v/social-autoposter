@@ -217,6 +217,7 @@ def _empty_domain_stats(domain, error=None):
         "email_signups": 0,
         "schedule_clicks": 0,
         "get_started_clicks": 0,
+        "cross_product_clicks": 0,
         "pageview_details": {domain: {
             "total": 0,
             "top_pages": {},
@@ -304,6 +305,7 @@ def _ph_batch_counts(api_key, project_id, domains, after_iso):
     signup_total = _count_by_host("event = 'newsletter_subscribed'")
     sched_total = _count_by_host("event = 'schedule_click'")
     get_started_total = _count_by_host(f"event IN {_GET_STARTED_EVENTS}")
+    cross_product_total = _count_by_host("event = 'cross_product_click'")
 
     top_pv = _top_pages_by_host("event = '$pageview'", row_cap=5000)
     top_signup = _top_pages_by_host("event = 'newsletter_subscribed'", row_cap=500)
@@ -392,6 +394,7 @@ def _ph_batch_counts(api_key, project_id, domains, after_iso):
             "email_signups": signup_total.get(d, 0),
             "schedule_clicks": sched_total.get(d, 0),
             "get_started_clicks": get_started_total.get(d, 0),
+            "cross_product_clicks": cross_product_total.get(d, 0),
             "pageview_details": {d: {
                 "total": pv,
                 "top_pages": top_pv.get(d, {}),
@@ -411,6 +414,7 @@ def _ph_combine(per_domain):
         "email_signups": 0,
         "schedule_clicks": 0,
         "get_started_clicks": 0,
+        "cross_product_clicks": 0,
         "pageview_details": {},
         "cta_details": [],
     }
@@ -420,6 +424,7 @@ def _ph_combine(per_domain):
         out["email_signups"] += s.get("email_signups", 0)
         out["schedule_clicks"] += s.get("schedule_clicks", 0)
         out["get_started_clicks"] += s.get("get_started_clicks", 0)
+        out["cross_product_clicks"] += s.get("cross_product_clicks", 0)
         out["pageview_details"].update(s.get("pageview_details", {}))
         out["cta_details"].extend(s.get("cta_details", []))
     return out
@@ -608,6 +613,7 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
         email_signups = None
         schedule_clicks = None
         get_started_clicks = None
+        cross_product_clicks = None
         ctr = None
         conv = None
         dw_pv_out = None
@@ -621,6 +627,10 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
         email_signups = (posthog["email_signups"] if posthog else 0)
         schedule_clicks = (posthog["schedule_clicks"] if posthog else 0)
         get_started_clicks = (posthog["get_started_clicks"] if posthog else 0)
+        # Cross-product stays domain-wide on purpose: it's a lightweight
+        # signal ("how many clicks went to a sibling product from this site")
+        # with no per-page top-pages breakdown, so there's nothing to scope.
+        cross_product_clicks = (posthog.get("cross_product_clicks", 0) if posthog else 0)
         # Domain-wide counterparts for the "scoped (domain-wide)" dashboard
         # rendering. domain_wide_* were captured before the window-scoping
         # overwrote posthog["pageviews"] etc.
@@ -667,6 +677,7 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
             "email_signups": email_signups,
             "schedule_clicks": schedule_clicks,
             "get_started_clicks": get_started_clicks,
+            "cross_product_clicks": cross_product_clicks,
             "real_bookings": real,
             "ctr_pct": ctr,
             "conv_pct": conv,
