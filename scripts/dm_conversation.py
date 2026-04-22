@@ -200,37 +200,49 @@ def ensure_dm(conn, platform, author, chat_url=None, lookback_hours=720):
     return row["id"], True, reply_id
 
 
-def log_inbound(conn, dm_id, author, content, message_at=None):
-    """Log a message we received."""
+def log_inbound(conn, dm_id, author, content, message_at=None, event_id=None):
+    """Log a message we received.
+
+    event_id, when provided, is a platform-native globally-unique message id
+    (Matrix `$...` event_ids from Reddit Chat). If supplied, dedup is against
+    event_id (perfect key, UNIQUE index backs it). Otherwise we fall back to
+    the content-match guard that catches cron-re-ingestion of the same text.
+    """
     row = conn.execute("SELECT platform, their_author FROM dms WHERE id = %s", (dm_id,)).fetchone()
     if not row:
         print(f"ERROR: DM #{dm_id} not found")
         return False
 
     # Idempotency guard: the DM-replies cron re-reads each chat every run, so
-    # without a check the same inbound gets inserted on every firing. If an
-    # inbound with the exact same (dm_id, author, content) already exists,
-    # skip. Partner truly re-sending identical multi-line text later is rare
-    # enough that dropping it is fine.
-    dup = conn.execute("""
-        SELECT id, message_at FROM dm_messages
-        WHERE dm_id = %s AND direction = 'inbound' AND author = %s AND content = %s
-        ORDER BY message_at ASC LIMIT 1
-    """, (dm_id, author, content)).fetchone()
+    # without a check the same inbound gets inserted on every firing. Prefer
+    # the platform event_id when we have one (perfect key); fall back to
+    # content match otherwise.
+    if event_id:
+        dup = conn.execute(
+            "SELECT id, message_at FROM dm_messages WHERE event_id = %s LIMIT 1",
+            (event_id,),
+        ).fetchone()
+    else:
+        dup = conn.execute("""
+            SELECT id, message_at FROM dm_messages
+            WHERE dm_id = %s AND direction = 'inbound' AND author = %s AND content = %s
+            ORDER BY message_at ASC LIMIT 1
+        """, (dm_id, author, content)).fetchone()
     if dup:
-        print(f"  DEDUP BLOCKED: Inbound from {author} (DM #{dm_id}) already logged as msg #{dup['id']} at {dup['message_at']}. Skipping.")
+        key = f"event_id={event_id}" if event_id else f"content match"
+        print(f"  DEDUP BLOCKED: Inbound from {author} (DM #{dm_id}) already logged as msg #{dup['id']} at {dup['message_at']} ({key}). Skipping.")
         return False
 
     if message_at:
         conn.execute("""
-            INSERT INTO dm_messages (dm_id, direction, author, content, message_at, logged_at)
-            VALUES (%s, 'inbound', %s, %s, %s, NOW())
-        """, (dm_id, author, content, message_at))
+            INSERT INTO dm_messages (dm_id, direction, author, content, message_at, logged_at, event_id)
+            VALUES (%s, 'inbound', %s, %s, %s, NOW(), %s)
+        """, (dm_id, author, content, message_at, event_id))
     else:
         conn.execute("""
-            INSERT INTO dm_messages (dm_id, direction, author, content, message_at, logged_at)
-            VALUES (%s, 'inbound', %s, %s, NOW(), NOW())
-        """, (dm_id, author, content))
+            INSERT INTO dm_messages (dm_id, direction, author, content, message_at, logged_at, event_id)
+            VALUES (%s, 'inbound', %s, %s, NOW(), NOW(), %s)
+        """, (dm_id, author, content, event_id))
 
     conn.execute("""
         UPDATE dms SET last_message_at = NOW(), message_count = message_count + 1,
@@ -715,6 +727,8 @@ def main():
     p_in.add_argument("--dm-id", type=int, required=True)
     p_in.add_argument("--author", required=True)
     p_in.add_argument("--content", required=True)
+    p_in.add_argument("--message-at", help="ISO timestamp (platform-provided); falls back to NOW() if omitted.")
+    p_in.add_argument("--event-id", help="Platform-native unique message id (e.g., Matrix $... event_id). When supplied, dedup is by event_id instead of content match.")
 
     p_hist = sub.add_parser("history", help="Show conversation history")
     p_hist.add_argument("--dm-id", type=int, required=True)
@@ -811,7 +825,8 @@ def main():
         else:
             print("  existing")
     elif args.command == "log-inbound":
-        log_inbound(conn, args.dm_id, args.author, args.content)
+        log_inbound(conn, args.dm_id, args.author, args.content,
+                    message_at=args.message_at, event_id=args.event_id)
     elif args.command == "history":
         show_history(conn, args.dm_id)
     elif args.command == "pending":
