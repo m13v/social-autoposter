@@ -293,11 +293,16 @@ def ingest_unread(hydration_wait_ms=8000, dry_run=False):
     Matrix event_id as the dedup key.
 
     Returns a structured summary of what happened.
+
+    dm_conversation.ensure_dm and log_inbound print progress lines to stdout,
+    which would corrupt our JSON output. We redirect them to stderr for the
+    duration of the ingest loop so the final JSON stays clean.
     """
     # Lazy imports so list-unread doesn't require DB connectivity.
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import db as dbmod  # noqa: E402
     import dm_conversation as dmc  # noqa: E402
+    import contextlib  # noqa: E402
 
     scan = list_unread(hydration_wait_ms=hydration_wait_ms)
     if not scan.get("ok"):
@@ -319,6 +324,29 @@ def ingest_unread(hydration_wait_ms=8000, dry_run=False):
     }
     per_room = []
 
+    # Route dm_conversation's progress prints to stderr for the whole loop.
+    # We emit one JSON doc at the end on stdout and that's it.
+    _redirect_cm = contextlib.redirect_stdout(sys.stderr)
+    _redirect_cm.__enter__()
+
+    try:
+        _ingest_rooms(conn, scan, dmc, dry_run, stats, per_room)
+    finally:
+        _redirect_cm.__exit__(None, None, None)
+
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "matrix_total_joined": scan.get("total_joined"),
+        "matrix_unread_rooms": scan.get("unread_room_count"),
+        "matrix_total_unread_messages": scan.get("total_unread_messages"),
+        "matrix_next_batch": scan.get("next_batch"),
+        "stats": stats,
+        "per_room": per_room,
+    }
+
+
+def _ingest_rooms(conn, scan, dmc, dry_run, stats, per_room):
     for room in scan["unread"]:
         partner = room.get("partner_username")
         chat_url = room.get("chat_url")
@@ -326,8 +354,6 @@ def ingest_unread(hydration_wait_ms=8000, dry_run=False):
             stats["rooms_without_partner"] += 1
             continue
 
-        # Track whether this dm was already in the table (for stats) and
-        # whether its chat_url was NULL beforehand (to count backfills).
         existing = conn.execute(
             "SELECT id, chat_url FROM dms WHERE platform='reddit' AND their_author=%s ORDER BY id DESC LIMIT 1",
             (partner,),
