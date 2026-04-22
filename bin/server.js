@@ -2468,13 +2468,29 @@ const HTML = `<!DOCTYPE html>
     <div class="card">
       <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         <span class="card-title">Job History</span>
-        <div class="style-stats-pill-row" id="jobs-history-pills" data-selected="all" style="margin:0;">
+      </div>
+      <div style="padding:10px 16px;border-bottom:1px solid var(--accent-panel-border);display:flex;flex-direction:column;gap:8px;">
+        <div class="style-stats-pill-row" id="jobs-history-platform-pills" data-selected="all" style="margin:0;">
+          <span class="label" style="font-size:11px;color:var(--muted);margin-right:4px;">Platform</span>
           <button type="button" class="style-stats-pill active" data-value="all">All</button>
           <button type="button" class="style-stats-pill" data-value="reddit">Reddit</button>
           <button type="button" class="style-stats-pill" data-value="twitter">Twitter</button>
           <button type="button" class="style-stats-pill" data-value="linkedin">LinkedIn</button>
           <button type="button" class="style-stats-pill" data-value="moltbook">MoltBook</button>
           <button type="button" class="style-stats-pill" data-value="github">GitHub</button>
+        </div>
+        <div class="style-stats-pill-row" id="jobs-history-type-pills" data-selected="all" style="margin:0;">
+          <span class="label" style="font-size:11px;color:var(--muted);margin-right:4px;">Job</span>
+          <button type="button" class="style-stats-pill active" data-value="all">All</button>
+          <button type="button" class="style-stats-pill" data-value="post">Post</button>
+          <button type="button" class="style-stats-pill" data-value="engage">Engage</button>
+          <button type="button" class="style-stats-pill" data-value="link-edit">Link Edit</button>
+          <button type="button" class="style-stats-pill" data-value="dm-outreach">DM Outreach</button>
+          <button type="button" class="style-stats-pill" data-value="dm-replies">DM Replies</button>
+          <button type="button" class="style-stats-pill" data-value="octolens">Octolens</button>
+          <button type="button" class="style-stats-pill" data-value="stats">Stats</button>
+          <button type="button" class="style-stats-pill" data-value="audit">Audit</button>
+          <button type="button" class="style-stats-pill" data-value="other">Other</button>
         </div>
       </div>
       <div id="jobs-history-body">
@@ -2960,7 +2976,8 @@ function updateFreqCells(jobs) {
 
 // Job history state ---------------------------------------------------------
 let _jobHistoryRuns = [];
-let _jobHistoryFilter = 'all';
+let _jobHistoryPlatformFilter = 'all';
+let _jobHistoryTypeFilter = 'all';
 
 function fmtRelTime(iso) {
   if (!iso) return '—';
@@ -3023,11 +3040,12 @@ function renderResult(run) {
 
 function buildJobsHistoryTable(runs) {
   if (!runs || !runs.length) {
-    return '<div class="style-stats-empty" style="padding:16px;">No runs in history.</div>';
+    return '<div class="style-stats-empty" style="padding:16px;">No runs match the current filters.</div>';
   }
-  const rows = runs.slice(0, 100).map(r => (
+  const rows = runs.slice(0, 300).map(r => (
     '<tr>' +
-      '<td style="text-align:left;padding-left:16px;">' + r.human_name + '</td>' +
+      '<td style="text-align:left;padding-left:16px;">' + (r.job_label || r.script) + '</td>' +
+      '<td>' + (r.platform || '<span style="color:var(--muted);">—</span>') + '</td>' +
       '<td>' + fmtLocalTime(r.started_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtRelTime(r.started_at) + ')</span></td>' +
       '<td>' + fmtLocalTime(r.finished_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtElapsed(r.elapsed_s) + ')</span></td>' +
       '<td style="text-align:left;">' + renderResult(r) + '</td>' +
@@ -3037,6 +3055,7 @@ function buildJobsHistoryTable(runs) {
     '<table class="matrix-table" style="margin-top:0;">' +
       '<thead><tr>' +
         '<th style="text-align:left;padding-left:16px;">Job</th>' +
+        '<th>Platform</th>' +
         '<th>Kicked off</th>' +
         '<th>Finished</th>' +
         '<th style="text-align:left;">Result</th>' +
@@ -3049,15 +3068,16 @@ function buildJobsHistoryTable(runs) {
 function applyJobsHistoryFilter() {
   const body = document.getElementById('jobs-history-body');
   if (!body) return;
-  const filter = _jobHistoryFilter;
-  const filtered = filter === 'all'
-    ? _jobHistoryRuns
-    : _jobHistoryRuns.filter(r => r.platform_key === filter);
+  const pf = _jobHistoryPlatformFilter, tf = _jobHistoryTypeFilter;
+  const filtered = _jobHistoryRuns.filter(r =>
+    (pf === 'all' || r.platform_key === pf) &&
+    (tf === 'all' || r.job_type === tf)
+  );
   body.innerHTML = buildJobsHistoryTable(filtered);
 }
 
-function initJobsHistoryPills() {
-  const pillRow = document.getElementById('jobs-history-pills');
+function wirePillRow(rowId, onSelect) {
+  const pillRow = document.getElementById(rowId);
   if (!pillRow || pillRow._wired) return;
   pillRow._wired = true;
   pillRow.addEventListener('click', (e) => {
@@ -3065,8 +3085,19 @@ function initJobsHistoryPills() {
     if (!btn) return;
     pillRow.querySelectorAll('.style-stats-pill').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    _jobHistoryFilter = btn.getAttribute('data-value');
-    pillRow.setAttribute('data-selected', _jobHistoryFilter);
+    const v = btn.getAttribute('data-value');
+    pillRow.setAttribute('data-selected', v);
+    onSelect(v);
+  });
+}
+
+function initJobsHistoryPills() {
+  wirePillRow('jobs-history-platform-pills', (v) => {
+    _jobHistoryPlatformFilter = v;
+    applyJobsHistoryFilter();
+  });
+  wirePillRow('jobs-history-type-pills', (v) => {
+    _jobHistoryTypeFilter = v;
     applyJobsHistoryFilter();
   });
 }
@@ -3078,7 +3109,7 @@ async function loadJobsHistory() {
   if (Date.now() - _jobHistoryLoadedAt < 20000) return;
   _jobHistoryLoadedAt = Date.now();
   try {
-    const res = await fetch('/api/job-runs?limit=200');
+    const res = await fetch('/api/job-runs?limit=500');
     const data = await res.json();
     _jobHistoryRuns = Array.isArray(data.runs) ? data.runs : [];
     initJobsHistoryPills();
