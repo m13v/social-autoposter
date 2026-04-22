@@ -216,24 +216,67 @@ async () => {
 """.replace("%OUR_USERNAME_LITERAL%", json.dumps(OUR_USERNAME))
 
 
-def list_unread(hydration_wait_ms=8000, nav_retries=2):
-    """Open /chat in a headless Chromium on the reddit profile, wait for
-    matrix-js-sdk to finish its incremental sync, then read IndexedDB.
+# Minimal extraction: every joined room, just partner resolution + room_id.
+# Used for the full chat_url backfill across the ~737 rooms the user has ever
+# joined, not just the unread subset. No timeline, no message bodies.
+_EXTRACT_ALL_ROOMS_JS = r"""
+async () => {
+  const REDDIT_SYSTEM_BOT = '@t2_1qwk:reddit.com';
+  const openReq = indexedDB.open('matrix-js-sdk:reddit-chat-sync');
+  const conn = await new Promise((res, rej) => {
+    openReq.onsuccess = () => res(openReq.result);
+    openReq.onerror = () => rej(openReq.error);
+  });
+  const row = await new Promise((res, rej) => {
+    const tx = conn.transaction('sync', 'readonly');
+    const req = tx.objectStore('sync').getAll();
+    req.onsuccess = () => res(req.result[0] || null);
+    req.onerror = () => rej(req.error);
+  });
+  conn.close();
+  if (!row || !row.roomsData || !row.roomsData.join) {
+    return { ok: false, error: 'no_sync_row', rooms: [] };
+  }
+  const join = row.roomsData.join;
+  const rooms = [];
+  for (const [roomId, r] of Object.entries(join)) {
+    const stateEvents = (r.state && r.state.events) || [];
+    const memberEvents = stateEvents.filter(e => e.type === 'm.room.member');
+    const ourMxid = memberEvents.find(m =>
+      m.content && m.content.displayname === %OUR_USERNAME_LITERAL%
+    )?.state_key || null;
+    const partner = memberEvents.find(m =>
+      m.state_key !== ourMxid &&
+      m.state_key !== REDDIT_SYSTEM_BOT &&
+      m.content && m.content.displayname
+    );
+    const nc = (r.unread_notifications && r.unread_notifications.notification_count) || 0;
+    rooms.push({
+      room_id: roomId,
+      chat_url: 'https://www.reddit.com/chat/room/' + encodeURIComponent(roomId),
+      partner_username: (partner && partner.content && partner.content.displayname) || null,
+      partner_mxid: (partner && partner.state_key) || null,
+      unread_count: nc,
+    });
+  }
+  return { ok: true, total_joined: rooms.length, rooms };
+}
+""".replace("%OUR_USERNAME_LITERAL%", json.dumps(OUR_USERNAME))
 
-    Returns the parsed dict from _EXTRACT_JS (or an {ok: false, error} record).
+
+def _open_and_evaluate(js_code, hydration_wait_ms=8000, nav_retries=2):
+    """Shared scaffolding: open /chat in a headless Chromium on the reddit
+    profile, let matrix-js-sdk finish incremental sync, then run the given
+    JS and return its result.
+
+    Returns either the parsed JS return value or an {ok: false, error} record.
     """
     from playwright.sync_api import sync_playwright
 
     _acquire_lock()
-
     try:
         with sync_playwright() as p:
-            # Retry on Chromium SingletonLock collisions (MCP holds the OS-level
-            # profile lock for its whole lifetime; our JSON lock can expire
-            # while the OS lock is still held). Same pattern reddit_browser.py
-            # uses.
             deadline = time.time() + LOCK_WAIT_MAX
-            last_err = None
             context = None
             while True:
                 try:
@@ -246,7 +289,6 @@ def list_unread(hydration_wait_ms=8000, nav_retries=2):
                     )
                     break
                 except Exception as e:
-                    last_err = e
                     if time.time() >= deadline:
                         return {
                             "ok": False,
@@ -256,28 +298,17 @@ def list_unread(hydration_wait_ms=8000, nav_retries=2):
 
             try:
                 page = context.new_page()
-                # Navigate; occasionally /chat bounces to a room-specific URL
-                # which is fine because the IndexedDB state is global across
-                # the whole reddit-chat-sync DB, not per-room.
-                last_nav_err = None
                 for attempt in range(nav_retries + 1):
                     try:
                         page.goto("https://www.reddit.com/chat", wait_until="domcontentloaded", timeout=30000)
                         break
                     except Exception as e:
-                        last_nav_err = e
                         if attempt == nav_retries:
                             return {"ok": False, "error": f"navigate_failed: {e}"}
                         time.sleep(2)
 
-                # Let matrix-js-sdk hydrate from its cached state and fire an
-                # incremental /_matrix/client/v3/sync?since=<token>. 8s is
-                # plenty for the delta-sync case since cached state already
-                # covers 737 joined rooms.
                 page.wait_for_timeout(hydration_wait_ms)
-
-                result = page.evaluate(_EXTRACT_JS)
-                return result
+                return page.evaluate(js_code)
             finally:
                 try:
                     context.close()
@@ -285,6 +316,19 @@ def list_unread(hydration_wait_ms=8000, nav_retries=2):
                     pass
     finally:
         _release_lock()
+
+
+def list_unread(hydration_wait_ms=8000, nav_retries=2):
+    """Return every Matrix room with notification_count > 0 along with its
+    partner, last message, and last ~30 timeline events."""
+    return _open_and_evaluate(_EXTRACT_JS, hydration_wait_ms, nav_retries)
+
+
+def list_all_rooms(hydration_wait_ms=8000, nav_retries=2):
+    """Return every joined room with {room_id, chat_url, partner_username,
+    unread_count}. Same IndexedDB source, no timeline payload. Used for the
+    full chat_url backfill that fills rows the unread-only scan misses."""
+    return _open_and_evaluate(_EXTRACT_ALL_ROOMS_JS, hydration_wait_ms, nav_retries)
 
 
 def ingest_unread(hydration_wait_ms=8000, dry_run=False):
@@ -450,6 +494,80 @@ def _ingest_rooms(conn, scan, dmc, dry_run, stats, per_room):
     }
 
 
+def backfill_chat_urls(hydration_wait_ms=8000, dry_run=False):
+    """For every joined Reddit chat room, if a platform='reddit' dms row
+    exists for that partner with chat_url IS NULL, stamp it with the
+    room's chat_url. Read-only lookup when --dry-run is set.
+
+    Unlike ingest-unread (which only processes rooms with unread notifs),
+    this walks ALL joined rooms so we can catch historical DMs that have
+    been quiet for months but are still in the sidebar."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import db as dbmod  # noqa: E402
+
+    scan = list_all_rooms(hydration_wait_ms=hydration_wait_ms)
+    if not scan.get("ok"):
+        return scan
+
+    conn = dbmod.get_conn()
+    stats = {
+        "rooms_in_sidebar": len(scan["rooms"]),
+        "rooms_without_partner": 0,
+        "matched_dms_already_filled": 0,
+        "matched_dms_filled_now": 0,
+        "no_matching_dm": 0,
+        "multiple_matching_dms": 0,
+    }
+    filled = []
+
+    for room in scan["rooms"]:
+        partner = room.get("partner_username")
+        chat_url = room.get("chat_url")
+        if not partner or not chat_url:
+            stats["rooms_without_partner"] += 1
+            continue
+
+        # Case-insensitive match on author because Reddit usernames are
+        # case-preserving but compare case-insensitively.
+        rows = conn.execute(
+            "SELECT id, chat_url FROM dms WHERE platform='reddit' AND LOWER(their_author)=LOWER(%s) ORDER BY id DESC",
+            (partner,),
+        ).fetchall()
+
+        if not rows:
+            stats["no_matching_dm"] += 1
+            continue
+        if len(rows) > 1:
+            stats["multiple_matching_dms"] += 1
+            # Fall through and backfill the most recent row only (rows[0]).
+
+        target = rows[0]
+        if target["chat_url"]:
+            stats["matched_dms_already_filled"] += 1
+            continue
+
+        if not dry_run:
+            conn.execute(
+                "UPDATE dms SET chat_url = %s WHERE id = %s",
+                (chat_url, target["id"]),
+            )
+            conn.commit()
+        stats["matched_dms_filled_now"] += 1
+        filled.append({
+            "dm_id": target["id"],
+            "partner": partner,
+            "chat_url": chat_url,
+        })
+
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "matrix_total_joined": scan.get("total_joined"),
+        "stats": stats,
+        "filled_sample": filled[:25],
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="command")
@@ -478,12 +596,22 @@ def main():
     p_ing.add_argument("--pretty", action="store_true")
     p_ing.add_argument("--hydration-ms", type=int, default=8000)
 
+    p_bf = sub.add_parser(
+        "backfill-chat-urls",
+        help="Walk all joined Reddit chat rooms and fill any platform=reddit dms row with chat_url IS NULL whose author matches.",
+    )
+    p_bf.add_argument("--dry-run", action="store_true", help="Simulate only; no DB writes.")
+    p_bf.add_argument("--pretty", action="store_true")
+    p_bf.add_argument("--hydration-ms", type=int, default=8000)
+
     args = ap.parse_args()
 
     if args.command == "list-unread":
         result = list_unread(hydration_wait_ms=args.hydration_ms)
     elif args.command == "ingest-unread":
         result = ingest_unread(hydration_wait_ms=args.hydration_ms, dry_run=args.dry_run)
+    elif args.command == "backfill-chat-urls":
+        result = backfill_chat_urls(hydration_wait_ms=args.hydration_ms, dry_run=args.dry_run)
     else:
         ap.print_help()
         sys.exit(2)
