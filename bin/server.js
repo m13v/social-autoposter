@@ -2565,6 +2565,34 @@ function relTime(iso) {
   return days + 'd ago';
 }
 
+// Postgres "timestamp without time zone" columns (dms.last_message_at,
+// dm_messages.message_at) serialize as ISO strings with NO offset suffix.
+// JS parses those as local time, but our servers write UTC via NOW(). Append
+// a Z so they parse as UTC and render correctly in the viewer's timezone.
+function parseServerUtcTs(iso) {
+  if (!iso) return null;
+  const s = String(iso);
+  const last = s.charAt(s.length - 1);
+  const hasZ = last === 'Z' || last === 'z';
+  const d = new Date(hasZ ? s : s + 'Z');
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function fmtDmTs(d) {
+  if (!d) return '';
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (sameDay) return time;
+  const sameYear = d.getFullYear() === now.getFullYear();
+  const dateOpts = sameYear
+    ? { month: 'short', day: 'numeric' }
+    : { month: 'short', day: 'numeric', year: 'numeric' };
+  return d.toLocaleDateString([], dateOpts) + ' ' + time;
+}
+
 function formatNextRun(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -4763,7 +4791,7 @@ function renderTopDms(payload) {
     tier: Number(d.tier) || 1,
     message_count: Number(d.message_count) || 0,
     last_message_at: d.last_message_at || d.discovered_at || null,
-    last_ts: (d.last_message_at || d.discovered_at) ? new Date(d.last_message_at || d.discovered_at).getTime() : 0,
+    last_ts: (() => { const p = parseServerUtcTs(d.last_message_at || d.discovered_at); return p ? p.getTime() : 0; })(),
     conversation_status: d.conversation_status || '',
     interest_level: d.interest_level || '',
     human_reason: d.human_reason || '',
@@ -4807,14 +4835,11 @@ function renderTopDms(payload) {
       formatter: (_v, r) => dmClassBadge(r) },
     { key: 'last_ts',        label: 'Last message', type: 'numeric', align: 'right', widthPct: 10,
       formatter: (_v, r) => {
-        if (!r.last_message_at) return '<span style="color:var(--text-faint);">—</span>';
-        const d = new Date(r.last_message_at);
-        const abs = d.toLocaleString();
-        const rel = relTime(r.last_message_at);
-        return '<div class="dm-last-ts">' +
-          '<div class="dm-last-ts-rel">' + escapeHtml(rel) + '</div>' +
-          '<div class="dm-last-ts-abs" title="' + escapeHtml(abs) + '">' + escapeHtml(abs) + '</div>' +
-        '</div>';
+        const d = parseServerUtcTs(r.last_message_at);
+        if (!d) return '<span style="color:var(--text-faint);">—</span>';
+        const shown = fmtDmTs(d);
+        const full = d.toLocaleString();
+        return '<div class="dm-last-ts-abs" title="' + escapeHtml(full) + '">' + escapeHtml(shown) + '</div>';
       } },
   ];
   const colCount = columns.length;
