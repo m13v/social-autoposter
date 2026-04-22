@@ -310,7 +310,8 @@ def main():
         posthog = get_posthog_stats(ph_key, ph_pid, domains, args.days) if domains else None
 
         client_slug = get_client_slug(name)
-        bookings = get_booking_stats(bookings_db_url, client_slug, args.days) if client_slug else None
+        booking_table = get_booking_table(name)
+        bookings = get_booking_stats(bookings_db_url, client_slug, args.days, booking_table) if client_slug else None
 
         print_project_report(name, post_stats, platforms, posthog, bookings, args.quiet)
 
