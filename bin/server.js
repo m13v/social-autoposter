@@ -3795,9 +3795,9 @@ function renderFunnelStats(payload) {
       { key: 'schedule_clicks',  label: 'Schedule Clicks', type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_schedule_clicks') },
       { key: 'get_started_clicks', label: 'Get Started',   type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_get_started_clicks') },
       { key: 'bookings',         label: 'Bookings',        type: 'numeric', align: 'right', formatter: fmt },
-      // Cross-product: clicks on CTAs that promote a sibling product (e.g.
-      // Claude Meter CTA on Fazm blog posts). Fires `cross_product_click`
-      // via @m13v/seo-components' trackCrossProductClick.
+      // Cross-product: clicks on CTAs that promote a sibling product
+      // (e.g. Claude Meter CTA on Fazm blog posts). Fires the
+      // cross_product_click event via trackCrossProductClick.
       { key: 'cross_product_clicks', label: 'Cross Product', type: 'numeric', align: 'right', formatter: v => v == null ? '\u2014' : fmt(v) },
     ],
   });
