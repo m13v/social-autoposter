@@ -511,7 +511,7 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
     )
 
     trigger_context = {
-        "serp": "This keyword came from SERP discovery. It has SERP gap and the product fits the commercial intent.",
+        "serp": "This topic came from discovery. Top-ranking pages leave a real gap, and the product fits the commercial intent behind this search.",
         "gsc": "This query is already driving impressions to the site in Google Search Console. Real users are searching for this. Capture the demand.",
         "manual": "This is an adhoc trigger. Treat the keyword as worth building.",
         "reddit": "This page is being created to drop into a high-performing Reddit thread. Match the thread audience's vocabulary and pain points; the page should genuinely help someone who landed on it from a Reddit comment.",
@@ -609,7 +609,7 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
         "    the 30 tool-call budget.\n\n"
         "INVALID reasons (push through instead):\n"
         "  - 'I'm not sure which file to read' -> read more files.\n"
-        "  - 'The first SERP search returned weak results' -> try other queries.\n"
+        "  - 'The first WebSearch returned weak results' -> try other queries.\n"
         "  - 'A tool returned an error once' -> retry, read the error, adapt.\n"
         "  - 'This is taking many tool calls' -> volume alone is not a block.\n"
         "  - 'I want to confirm the angle is good' -> commit and ship.\n\n"
@@ -649,13 +649,13 @@ These are not prompts to extract facts from. They are where the real implementat
 
 If the product has a `scripts/` folder in any of the paths above, look there. That is where database queries, analytics pulls, and data exports live. Run what is available instead of trying to connect to databases directly. Real numbers from the product beat invented benchmarks.
 
-1c. Check the SERP.
+1c. Check what currently ranks.
 
-Use WebSearch for "{keyword}" and read the top 5 results. Note what they all cover. Note what they all miss. Your angle should be in the gap.
+Use WebSearch for "{keyword}" and read the top 5 results that rank today. Note what they all cover. Note what they all miss. Your angle should be in the gap.
 
 1d. Commit to an angle.
 
-Pick ONE specific thing the product does that is not in the top SERP results. That thing is the spine of your page.
+Pick ONE specific thing the product does that is not covered by the top-ranking pages. That thing is the spine of your page.
 
 ## Step 2 — Write the concept
 
@@ -665,9 +665,15 @@ CONCEPT
   angle: <one sentence describing the specific product behavior your page is built around>
   source: <the exact file path or script command you verified this from>
   anchor_fact: <one concrete, checkable thing — a file name, a number, a specific behavior — that makes the page uncopyable>
-  serp_gap: <what the top 5 search results miss that your angle fills>
+  competitor_gap: <what the top-ranking pages miss that your angle fills>
 
 If you cannot fill in all four lines with specific non-generic answers, stop and do more research. Do not proceed to Step 3 with a generic concept.
+
+### SEO jargon must not appear in the rendered page
+
+The words "SERP", "keyword", "search intent", "search results", "top 10", "top 5", "ranking", "rank for", and "SEO" are INTERNAL vocabulary for this prompt. Never write them into the page body, section headers, FAQ answers, hero captions, schema descriptions, or meta descriptions. They break authenticity: a reader who arrived via Google should not be reminded that you wrote this for Google.
+
+When you need to reference competing content, write it the way a subject-matter expert would: "every other guide on this", "most articles about X", "the pages that currently rank", "the existing playbooks", "common advice online", or paraphrase entirely. When you need to reference the query itself, write "this topic", "this question", or the actual subject. If a sentence cannot be rewritten without using one of the forbidden words, rewrite the sentence.
 
 ## Step 3 — Pick your component palette
 
