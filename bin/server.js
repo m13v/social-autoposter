@@ -2446,7 +2446,7 @@ const HTML = `<!DOCTYPE html>
       <button type="button" class="style-stats-pill" data-value="linkedin">LinkedIn</button>
       <button type="button" class="style-stats-pill" data-value="moltbook">Moltbook</button>
     </div>
-    <div class="style-stats-pill-row hidden" id="top-project-pills" data-selected="all">
+    <div class="style-stats-pill-row" id="top-project-pills" data-selected="all">
       <span class="label">Project</span>
       <button type="button" class="style-stats-pill active" data-value="all">All</button>
     </div>
@@ -4004,6 +4004,35 @@ let _topDmsLoaded = false;
 let _topDmsLoading = false;
 let _topDmsPayload = null;
 let _topDmDir = 'all';
+let _topPostsPayload = null;
+const _topProjectNames = new Set();
+
+function refreshTopProjectPills(newNames) {
+  const projRow = document.getElementById('top-project-pills');
+  if (!projRow) return;
+  if (Array.isArray(newNames)) {
+    for (const n of newNames) {
+      if (n && typeof n === 'string') _topProjectNames.add(n);
+    }
+  }
+  const sorted = Array.from(_topProjectNames).sort((a, b) => a.localeCompare(b));
+  const wanted = ['all', ...sorted];
+  const existing = Array.from(projRow.querySelectorAll('.style-stats-pill'))
+    .map(b => b.getAttribute('data-value') || '');
+  const same = wanted.length === existing.length && wanted.every((v, i) => v === existing[i]);
+  if (same) return;
+  const current = projRow.dataset.selected || 'all';
+  const selected = (current === 'all' || sorted.includes(current)) ? current : 'all';
+  if (selected !== current) _topProject = selected;
+  projRow.dataset.selected = selected;
+  const labelHtml = '<span class="label">Project</span>';
+  const pillsHtml = wanted.map(v => (
+    '<button type="button" class="style-stats-pill' + (v === selected ? ' active' : '') +
+    '" data-value="' + escapeHtml(v) + '">' +
+    escapeHtml(v === 'all' ? 'All' : v) + '</button>'
+  )).join('');
+  projRow.innerHTML = labelHtml + pillsHtml;
+}
 
 function parentLabel(post) {
   const plat = String(post.platform || '').toLowerCase();
@@ -4115,7 +4144,12 @@ function renderTopPosts(payload) {
     _topTableHandle = null;
     return;
   }
-  const posts = (payload && payload.posts) || [];
+  _topPostsPayload = payload;
+  const allPosts = (payload && payload.posts) || [];
+  refreshTopProjectPills(allPosts.map(p => p.project_name).filter(Boolean));
+  const posts = (_topProject && _topProject !== 'all')
+    ? allPosts.filter(p => (p.project_name || '') === _topProject)
+    : allPosts;
   if (totalEl) totalEl.textContent = posts.length + ' post' + (posts.length === 1 ? '' : 's');
   if (!posts.length) {
     container.innerHTML = '<div class="style-stats-empty">No posts with engagement yet.</div>';
@@ -4354,7 +4388,6 @@ function renderTopPages(payload) {
   const container = document.getElementById('top-pages-container');
   const unknownContainer = document.getElementById('top-pages-unknown-container');
   const totalEl = document.getElementById('top-total');
-  const projRow = document.getElementById('top-project-pills');
   if (!container) return;
   if (payload && payload.error) {
     container.innerHTML = '<div class="style-stats-empty">' + escapeHtml(payload.error) + '</div>';
@@ -4363,25 +4396,7 @@ function renderTopPages(payload) {
     return;
   }
   const projects = (payload && payload.projects) || [];
-  if (projRow) {
-    const names = projects.map(p => p.name).filter(Boolean).sort();
-    const current = projRow.dataset.selected || 'all';
-    const wanted = ['all', ...names];
-    const existing = Array.from(projRow.querySelectorAll('.style-stats-pill')).map(b => b.getAttribute('data-value') || '');
-    const same = wanted.length === existing.length && wanted.every((v, i) => v === existing[i]);
-    if (!same) {
-      const selected = names.includes(current) ? current : 'all';
-      _topProject = selected;
-      projRow.dataset.selected = selected;
-      const labelHtml = '<span class="label">Project</span>';
-      const pillsHtml = wanted.map(v => (
-        '<button type="button" class="style-stats-pill' + (v === selected ? ' active' : '') +
-        '" data-value="' + escapeHtml(v) + '">' +
-        escapeHtml(v === 'all' ? 'All' : v) + '</button>'
-      )).join('');
-      projRow.innerHTML = labelHtml + pillsHtml;
-    }
-  }
+  refreshTopProjectPills(projects.map(p => p.name).filter(Boolean));
   const fmt = n => (Number(n) || 0).toLocaleString();
   const normPath = (p) => {
     let s = String(p || '/');
