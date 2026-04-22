@@ -265,6 +265,38 @@ fi
 # ═══════════════════════════════════════════════════════
 log "Phase A: Scanning Reddit Chat for new inbound messages..."
 
+# Phase A.0: Ingest Reddit Chat inbounds directly from the matrix-js-sdk
+# IndexedDB cache before the LLM runs. Replaces the old "scan sidebar +
+# click into each unread room" flow (which was silently broken: the
+# scan_reddit_chat.js selector hadn't matched the post-migration DOM in
+# weeks, leaving 200+ unread rooms invisible to the pipeline).
+#
+# ingest-unread reads Matrix state the Reddit client already synced, upserts
+# dms rows (backfilling chat_url), and logs each inbound m.room.message with
+# its Matrix event_id as the dedup key. Idempotent — re-runs dedup via
+# dm_messages.event_id's UNIQUE partial index. When this completes, the
+# pending-replies query and dashboard both see the full unread backlog; the
+# LLM then only has to decide who to reply to, not where to find inbounds.
+if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ]; then
+    log "Phase A.0: ingesting Reddit Chat inbounds from matrix-js-sdk IndexedDB..."
+    _INGEST_OUT=$(mktemp)
+    if python3 "$REPO_DIR/scripts/reddit_chat_sync.py" ingest-unread > "$_INGEST_OUT" 2>/dev/null; then
+        python3 -c "
+import json, sys
+d = json.load(open('$_INGEST_OUT'))
+s = d.get('stats', {}) or {}
+fields = ['rooms_scanned','rooms_new_dms','chat_urls_backfilled','inbound_inserted','inbound_deduped']
+parts = [f'{k}={s.get(k, 0)}' for k in fields]
+errs = len(s.get('errors') or [])
+parts.append(f'errors={errs}')
+print(' '.join(parts))
+" 2>/dev/null | while IFS= read -r _line; do log "  [ingest] $_line"; done
+    else
+        log "  [ingest] WARNING: reddit_chat_sync.py ingest-unread failed; Reddit Chat backlog may be stale"
+    fi
+    rm -f "$_INGEST_OUT"
+fi
+
 # Get list of known Reddit DM authors to match against chat rooms
 KNOWN_REDDIT_AUTHORS=$(psql "$DATABASE_URL" -t -A -c "
     SELECT string_agg(their_author, ', ')
@@ -315,43 +347,57 @@ if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ]; then
     IFS= read -r -d '' PHASE_A_BLOCK <<'PHASE_A_EOF' || true
 ## PHASE A: Scan Reddit for new messages
 
-1. Scan Reddit inbox for comment replies (notifications about replies to our comments):
+Reddit Chat inbounds were already ingested before you started (Phase A.0 in
+this run's shell log — reddit_chat_sync.py ingest-unread). Every unread chat
+room's last ~30 messages are already in dm_messages with Matrix event_id set,
+partner usernames resolved, chat_urls backfilled, and dms.conversation_status
+flipped to 'needs_reply' for new inbounds. You do NOT need to navigate
+reddit.com/chat, click into any rooms, run scan_reddit_chat.js, or call
+log-inbound for Reddit chat rooms. Doing so is wasted work and risks double-
+counting (event_id dedup will block it but don't even try).
+
+1. Scan the legacy Reddit inbox for comment replies and classic PMs:
    ```bash
    cd ~/social-autoposter && python3 scripts/reddit_browser.py unread-dms
    ```
-   This returns JSON with: author, subject, preview, time, thread_url, type for each unread item.
+   Returns JSON with: author, subject, preview, time, thread_url, type.
+   Type = 'pm' or 'comment_reply' are the ones to handle here. Type='chat'
+   entries from this script are unreliable (selector is stale) and should
+   be IGNORED — chat rooms were already handled by Phase A.0.
 
-2. For Reddit Chat conversations (new reddit SPA), use the reddit-agent browser (mcp__reddit-agent__* tools):
-   a. Navigate to https://www.reddit.com/chat
-   b. Extract the full sidebar with mcp__reddit-agent__browser_run_code using scripts/browser/scan_reddit_chat.js. Save the returned `conversations` array to /tmp/reddit_chat_scan.json.
-   c. **Backfill chat URLs for any existing DM rows that still have chat_url=NULL**, using every conversation in that scan (read AND unread). This is cheap, idempotent, and fills buttons for historical rows whose chat is still in the sidebar:
+2. Find Reddit conversations needing a reply (includes both newly-ingested
+   chat rooms and any legacy PMs logged via step 1):
+   ```bash
+   cd ~/social-autoposter && python3 scripts/dm_conversation.py pending
+   ```
+   Scope to Reddit when needed via their_author + platform columns. This is
+   the authoritative list; don't reconstruct it from sidebar scrapes.
+
+3. For each Reddit PM/comment-reply surfaced by step 1 that isn't already in
+   dms, create a row and log the inbound (chat rooms already have rows from
+   Phase A.0):
+   a. `ensure-dm` is idempotent — returns existing id if present, creates one
+      if missing, and auto-links reply_id/post_id from their most recent
+      public comment:
       ```bash
-      python3 -c "import json; d=json.load(open('/tmp/reddit_chat_scan.json')); print(json.dumps(d.get('conversations', d) if isinstance(d, dict) else d))" \
-        | python3 scripts/dm_conversation.py backfill-urls --platform reddit
+      cd ~/social-autoposter && python3 scripts/dm_conversation.py ensure-dm --platform reddit --author "USERNAME" --chat-url "THREAD_URL"
       ```
-      The validator drops anything that's not a real chat-room URL.
-   d. Then look for chat rooms with unread indicators and click into each unread chat room to read messages.
-
-3. For each conversation with new inbound messages:
-   a. Identify the sender username
-   b. **First, ensure a DM row exists.** ALWAYS run this before log-inbound — it is idempotent (returns existing id if present, creates one if missing) and auto-links reply_id/post_id from their most recent public comment on our posts, so the dashboard shows the full context chain instead of an orphan record:
-      ```bash
-      cd ~/social-autoposter && python3 scripts/dm_conversation.py ensure-dm --platform reddit --author "USERNAME" --chat-url "CHAT_ROOM_URL"
-      ```
-      It prints `DM_ID=<n>` on stdout. Capture that id for the next call.
-
-      `CHAT_ROOM_URL` must be the URL of the DM thread itself, NOT the post URL. Valid shapes:
-      - `https://www.reddit.com/chat/room/!<id>%3Areddit.com` (new Reddit chat)
-      - `https://www.reddit.com/message/messages/<id>` (legacy Reddit PM)
-      When you are inside the chat room in the reddit-agent browser, use the browser's current URL (address bar). Do NOT pass the post/comment URL, do NOT pass the subreddit URL. If you genuinely don't have one, omit `--chat-url` entirely; a validator rejects non-thread URLs anyway.
-   c. Log inbound messages (use the dm-id printed above):
+      Prints `DM_ID=<n>`. `THREAD_URL` must be the PM thread URL
+      `https://old.reddit.com/message/messages/<id>`, NOT a post/subreddit
+      URL. A validator rejects anything else; omit the flag if you don't
+      have it.
+   b. Log inbound (uses event-id dedup when available; plain content match
+      otherwise):
       ```bash
       python3 scripts/dm_conversation.py log-inbound --dm-id DM_ID --author "USERNAME" --content "MESSAGE_TEXT"
       ```
-   d. If you didn't have the chat URL at step b, stamp it now:
-      ```bash
-      python3 scripts/dm_conversation.py set-url --dm-id DM_ID --url "CHAT_URL"
-      ```
+
+For every Reddit chat room flagged as needs_reply by the `pending` query,
+open it in the reddit-agent browser only to SEND a reply — not to read.
+The conversation history is available via:
+   ```bash
+   python3 scripts/dm_conversation.py history --dm-id DM_ID
+   ```
 PHASE_A_EOF
 fi
 
