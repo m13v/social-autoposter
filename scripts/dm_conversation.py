@@ -207,7 +207,20 @@ def log_inbound(conn, dm_id, author, content, message_at=None):
         print(f"ERROR: DM #{dm_id} not found")
         return False
 
-    ts = message_at or "NOW()"
+    # Idempotency guard: the DM-replies cron re-reads each chat every run, so
+    # without a check the same inbound gets inserted on every firing. If an
+    # inbound with the exact same (dm_id, author, content) already exists,
+    # skip. Partner truly re-sending identical multi-line text later is rare
+    # enough that dropping it is fine.
+    dup = conn.execute("""
+        SELECT id, message_at FROM dm_messages
+        WHERE dm_id = %s AND direction = 'inbound' AND author = %s AND content = %s
+        ORDER BY message_at ASC LIMIT 1
+    """, (dm_id, author, content)).fetchone()
+    if dup:
+        print(f"  DEDUP BLOCKED: Inbound from {author} (DM #{dm_id}) already logged as msg #{dup['id']} at {dup['message_at']}. Skipping.")
+        return False
+
     if message_at:
         conn.execute("""
             INSERT INTO dm_messages (dm_id, direction, author, content, message_at, logged_at)
