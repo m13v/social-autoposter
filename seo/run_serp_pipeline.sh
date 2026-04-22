@@ -30,6 +30,10 @@ LOCK_DIR="$SCRIPT_DIR/.locks"
 DB="python3 $SCRIPT_DIR/db_helpers.py"
 GENERATOR="python3 $SCRIPT_DIR/generate_page.py"
 
+# Retry wrapper for `claude` (guards against auto-update unlink window).
+# shellcheck source=./claude_helpers.sh
+source "$SCRIPT_DIR/claude_helpers.sh"
+
 PRODUCT="${1:?Usage: $0 <product_name> [--score-only] [--generate-only]}"
 MODE="${2:-full}"  # full, --score-only, --generate-only
 
@@ -131,8 +135,8 @@ if [ "$STATUS" = "unscored" ] && [ "$MODE" != "--generate-only" ]; then
     # Mark as scoring in Postgres
     $DB update "$PRODUCT" "$KEYWORD" scoring
 
-    # Run Claude to score the SERP
-    claude -p "You are a SERP analyst. Score this keyword for the product '$PRODUCT'.
+    # Run Claude to score the SERP (with retry wrapper for auto-update races)
+    claude_with_retry -p "You are a SERP analyst. Score this keyword for the product '$PRODUCT'.
 
 Product: $PRODUCT
 Website: $WEBSITE
