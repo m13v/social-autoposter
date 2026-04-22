@@ -425,12 +425,15 @@ def _ph_combine(per_domain):
     return out
 
 
-def _bookings_shared(bookings_conn, client_slug, days):
+def _bookings_shared(bookings_conn, client_slug, days, table="cal_bookings"):
     """Same output shape as ps.get_booking_stats, but reuses a shared psycopg2
-    connection instead of opening a fresh one per project."""
+    connection instead of opening a fresh one per project.
+    `table` is `cal_bookings` (Cal.com) or `calendly_bookings` (Calendly)."""
     if not bookings_conn or not client_slug:
         return None
     try:
+        if table not in {"cal_bookings", "calendly_bookings"}:
+            raise ValueError(f"unsupported booking table: {table}")
         cur = bookings_conn.cursor()
         cur.execute(
             "SELECT COUNT(*), "
@@ -441,7 +444,7 @@ def _bookings_shared(bookings_conn, client_slug, days):
             "AND attendee_email NOT LIKE '%%example%%' "
             "AND attendee_name NOT LIKE '%%TEST%%' "
             "AND attendee_name NOT LIKE '%%John Doe%%') "
-            "FROM cal_bookings WHERE client_slug = %s "
+            "FROM " + table + " WHERE client_slug = %s "
             "AND created_at >= NOW() - INTERVAL '" + str(days) + " days'",
             (client_slug,),
         )
@@ -451,7 +454,7 @@ def _bookings_shared(bookings_conn, client_slug, days):
 
         cur.execute(
             "SELECT attendee_name, attendee_email, status, start_time, created_at "
-            "FROM cal_bookings WHERE client_slug = %s "
+            "FROM " + table + " WHERE client_slug = %s "
             "AND created_at >= NOW() - INTERVAL '" + str(days) + " days' "
             "ORDER BY created_at DESC LIMIT 5",
             (client_slug,),
@@ -592,7 +595,8 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
         posthog["get_started_clicks"] = scoped_get_started
 
     client_slug = ps.get_client_slug(name)
-    bookings = _bookings_shared(bookings_conn, client_slug, days) if client_slug else None
+    booking_table = ps.get_booking_table(name)
+    bookings = _bookings_shared(bookings_conn, client_slug, days, booking_table) if client_slug else None
 
     # When the PostHog batch failed, the aggregate numbers on `posthog` are
     # all 0 but that doesn't mean there are no events, it means we couldn't
