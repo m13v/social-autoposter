@@ -1956,6 +1956,13 @@ const HTML = `<!DOCTYPE html>
     100% { background: transparent; box-shadow: inset 3px 0 0 transparent; }
   }
 
+  .activity-filters { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+  .activity-filters .style-stats-pill-row { align-items: center; }
+  .activity-filters .style-stats-pill-row .label { min-width: 70px; }
+  .activity-filters .activity-filter-group { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .activity-filters .activity-filter-menu-btn { background: var(--bg-subtle); }
+  .activity-filters .activity-filter-menu-btn:hover { background: var(--bg-hover); }
+
   /* Top tab */
   .top-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 12px; flex-wrap: wrap; }
   .top-title { font-size: 13px; font-weight: 600; color: var(--text); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -2357,6 +2364,26 @@ const HTML = `<!DOCTYPE html>
       <span id="activity-count" style="color:var(--text);margin-left:8px;"></span>
     </div>
   </div>
+  <div class="activity-filters">
+    <div class="style-stats-pill-row" id="activity-type-pills">
+      <span class="label">Event</span>
+      <button type="button" class="activity-filter-menu-btn" data-filter-action="type-all">All</button>
+      <button type="button" class="activity-filter-menu-btn" data-filter-action="type-none">None</button>
+      <span class="activity-filter-group" id="activity-type-filters"></span>
+    </div>
+    <div class="style-stats-pill-row" id="activity-platform-pills">
+      <span class="label">Platform</span>
+      <button type="button" class="activity-filter-menu-btn" data-filter-action="platform-all">All</button>
+      <button type="button" class="activity-filter-menu-btn" data-filter-action="platform-none">None</button>
+      <span class="activity-filter-group" id="activity-platform-filters"></span>
+    </div>
+    <div class="style-stats-pill-row" id="activity-project-pills">
+      <span class="label">Project</span>
+      <button type="button" class="activity-filter-menu-btn" data-filter-action="project-all">All</button>
+      <button type="button" class="activity-filter-menu-btn" data-filter-action="project-none">None</button>
+      <span class="activity-filter-group" id="activity-project-filters"></span>
+    </div>
+  </div>
   <div class="activity-wrapper">
     <table class="activity-table">
       <thead>
@@ -2377,38 +2404,9 @@ const HTML = `<!DOCTYPE html>
             <span class="activity-header-label">Cost <span class="activity-sort-arrow" data-sort-arrow="cost_usd"></span></span>
           </th>
         </tr>
-        <tr class="activity-filter-row">
-          <th>
-            <details class="activity-filter-dropdown" id="activity-type-dropdown">
-              <summary><span id="activity-type-summary">all events</span></summary>
-              <div class="activity-filter-menu">
-                <div class="activity-filter-menu-actions">
-                  <button type="button" class="activity-filter-menu-btn" data-filter-action="type-all">all</button>
-                  <button type="button" class="activity-filter-menu-btn" data-filter-action="type-none">none</button>
-                </div>
-                <div class="activity-filter-group" id="activity-type-filters"></div>
-              </div>
-            </details>
-          </th>
-          <th>
-            <details class="activity-filter-dropdown" id="activity-platform-dropdown">
-              <summary><span id="activity-platform-summary">all</span></summary>
-              <div class="activity-filter-menu">
-                <div class="activity-filter-menu-actions">
-                  <button type="button" class="activity-filter-menu-btn" data-filter-action="platform-all">all</button>
-                  <button type="button" class="activity-filter-menu-btn" data-filter-action="platform-none">none</button>
-                </div>
-                <div class="activity-filter-group" id="activity-platform-filters"></div>
-              </div>
-            </details>
-          </th>
-          <th><input type="text" id="activity-filter-project" placeholder="filter project/detail&hellip;" class="activity-col-filter" /></th>
-          <th><input type="text" id="activity-filter-summary" placeholder="filter what&hellip;" class="activity-col-filter" /></th>
-          <th></th>
-        </tr>
       </thead>
       <tbody id="activity-body">
-        <tr><td colspan="6" style="text-align:center;color:var(--text);padding:40px;">Loading&hellip;</td></tr>
+        <tr><td colspan="5" style="text-align:center;color:var(--text);padding:40px;">Loading&hellip;</td></tr>
       </tbody>
     </table>
   </div>
