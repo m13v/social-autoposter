@@ -3043,13 +3043,14 @@ async function saveSettings() {
 const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'dm_reply_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit', 'page_published_top', 'page_improved', 'resurrected'];
 const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', dm_reply_sent: 'dm reply', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)', page_published_top: 'page (top)', page_improved: 'page (improved)', resurrected: 'resurrected' };
 const ACTIVITY_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github', 'seo'];
+const ACTIVITY_PROJECT_NONE = '(none)';
 let _activitySeen = new Set();
 let _activityFirstLoad = true;
 let _activityTypeFilter = new Set(EVENT_TYPES);
 let _activityPlatformFilter = new Set(ACTIVITY_PLATFORMS);
+let _activityProjectFilter = new Set();
+let _activityKnownProjects = [];
 let _activitySearch = '';
-let _activityFilterProject = '';
-let _activityFilterSummary = '';
 let _activitySortField = 'occurred_at';
 let _activitySortDir = 'desc';
 let _activityPage = 0;
@@ -3062,22 +3063,36 @@ let _activityPageSize = (() => {
 let _activityTimer = null;
 let _activityControlsWired = false;
 
-function updateTypeDropdownSummary() {
-  const el = document.getElementById('activity-type-summary');
-  if (!el) return;
-  const n = _activityTypeFilter.size, total = EVENT_TYPES.length;
-  el.textContent = n === total ? 'all events' : (n === 0 ? 'none' : n + ' of ' + total);
+function activityProjectKey(e) {
+  const p = String((e && e.project) || '').trim();
+  return p || ACTIVITY_PROJECT_NONE;
 }
-function updatePlatformDropdownSummary() {
-  const el = document.getElementById('activity-platform-summary');
-  if (!el) return;
-  const n = _activityPlatformFilter.size, total = ACTIVITY_PLATFORMS.length;
-  el.textContent = n === total ? 'all' : (n === 0 ? 'none' : n + ' of ' + total);
+
+function refreshActivityProjectPills(events) {
+  const projEl = document.getElementById('activity-project-filters');
+  if (!projEl) return;
+  const seen = new Set(_activityKnownProjects);
+  let added = false;
+  for (const e of events || []) {
+    const p = activityProjectKey(e);
+    if (!seen.has(p)) { seen.add(p); _activityKnownProjects.push(p); _activityProjectFilter.add(p); added = true; }
+  }
+  if (!added && projEl.children.length) {
+    projEl.querySelectorAll('[data-project]').forEach(el => {
+      el.classList.toggle('active', _activityProjectFilter.has(el.dataset.project));
+    });
+    return;
+  }
+  _activityKnownProjects.sort((a, b) => a.localeCompare(b));
+  projEl.innerHTML = _activityKnownProjects.map(p =>
+    '<span class="activity-chip' + (_activityProjectFilter.has(p) ? ' active' : '') + '" data-project="' + escapeHtml(p) + '" title="' + escapeHtml(p) + '">' + escapeHtml(p) + '</span>'
+  ).join('');
 }
 
 function buildActivityFilters() {
   const tEl = document.getElementById('activity-type-filters');
   const pEl = document.getElementById('activity-platform-filters');
+  const projEl = document.getElementById('activity-project-filters');
   if (!tEl || tEl.children.length) return;
   tEl.innerHTML = EVENT_TYPES.map(t =>
     '<span class="activity-chip ev-' + t + ' active" data-type="' + t + '">' + EVENT_LABELS[t] + '</span>'
@@ -3085,27 +3100,36 @@ function buildActivityFilters() {
   pEl.innerHTML = ACTIVITY_PLATFORMS.map(p =>
     '<span class="activity-chip active" data-platform="' + p + '" title="' + p + '">' + (PLATFORM_ICONS[p] || p) + '</span>'
   ).join('');
-  tEl.querySelectorAll('[data-type]').forEach(el => {
-    el.addEventListener('click', () => {
-      const t = el.dataset.type;
-      if (_activityTypeFilter.has(t)) { _activityTypeFilter.delete(t); el.classList.remove('active'); }
-      else { _activityTypeFilter.add(t); el.classList.add('active'); }
+  tEl.addEventListener('click', (ev) => {
+    const el = ev.target.closest('[data-type]');
+    if (!el || !tEl.contains(el)) return;
+    const t = el.dataset.type;
+    if (_activityTypeFilter.has(t)) { _activityTypeFilter.delete(t); el.classList.remove('active'); }
+    else { _activityTypeFilter.add(t); el.classList.add('active'); }
+    _activityPage = 0;
+    renderActivity(_lastActivityEvents || []);
+  });
+  pEl.addEventListener('click', (ev) => {
+    const el = ev.target.closest('[data-platform]');
+    if (!el || !pEl.contains(el)) return;
+    const p = el.dataset.platform;
+    if (_activityPlatformFilter.has(p)) { _activityPlatformFilter.delete(p); el.classList.remove('active'); }
+    else { _activityPlatformFilter.add(p); el.classList.add('active'); }
+    _activityPage = 0;
+    renderActivity(_lastActivityEvents || []);
+  });
+  if (projEl) {
+    projEl.addEventListener('click', (ev) => {
+      const el = ev.target.closest('[data-project]');
+      if (!el || !projEl.contains(el)) return;
+      const p = el.dataset.project;
+      if (_activityProjectFilter.has(p)) { _activityProjectFilter.delete(p); el.classList.remove('active'); }
+      else { _activityProjectFilter.add(p); el.classList.add('active'); }
       _activityPage = 0;
-      updateTypeDropdownSummary();
       renderActivity(_lastActivityEvents || []);
     });
-  });
-  pEl.querySelectorAll('[data-platform]').forEach(el => {
-    el.addEventListener('click', () => {
-      const p = el.dataset.platform;
-      if (_activityPlatformFilter.has(p)) { _activityPlatformFilter.delete(p); el.classList.remove('active'); }
-      else { _activityPlatformFilter.add(p); el.classList.add('active'); }
-      _activityPage = 0;
-      updatePlatformDropdownSummary();
-      renderActivity(_lastActivityEvents || []);
-    });
-  });
-  document.querySelectorAll('[data-filter-action]').forEach(btn => {
+  }
+  document.querySelectorAll('#tab-activity [data-filter-action]').forEach(btn => {
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       const a = btn.dataset.filterAction;
@@ -3121,28 +3145,21 @@ function buildActivityFilters() {
       } else if (a === 'platform-none') {
         _activityPlatformFilter = new Set();
         pEl.querySelectorAll('[data-platform]').forEach(c => c.classList.remove('active'));
+      } else if (a === 'project-all') {
+        _activityProjectFilter = new Set(_activityKnownProjects);
+        if (projEl) projEl.querySelectorAll('[data-project]').forEach(c => c.classList.add('active'));
+      } else if (a === 'project-none') {
+        _activityProjectFilter = new Set();
+        if (projEl) projEl.querySelectorAll('[data-project]').forEach(c => c.classList.remove('active'));
       }
       _activityPage = 0;
-      updateTypeDropdownSummary();
-      updatePlatformDropdownSummary();
       renderActivity(_lastActivityEvents || []);
-    });
-  });
-  updateTypeDropdownSummary();
-  updatePlatformDropdownSummary();
-  document.addEventListener('click', (ev) => {
-    document.querySelectorAll('.activity-filter-dropdown[open]').forEach(d => {
-      if (!d.contains(ev.target)) d.removeAttribute('open');
     });
   });
   if (!_activityControlsWired) {
     _activityControlsWired = true;
     const search = document.getElementById('activity-search');
     if (search) search.addEventListener('input', () => { _activitySearch = search.value.trim().toLowerCase(); _activityPage = 0; renderActivity(_lastActivityEvents || []); });
-    const fp = document.getElementById('activity-filter-project');
-    if (fp) fp.addEventListener('input', () => { _activityFilterProject = fp.value.trim().toLowerCase(); _activityPage = 0; renderActivity(_lastActivityEvents || []); });
-    const fs = document.getElementById('activity-filter-summary');
-    if (fs) fs.addEventListener('input', () => { _activityFilterSummary = fs.value.trim().toLowerCase(); _activityPage = 0; renderActivity(_lastActivityEvents || []); });
     document.querySelectorAll('.activity-sortable').forEach(el => {
       el.addEventListener('click', () => {
         const field = el.dataset.sort;
@@ -5152,19 +5169,14 @@ async function loadDmStats(force) {
 let _lastActivityEvents = [];
 function renderActivity(events) {
   _lastActivityEvents = events;
+  refreshActivityProjectPills(events);
   const body = document.getElementById('activity-body');
   if (!body) return;
   renderSortArrows();
   const filtered = events.filter(e => {
     if (!_activityTypeFilter.has(e.type)) return false;
     if (!_activityPlatformFilter.has((e.platform || '').toLowerCase())) return false;
-    if (_activityFilterProject) {
-      const hay = (String(e.project || '') + ' ' + String(e.detail || '')).toLowerCase();
-      if (hay.indexOf(_activityFilterProject) === -1) return false;
-    }
-    if (_activityFilterSummary) {
-      if (String(e.summary || '').toLowerCase().indexOf(_activityFilterSummary) === -1) return false;
-    }
+    if (!_activityProjectFilter.has(activityProjectKey(e))) return false;
     if (!activityMatchesSearch(e, _activitySearch)) return false;
     return true;
   });
@@ -5175,7 +5187,7 @@ function renderActivity(events) {
     sorted.length + ' of ' + events.length + ' events';
   renderPagination(sorted.length);
   if (!page.length) {
-    body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text);padding:40px;">No matching events</td></tr>';
+    body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text);padding:40px;">No matching events</td></tr>';
     return;
   }
   const rows = page.map(e => {
