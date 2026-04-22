@@ -71,8 +71,11 @@ Claude decides WHAT (pick project, write text). Scripts execute HOW (navigate, c
 | Script | Platform | Action |
 |--------|----------|--------|
 | `scripts/browser/edit_linkedin_comment.js` | LinkedIn | Append text to our comment |
-| `scripts/browser/scan_reddit_chat.js` | Reddit | Scan chat sidebar for conversations with unread indicators |
 | `scripts/browser/scrape_reddit_views.js` | Reddit | Scroll profile page and extract post view counts |
+
+For Reddit chat ingestion, use `scripts/reddit_chat_sync.py` (ingest-unread /
+list-unread / backfill-chat-urls). It reads matrix-js-sdk's IndexedDB cache
+directly, which is more reliable than DOM scraping of the sidebar.
 
 ## Platform Notes
 
