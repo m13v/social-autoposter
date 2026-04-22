@@ -4698,11 +4698,16 @@ function renderTopDms(payload) {
     return;
   }
   const allDms = (payload && payload.dms) || [];
+  const dmProjectName = d => d.target_project || d.project_name || '';
+  refreshTopProjectPills(allDms.map(dmProjectName).filter(Boolean));
+  const projectScoped = (_topProject && _topProject !== 'all')
+    ? allDms.filter(d => dmProjectName(d) === _topProject)
+    : allDms;
   const dms = _topDmDir === 'in'
-    ? allDms.filter(d => d.last_dir === 'inbound')
+    ? projectScoped.filter(d => d.last_dir === 'inbound')
     : (_topDmDir === 'out'
-      ? allDms.filter(d => d.last_dir === 'outbound')
-      : allDms);
+      ? projectScoped.filter(d => d.last_dir === 'outbound')
+      : projectScoped);
   if (totalEl) {
     const suffix = _topDmDir === 'in' ? ' (IN)' : (_topDmDir === 'out' ? ' (OUT)' : '');
     totalEl.textContent = dms.length + ' thread' + (dms.length === 1 ? '' : 's') + suffix;
