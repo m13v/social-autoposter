@@ -181,21 +181,28 @@ def check_consumer_setup(repo_path: str) -> dict:
         has_source_pragma = (
             "@source" in css_text and "seo-components" in css_text
         )
-        # Fallback: layout.tsx may inject prebuilt SeoComponentsStyles instead
-        # of relying on the Tailwind JIT scan.
-        has_seo_styles_injection = False
+        if not has_source_pragma:
+            missing.append(
+                f"{globals_css.relative_to(root)} missing "
+                "'@source \"../../node_modules/@seo/components/src\"' pragma (Phase 2c). "
+                "Without it Tailwind v4 never scans the library and utilities "
+                "used inside @seo/components render unstyled."
+            )
+        # SeoComponentsStyles is the legacy second-stylesheet pattern. It injects
+        # duplicates of .hidden / .xl:flex inside @layer seo-components, which
+        # loses to the consumer's @layer utilities and forces GuideChatPanel /
+        # SitemapSidebar to display:none forever. The @source pragma above
+        # already makes this component unnecessary, so flag any lingering usage.
         for lay_p in layout_candidates_for_check(root):
             if lay_p.exists() and "SeoComponentsStyles" in lay_p.read_text(
                 errors="ignore"
             ):
-                has_seo_styles_injection = True
+                missing.append(
+                    f"{lay_p.relative_to(root)} still renders <SeoComponentsStyles /> "
+                    "(Phase 2d). Remove it — it collides with @layer utilities "
+                    "and forces GuideChatPanel/SitemapSidebar to display:none."
+                )
                 break
-        if not has_source_pragma and not has_seo_styles_injection:
-            missing.append(
-                f"{globals_css.relative_to(root)} missing "
-                "'@source \"../../node_modules/@seo/components/src\"' pragma "
-                "AND layout.tsx has no <SeoComponentsStyles /> (Phase 2c)"
-            )
 
     # Phase 4a: withSeoContent wrapper so /api/guide-chat can read MDX at runtime
     next_cfg_candidates = [
