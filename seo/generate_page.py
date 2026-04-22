@@ -97,6 +97,17 @@ CONTENT_TYPES = {
         "example_dirs": ["src/app/use-case/", "src/app/t/"],
         "description": "a use-case page describing one specific job the product does",
     },
+    "cross_roundup": {
+        "route_prefix": "/best/",
+        "path_candidates": [
+            "src/app/best/{slug}/page.tsx",
+            "src/app/(content)/best/{slug}/page.tsx",
+            "src/app/(main)/best/{slug}/page.tsx",
+            "website/src/app/best/{slug}/page.tsx",
+        ],
+        "example_dirs": ["src/app/best/", "src/app/t/"],
+        "description": "a dated best-of listicle that ranks the host product alongside 6-10 sibling projects, including cross-industry picks, with every entry wired to trackCrossProductClick for attribution",
+    },
 }
 
 
@@ -300,6 +311,81 @@ def resolve_source_paths(product_cfg: dict) -> list[dict]:
             "exists": os.path.isdir(path),
         })
     return out
+
+
+def build_cross_roundup_block(host_cfg: dict) -> str:
+    """Return a prompt block listing every sibling project for the cross_roundup
+    content type. The model picks 6-10 of these (including at least a few
+    cross-industry ones) and writes a dated listicle for the host product.
+    Each entry's CTA must call trackCrossProductClick so the click attributes
+    to the dashboard's Cross Product column."""
+    with open(CONFIG_PATH) as f:
+        cfg = json.load(f)
+    host_slug = (host_cfg.get("name") or "").lower()
+    siblings = []
+    for p in cfg.get("projects", []):
+        if (p.get("name") or "").lower() == host_slug:
+            continue
+        if not p.get("website"):
+            continue
+        sr = p.get("seo_roundup") or {}
+        category = sr.get("category") or ""
+        siblings.append({
+            "name": p["name"],
+            "slug": (p["name"] or "").lower(),
+            "website": p.get("website", ""),
+            "category": category,
+            "tagline": p.get("tagline") or p.get("description") or "",
+            "get_started_link": p.get("get_started_link") or p.get("website", ""),
+            "booking_link": p.get("booking_link") or "",
+        })
+    host_sr = host_cfg.get("seo_roundup") or {}
+    host_category = host_sr.get("category") or ""
+    siblings_json = json.dumps(siblings, indent=2, default=str)
+    return (
+        "=== CROSS-ROUNDUP INPUT ===\n"
+        f"Host product: {host_cfg.get('name')} ({host_cfg.get('website','')})\n"
+        f"Host niche (use this in the H1 and <title>): {host_category}\n"
+        "Today's date is the date the page is generated. Use it in the H1 as:\n"
+        '  "Best {host_niche} for {Month} {Day}, {Year}"\n'
+        "Slug must include YYYY-MM-DD and lives under /best/<slug>.\n\n"
+        "Sibling projects (JSON, pick 6-10 for the list — include at least\n"
+        "two that are CROSS-INDUSTRY, not just same-niche; write each entry\n"
+        "through the host audience's lens, not as a generic product blurb):\n\n"
+        f"{siblings_json}\n\n"
+        "MANDATORY rules for this content type:\n"
+        "  1. H1 MUST be exactly: \"Best <host niche> for <Month Day, Year>\".\n"
+        "     The <title> meta should mirror the H1. Use today's real date.\n"
+        "  2. List between 6 and 10 products in total. The host product MUST\n"
+        "     be one of them, featured near the top (#1 or #2 is typical for\n"
+        "     a first-party page).\n"
+        "  3. For sibling entries, write a 2-4 sentence 'why this fits' blurb\n"
+        "     from the host audience's point of view. Do not copy the sibling's\n"
+        "     own marketing copy verbatim; rewrite it.\n"
+        "  4. Every sibling entry's primary CTA MUST be a button/link that calls\n"
+        "     trackCrossProductClick on click. Import from @seo/components:\n"
+        "       import { trackCrossProductClick } from \"@seo/components\";\n"
+        "     Call with:\n"
+        "       trackCrossProductClick({\n"
+        f"         site: \"{host_slug}\",\n"
+        "         targetProduct: <sibling slug>,\n"
+        "         destination: <sibling get_started_link>,\n"
+        "         text: <visible button text>,\n"
+        "         component: \"CrossRoundupEntry\",\n"
+        "         section: <e.g. \"entry-3\">,\n"
+        "       });\n"
+        "     The <a href> on the button is the sibling's get_started_link.\n"
+        "     Use target=\"_blank\" rel=\"noopener noreferrer\".\n"
+        "  5. The HOST product's CTA can stay as your normal primary CTA\n"
+        "     (GetStartedCTA, trackGetStartedClick, or a book-a-call button).\n"
+        "     Do NOT fire cross_product_click for the host's own button.\n"
+        "  6. Each entry should be visually distinct from the plain guide\n"
+        "     template. Use BentoGrid, GlowCard, or numbered rank cards as\n"
+        "     the list layout. No bare <ul><li> of product names.\n"
+        "  7. Intro paragraph must state the date plainly so readers searching\n"
+        "     \"best X April 2026\" see the match immediately.\n"
+        "=== END CROSS-ROUNDUP INPUT ===\n"
+    )
 
 
 def format_source_block(sources: list[dict]) -> str:
@@ -549,6 +635,7 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
         "gsc": "This query is already driving impressions to the site in Google Search Console. Real users are searching for this. Capture the demand.",
         "manual": "This is an adhoc trigger. Treat the keyword as worth building.",
         "reddit": "This page is being created to drop into a high-performing Reddit thread. Match the thread audience's vocabulary and pain points; the page should genuinely help someone who landed on it from a Reddit comment.",
+        "roundup": "This is a weekly cross-product roundup: a listicle hosted on this product's own domain that ranks the host alongside 6-10 sibling projects. The SEO target is the freshness query 'best <niche> <Month Year>'. Click tracking attributes every sibling CTA to the dashboard's Cross Product column.",
     }.get(trigger, "")
 
     ct = CONTENT_TYPES.get(content_type, CONTENT_TYPES["guide"])
@@ -568,7 +655,12 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
         "guide": "This is a general guide/explainer page. You have the most creative freedom here — the angle, section shape, and length are all yours.",
         "alternative": f"This is an alternative/comparison page. Readers arrived by searching for a competitor product. Your job is to show them {product} is the better pick for the use case their keyword implies. Read an existing alternative page in `{repo}/src/app/alternative/` to see if a shell component exists (e.g. AlternativePageShell) — if it does, use it and emit only a typed data object. If no shell exists in this repo, compose raw sections using the trust-signal components below.",
         "use_case": f"This is a use-case page describing one concrete job {product} does. Readers want to know whether {product} can handle their specific workflow. Show them, with at least one anchor_fact drawn from real product source. If a UseCasePageShell exists in `{repo}/src/components/seo/`, prefer it; otherwise compose raw sections.",
+        "cross_roundup": f"This is a dated, cross-product roundup listicle hosted on {product}'s domain. Target query: \"best <niche> <Month Year>\". See the CROSS-ROUNDUP INPUT block below for the host niche, the sibling project list, the mandatory H1/title format, and the mandatory trackCrossProductClick wiring on every sibling entry's CTA. Skip the Step 1 'find an angle' research — for a roundup the angle IS the rank order plus the per-entry reason-it-fits paragraph.",
     }.get(content_type, "")
+
+    cross_roundup_block = ""
+    if content_type == "cross_roundup":
+        cross_roundup_block = build_cross_roundup_block(product_cfg)
 
     guidance_block = ""
     if human_guidance:
@@ -669,6 +761,7 @@ TRIGGER: {trigger}
 {trigger_context}
 
 {guardrails_block}
+{cross_roundup_block}
 ## Step 1 — Find an angle no competitor has
 
 Before you write anything, do research. Budget ~15 minutes for this step. It matters more than the writing.
@@ -1330,6 +1423,37 @@ def update_state(trigger: str, product: str, keyword: str, status: str,
         conn.commit()
         cur.close()
         conn.close()
+    elif trigger == "roundup":
+        conn = db_helpers.get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO seo_keywords (product, keyword, slug, source, status) "
+            "VALUES (%s, %s, %s, 'roundup', %s) "
+            "ON CONFLICT (product, keyword) DO NOTHING",
+            (product, keyword, slug or "", status),
+        )
+        sets = ["status = %s", "updated_at = NOW()"]
+        vals: list = [status]
+        if page_url is not None:
+            sets.append("page_url = %s"); vals.append(page_url)
+        if slug is not None:
+            sets.append("slug = %s"); vals.append(slug)
+        if notes is not None:
+            sets.append("notes = %s"); vals.append(notes)
+        if content_type is not None:
+            sets.append("content_type = %s"); vals.append(content_type)
+        if claude_session_id is not None:
+            sets.append("claude_session_id = %s"); vals.append(claude_session_id)
+        if status == "done":
+            sets.append("completed_at = NOW()")
+        vals.extend([product, keyword])
+        cur.execute(
+            f"UPDATE seo_keywords SET {', '.join(sets)} WHERE product = %s AND keyword = %s",
+            vals,
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
     elif trigger == "manual":
         pass  # caller manages state
 
@@ -1591,7 +1715,7 @@ def main() -> int:
     ap.add_argument("--product")
     ap.add_argument("--keyword")
     ap.add_argument("--slug")
-    ap.add_argument("--trigger", choices=["serp", "gsc", "manual", "reddit", "top_page"], default="manual")
+    ap.add_argument("--trigger", choices=["serp", "gsc", "manual", "reddit", "top_page", "roundup"], default="manual")
     ap.add_argument("--content-type", choices=list(CONTENT_TYPES.keys()), default=None,
                     help="Override the regex classifier. Default: auto-classify from keyword.")
     ap.add_argument("--force", action="store_true",
