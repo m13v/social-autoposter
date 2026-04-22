@@ -1018,10 +1018,11 @@ async function handleApi(req, res) {
       "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text, NULL::numeric FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
       "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || dms.id), NULL::text, sc.per_row_cost FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
       "UNION ALL SELECT * FROM (SELECT m.message_at, 'dm_reply_sent', d.platform, d.their_author, LEFT(m.content, 140), NULL::text, d.chat_url, ('dr' || m.id), NULL::text, sc.per_row_cost FROM dm_messages m JOIN dms d ON d.id = m.dm_id LEFT JOIN session_cost sc ON sc.session_id = m.claude_session_id WHERE m.direction = 'outbound' AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction = 'inbound' AND m2.message_at < m.message_at) ORDER BY m.message_at DESC LIMIT 150) x5b " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || sk.id), product, sc.per_row_cost FROM seo_keywords sk LEFT JOIN session_cost sc ON sc.session_id = sk.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page') ORDER BY completed_at DESC LIMIT 150) x6 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || sk.id), product, sc.per_row_cost FROM seo_keywords sk LEFT JOIN session_cost sc ON sc.session_id = sk.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page', 'roundup') ORDER BY completed_at DESC LIMIT 150) x6 " +
       "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || gq.id), product, sc.per_row_cost FROM gsc_queries gq LEFT JOIN session_cost sc ON sc.session_id = gq.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
       "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || sk2.id), product, sc.per_row_cost FROM seo_keywords sk2 LEFT JOIN session_cost sc ON sc.session_id = sk2.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
       "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_top', 'seo', product, keyword, slug, page_url, ('kt' || sk3.id), product, sc.per_row_cost FROM seo_keywords sk3 LEFT JOIN session_cost sc ON sc.session_id = sk3.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'top_page' ORDER BY completed_at DESC LIMIT 150) x8b " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_roundup', 'seo', product, keyword, slug, page_url, ('kru' || sk4.id), product, sc.per_row_cost FROM seo_keywords sk4 LEFT JOIN session_cost sc ON sc.session_id = sk4.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'roundup' ORDER BY completed_at DESC LIMIT 150) x8r " +
       "UNION ALL SELECT * FROM (SELECT completed_at, 'page_improved', 'seo', product, LEFT(COALESCE(rationale, diff_summary, page_path), 140), page_path, page_url, ('pi' || spi.id), product, sc.per_row_cost FROM seo_page_improvements spi LEFT JOIN session_cost sc ON sc.session_id = spi.claude_session_id WHERE completed_at IS NOT NULL AND status = 'committed' ORDER BY completed_at DESC LIMIT 150) x8c " +
       "UNION ALL SELECT * FROM (SELECT resurrected_at AS occurred_at, 'resurrected' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, NULL::text AS detail, our_url AS link, ('rr' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id WHERE resurrected_at IS NOT NULL ORDER BY resurrected_at DESC LIMIT 150) x9 " +
       "ORDER BY 1 DESC LIMIT 500) r";
@@ -1170,10 +1171,11 @@ async function handleApi(req, res) {
     }
     parts.push("SELECT 'dm_sent' AS type, platform AS pl FROM dms WHERE status='sent' AND sent_at >= NOW() - " + win + dmsPc.clause);
     parts.push("SELECT 'dm_reply_sent' AS type, d.platform AS pl FROM dm_messages m JOIN dms d ON d.id = m.dm_id WHERE m.direction='outbound' AND m.message_at >= NOW() - " + win + " AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction='inbound' AND m2.message_at < m.message_at)" + dmsAliasedPc.clause);
-    parts.push("SELECT 'page_published_serp' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page')" + seoProdPc.clause);
+    parts.push("SELECT 'page_published_serp' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page', 'roundup')" + seoProdPc.clause);
     parts.push("SELECT 'page_published_gsc' AS type, 'seo' AS pl FROM gsc_queries WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL" + seoProdPc.clause);
     parts.push("SELECT 'page_published_reddit' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='reddit'" + seoProdPc.clause);
     parts.push("SELECT 'page_published_top' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='top_page'" + seoProdPc.clause);
+    parts.push("SELECT 'page_published_roundup' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='roundup'" + seoProdPc.clause);
     parts.push("SELECT 'page_improved' AS type, 'seo' AS pl FROM seo_page_improvements WHERE completed_at >= NOW() - " + win + " AND status='committed'" + seoProdPc.clause);
     parts.push("SELECT 'resurrected' AS type, platform AS pl FROM posts WHERE resurrected_at >= NOW() - " + win + postsPc.clause);
     const q = "SELECT json_agg(row_to_json(r)) FROM (" +
@@ -1293,7 +1295,7 @@ async function handleApi(req, res) {
     const platformFilter = ALLOWED_PLATFORMS.has(rawPlatform) ? rawPlatform : '';
     const whereParts = [];
     if (windowHours != null) {
-      whereParts.push("COALESCE(d.last_message_at, d.discovered_at) >= NOW() - INTERVAL '" + windowHours + " hours'");
+      whereParts.push("COALESCE(tlm.last_at, d.last_message_at, d.discovered_at) >= NOW() - INTERVAL '" + windowHours + " hours'");
     }
     if (platformFilter) {
       whereParts.push("LOWER(d.platform) = '" + platformFilter + "'");
@@ -1307,7 +1309,9 @@ async function handleApi(req, res) {
     const q =
       "SELECT json_agg(row_to_json(r)) FROM (" +
         "SELECT d.id, d.platform, d.their_author, d.chat_url, " +
-          "d.tier, d.message_count, d.last_message_at, d.discovered_at, " +
+          "d.tier, d.message_count, " +
+          "COALESCE(tlm.last_at, d.last_message_at) AS last_message_at, " +
+          "d.discovered_at, " +
           "d.conversation_status, d.interest_level, " +
           "d.human_reason, d.flagged_at, " +
           "d.target_project, d.icp_precheck, d.icp_matches, d.qualification_status, " +
@@ -1371,10 +1375,18 @@ async function handleApi(req, res) {
         ") r_fallback ON TRUE " +
         "LEFT JOIN posts     p_via_fb    ON p_via_fb.id    = r_fallback.post_id " +
         "LEFT JOIN prospects pr          ON pr.id          = d.prospect_id " +
+        // True last-message timestamp from dm_messages. dms.last_message_at is
+        // set to NOW() on ingest (see scripts/dm_conversation.py), so it drifts
+        // from the real platform message_at whenever we backfill or batch-poll.
+        // Use this for the UI "Last message" column, the window filter, and the
+        // final ORDER BY tie-breaker.
+        "LEFT JOIN LATERAL (" +
+          "SELECT MAX(message_at) AS last_at FROM dm_messages WHERE dm_id = d.id" +
+        ") tlm ON TRUE " +
         whereSql + " " +
         "ORDER BY sort_bucket ASC, " +
           "CASE WHEN d.conversation_status = 'needs_human' THEN d.flagged_at END DESC NULLS LAST, " +
-          "d.last_message_at DESC NULLS LAST, " +
+          "COALESCE(tlm.last_at, d.last_message_at) DESC NULLS LAST, " +
           "d.id DESC " +
         "LIMIT " + limit +
       ") r";
@@ -1825,6 +1837,7 @@ const HTML = `<!DOCTYPE html>
   .activity-chip.active.ev-page_published_gsc    { background: #134e4a; border-color: #14b8a6; color: #5eead4; }
   .activity-chip.active.ev-page_published_reddit { background: #7c2d12; border-color: #f97316; color: #fdba74; }
   .activity-chip.active.ev-page_published_top    { background: #4a044e; border-color: #d946ef; color: #f5d0fe; }
+  .activity-chip.active.ev-page_published_roundup { background: #881337; border-color: #f43f5e; color: #fda4af; }
   .activity-chip.active.ev-page_improved         { background: #365314; border-color: #84cc16; color: #bef264; }
   .activity-chip.active.ev-resurrected { background: #1e3a8a; border-color: #3b82f6; color: #93c5fd; }
 
@@ -1883,6 +1896,7 @@ const HTML = `<!DOCTYPE html>
   .ev-pill.ev-page_published_gsc    { background: #134e4a; color: #5eead4; border: 1px solid #14b8a6; }
   .ev-pill.ev-page_published_reddit { background: #7c2d12; color: #fdba74; border: 1px solid #f97316; }
   .ev-pill.ev-page_published_top    { background: #4a044e; color: #f5d0fe; border: 1px solid #d946ef; }
+  .ev-pill.ev-page_published_roundup { background: #881337; color: #fda4af; border: 1px solid #f43f5e; }
   .ev-pill.ev-page_improved         { background: #365314; color: #bef264; border: 1px solid #84cc16; }
   .ev-pill.ev-resurrected { background: #1e3a8a; color: #93c5fd; border: 1px solid #3b82f6; }
 
@@ -2028,6 +2042,7 @@ const HTML = `<!DOCTYPE html>
   #top-dms-container .style-stats-table th,
   #top-dms-container .style-stats-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 10px 10px; }
   #top-dms-container .style-stats-table td[data-col-key="last_msg"] { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; color: var(--text-secondary); font-size: 12px; }
+  #top-dms-container .style-stats-table td[data-col-key="last_ts"] { white-space: normal; overflow: visible; text-overflow: clip; vertical-align: top; }
   .dm-class-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
   .dm-class-human    { background: #7f1d1d; color: #fecaca; }
   .dm-class-hot      { background: #b91c1c; color: #fff; }
@@ -2044,6 +2059,9 @@ const HTML = `<!DOCTYPE html>
   .dm-thread-tier    { color: var(--text-muted); font-size: 11px; font-family: 'SF Mono', 'Fira Code', monospace; }
   .dm-last-dir       { display: inline-block; background: var(--pill-inverse-bg); color: var(--pill-inverse-text); font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 3px; margin-right: 6px; vertical-align: baseline; }
   .dm-thread-subline { margin-top: 4px; }
+  .dm-last-ts        { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; }
+  .dm-last-ts-rel    { font-weight: 500; }
+  .dm-last-ts-abs    { font-size: 11px; color: var(--text-muted); font-family: 'SF Mono', 'Fira Code', monospace; margin-top: 2px; white-space: nowrap; }
   .dm-prospect-pill  { display: inline-block; max-width: 100%; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-subtle); color: var(--link); font-size: 10px; line-height: 1.3; cursor: pointer; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: inherit; }
   .dm-prospect-pill:hover { background: var(--bg-hover); border-color: var(--link); color: var(--link); }
   .dm-meta-row       { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
@@ -2128,6 +2146,7 @@ const HTML = `<!DOCTYPE html>
   .stat-card.ev-page_published_gsc    { border-left: 3px solid #14b8a6; }
   .stat-card.ev-page_published_reddit { border-left: 3px solid #f97316; }
   .stat-card.ev-page_published_top    { border-left: 3px solid #d946ef; }
+  .stat-card.ev-page_published_roundup { border-left: 3px solid #f43f5e; }
   .stat-card.ev-page_improved         { border-left: 3px solid #84cc16; }
   .stat-card.ev-resurrected         { border-left: 3px solid #3b82f6; }
   .stat-card-breakdown { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--text); }
@@ -3041,8 +3060,8 @@ async function saveSettings() {
 }
 
 // Activity tab
-const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'dm_reply_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit', 'page_published_top', 'page_improved', 'resurrected'];
-const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', dm_reply_sent: 'dm reply', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)', page_published_top: 'page (top)', page_improved: 'page (improved)', resurrected: 'resurrected' };
+const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'dm_reply_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit', 'page_published_top', 'page_published_roundup', 'page_improved', 'resurrected'];
+const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', dm_reply_sent: 'dm reply', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)', page_published_top: 'page (top)', page_published_roundup: 'page (roundup)', page_improved: 'page (improved)', resurrected: 'resurrected' };
 const ACTIVITY_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github', 'seo'];
 const ACTIVITY_PROJECT_NONE = '(none)';
 let _activitySeen = new Set();
@@ -4788,8 +4807,14 @@ function renderTopDms(payload) {
       formatter: (_v, r) => dmClassBadge(r) },
     { key: 'last_ts',        label: 'Last message', type: 'numeric', align: 'right', widthPct: 10,
       formatter: (_v, r) => {
-        const abs = r.last_message_at ? new Date(r.last_message_at).toLocaleString() : '';
-        return '<span title="' + escapeHtml(abs) + '">' + escapeHtml(relTime(r.last_message_at)) + '</span>';
+        if (!r.last_message_at) return '<span style="color:var(--text-faint);">—</span>';
+        const d = new Date(r.last_message_at);
+        const abs = d.toLocaleString();
+        const rel = relTime(r.last_message_at);
+        return '<div class="dm-last-ts">' +
+          '<div class="dm-last-ts-rel">' + escapeHtml(rel) + '</div>' +
+          '<div class="dm-last-ts-abs" title="' + escapeHtml(abs) + '">' + escapeHtml(abs) + '</div>' +
+        '</div>';
       } },
   ];
   const colCount = columns.length;
