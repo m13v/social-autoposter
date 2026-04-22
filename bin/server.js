@@ -2238,6 +2238,28 @@ const HTML = `<!DOCTYPE html>
 </div>
 
 <div class="content hidden sa-local-only" id="tab-status">
+  <details class="style-stats-section" id="cost-stats" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">&#9654;</span><span id="cost-stats-heading">Cost per Activity (last 24 hours)</span></span>
+      <span class="style-stats-total" id="cost-stats-total"></span>
+    </summary>
+    <div class="style-stats-controls">
+      <div class="style-stats-pill-row" id="cost-stats-platform-pills" data-selected="all">
+        <span class="label">Platform</span>
+        <button type="button" class="style-stats-pill active" data-value="all">All</button>
+        <button type="button" class="style-stats-pill" data-value="reddit">Reddit</button>
+        <button type="button" class="style-stats-pill" data-value="twitter">Twitter / X</button>
+        <button type="button" class="style-stats-pill" data-value="linkedin">LinkedIn</button>
+        <button type="button" class="style-stats-pill" data-value="moltbook">MoltBook</button>
+        <button type="button" class="style-stats-pill" data-value="github">GitHub</button>
+        <button type="button" class="style-stats-pill" data-value="seo">SEO</button>
+        <button type="button" class="style-stats-pill" data-value="email">Email</button>
+      </div>
+    </div>
+    <div id="cost-stats-body">
+      <div class="style-stats-empty">Loading&hellip;</div>
+    </div>
+  </details>
   <details class="style-stats-section" id="deploy-health">
     <summary>
       <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span>Deploy Health</span>
@@ -2315,28 +2337,6 @@ const HTML = `<!DOCTYPE html>
     </summary>
     <div id="dm-stats-body">
       <div class="style-stats-empty">Loading\u2026</div>
-    </div>
-  </details>
-  <details class="style-stats-section sa-local-only" id="cost-stats">
-    <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">&#9654;</span><span id="cost-stats-heading">Cost per Activity (last 24 hours)</span></span>
-      <span class="style-stats-total" id="cost-stats-total"></span>
-    </summary>
-    <div class="style-stats-controls">
-      <div class="style-stats-pill-row" id="cost-stats-platform-pills" data-selected="all">
-        <span class="label">Platform</span>
-        <button type="button" class="style-stats-pill active" data-value="all">All</button>
-        <button type="button" class="style-stats-pill" data-value="reddit">Reddit</button>
-        <button type="button" class="style-stats-pill" data-value="twitter">Twitter / X</button>
-        <button type="button" class="style-stats-pill" data-value="linkedin">LinkedIn</button>
-        <button type="button" class="style-stats-pill" data-value="moltbook">MoltBook</button>
-        <button type="button" class="style-stats-pill" data-value="github">GitHub</button>
-        <button type="button" class="style-stats-pill" data-value="seo">SEO</button>
-        <button type="button" class="style-stats-pill" data-value="email">Email</button>
-      </div>
-    </div>
-    <div id="cost-stats-body">
-      <div class="style-stats-empty">Click to load&hellip;</div>
     </div>
   </details>
 </div>
@@ -5297,6 +5297,7 @@ document.querySelectorAll('.tab').forEach(tab => {
   el.addEventListener('toggle', () => {
     if (el.open) loadCostStats();
   });
+  if (el.open) loadCostStats();
   const row = document.getElementById('cost-stats-platform-pills');
   if (row) {
     row.addEventListener('click', ev => {
