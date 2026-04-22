@@ -477,8 +477,10 @@ def vercel_env_newline_issues(env: dict[str, str]) -> list[str]:
 
 def fetch_shipped_key(website: str, timeout: int = 10) -> str | None:
     """Fetch the production site and extract the phc_* token actually
-    shipped to browsers. Checks the inline HTML plus up to ~12 first-load
-    JS chunks. Returns None if no token ships, or on any network error."""
+    shipped to browsers. Checks the inline HTML plus first-load JS chunks,
+    preferring chunks whose URL hints at PostHog and capping total probes
+    at 25 to avoid runaway fetches. Returns None if no token ships, or on
+    any network error."""
     if not website:
         return None
     base = website.rstrip("/")
@@ -494,9 +496,16 @@ def fetch_shipped_key(website: str, timeout: int = 10) -> str | None:
     m = PHC_RE.search(html)
     if m:
         return m.group(0)
-    # Check first-load JS chunks (capped to avoid runaway fetches).
+    # Check first-load JS chunks. Alphabetical sort can push the PostHog
+    # bundle past a small cap on sites with many code-split chunks (bit
+    # mk0r 2026-04-22: phc_ token landed at sorted-index 12, so a cap of
+    # 12 intermittently missed it during redeploys). Prefer chunks whose
+    # URL hints at PostHog, then probe the rest up to a higher cap.
     chunks = sorted(set(re.findall(r'/_next/static/chunks/[^"\'\s]+\.js', html)))
-    for chunk in chunks[:12]:
+    hinted = [c for c in chunks if "posthog" in c.lower()]
+    rest = [c for c in chunks if c not in hinted]
+    ordered = hinted + rest
+    for chunk in ordered[:25]:
         try:
             req = urllib.request.Request(
                 base + chunk,
