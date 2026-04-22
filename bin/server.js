@@ -3798,7 +3798,7 @@ function renderFunnelStats(payload) {
       // Cross-product: clicks on CTAs that promote a sibling product (e.g.
       // Claude Meter CTA on Fazm blog posts). Fires `cross_product_click`
       // via @m13v/seo-components' trackCrossProductClick.
-      { key: 'cross_product_clicks', label: 'Cross Product', type: 'numeric', align: 'right', formatter: v => v == null ? '—' : fmt(v) },
+      { key: 'cross_product_clicks', label: 'Cross Product', type: 'numeric', align: 'right', formatter: v => v == null ? '\u2014' : fmt(v) },
     ],
   });
   // Inline legend below the table explaining the "N (M)" cell format.
