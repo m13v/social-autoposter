@@ -252,6 +252,118 @@ function getLaunchAgentPath(unitFile) {
   return path.join(AGENT_DIR, driver.unitFileName(unitFile));
 }
 
+// --- Job history helpers ----------------------------------------------------
+// run_monitor.log is the one-line-per-completed-run ledger written by
+// scripts/log_run.py. Each line: `ISO_TS | script_name | posted=N skipped=N
+// failed=N cost=$X elapsed=Ns`. WARNING lines are interleaved and skipped.
+
+const RUN_MONITOR_PATH = path.join(LOG_DIR, 'run_monitor.log');
+const RUN_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*posted=(\d+)\s+skipped=(\d+)\s+failed=(\d+)\s+cost=\$([\d.]+)\s+elapsed=(\d+)s/;
+
+// posts.platform is lowercase; UI labels are capitalized.
+const PLATFORM_LABELS = {
+  twitter: 'Twitter', reddit: 'Reddit', linkedin: 'LinkedIn',
+  moltbook: 'MoltBook', github: 'GitHub', dev: 'Dev',
+  hackernews: 'HackerNews', youtube: 'YouTube',
+};
+
+function classifyScript(script) {
+  const norm = script.replace(/-/g, '_').toLowerCase();
+  const match = (re, type, humanPrefix) => {
+    const m = norm.match(re);
+    if (!m) return null;
+    const slug = m[1];
+    const label = PLATFORM_LABELS[slug] || slug;
+    return { job_type: type, platform: label, platform_key: slug, human_name: `${humanPrefix} · ${label}` };
+  };
+  return (
+    match(/^link_edit_(\w+)$/, 'link-edit', 'Link Edit') ||
+    match(/^engage_(\w+)$/, 'engage', 'Engage') ||
+    match(/^post_(\w+)$/, 'post', 'Post') ||
+    match(/^dm_outreach_(\w+)$/, 'dm-outreach', 'DM Outreach') ||
+    match(/^dm_replies_(\w+)$/, 'dm-replies', 'DM Replies') ||
+    match(/^octolens_(\w+)$/, 'octolens', 'Octolens') ||
+    match(/^stats_(\w+)$/, 'stats', 'Stats') ||
+    match(/^audit_(\w+)$/, 'audit', 'Audit') ||
+    { job_type: 'other', platform: null, platform_key: null, human_name: script }
+  );
+}
+
+function parseRunMonitorLog(maxLines) {
+  let lines;
+  try {
+    lines = fs.readFileSync(RUN_MONITOR_PATH, 'utf8').split('\n');
+  } catch { return []; }
+  const runs = [];
+  const tail = lines.slice(-maxLines * 2);
+  for (const line of tail) {
+    const m = line.match(RUN_LINE_RE);
+    if (!m) continue;
+    const [, ts, script, posted, skipped, failed, cost, elapsed] = m;
+    // log_run.py writes naive local-wallclock time (strftime without tz), so
+    // `new Date(ts)` in node interprets it as local on the server. That is
+    // correct since the dashboard server runs on the same host.
+    const finishedMs = new Date(ts).getTime();
+    if (!Number.isFinite(finishedMs)) continue;
+    const elapsedSec = parseInt(elapsed, 10);
+    const startedMs = finishedMs - elapsedSec * 1000;
+    const cls = classifyScript(script);
+    runs.push({
+      script,
+      job_type: cls.job_type,
+      platform: cls.platform,
+      platform_key: cls.platform_key,
+      human_name: cls.human_name,
+      started_at: new Date(startedMs).toISOString(),
+      finished_at: new Date(finishedMs).toISOString(),
+      elapsed_s: elapsedSec,
+      result: {
+        type: 'generic',
+        posted: parseInt(posted, 10),
+        skipped: parseInt(skipped, 10),
+        failed: parseInt(failed, 10),
+        cost_usd: parseFloat(cost),
+      },
+    });
+  }
+  return runs.reverse(); // newest first
+}
+
+async function enrichLinkEditRuns(runs) {
+  const linkRuns = runs.filter(r => r.job_type === 'link-edit' && r.platform_key);
+  if (!linkRuns.length) return;
+  // Cheapest: one query for all link-edited posts since the oldest run
+  // start (minus 2min buffer), bucket in JS.
+  let oldestMs = Infinity;
+  for (const r of linkRuns) {
+    const ms = new Date(r.started_at).getTime();
+    if (ms < oldestMs) oldestMs = ms;
+  }
+  const since = new Date(oldestMs - 2 * 60 * 1000).toISOString();
+  const rows = await pq(
+    "SELECT platform, link_edited_at, (link_edit_content LIKE 'SKIPPED:%') AS is_skip FROM posts WHERE link_edited_at >= $1::timestamp",
+    [since]
+  );
+  if (!rows) return;
+  const normRows = rows.map(r => ({
+    platform: (r.platform || '').toLowerCase(),
+    editedMs: new Date(r.link_edited_at).getTime(),
+    skip: !!r.is_skip,
+  }));
+  for (const run of linkRuns) {
+    const startMs = new Date(run.started_at).getTime();
+    const endMs = new Date(run.finished_at).getTime() + 60 * 1000; // 60s trailing buffer
+    let total = 0, success = 0, skipped = 0;
+    for (const p of normRows) {
+      if (p.platform !== run.platform_key) continue;
+      if (p.editedMs < startMs || p.editedMs > endMs) continue;
+      total++;
+      if (p.skip) skipped++; else success++;
+    }
+    run.result = { type: 'link-edit', total, success, skipped };
+  }
+}
+
 // 5s TTL cache so /api/status polling (typically every 1-2s) doesn't spawn
 // a psql subprocess on every hit. Stale-by-5s is fine for the pending-reply
 // counter since it only affects the dashboard badge.
@@ -936,6 +1048,22 @@ async function handleApi(req, res) {
       const rows = await pq(q);
       const result = (rows && rows.length && rows[0].result) ? rows[0].result : { count: null, byPlatform: [], recent: [], statusCounts: [] };
       return json(res, result);
+    })().catch(e => json(res, { error: e.message }, 500));
+  }
+
+  // GET /api/job-runs
+  // General-purpose job history: last N completed runs of every pipeline that
+  // writes to skill/logs/run_monitor.log. For link-edit-* runs the per-run
+  // result (total touched / success / skipped) is computed from the `posts`
+  // table over the run's [started_at, finished_at] window, since the
+  // log_run.py counters for link-edit are not populated reliably.
+  if (p === '/api/job-runs' && req.method === 'GET') {
+    return (async () => {
+      const limitRaw = parseInt(url.searchParams.get('limit') || '100', 10);
+      const limit = Math.min(Math.max(limitRaw, 1), 500);
+      const runs = parseRunMonitorLog(Math.max(limit * 3, 300)).slice(0, limit);
+      await enrichLinkEditRuns(runs);
+      return json(res, { runs });
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
