@@ -189,6 +189,8 @@ def _client_slug(product_name):
         "S4L": "s4l",
         "fde10x": "fde10x",
         "Assrt": "assrt",
+        "Clone": "clone",
+        "mk0r": "mk0r",
     }.get(product_name)
 
 
