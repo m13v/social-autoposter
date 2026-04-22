@@ -15,9 +15,12 @@ if [ -z "${_SA_LOCK_DIRS+x}" ]; then
   _SA_LOCK_DIRS=()
   _sa_release_locks() {
     local d
-    for d in "${_SA_LOCK_DIRS[@]}"; do
-      rm -rf "$d"
-    done
+    # Guard against set -u + empty-array expansion (bash 3.2 macOS default).
+    if [ "${#_SA_LOCK_DIRS[@]}" -gt 0 ]; then
+      for d in "${_SA_LOCK_DIRS[@]}"; do
+        rm -rf "$d"
+      done
+    fi
   }
   trap _sa_release_locks EXIT INT TERM HUP
 fi
