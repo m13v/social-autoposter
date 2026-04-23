@@ -214,9 +214,15 @@ def main():
 
     # Backfill dominant model onto any activity rows stamped with this session.
     # Only overwrites rows where model IS NULL so re-runs of log_claude_session
-    # against the same session_id stay idempotent.
+    # against the same session_id stay idempotent. Covers social tables
+    # (posts/replies/dms/dm_messages) plus SEO pipeline tables that stamp
+    # claude_session_id (seo_escalations, seo_keywords, seo_page_improvements,
+    # gsc_queries).
     backfill_counts = {}
-    for table in ("posts", "replies", "dms", "dm_messages"):
+    for table in (
+        "posts", "replies", "dms", "dm_messages",
+        "seo_escalations", "seo_keywords", "seo_page_improvements", "gsc_queries",
+    ):
         cur = conn.execute(
             f"UPDATE {table} SET model = %s "
             f"WHERE claude_session_id = %s AND model IS NULL",
