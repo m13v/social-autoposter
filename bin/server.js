@@ -690,7 +690,7 @@ function resumeAll() {
 }
 
 function deriveName(label) {
-  return label.replace(/^com\.m13v\.social-/, '')
+  return label.replace(/^com\.m13v\.(social-)?/, '')
     .split('-')
     .map(s => s.charAt(0).toUpperCase() + s.slice(1))
     .join(' ');
