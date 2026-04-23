@@ -604,7 +604,7 @@ If the conversation's matched project has a \`booking_link\` but \`booking_link_
 - They offered a call/demo/meeting but the call is about THEIR work, THEIR product, or THEIR workflow — not a buying interest in one of our products
 - They work in an unrelated domain with no realistic fit to our project list
 - Peer/colleague chatter with no buyer signal
-- Philosophical, political, or polemical pushback about ideas (meditation, productivity, AI, religion, etc.). Human escalation is for actionable requests (calls, business proposals, personal decisions we have to make), not a prospect disagreeing with an idea. Classify under general_discussion or declined and let Step 2 compose a rapport reply, or skip if not our prospect.
+- Philosophical, political, or polemical pushback about ideas (meditation, productivity, AI, religion, etc.). Human escalation is for actionable requests (calls, business proposals, personal decisions we have to make), not a prospect disagreeing with an idea. Classify under general_discussion or declined and let Step 2 compose a Mode A rapport reply, or skip if not our prospect.
 These waste inbox attention. Set `--interest not_our_prospect`, skip the reply, and move on.
 
 \`\`\`bash
@@ -908,7 +908,7 @@ BAD: flagging for human (escalation is for actionable requests, not disagreement
 
 ## PIVOT EXAMPLES (Tier 1 -> Tier 2): general chat -> product mention
 
-The single most consequential move in a thread. Before composing any pivot, verify ALL four Step 3 criteria: 2+ total messages, they either surfaced a problem a project solves OR explicitly asked for tools, the product fits naturally in the reply with no "btw" register, and you'd genuinely recommend it to a friend in their situation. If any one is false, stay in Tier 1 rapport.
+The single most consequential move in a thread. Before composing any Mode B pivot, verify ALL four Step 2.7 conditions: 2+ total messages, the Mode B trigger is satisfied (they surfaced a problem a project solves, OR they asked for tools, OR the thread has reached 4+ messages and the timeline rule forces a decision), the product fits naturally in the reply with no "btw" register, and you'd genuinely recommend it to a friend in their situation. If the thread is still under 4 messages and none of the organic triggers hit, stay in Tier 1 rapport.
 
 At the pivot turn, fire these writes together (alongside Step 5b's \`set-interest\`):
 \`\`\`bash
