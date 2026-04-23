@@ -277,9 +277,9 @@ class InboxScanner:
 
 
 def run_engage(limit, timeout):
-    print(f"\nFiring engage_reddit.py --limit {limit}...")
+    print(f"\nFiring engage_reddit.py --platform reddit --limit {limit}...")
     proc = subprocess.run(
-        ["python3", ENGAGE_SCRIPT, "--limit", str(limit), "--timeout", str(timeout)],
+        ["python3", ENGAGE_SCRIPT, "--platform", "reddit", "--limit", str(limit), "--timeout", str(timeout)],
         cwd=os.path.dirname(ENGAGE_SCRIPT),
     )
     print(f"engage_reddit exit code: {proc.returncode}")
