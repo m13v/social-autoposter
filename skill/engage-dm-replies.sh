@@ -582,7 +582,7 @@ If the matched project has \`booking_link_auto_share: true\` AND they just asked
   python3 scripts/dm_conversation.py mark-booking-sent --dm-id DM_ID
   \`\`\`
 
-If they asked for a call/demo but \`qualification_status\` is still \`pending\` or \`asked\` AND the must_have/disqualify bar isn't clearly met yet, do NOT share the booking link yet — drop into Step 2.5 and qualify first, or compose a rapport reply that surfaces the qualifying question naturally.
+If they asked for a call/demo but \`qualification_status\` is still \`pending\` or \`asked\` AND the must_have/disqualify bar isn't clearly met yet, do NOT share the booking link yet — drop into Step 2.5 and qualify first, or compose a Mode A rapport reply that surfaces the qualifying question naturally.
 
 If the conversation's matched project has a \`booking_link\` but \`booking_link_auto_share\` is false (or the field is missing), the bot must NOT share that link automatically — flag for human instead.
 
@@ -612,17 +612,29 @@ cd ~/social-autoposter && python3 scripts/dm_conversation.py flag-human --dm-id 
 \`\`\`
 Then SKIP. Do NOT reply.
 
-### Step 2: Compose a genuine reply
-Your reply should:
+### Step 2: Compose the reply (rapport OR product mention + booking link)
+
+Every reply is one of two modes. Pick the mode based on the timeline rule and Mode B triggers below; everything else in this step (2.4 through 2.8) then shapes the content.
+
+- **Mode A (rapport)**: conversational/continuation reply. No product name, no GitHub link, no booking link.
+- **Mode B (product pivot)**: the reply introduces the best-fit project from \$PROJECTS, with the booking link appended when Step 2.8 eligibility is met.
+
+**TIMELINE RULE (overrides the default):**
+- Total messages 1-3 in the thread: Mode A is the default. Switch to Mode B only if the Mode B triggers in Step 2.7 are already met.
+- Total messages 4+: you MUST be in Mode B. Either mention the best-fit product naturally OR, if no project in \$PROJECTS plausibly fits this prospect, set \`qualification_status = disqualified\` per Step 2.5 with a one-line reason and stay in Mode A permanently. Do NOT let a thread drift past 3 outbound turns of pure rapport without either pitching or disqualifying.
+
+Total messages = inbound + outbound count in this thread (use conversation_history length). The message you're about to send counts, so by the time you send message 4 it must be a Mode B pivot (or a Mode A rapport reply after a disqualification has been recorded).
+
+**SHARED STYLE RULES (both modes):**
 - Be 1-3 sentences max. Texting style, not essay style.
-- Reference something SPECIFIC from their message (proves you read it)
-- Either share a relevant experience, ask a genuine follow-up question, or acknowledge what they said
-- Sound like a real person texting, not a customer success bot
+- Reference something SPECIFIC from their message (proves you read it).
+- Either share a relevant experience, ask a genuine follow-up question, or acknowledge what they said.
+- Sound like a real person texting, not a customer success bot.
 - No em dashes. Lowercase is fine. Casual.
-- NEVER repeat a question or point you already made in a previous message
+- NEVER repeat a question or point you already made in a previous message.
 
 COMMITMENT GUARDRAILS (never violate these in any reply):
-- NEVER suggest, offer, or agree to calls, meetings, demos, or video chats UNLESS the matched project in \$PROJECTS has \`booking_link_auto_share: true\` AND the prospect asked first AND \`qualification_status = qualified\` on the DM row. In that case Step 3.5 shares the config booking_link. Otherwise keep it in the DM.
+- NEVER suggest, offer, or agree to calls, meetings, demos, or video chats UNLESS the matched project in \$PROJECTS has \`booking_link_auto_share: true\` AND \`qualification_status = qualified\` on the DM row. In that case append the config booking_link to the Mode B reply per Step 2.8. Otherwise keep it in the DM.
 - NEVER agree to podcast appearances, X Spaces, interviews, or live events.
 - NEVER offer to move to another platform (Telegram, Discord, email, etc.). Stay in this DM thread.
 - NEVER promise to share specific links or resources you don't have right now in config.json projects.
@@ -665,8 +677,8 @@ Pull the matched project's \`qualifying_question\`, \`must_have\`, and \`disqual
 Branch on \`qualification_status\` of the DM row:
 
 1. \`pending\` → we have never asked yet.
-   - If fewer than 2 total messages exist, do NOT ask yet. Stay in rapport mode from Step 2.
-   - Otherwise fold the project's \`qualifying_question\` into the reply in a natural, one-sentence form (paraphrase it; don't paste verbatim). Never interrogate; never list multiple questions. By the 4th total message you MUST either ask the qualifier or, if nothing in \$PROJECTS plausibly fits this prospect, set \`qualification_status = disqualified\` with a one-line reason and stop pitching.
+   - If fewer than 2 total messages exist, do NOT ask yet. Stay in Mode A rapport from Step 2.
+   - Otherwise fold the project's \`qualifying_question\` into the reply in a natural, one-sentence form (paraphrase it; don't paste verbatim). Never interrogate; never list multiple questions. This typically happens on the Mode B pivot turn (message 3 or 4 per Step 2's TIMELINE RULE). By the 4th total message you MUST either ask the qualifier or, if nothing in \$PROJECTS plausibly fits this prospect, set \`qualification_status = disqualified\` with a one-line reason and stop pitching.
    - After sending, mark status as \`asked\`:
      \`\`\`bash
      python3 scripts/dm_conversation.py set-qualification --dm-id DM_ID --status asked --notes "ASKED: short paraphrase of what we asked"
@@ -686,7 +698,7 @@ Branch on \`qualification_status\` of the DM row:
 
 3. \`answered\` → we already asked a clarifier on the prior turn. Evaluate now and land on \`qualified\` or \`disqualified\`; do not ask a third time.
 
-4. \`qualified\` → proceed to Step 3.5 (auto-share the booking link if eligible).
+4. \`qualified\` → proceed to Step 2.8 (auto-share the booking link if eligible).
 
 5. \`disqualified\` → never share the booking link. Do NOT pitch. Also set \`--interest not_our_prospect\` in Step 5b and usually let the conversation rest with a short, polite reply.
 
@@ -694,36 +706,43 @@ Branch on \`qualification_status\` of the DM row:
 
 The DM payload now includes prospect_headline, prospect_bio, prospect_company, prospect_role, prospect_recent_activity, and prospect_notes (best-effort; some may be NULL). If any of these are set, weave at most ONE specific detail into your reply so it sounds like we know who they are (e.g., referencing their company's stage, the role they hold, or a recent thing they shipped). Never dump the whole profile; never mention that we scraped it. If the fields are all NULL, don't apologize, just write the reply without.
 
-### Step 3: Should we recommend a tool? (ONLY if step 2 naturally leads here)
-Only recommend a product if ALL of these are true:
-- There are 2+ total messages in the conversation (they have replied at least once)
-- They described a problem that a project in config solves, or asked for tool recommendations
-- The mention fits naturally in the reply without any "btw" or topic change
-- You would genuinely recommend this tool to a friend in their situation
+### Step 2.7: Mode B triggers and product mention
 
+You are in Mode B on this turn if EITHER of the following is true:
+- **Organic trigger**: they described a problem a project in \$PROJECTS solves, OR they asked for tool recommendations.
+- **Timeline trigger (Step 2)**: total messages in this thread are 4+. By this point Mode B is mandatory unless the DM is already \`qualification_status = disqualified\`, in which case stay in Mode A permanently.
 
-If sharing a link, embed it in a natural sentence. Never make the link the point of the message.
+AND ALL of the following are true (floor conditions — never pivot without them):
+- There are 2+ total messages in the conversation (they have replied at least once). This mirrors HARD RULE 4.
+- The mention fits naturally in the reply without any "btw" or topic change.
+- You would genuinely recommend this tool to a friend in their situation.
+- If target_project has a \`qualifying_question\`, \`qualification_status\` is NOT \`disqualified\`.
+
+If none of these conditions hold AND the thread is 4+ messages, the timeline trigger still forces a decision: either find a plausible fit and pivot, or set \`qualification_status = disqualified\` via Step 2.5 and send a Mode A reply. Do NOT keep ping-ponging rapport forever.
+
+Pick the best-fit project from \$PROJECTS using the (possibly updated) target_project from Step 2.4. If sharing a link, embed it in a natural sentence. Never make the link the point of the message.
 Good: "yeah there's this tool terminator that does that, github.com/mediar-ai/terminator - the accessibility API approach avoids the screenshot reliability issues you mentioned"
 Bad: "btw I built a tool for that, check out github.com/mediar-ai/terminator if you're curious"
 
-Update tier AND project ONLY when a product is recommended or when they explicitly ask for tools:
+When you pivot to Mode B (with or without a booking link), stamp project and tier:
 \`\`\`bash
-python3 scripts/dm_conversation.py set-project --dm-id DM_ID --project "PROJECT_NAME"
-python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier N
+python3 scripts/dm_conversation.py set-project --dm-id DM_ID --project "EXACT_PROJECT_NAME_FROM_CONFIG"
+python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier 2
 \`\`\`
+\`set-tier\` auto-stamps \`first_product_mention_at = NOW()\` on first transition to tier >= 2. Soft pivots (category named, product name deferred) stay at tier 1 until the next turn — see PIVOT EXAMPLES below.
 
-### Step 3.5: Share the booking link when the prospect is qualified
+### Step 2.8: Append the booking link (Mode B only, when eligible)
 
-If all of the following are true, append the matched project's \`booking_link\` to the reply you're about to send:
+If all of the following are true, append the matched project's \`booking_link\` to the Mode B reply you're about to send:
 - \`qualification_status = qualified\` for this DM (set in Step 2.5 or earlier)
 - The matched project has \`booking_link\` AND \`booking_link_auto_share: true\` in config
 - \`booking_link_sent_at\` is NULL (we haven't already sent it)
-- The conversation is at a natural place to propose a call (they've surfaced pain or asked for more; not just "cool")
+- The conversation is at a natural place to propose a call (they've surfaced pain or asked for more; not just "cool"). You do NOT need them to have explicitly asked for a call — see the updated COMMITMENT GUARDRAILS in Step 2.
 
 Phrase it naturally, one sentence, link embedded:
-"makes sense — if you want to see how it'd work on your setup, grab a time here: <booking_link>"
+"makes sense, if you want to see how it'd work on your setup, grab a time here: <booking_link>"
 
-After sending, stamp it:
+After sending, stamp project + tier 3 + mark booking sent (runs in addition to the Step 2.7 set-project/set-tier; set-tier 3 supersedes tier 2):
 \`\`\`bash
 python3 scripts/dm_conversation.py set-project --dm-id DM_ID --project "EXACT_PROJECT_NAME_FROM_CONFIG"
 python3 scripts/dm_conversation.py set-target-project --dm-id DM_ID --project "EXACT_PROJECT_NAME_FROM_CONFIG"
@@ -731,7 +750,7 @@ python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier 3
 python3 scripts/dm_conversation.py mark-booking-sent --dm-id DM_ID
 \`\`\`
 
-Never send the booking link twice. If \`booking_link_sent_at\` is not NULL, Step 3.5 is a no-op; let Step 3 handle any tool mention normally.
+Never send the booking link twice. If \`booking_link_sent_at\` is not NULL, Step 2.8 is a no-op; let Step 2.7 handle any tool mention normally.
 
 ### Step 4: Send the reply
 
