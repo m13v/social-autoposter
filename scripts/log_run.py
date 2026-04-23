@@ -20,13 +20,15 @@ def main():
     parser.add_argument("--failed", type=int, default=0, help="Number of failures")
     parser.add_argument("--cost", type=float, default=0.0, help="Total cost in USD")
     parser.add_argument("--elapsed", type=float, default=0.0, help="Elapsed time in seconds")
+    parser.add_argument("--model", default="", help="Dominant Claude model id used in the run (optional)")
     args = parser.parse_args()
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    model_suffix = f" model={args.model}" if args.model else ""
     line = (
         f"{timestamp} | {args.script} | "
         f"posted={args.posted} skipped={args.skipped} failed={args.failed} "
-        f"cost=${args.cost:.2f} elapsed={args.elapsed:.0f}s"
+        f"cost=${args.cost:.2f} elapsed={args.elapsed:.0f}s{model_suffix}"
     )
 
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
