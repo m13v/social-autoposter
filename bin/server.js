@@ -79,8 +79,6 @@ const JOBS = [
   { label: 'com.m13v.social-octolens-reddit', name: 'Octolens Reddit', type: 'Octolens', platform: 'Reddit', script: 'octolens-reddit.sh', logPrefix: 'octolens-reddit-', plist: 'com.m13v.social-octolens-reddit.plist' },
   { label: 'com.m13v.social-octolens-twitter', name: 'Octolens Twitter', type: 'Octolens', platform: 'Twitter', script: 'octolens-twitter.sh', logPrefix: 'octolens-twitter-', plist: 'com.m13v.social-octolens-twitter.plist' },
   { label: 'com.m13v.social-octolens-linkedin', name: 'Octolens LinkedIn', type: 'Octolens', platform: 'LinkedIn', script: 'octolens-linkedin.sh', logPrefix: 'octolens-linkedin-', plist: 'com.m13v.social-octolens-linkedin.plist' },
-
-  { label: 'com.m13v.social-seo-top-pages', name: 'SEO Top Pages', type: 'SEO', platform: 'SEO', script: 'run_top_pages_pipeline.sh', logPrefix: 'launchd-seo-top-pages-', plist: 'com.m13v.social-seo-top-pages.plist' },
 ];
 
 // --- Helpers ---
