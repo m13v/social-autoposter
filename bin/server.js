@@ -61,6 +61,7 @@ const JOBS = [
   { label: 'com.m13v.social-dm-replies-linkedin', name: 'DM Replies LinkedIn', type: 'DM Replies', platform: 'LinkedIn', script: 'engage-dm-replies-linkedin.sh', logPrefix: 'engage-dm-replies-linkedin-', plist: 'com.m13v.social-dm-replies-linkedin.plist' },
   // Link Edit row (batch update links on published posts)
   { label: 'com.m13v.social-link-edit-reddit', name: 'Link Edit Reddit', type: 'Link Edit', platform: 'Reddit', script: 'link-edit-reddit.sh', logPrefix: 'link-edit-reddit-', plist: 'com.m13v.social-link-edit-reddit.plist' },
+  { label: 'com.m13v.social-link-edit-twitter', name: 'Link Edit Twitter', type: 'Link Edit', platform: 'Twitter', script: 'link-edit-twitter.sh', logPrefix: 'link-edit-twitter-', plist: 'com.m13v.social-link-edit-twitter.plist' },
   { label: 'com.m13v.social-link-edit-linkedin', name: 'Link Edit LinkedIn', type: 'Link Edit', platform: 'LinkedIn', script: 'link-edit-linkedin.sh', logPrefix: 'link-edit-linkedin-', plist: 'com.m13v.social-link-edit-linkedin.plist' },
   { label: 'com.m13v.social-link-edit-moltbook', name: 'Link Edit MoltBook', type: 'Link Edit', platform: 'MoltBook', script: 'link-edit-moltbook.sh', logPrefix: 'link-edit-moltbook-', plist: 'com.m13v.social-link-edit-moltbook.plist' },
   { label: 'com.m13v.social-link-edit-github', name: 'Link Edit GitHub', type: 'Link Edit', platform: 'GitHub', script: 'link-edit-github.sh', logPrefix: 'link-edit-github-', plist: 'com.m13v.social-link-edit-github.plist' },
