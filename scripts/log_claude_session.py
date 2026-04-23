@@ -133,11 +133,13 @@ def parse_transcript(path: str):
 
     total_cost = sum(m["cost_usd"] for m in by_model.values())
     # Dominant model = the one that produced the most output tokens in this
-    # session. For single-model sessions this is just the only key; for mixed
-    # sessions (e.g. a sub-agent hop) it reflects where the actual generation
-    # happened rather than whichever model responded first.
+    # session. Claude Code's transcript emits `"model": "<synthetic>"` on
+    # interrupted/stopped events with zero usage; those shouldn't win just
+    # because they sort alphabetically when all real candidates tie.
+    real_models = {k: v for k, v in by_model.items() if not k.startswith("<")}
+    pool = real_models or by_model
     primary_model = max(
-        by_model.items(),
+        pool.items(),
         key=lambda kv: (kv[1].get("output_tokens", 0), kv[1].get("input_tokens", 0)),
     )[0]
     return {
