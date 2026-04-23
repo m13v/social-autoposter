@@ -970,18 +970,32 @@ DM_SUMMARY=$(psql "$DATABASE_URL" -t -A -c "
 
 log "DM pipeline summary: $DM_SUMMARY"
 
-# Log run to persistent monitor per platform
+# Log run to persistent monitor per platform.
+# posted  = DM replies actually sent during this run's window (per-platform, per-window)
+# skipped = conversations currently marked stale (per-platform, cumulative snapshot)
+dm_counts_for() {
+    local plat="$1"
+    psql "$DATABASE_URL" -t -A -c "
+        SELECT
+            (SELECT COUNT(*) FROM dm_messages m JOIN dms d ON d.id=m.dm_id
+             WHERE m.direction='outbound' AND d.platform='$plat'
+               AND m.message_at >= to_timestamp($RUN_START)),
+            (SELECT COUNT(*) FROM dms
+             WHERE platform='$plat' AND conversation_status='stale');
+    " 2>/dev/null | tr '|' ' '
+}
 RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
-DM_OUTBOUND=$(echo "$DM_SUMMARY" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('outbound',0))" 2>/dev/null || echo 0)
-DM_STALE_CT=$(echo "$DM_SUMMARY" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('stale',0))" 2>/dev/null || echo 0)
 if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ]; then
-    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_reddit" --posted "$DM_OUTBOUND" --skipped "$DM_STALE_CT" --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
+    read -r R_POSTED R_STALE <<< "$(dm_counts_for reddit)"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_reddit" --posted "${R_POSTED:-0}" --skipped "${R_STALE:-0}" --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
 fi
 if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ]; then
-    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_linkedin" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed 0
+    read -r L_POSTED L_STALE <<< "$(dm_counts_for linkedin)"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_linkedin" --posted "${L_POSTED:-0}" --skipped "${L_STALE:-0}" --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
 fi
 if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ]; then
-    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_twitter" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed 0
+    read -r T_POSTED T_STALE <<< "$(dm_counts_for twitter)"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_twitter" --posted "${T_POSTED:-0}" --skipped "${T_STALE:-0}" --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
 fi
 
 # Report flagged conversations needing human attention (emails already sent per-DM during flagging)
