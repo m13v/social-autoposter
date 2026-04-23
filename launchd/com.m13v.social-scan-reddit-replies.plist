@@ -23,6 +23,6 @@
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-scan-reddit-replies-stdout.log</string>
 	<key>StartInterval</key>
-	<integer>300</integer>
+	<integer>600</integer>
 </dict>
 </plist>
