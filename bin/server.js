@@ -3224,15 +3224,20 @@ function buildJobsHistoryTable(runs) {
   if (!runs || !runs.length) {
     return '<div class="style-stats-empty" style="padding:16px;">No runs match the current filters.</div>';
   }
-  const rows = runs.slice(0, 300).map(r => (
-    '<tr>' +
-      '<td style="text-align:left;padding-left:16px;">' + (r.job_label || r.script) + '</td>' +
-      '<td>' + (r.platform || '<span style="color:var(--muted);">—</span>') + '</td>' +
-      '<td>' + fmtLocalTime(r.started_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtRelTime(r.started_at) + ')</span></td>' +
-      '<td>' + fmtLocalTime(r.finished_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtElapsed(r.elapsed_s) + ')</span></td>' +
-      '<td style="text-align:left;">' + renderResult(r) + '</td>' +
-    '</tr>'
-  )).join('');
+  const rows = runs.slice(0, 300).map(r => {
+    const cost = r.result && r.result.cost_usd;
+    const costCell = cost ? fmtCost(cost) : '<span style="color:var(--muted);">—</span>';
+    return (
+      '<tr>' +
+        '<td style="text-align:left;padding-left:16px;">' + (r.job_label || r.script) + '</td>' +
+        '<td>' + (r.platform || '<span style="color:var(--muted);">—</span>') + '</td>' +
+        '<td>' + fmtLocalTime(r.started_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtRelTime(r.started_at) + ')</span></td>' +
+        '<td>' + fmtLocalTime(r.finished_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtElapsed(r.elapsed_s) + ')</span></td>' +
+        '<td style="text-align:left;">' + renderResult(r) + '</td>' +
+        '<td style="color:var(--muted);font-size:12px;">' + costCell + '</td>' +
+      '</tr>'
+    );
+  }).join('');
   return (
     '<table class="matrix-table" style="margin-top:0;">' +
       '<thead><tr>' +
@@ -3241,6 +3246,7 @@ function buildJobsHistoryTable(runs) {
         '<th>Kicked off</th>' +
         '<th>Finished</th>' +
         '<th style="text-align:left;">Result</th>' +
+        '<th>Cost</th>' +
       '</tr></thead>' +
       '<tbody>' + rows + '</tbody>' +
     '</table>'
