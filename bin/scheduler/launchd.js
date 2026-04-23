@@ -5,8 +5,21 @@ const fs = require('fs');
 const { execSync, spawnSync } = require('child_process');
 const platform = require('../platform');
 
-const UNIT_PREFIX = 'com.m13v.social-';
+// Unit filter for discovery and listing. Historically everything was
+// `com.m13v.social-*`. A few SEO jobs got provisioned as `com.m13v.seo-*`
+// (weekly roundup, standalone SEO daily report), so accept either prefix.
+// Other m13v jobs (fazm-*, gmail-*, etc.) still get excluded.
+const UNIT_PREFIXES = ['com.m13v.social-', 'com.m13v.seo-'];
+const UNIT_PREFIX = UNIT_PREFIXES[0]; // kept for renderPlist/install callers
 const UNIT_SUFFIX = '.plist';
+
+function hasUnitPrefix(label) {
+  return UNIT_PREFIXES.some(p => label.startsWith(p));
+}
+
+function fileHasUnitPrefix(filename) {
+  return UNIT_PREFIXES.some(p => filename.startsWith(p)) && filename.endsWith(UNIT_SUFFIX);
+}
 
 function renderPlist(job, env) {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -70,7 +83,7 @@ function list() {
       const parts = line.split('\t');
       if (parts.length < 3) continue;
       const label = parts[2];
-      if (!label.startsWith(UNIT_PREFIX)) continue;
+      if (!hasUnitPrefix(label)) continue;
       loadedLabels.add(label);
       const pid = parseInt(parts[0], 10);
       if (!isNaN(pid)) pidByLabel.set(label, pid);
@@ -148,9 +161,7 @@ function discoverJobs({ repoUnitDir, agentsDir }) {
   const byLabel = new Map();
   const scan = (dir) => {
     try {
-      const files = fs.readdirSync(dir).filter(f =>
-        f.startsWith(UNIT_PREFIX) && f.endsWith(UNIT_SUFFIX)
-      );
+      const files = fs.readdirSync(dir).filter(fileHasUnitPrefix);
       for (const f of files) {
         try {
           const body = fs.readFileSync(path.join(dir, f), 'utf8');
