@@ -1605,7 +1605,7 @@ async function handleApi(req, res) {
           "d.tier, d.message_count, " +
           "COALESCE(tlm.last_at, d.last_message_at) AS last_message_at, " +
           "d.discovered_at, " +
-          "d.conversation_status, d.interest_level, " +
+          "d.conversation_status, d.interest_level, d.mode, " +
           "d.human_reason, d.flagged_at, " +
           "d.target_project, d.icp_precheck, d.icp_matches, d.qualification_status, " +
           "d.qualification_notes, d.booking_link_sent_at, " +
@@ -2807,6 +2807,46 @@ const HTML = `<!DOCTYPE html>
       <button type="button" class="style-stats-pill active" data-value="all">All</button>
       <button type="button" class="style-stats-pill" data-value="in">IN</button>
       <button type="button" class="style-stats-pill" data-value="out">OUT</button>
+    </div>
+    <div class="style-stats-pill-row hidden" id="top-dm-interest-pills" data-selected="all">
+      <span class="label">Interest</span>
+      <button type="button" class="style-stats-pill active" data-value="all">All</button>
+      <button type="button" class="style-stats-pill" data-value="hot">Hot</button>
+      <button type="button" class="style-stats-pill" data-value="warm">Warm</button>
+      <button type="button" class="style-stats-pill" data-value="general_discussion">General</button>
+      <button type="button" class="style-stats-pill" data-value="cold">Cold</button>
+      <button type="button" class="style-stats-pill" data-value="not_our_prospect">Not ours</button>
+      <button type="button" class="style-stats-pill" data-value="declined">Declined</button>
+    </div>
+    <div class="style-stats-pill-row hidden" id="top-dm-mode-pills" data-selected="all">
+      <span class="label">Mode</span>
+      <button type="button" class="style-stats-pill active" data-value="all">All</button>
+      <button type="button" class="style-stats-pill" data-value="rapport">Rapport</button>
+      <button type="button" class="style-stats-pill" data-value="pitch">Pitch</button>
+    </div>
+    <div class="style-stats-pill-row hidden" id="top-dm-tier-pills" data-selected="all">
+      <span class="label">Tier</span>
+      <button type="button" class="style-stats-pill active" data-value="all">All</button>
+      <button type="button" class="style-stats-pill" data-value="1">1</button>
+      <button type="button" class="style-stats-pill" data-value="2">2</button>
+      <button type="button" class="style-stats-pill" data-value="3">3</button>
+    </div>
+    <div class="style-stats-pill-row hidden" id="top-dm-qual-pills" data-selected="all">
+      <span class="label">Qualification</span>
+      <button type="button" class="style-stats-pill active" data-value="all">All</button>
+      <button type="button" class="style-stats-pill" data-value="pending">Pending</button>
+      <button type="button" class="style-stats-pill" data-value="asked">Asked</button>
+      <button type="button" class="style-stats-pill" data-value="answered">Answered</button>
+      <button type="button" class="style-stats-pill" data-value="qualified">Qualified</button>
+      <button type="button" class="style-stats-pill" data-value="disqualified">Disqualified</button>
+    </div>
+    <div class="style-stats-pill-row hidden" id="top-dm-status-pills" data-selected="all">
+      <span class="label">Status</span>
+      <button type="button" class="style-stats-pill active" data-value="all">All</button>
+      <button type="button" class="style-stats-pill" data-value="active">Active</button>
+      <button type="button" class="style-stats-pill" data-value="needs_reply">Needs reply</button>
+      <button type="button" class="style-stats-pill" data-value="stale">Stale</button>
+      <button type="button" class="style-stats-pill" data-value="needs_human">Needs human</button>
     </div>
   </div>
   <div id="top-table-container">
@@ -4589,6 +4629,11 @@ let _topDmsLoaded = false;
 let _topDmsLoading = false;
 let _topDmsPayload = null;
 let _topDmDir = 'all';
+let _topDmInterest = 'all';
+let _topDmMode = 'all';
+let _topDmTier = 'all';
+let _topDmQual = 'all';
+let _topDmStatus = 'all';
 let _topPostsPayload = null;
 const _topProjectNames = new Set();
 
@@ -4861,11 +4906,21 @@ function initTopFilters() {
   const projRow = document.getElementById('top-project-pills');
   const srcRow  = document.getElementById('top-pages-source-pills');
   const dirRow  = document.getElementById('top-dm-dir-pills');
+  const intRow  = document.getElementById('top-dm-interest-pills');
+  const modeRow = document.getElementById('top-dm-mode-pills');
+  const tierRow = document.getElementById('top-dm-tier-pills');
+  const qualRow = document.getElementById('top-dm-qual-pills');
+  const statRow = document.getElementById('top-dm-status-pills');
   if (winRow) setTopPillActive(winRow, _topWindow);
   if (platRow) setTopPillActive(platRow, _topPlatform);
   if (projRow) setTopPillActive(projRow, _topProject);
   if (srcRow) setTopPillActive(srcRow, _topPagesSource);
   if (dirRow) setTopPillActive(dirRow, _topDmDir);
+  if (intRow) setTopPillActive(intRow, _topDmInterest);
+  if (modeRow) setTopPillActive(modeRow, _topDmMode);
+  if (tierRow) setTopPillActive(tierRow, _topDmTier);
+  if (qualRow) setTopPillActive(qualRow, _topDmQual);
+  if (statRow) setTopPillActive(statRow, _topDmStatus);
   wireTopPillRow('top-window-pills', (v) => {
     _topWindow = v || '24h';
     if (_topSubtab === 'pages') loadTopPages(true);
