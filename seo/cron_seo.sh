@@ -33,6 +33,9 @@ mkdir -p "$SCRIPT_DIR/.locks" "$REPO_DIR/skill/logs" "$REFRESH_DIR"
 
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+RUN_START=$(date +%s)
+trap '__e=$?; python3 "$REPO_DIR/scripts/log_run.py" --script "serp_seo" --posted 0 --skipped 0 --failed "$__e" --cost 0 --elapsed "$(( $(date +%s) - RUN_START ))" >/dev/null 2>&1 || true' EXIT
+
 echo "[$(ts)] cron_seo tick $TICK_ID starting (parallel per-product)" >> "$TICK_LOG"
 
 # --- Reap stuck rows once per tick (shared state) ---
