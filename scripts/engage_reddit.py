@@ -37,8 +37,20 @@ def load_config():
         return json.load(f)
 
 
-def get_next_pending(conn):
-    """Fetch the next pending Reddit/Moltbook reply (one at a time)."""
+def reset_stuck_processing(conn, platform):
+    result = conn.execute(
+        "UPDATE replies SET status='pending' WHERE status='processing' "
+        "AND platform = %s AND processing_at < NOW() - INTERVAL '2 hours' RETURNING id",
+        (platform,),
+    )
+    count = len(result.fetchall())
+    conn.commit()
+    if count > 0:
+        print(f"[engage_reddit] Reset {count} stuck 'processing' {platform} items back to pending")
+
+
+def get_next_pending(conn, platform):
+    """Fetch the next pending reply for the given platform (one at a time)."""
     cur = conn.execute("""
         SELECT r.id, r.platform, r.their_author,
                LEFT(r.their_content, 300) as their_content,
@@ -48,12 +60,12 @@ def get_next_pending(conn):
                CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post
         FROM replies r
         JOIN posts p ON r.post_id = p.id
-        WHERE r.status='pending' AND r.platform IN ('reddit', 'moltbook')
+        WHERE r.status='pending' AND r.platform = %s
         ORDER BY
             CASE WHEN p.thread_url = p.our_url THEN 0 ELSE 1 END,
             r.discovered_at ASC
         LIMIT 1
-    """)
+    """, (platform,))
     row = cur.fetchone()
     if not row:
         return None
@@ -67,20 +79,20 @@ def get_next_pending(conn):
     }
 
 
-def get_recent_archetypes(conn, limit=3):
+def get_recent_archetypes(conn, platform, limit=3):
     """Fetch archetypes of last N replied replies for rotation context."""
     cur = conn.execute("""
         SELECT LEFT(our_reply_content, 150)
         FROM replies
         WHERE status='replied' AND our_reply_content IS NOT NULL
-            AND platform NOT IN ('linkedin', 'x')
+            AND platform = %s
         ORDER BY replied_at DESC
         LIMIT %s
-    """, [limit])
+    """, [platform, limit])
     return [row[0] for row in cur.fetchall()]
 
 
-def build_prompt(reply, recent_replies, config, excluded_authors):
+def build_prompt(reply, recent_replies, config, excluded_authors, top_report=""):
     """Build a minimal prompt for one reply."""
     reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "Deep_Ad1959")
     reply_json = json.dumps(reply, indent=2)
@@ -93,18 +105,19 @@ Your last {len(recent_replies)} replies (vary your style, don't repeat the same 
 {snippets}
 """
 
-    exclusion_note = ""
     if excluded_authors and reply["their_author"].lower() in {a.lower() for a in excluded_authors}:
         return None  # will be skipped by caller
 
-    return f"""Reply to this Reddit comment. You are the Social Autoposter engagement bot.
+    top_context = f"\n## FEEDBACK FROM PAST PERFORMANCE (use this to write better replies):\n{top_report}\n" if top_report else ""
+
+    return f"""Reply to this {reply['platform']} comment. You are the Social Autoposter engagement bot.
 
 ## Reply data
 {reply_json}
 
 ## Context
 Read ~/social-autoposter/config.json for project details and content_angle.
-{recent_context}
+{recent_context}{top_context}
 ## Content rules
 {get_content_rules("reddit")}
 - First person, specific details from content_angle in config.json.
@@ -251,7 +264,9 @@ def run_claude(prompt, timeout=300, session_id=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Reddit reply engagement (one at a time)")
+    parser = argparse.ArgumentParser(description="Reddit/Moltbook reply engagement (one at a time)")
+    parser.add_argument("--platform", choices=["reddit", "moltbook"], default="reddit",
+                        help="Platform to process (default: reddit)")
     parser.add_argument("--dry-run", action="store_true", help="Print prompt for first reply without executing")
     parser.add_argument("--limit", type=int, default=0, help="Max replies to process (0 = unlimited)")
     parser.add_argument("--timeout", type=int, default=5400, help="Global timeout in seconds")
@@ -263,6 +278,16 @@ def main():
     config = load_config()
     excluded_authors = config.get("exclusions", {}).get("authors", [])
 
+    reset_stuck_processing(conn, args.platform)
+
+    try:
+        top_report = subprocess.check_output(
+            ["python3", os.path.join(REPO_DIR, "scripts", "top_performers.py"), "--platform", args.platform],
+            text=True, stderr=subprocess.DEVNULL, timeout=30,
+        )
+    except Exception:
+        top_report = ""
+
     start_time = time.time()
     processed = 0
     succeeded = 0
@@ -270,7 +295,7 @@ def main():
     failed = 0
     total_usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
 
-    print(f"[engage_reddit] Starting. limit={args.limit or 'unlimited'}, timeout={args.timeout}s")
+    print(f"[engage_reddit] Starting. platform={args.platform} limit={args.limit or 'unlimited'}, timeout={args.timeout}s")
 
     while True:
         # Global timeout check
@@ -285,7 +310,7 @@ def main():
             break
 
         # Fetch next pending reply
-        reply = get_next_pending(conn)
+        reply = get_next_pending(conn, args.platform)
         if not reply:
             print("[engage_reddit] No pending replies. Done!")
             break
@@ -299,10 +324,10 @@ def main():
             continue
 
         # Get recent replies for archetype rotation
-        recent = get_recent_archetypes(conn, limit=3)
+        recent = get_recent_archetypes(conn, args.platform, limit=3)
 
         # Build prompt
-        prompt = build_prompt(reply, recent, config, excluded_authors)
+        prompt = build_prompt(reply, recent, config, excluded_authors, top_report=top_report)
         if prompt is None:
             skipped += 1
             processed += 1
