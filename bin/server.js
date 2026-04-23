@@ -733,6 +733,15 @@ function getPlistNextRun(unitPath) {
   } catch { return null; }
 }
 
+// Returns {hour, minute} if the unit uses a single-dict daily calendar
+// schedule, else null. Used by the UI to pre-fill the time picker.
+function getPlistStartTime(unitPath) {
+  try {
+    const text = fs.readFileSync(unitPath, 'utf8');
+    return driver.startTimeFromUnit && driver.startTimeFromUnit(text);
+  } catch { return null; }
+}
+
 // Resolve a job label to a normalized descriptor usable by every per-job
 // endpoint. Looks up static JOBS first (for matrix metadata) and falls back to
 // discovered plists so newly added jobs work without touching JOBS.
@@ -847,6 +856,7 @@ async function handleApi(req, res) {
       const plistPath = unitSrcPath(job);
       const schedule = getPlistSchedule(plistPath);
       const nextRun = loaded ? getPlistNextRun(plistPath) : null;
+      const startTime = getPlistStartTime(plistPath);
       return {
         label: job.label,
         name: job.name,
@@ -857,6 +867,7 @@ async function handleApi(req, res) {
         status,
         schedule,
         nextRun,
+        startTime,
         lastRun: lastLog.time,
         lastLogFile: lastLog.file,
         plistFile: job.plist,
@@ -879,6 +890,7 @@ async function handleApi(req, res) {
           if (!fs.existsSync(plistPath)) plistPath = getLaunchAgentPath(d.plist);
           const schedule = getPlistSchedule(plistPath);
           const nextRun = loaded ? getPlistNextRun(plistPath) : null;
+          const startTime = getPlistStartTime(plistPath);
           return {
             label: d.label,
             name: deriveName(d.label),
@@ -889,6 +901,7 @@ async function handleApi(req, res) {
             status,
             schedule,
             nextRun,
+            startTime,
             lastRun: lastLog.time,
             lastLogFile: lastLog.file,
             plistFile: d.plist,
@@ -1033,6 +1046,47 @@ async function handleApi(req, res) {
         } catch {}
       }
       return json(res, { interval });
+    }).catch(e => json(res, { error: e.message }, 400));
+  }
+
+  // POST /api/jobs/:label/start-time - set a daily StartCalendarInterval at
+  // {hour, minute}. Converts interval-based jobs and array-form calendar jobs
+  // into a single-dict daily schedule. Reloads the job so launchd picks it up.
+  const startTimeMatch = p.match(/^\/api\/jobs\/([^/]+)\/start-time$/);
+  if (startTimeMatch && req.method === 'POST') {
+    return readBody(req).then(body => {
+      const { hour, minute } = JSON.parse(body);
+      if (!Number.isFinite(hour) || hour < 0 || hour > 23 ||
+          !Number.isFinite(minute) || minute < 0 || minute > 59) {
+        return json(res, { error: 'hour must be 0-23 and minute 0-59' }, 400);
+      }
+      const label = decodeURIComponent(startTimeMatch[1]);
+      const job = findJob(label);
+      if (!job) return json(res, { error: 'Unknown job' }, 404);
+      let unitPath = path.join(UNIT_DIR, driver.unitFileName(job.plist));
+      if (!fs.existsSync(unitPath)) unitPath = getLaunchAgentPath(job.plist);
+      let ok;
+      try { ok = driver.updateStartTime(unitPath, hour, minute); }
+      catch (e) { return json(res, { error: e.message }, 500); }
+      if (!ok) {
+        return json(res, { error: 'Could not rewrite plist schedule' }, 500);
+      }
+      const agentLink = getLaunchAgentPath(job.plist);
+      // If the installed agent file is a regular copy (not a symlink to the
+      // repo unit), we need to replace it so the new schedule takes effect.
+      if (isJobLoaded(label)) {
+        try {
+          driver.unload(label, agentLink);
+          try {
+            const st = fs.lstatSync(agentLink);
+            if (!st.isSymbolicLink()) fs.unlinkSync(agentLink);
+          } catch {}
+          driver.install(unitPath, AGENT_DIR);
+          driver.load(agentLink);
+        } catch {}
+      }
+      invalidateStatusCache();
+      return json(res, { hour, minute });
     }).catch(e => json(res, { error: e.message }, 400));
   }
 
