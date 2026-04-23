@@ -32,7 +32,7 @@ function agentPath(job) {
 // Matrix: rows = job types, columns = platforms
 // Each cell is a job (or null if that combo doesn't exist)
 const PLATFORMS = ['Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
-const JOB_TYPES = ['Post', 'Engage', 'Check Replies', 'DM Outreach', 'DM Replies', 'Link Edit', 'Stats', 'Health Check', 'Octolens'];
+const JOB_TYPES = ['Post', 'Engage', 'DM Outreach', 'DM Replies', 'Link Edit', 'Stats', 'Health Check', 'Octolens'];
 
 const JOBS = [
   // Post row
@@ -3028,7 +3028,7 @@ function fmtInterval(secs) {
 
 let _initialized = false;
 const PLATFORMS = ['Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
-const JOB_TYPES = ['Post', 'Engage', 'Check Replies', 'DM Outreach', 'DM Replies', 'Link Edit', 'Stats', 'Health Check', 'Octolens'];
+const JOB_TYPES = ['Post', 'Engage', 'DM Outreach', 'DM Replies', 'Link Edit', 'Stats', 'Health Check', 'Octolens'];
 
 function renderToggle(label, loaded) {
   return '<label class="toggle-switch" data-field="toggle" title="' + (loaded ? 'On — click to disable' : 'Off — click to enable') + '">' +
