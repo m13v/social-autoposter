@@ -5341,7 +5341,7 @@ function renderTopDms(payload) {
     { key: 'platform',       label: 'Platform', type: 'text',    align: 'left',  widthPct: 5,
       formatter: v => platformIconHtml(v) },
     { key: 'project_display', label: 'Project', type: 'text',    align: 'left',  widthPct: 9,
-      formatter: (_v, r) => r.project_display ? escapeHtml(String(r.project_display)) : '<span style="color:var(--text-faint);">\u2014</span>' },
+      formatter: (_v, r) => r.project_display ? escapeHtml(PROJECT_LABELS[String(r.project_display)] || String(r.project_display)) : '<span style="color:var(--text-faint);">\u2014</span>' },
     { key: 'their_author',   label: 'Thread',   type: 'text',    align: 'left',  widthPct: 13,
       formatter: (_v, r) => renderDmThreadCell(r) },
     { key: 'last_msg',       label: 'Last message', type: 'text', align: 'left', widthPct: 32,
