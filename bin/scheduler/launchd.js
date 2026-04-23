@@ -291,6 +291,63 @@ function updateInterval(unitPath, seconds) {
   return true;
 }
 
+// Read the daily start time from a plist, if it has a single-dict
+// StartCalendarInterval with Hour/Minute. Array-form (multi-fire) schedules
+// return null because they don't reduce to one time. Interval jobs return null.
+function startTimeFromUnit(xml) {
+  try {
+    if (/<key>StartCalendarInterval<\/key>\s*<array>/.test(xml)) return null;
+    const dictM = xml.match(/<key>StartCalendarInterval<\/key>\s*<dict>([\s\S]*?)<\/dict>/);
+    if (!dictM) return null;
+    const body = dictM[1];
+    const h = body.match(/<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/);
+    const m = body.match(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/);
+    if (!h && !m) return null;
+    return {
+      hour: h ? parseInt(h[1], 10) : 0,
+      minute: m ? parseInt(m[1], 10) : 0,
+    };
+  } catch { return null; }
+}
+
+// Convert any plist schedule to a single daily StartCalendarInterval at
+// Hour/Minute. Replaces StartInterval and/or an existing StartCalendarInterval
+// (dict or array). Returns true on success, false if the XML can't be parsed.
+// Caller is responsible for reloading the job so launchd picks up the change.
+function updateStartTime(unitPath, hour, minute) {
+  const xml = fs.readFileSync(unitPath, 'utf8');
+  const h = Math.max(0, Math.min(23, parseInt(hour, 10)));
+  const m = Math.max(0, Math.min(59, parseInt(minute, 10)));
+  if (Number.isNaN(h) || Number.isNaN(m)) return false;
+
+  // Match the plist's existing indent style so the file stays consistent.
+  // Most plists in this repo use tabs; a few (seo/*) use 4-space indent.
+  const spaceIndented = /^    <key>/m.test(xml) && !/^\t<key>/m.test(xml);
+  const indent = spaceIndented ? '    ' : '\t';
+  const block =
+    `${indent}<key>StartCalendarInterval</key>\n` +
+    `${indent}<dict>\n` +
+    `${indent}${indent}<key>Hour</key>\n` +
+    `${indent}${indent}<integer>${h}</integer>\n` +
+    `${indent}${indent}<key>Minute</key>\n` +
+    `${indent}${indent}<integer>${m}</integer>\n` +
+    `${indent}</dict>\n`;
+
+  let next = xml.replace(
+    /[ \t]*<key>StartInterval<\/key>\s*<integer>\d+<\/integer>\s*\n?/,
+    ''
+  );
+  next = next.replace(
+    /[ \t]*<key>StartCalendarInterval<\/key>\s*(?:<dict>[\s\S]*?<\/dict>|<array>[\s\S]*?<\/array>)\s*\n?/,
+    ''
+  );
+  const idx = next.lastIndexOf('</dict>');
+  if (idx === -1) return false;
+  next = next.slice(0, idx) + block + next.slice(idx);
+  fs.writeFileSync(unitPath, next);
+  return true;
+}
+
 module.exports = {
   renderPlist,
   generate,
@@ -309,4 +366,6 @@ module.exports = {
   scheduleFromUnit,
   nextRunFromUnit,
   updateInterval,
+  startTimeFromUnit,
+  updateStartTime,
 };
