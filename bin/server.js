@@ -3174,13 +3174,21 @@ function renderOtherJobRow(job) {
     ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
     : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
   const nextLine = job.nextRun ? formatNextRun(job.nextRun) : '';
+  const timeValue = job.startTime
+    ? String(job.startTime.hour).padStart(2, '0') + ':' + String(job.startTime.minute).padStart(2, '0')
+    : '';
+  const timeInput =
+    '<input type="time" data-field="starttime" value="' + timeValue + '"' +
+    ' title="Set daily start time (converts to calendar schedule)"' +
+    ' onchange="setStartTime(\\'' + job.label + '\\', this.value)"' +
+    ' style="font-size:11px;padding:1px 2px;margin-left:4px;background:transparent;color:var(--text);border:1px solid var(--border);border-radius:3px;">';
   return '<tr data-other-job="' + job.label + '">' +
     '<td style="text-align:left;padding-left:16px;">' + job.name + '</td>' +
     '<td style="color:var(--text);font-size:12px;">' +
       '<div style="display:flex;align-items:center;justify-content:center;gap:8px;">' +
         renderToggle(job.label, job.loaded) +
         '<div style="display:flex;flex-direction:column;line-height:1.3;">' +
-          '<span>' + (job.schedule || '--') + '</span>' +
+          '<span>' + (job.schedule || '--') + timeInput + '</span>' +
           '<span data-field="nextrun" style="color:var(--muted);font-size:11px;">' + nextLine + '</span>' +
         '</div>' +
       '</div>' +
@@ -3219,6 +3227,13 @@ function updateOtherJobsInPlace(jobs) {
     if (nextrun) nextrun.textContent = job.nextRun ? formatNextRun(job.nextRun) : '';
     const toggleInput = tr.querySelector('[data-field="toggle"] input');
     if (toggleInput && toggleInput.checked !== !!job.loaded) toggleInput.checked = !!job.loaded;
+    const timeInput = tr.querySelector('[data-field="starttime"]');
+    if (timeInput && document.activeElement !== timeInput) {
+      const nextValue = job.startTime
+        ? String(job.startTime.hour).padStart(2, '0') + ':' + String(job.startTime.minute).padStart(2, '0')
+        : '';
+      if (timeInput.value !== nextValue) timeInput.value = nextValue;
+    }
     const actions = tr.querySelector('.cell-actions');
     if (actions) {
       const runStopBtn = job.running
@@ -3572,6 +3587,28 @@ async function setInterval_(label, value) {
       body: JSON.stringify({ interval: parseInt(value) }),
     });
     toast('Interval updated');
+    loadStatus();
+  } catch(e) { toast('Error: ' + e.message, true); }
+}
+
+async function setStartTime(label, value) {
+  if (!value) return;
+  const parts = value.split(':');
+  const hour = parseInt(parts[0], 10);
+  const minute = parseInt(parts[1], 10);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+    toast('Invalid time', true);
+    return;
+  }
+  try {
+    const res = await fetch('/api/jobs/' + encodeURIComponent(label) + '/start-time', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hour, minute }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'request failed');
+    toast('Start time set to ' + value);
     loadStatus();
   } catch(e) { toast('Error: ' + e.message, true); }
 }
