@@ -39,6 +39,7 @@ ALTER TABLE posts ADD COLUMN IF NOT EXISTS project_name TEXT;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS feedback_report_used BOOLEAN DEFAULT FALSE;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS engagement_style TEXT;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS resurrected_at TIMESTAMP;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS model TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_posts_platform ON posts(platform);
 CREATE INDEX IF NOT EXISTS idx_posts_resurrected_at ON posts(resurrected_at) WHERE resurrected_at IS NOT NULL;
@@ -115,6 +116,7 @@ CREATE TABLE IF NOT EXISTS replies (
 -- Add columns to existing deployments (safe to re-run)
 ALTER TABLE replies ADD COLUMN IF NOT EXISTS processing_at TIMESTAMP;
 ALTER TABLE replies ADD COLUMN IF NOT EXISTS engagement_style TEXT;
+ALTER TABLE replies ADD COLUMN IF NOT EXISTS model TEXT;
 ALTER TABLE replies ADD CONSTRAINT IF NOT EXISTS replies_platform_comment_id_unique UNIQUE (platform, their_comment_id);
 
 CREATE TABLE IF NOT EXISTS dms (
@@ -154,6 +156,7 @@ ALTER TABLE dms ADD COLUMN IF NOT EXISTS icp_precheck TEXT;                -- DE
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS icp_matches JSONB NOT NULL DEFAULT '[]'::jsonb;  -- [{project,label,notes,at}, ...] per-project ICP verdicts
 CREATE INDEX IF NOT EXISTS idx_dms_icp_matches ON dms USING gin (icp_matches);
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS prospect_id INTEGER;              -- FK added below after prospects table defined
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS model TEXT;                       -- dominant Claude model for the outreach session
 
 -- prospects: persistent per-(platform, author) record. One person can have multiple DMs over time.
 CREATE TABLE IF NOT EXISTS prospects (
@@ -262,10 +265,19 @@ CREATE TABLE IF NOT EXISTS claude_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_claude_sessions_started ON claude_sessions(started_at DESC);
 
+-- Dominant model id used in the session (picked by max output_tokens across
+-- model_breakdown). Flat column for convenience; model_breakdown retains the
+-- full per-model split for multi-model sessions.
+ALTER TABLE claude_sessions ADD COLUMN IF NOT EXISTS model TEXT;
+
 ALTER TABLE posts        ADD COLUMN IF NOT EXISTS claude_session_id UUID;
 ALTER TABLE replies      ADD COLUMN IF NOT EXISTS claude_session_id UUID;
 ALTER TABLE dms          ADD COLUMN IF NOT EXISTS claude_session_id UUID;
 ALTER TABLE dm_messages  ADD COLUMN IF NOT EXISTS claude_session_id UUID;
+
+-- Per-row model stamp, backfilled by log_claude_session.py after each session
+-- ends. Lets dashboards / audits filter by model without joining claude_sessions.
+ALTER TABLE dm_messages  ADD COLUMN IF NOT EXISTS model TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_posts_claude_session       ON posts(claude_session_id)       WHERE claude_session_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_replies_claude_session     ON replies(claude_session_id)     WHERE claude_session_id IS NOT NULL;
