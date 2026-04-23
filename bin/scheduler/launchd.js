@@ -333,12 +333,15 @@ function updateStartTime(unitPath, hour, minute) {
     `${indent}${indent}<integer>${m}</integer>\n` +
     `${indent}</dict>\n`;
 
+  // Strip any existing schedule entry along with exactly its trailing newline.
+  // Using \s* here would greedily consume the indent of the *next* key, so we
+  // anchor on \n? only to preserve the leading whitespace of the following line.
   let next = xml.replace(
-    /[ \t]*<key>StartInterval<\/key>\s*<integer>\d+<\/integer>\s*\n?/,
+    /[ \t]*<key>StartInterval<\/key>[ \t\r\n]*<integer>\d+<\/integer>\n?/,
     ''
   );
   next = next.replace(
-    /[ \t]*<key>StartCalendarInterval<\/key>\s*(?:<dict>[\s\S]*?<\/dict>|<array>[\s\S]*?<\/array>)\s*\n?/,
+    /[ \t]*<key>StartCalendarInterval<\/key>[ \t\r\n]*(?:<dict>[\s\S]*?<\/dict>|<array>[\s\S]*?<\/array>)\n?/,
     ''
   );
   const idx = next.lastIndexOf('</dict>');
