@@ -619,6 +619,19 @@ def set_interest(conn, dm_id, interest):
     print(f"  Set interest_level={interest} for DM #{dm_id}")
 
 
+def set_mode(conn, dm_id, mode):
+    """Set the per-turn conversational posture (rapport vs pitch).
+
+    Reversible: a thread can flip back to 'rapport' after a 'pitch' turn if
+    the next message drops product talk and goes back to casual. The tier
+    ratchet and first_product_mention_at stamp handle the historical
+    'we ever pitched' signal independently.
+    """
+    conn.execute("UPDATE dms SET mode = %s WHERE id = %s", (mode, dm_id))
+    conn.commit()
+    print(f"  Set mode={mode} for DM #{dm_id}")
+
+
 def set_project(conn, dm_id, project):
     conn.execute("UPDATE dms SET project_name = %s WHERE id = %s", (project, dm_id))
     conn.commit()
@@ -765,6 +778,10 @@ def main():
     p_interest.add_argument("--interest", required=True,
                             choices=["no_response", "general_discussion", "cold", "warm", "hot", "declined", "not_our_prospect"])
 
+    p_mode = sub.add_parser("set-mode", help="Set per-turn conversational posture (rapport vs pitch). Reversible.")
+    p_mode.add_argument("--dm-id", type=int, required=True)
+    p_mode.add_argument("--mode", required=True, choices=["rapport", "pitch"])
+
     p_flag = sub.add_parser("flag-human", help="Flag conversation for human attention")
     p_flag.add_argument("--dm-id", type=int, required=True)
     p_flag.add_argument("--reason", required=True)
@@ -859,6 +876,8 @@ def main():
         set_status(conn, args.dm_id, args.status)
     elif args.command == "set-interest":
         set_interest(conn, args.dm_id, args.interest)
+    elif args.command == "set-mode":
+        set_mode(conn, args.dm_id, args.mode)
     elif args.command == "flag-human":
         flag_human(conn, args.dm_id, args.reason)
     elif args.command == "show-flagged":
