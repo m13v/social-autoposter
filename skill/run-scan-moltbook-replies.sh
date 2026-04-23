@@ -22,7 +22,11 @@ START_TS=$(date +%s)
 PYTHONUNBUFFERED=1 python3 "$REPO_DIR/scripts/scan_moltbook_replies.py" 2>&1 | tee -a "$LOG_FILE" || true
 
 ELAPSED=$(( $(date +%s) - START_TS ))
-FOUND=$(grep -ci "new repl" "$LOG_FILE" 2>/dev/null || echo 0)
+# grep -c prints "0" AND exits 1 on zero matches, so `|| echo 0` was
+# appending a second "0" and making FOUND multiline, which silently broke
+# log_run.py. Use `|| FOUND=0` so the fallback only fires when the file is
+# unreadable.
+FOUND=$(grep -ci "new repl" "$LOG_FILE" 2>/dev/null) || FOUND=0
 python3 "$REPO_DIR/scripts/log_run.py" --script "scan_moltbook_replies" --posted "$FOUND" --skipped 0 --failed 0 --cost 0 --elapsed "$ELAPSED" || true
 
 echo "=== Scan Moltbook Replies complete: $(date) (elapsed ${ELAPSED}s) ===" | tee -a "$LOG_FILE"
