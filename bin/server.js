@@ -692,9 +692,10 @@ function resumeAll() {
 }
 
 function deriveName(label) {
+  const acronyms = { seo: 'SEO' };
   return label.replace(/^com\.m13v\.(social-)?/, '')
     .split('-')
-    .map(s => s.charAt(0).toUpperCase() + s.slice(1))
+    .map(s => acronyms[s.toLowerCase()] || s.charAt(0).toUpperCase() + s.slice(1))
     .join(' ');
 }
 
@@ -833,39 +834,67 @@ async function handleApi(req, res) {
 
     // Discovered jobs that aren't in the static matrix. These get a flat row
     // in the "Other Jobs" table so they're visible and controllable in the UI.
+    // Static JOBS with type 'Other' are also included here (they are excluded
+    // from the matrix since 'Other' is not in JOB_TYPES).
     const matrixLabels = new Set(JOBS.map(j => j.label));
     const discovered = discoverLaunchdJobs();
-    const otherJobs = discovered
-      .filter(d => !matrixLabels.has(d.label))
-      .map(d => {
-        const loaded = snap.loadedLabels.has(d.label);
-        const pids = pidsForLabelFromSnapshot(snap, d.label);
-        const running = pids.length > 0;
-        const status = running ? 'running' : loaded ? 'scheduled' : 'stopped';
-        const scriptBasename = d.scriptPath ? path.basename(d.scriptPath) : null;
-        const logPrefix = scriptBasename ? scriptBasename.replace(/\.(sh|py|js)$/, '-') : null;
-        const lastLog = logPrefix ? lastLogFromSnapshot(snap, { logPrefix }) : { file: null, time: null };
-        // Prefer repo unit file for schedule; fall back to installed
-        let plistPath = path.join(UNIT_DIR, driver.unitFileName(d.plist));
-        if (!fs.existsSync(plistPath)) plistPath = getLaunchAgentPath(d.plist);
-        const schedule = getPlistSchedule(plistPath);
-        const nextRun = loaded ? getPlistNextRun(plistPath) : null;
-        return {
-          label: d.label,
-          name: deriveName(d.label),
-          script: scriptBasename,
-          loaded,
-          running,
-          pids,
-          status,
-          schedule,
-          nextRun,
-          lastRun: lastLog.time,
-          lastLogFile: lastLog.file,
-          plistFile: d.plist,
-        };
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const staticOtherJobs = JOBS.filter(job => job.type === 'Other').map(job => {
+      const loaded = snap.loadedLabels.has(job.label);
+      const pids = pidsForLabelFromSnapshot(snap, job.label);
+      const running = pids.length > 0;
+      const status = running ? 'running' : loaded ? 'scheduled' : 'stopped';
+      const lastLog = lastLogFromSnapshot(snap, job);
+      const plistPath = unitSrcPath(job);
+      const schedule = getPlistSchedule(plistPath);
+      const nextRun = loaded ? getPlistNextRun(plistPath) : null;
+      return {
+        label: job.label,
+        name: job.name,
+        script: job.script,
+        loaded,
+        running,
+        pids,
+        status,
+        schedule,
+        nextRun,
+        lastRun: lastLog.time,
+        lastLogFile: lastLog.file,
+        plistFile: job.plist,
+      };
+    });
+    const otherJobs = [
+      ...staticOtherJobs,
+      ...discovered
+        .filter(d => !matrixLabels.has(d.label))
+        .map(d => {
+          const loaded = snap.loadedLabels.has(d.label);
+          const pids = pidsForLabelFromSnapshot(snap, d.label);
+          const running = pids.length > 0;
+          const status = running ? 'running' : loaded ? 'scheduled' : 'stopped';
+          const scriptBasename = d.scriptPath ? path.basename(d.scriptPath) : null;
+          const logPrefix = scriptBasename ? scriptBasename.replace(/\.(sh|py|js)$/, '-') : null;
+          const lastLog = logPrefix ? lastLogFromSnapshot(snap, { logPrefix }) : { file: null, time: null };
+          // Prefer repo unit file for schedule; fall back to installed
+          let plistPath = path.join(UNIT_DIR, driver.unitFileName(d.plist));
+          if (!fs.existsSync(plistPath)) plistPath = getLaunchAgentPath(d.plist);
+          const schedule = getPlistSchedule(plistPath);
+          const nextRun = loaded ? getPlistNextRun(plistPath) : null;
+          return {
+            label: d.label,
+            name: deriveName(d.label),
+            script: scriptBasename,
+            loaded,
+            running,
+            pids,
+            status,
+            schedule,
+            nextRun,
+            lastRun: lastLog.time,
+            lastLogFile: lastLog.file,
+            plistFile: d.plist,
+          };
+        }),
+    ].sort((a, b) => a.name.localeCompare(b.name));
 
     const pending = await cachedPendingReplies();
     const allDiscovered = discovered;
