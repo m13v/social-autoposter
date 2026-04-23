@@ -3606,6 +3606,7 @@ async function saveSettings() {
 const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'dm_reply_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit', 'page_published_top', 'page_published_roundup', 'page_improved', 'resurrected'];
 const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', dm_reply_sent: 'dm reply', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)', page_published_top: 'page (top)', page_published_roundup: 'page (roundup)', page_improved: 'page (improved)', resurrected: 'resurrected' };
 const ACTIVITY_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github', 'seo'];
+const PROJECT_LABELS = { tenxats: '10xats' };
 const ACTIVITY_PROJECT_NONE = '(none)';
 let _activitySeen = new Set();
 let _activityFirstLoad = true;
@@ -3648,7 +3649,7 @@ function refreshActivityProjectPills(events) {
   }
   _activityKnownProjects.sort((a, b) => a.localeCompare(b));
   projEl.innerHTML = _activityKnownProjects.map(p =>
-    '<span class="activity-chip' + (_activityProjectFilter.has(p) ? ' active' : '') + '" data-project="' + escapeHtml(p) + '" title="' + escapeHtml(p) + '">' + escapeHtml(p) + '</span>'
+    '<span class="activity-chip' + (_activityProjectFilter.has(p) ? ' active' : '') + '" data-project="' + escapeHtml(p) + '" title="' + escapeHtml(p) + '">' + escapeHtml(PROJECT_LABELS[p] || p) + '</span>'
   ).join('');
 }
 
@@ -4449,7 +4450,7 @@ function renderDmStats(payload) {
     state: _dmStatsTableState,
     showTotals: true,
     columns: [
-      { key: 'name',               label: 'Project',      type: 'text',    align: 'left',  formatter: v => escapeHtml(v) },
+      { key: 'name',               label: 'Project',      type: 'text',    align: 'left',  formatter: v => escapeHtml(PROJECT_LABELS[v] || v) },
       { key: 'dms',                label: 'DMs',          type: 'numeric', align: 'right', formatter: fmt },
       { key: 'replied',            label: 'Replied',      type: 'numeric', align: 'right', formatter: fmt },
       { key: 'reply_rate',         label: 'Reply %',      type: 'numeric', align: 'right', formatter: pct, footer: replyRateFooter },
