@@ -311,6 +311,7 @@ function classifyScript(script) {
     match(/^post_(\w+)$/, 'post', 'Post') ||
     match(/^dm_outreach_(\w+)$/, 'dm-outreach', 'DM Outreach') ||
     match(/^dm_replies_(\w+)$/, 'dm-replies', 'DM Replies') ||
+    match(/^scan_(\w+?)_(?:replies|followups|mentions)$/, 'check-replies', 'Check Replies') ||
     match(/^octolens_(\w+)$/, 'octolens', 'Octolens') ||
     match(/^stats_(\w+)$/, 'stats', 'Stats') ||
     match(/^audit_(\w+)$/, 'audit', 'Audit') ||
@@ -471,6 +472,57 @@ async function enrichEngageRuns(runs) {
       errored,
       pending_now: pendingByPlatform[dbPlatform] || 0,
       cost_usd: run.result && run.result.cost_usd ? run.result.cost_usd : 0,
+    };
+  }
+}
+
+// scan_*_replies / scan_*_followups / scan_*_mentions runs: the shell wrappers
+// log `posted=FOUND` where FOUND is grepped from stdout, which is fragile and
+// zero-by-default. Replace it with a direct count of rows inserted into the
+// `replies` table during the run window, and surface what share of new rows
+// were stale (already existed, filtered out, etc) via the pending queue size.
+async function enrichCheckRepliesRuns(runs) {
+  const scanRuns = runs.filter(r => r.job_type === 'check-replies' && r.platform_key);
+  if (!scanRuns.length) return;
+  let oldestMs = Infinity;
+  for (const r of scanRuns) {
+    const ms = new Date(r.started_at).getTime();
+    if (ms < oldestMs) oldestMs = ms;
+  }
+  const since = new Date(oldestMs - 2 * 60 * 1000).toISOString();
+  const rows = await pq(
+    "SELECT platform, discovered_at FROM replies WHERE discovered_at >= $1::timestamp",
+    [since]
+  );
+  if (!rows) return;
+  const normRows = rows.map(r => {
+    const d = r.discovered_at instanceof Date ? r.discovered_at : new Date(r.discovered_at);
+    return {
+      platform: (r.platform || '').toLowerCase(),
+      discoveredMs: d.getTime() - d.getTimezoneOffset() * 60 * 1000,
+    };
+  });
+  const pendingRows = await pq(
+    "SELECT platform, COUNT(*)::int AS n FROM replies WHERE status='pending' GROUP BY platform"
+  );
+  const pendingByPlatform = {};
+  if (pendingRows) {
+    for (const r of pendingRows) pendingByPlatform[(r.platform || '').toLowerCase()] = r.n;
+  }
+  for (const run of scanRuns) {
+    const startMs = new Date(run.started_at).getTime();
+    const endMs = new Date(run.finished_at).getTime() + 60 * 1000;
+    const dbPlatform = run.platform_key === 'twitter' ? 'x' : run.platform_key;
+    let found = 0;
+    for (const p of normRows) {
+      if (p.platform !== dbPlatform) continue;
+      if (p.discoveredMs < startMs || p.discoveredMs > endMs) continue;
+      found++;
+    }
+    run.result = {
+      type: 'check-replies',
+      found,
+      pending_now: pendingByPlatform[dbPlatform] || 0,
     };
   }
 }
@@ -1175,6 +1227,7 @@ async function handleApi(req, res) {
       const runs = parseRunMonitorLog(Math.max(limit * 3, 300)).slice(0, limit);
       await enrichLinkEditRuns(runs);
       await enrichEngageRuns(runs);
+      await enrichCheckRepliesRuns(runs);
       return json(res, { runs });
     })().catch(e => json(res, { error: e.message }, 500));
   }
@@ -3121,6 +3174,17 @@ function renderResult(run) {
       pill('touched', r.total, 'var(--text)') +
       pill('success', r.success, '#22c55e') +
       pill('skipped', r.skipped, '#eab308')
+    );
+  }
+  if (r.type === 'check-replies') {
+    const found = r.found || 0;
+    const pending = r.pending_now || 0;
+    if (!found && !pending) {
+      return '<span style="color:var(--muted);font-size:12px;">no new replies</span>';
+    }
+    return (
+      pill('found', found, found > 0 ? '#22c55e' : 'var(--text)') +
+      (pending ? pill('queue', pending, 'var(--muted)') : '')
     );
   }
   if (r.type === 'engage') {
