@@ -2416,6 +2416,7 @@ const HTML = `<!DOCTYPE html>
   .prospect-modal a { color: var(--link); }
 
   /* Status tab: 24h activity stats */
+  .stats-top-filters { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
   .stats-wrapper { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; margin-bottom: 20px; }
   .stats-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
   .stats-title { font-size: 13px; font-weight: 600; color: var(--text); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -2653,12 +2654,20 @@ const HTML = `<!DOCTYPE html>
 </div>
 
 <div class="content" id="tab-stats">
-  <div class="style-stats-pill-row" id="stats-window-pills" data-selected="24h" style="margin-bottom:16px;">
-    <span class="label">Window</span>
-    <button type="button" class="style-stats-pill active" data-value="24h">Last 24h</button>
-    <button type="button" class="style-stats-pill" data-value="7d">Last 7d</button>
-    <button type="button" class="style-stats-pill" data-value="14d">Last 14d</button>
-    <button type="button" class="style-stats-pill" data-value="30d">Last 30d</button>
+  <div class="stats-top-filters">
+    <div class="style-stats-pill-row" id="stats-window-pills" data-selected="24h">
+      <span class="label">Window</span>
+      <button type="button" class="style-stats-pill active" data-value="24h">Last 24h</button>
+      <button type="button" class="style-stats-pill" data-value="7d">Last 7d</button>
+      <button type="button" class="style-stats-pill" data-value="14d">Last 14d</button>
+      <button type="button" class="style-stats-pill" data-value="30d">Last 30d</button>
+    </div>
+    <div class="style-stats-pill-row" id="style-stats-platform-pills" data-selected="all">
+      <span class="label">Platform</span>
+    </div>
+    <div class="style-stats-pill-row" id="style-stats-project-pills" data-selected="all">
+      <span class="label">Project</span>
+    </div>
   </div>
   <div class="stats-wrapper">
     <div class="stats-header">
@@ -2672,14 +2681,6 @@ const HTML = `<!DOCTYPE html>
       <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="style-stats-heading">Posts by Engagement Style (24h)</span></span>
       <span class="style-stats-total" id="style-stats-total"></span>
     </summary>
-    <div class="style-stats-controls">
-      <div class="style-stats-pill-row" id="style-stats-platform-pills" data-selected="all">
-        <span class="label">Platform</span>
-      </div>
-      <div class="style-stats-pill-row" id="style-stats-project-pills" data-selected="all">
-        <span class="label">Project</span>
-      </div>
-    </div>
     <div id="style-stats-body">
       <div class="style-stats-empty">Loading\u2026</div>
     </div>
@@ -4284,7 +4285,11 @@ function renderFunnelStats(payload) {
     body.innerHTML = '<div class="style-stats-empty">' + escapeHtml(payload.error) + '</div>';
     return;
   }
-  const projects = (payload && payload.projects) || [];
+  const _projRow = document.getElementById('style-stats-project-pills');
+  const _selProj = (_projRow && _projRow.dataset.selected) || 'all';
+  const projects = ((payload && payload.projects) || []).filter(
+    p => _selProj === 'all' || p.name === _selProj
+  );
   if (!projects.length) {
     if (totalEl) totalEl.textContent = '0 projects';
     body.innerHTML = '<div class="style-stats-empty">No project data.</div>';
@@ -5776,6 +5781,7 @@ function saAuthNotReady() {
 
 let _funnelStatsLoadedFor = null;
 let _funnelStatsLoading = false;
+let _lastFunnelPayload = null;
 async function loadFunnelStats(force) {
   if (_funnelStatsLoading) return;
   if (saAuthNotReady()) return;
@@ -5791,6 +5797,7 @@ async function loadFunnelStats(force) {
   try {
     const res = await fetch('/api/funnel/stats?days=' + days);
     const data = await res.json();
+    if (data && !data.error) _lastFunnelPayload = data;
     renderFunnelStats(data);
     _funnelStatsLoadedFor = days;
   } catch (e) {
@@ -5975,6 +5982,26 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (costEl && costEl.open) loadCostStats(true);
   });
   syncStatsHeadings();
+})();
+
+// Top-of-stats-tab platform/project filter pills. Re-run style stats and
+// re-render funnel stats (client-side project filter against cached payload).
+(function wireStatsPlatformProjectPills() {
+  const tabStats = document.getElementById('tab-stats');
+  if (!tabStats) return;
+  tabStats.addEventListener('click', ev => {
+    const btn = ev.target.closest('.style-stats-pill');
+    if (!btn) return;
+    const row = btn.closest('.style-stats-pill-row');
+    if (!row) return;
+    if (row.id !== 'style-stats-platform-pills' && row.id !== 'style-stats-project-pills') return;
+    // renderStyleStatsPills already handles active state + loadStyleStats() via its own handler.
+    // Here we add funnel stats re-render using the cached payload.
+    if (_lastFunnelPayload) {
+      const funnelEl = document.getElementById('funnel-stats');
+      if (funnelEl && funnelEl.open) renderFunnelStats(_lastFunnelPayload);
+    }
+  });
 })();
 
 // Lazy-load funnel stats the first time the user opens the section. The fetch
