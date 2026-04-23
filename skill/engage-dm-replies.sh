@@ -115,7 +115,7 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
                d.chat_url, d.their_content as original_comment,
                d.comment_context, d.project_name, d.target_project,
                d.qualification_status, d.qualification_notes,
-               d.booking_link_sent_at,
+               d.booking_link_sent_at, d.mode as current_mode,
                pr.headline as prospect_headline,
                pr.bio as prospect_bio,
                pr.company as prospect_company,
@@ -782,9 +782,11 @@ cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --dm-i
 \`\`\`
 The log-outbound command has a dedup guard. If it says "DEDUP BLOCKED", the message was NOT logged. Do not retry.
 
-### Step 5b: Classify interest level (REQUIRED on every reply)
+### Step 5b: Classify interest level AND mode (REQUIRED on every reply)
 
-After replying (or deciding to SKIP/flag/stale), classify the prospect's current interest in our products/topic based on the LATEST inbound message and the full conversation arc. Set it every time — the label can go up or down as the conversation evolves.
+After replying (or deciding to SKIP/flag/stale), classify two things and write BOTH. These are separate commands, one call each, every turn, no exceptions.
+
+**(i) interest_level**: the prospect's signal, based on their LATEST inbound plus the full arc. Can go up or down as the conversation evolves.
 
 \`\`\`bash
 python3 scripts/dm_conversation.py set-interest --dm-id DM_ID --interest LEVEL
@@ -806,6 +808,23 @@ Rules:
 - Default new replied-to threads to general_discussion, not cold. Cold means "engagement faded after product relevance appeared"; general_discussion means "product relevance hasn't appeared yet." (no_response is reserved for threads where they have not replied at all, which this flow does not process.)
 - Move to not_our_prospect as soon as it's clear they're pitching us or have no buyer fit — don't let those sit as warm.
 - If they move from warm → declined (e.g., shut the conversation down), update to declined.
+
+**(ii) mode**: the posture of the OUTBOUND reply we just sent. This describes what we said on this turn, not what the prospect feels. Reversible; can flip back and forth as the thread evolves.
+
+\`\`\`bash
+python3 scripts/dm_conversation.py set-mode --dm-id DM_ID --mode MODE
+\`\`\`
+
+MODE is exactly one of:
+- **rapport**: our reply contained no product name, no GitHub link, no booking link. Conversational continuation, qualifying question folded into rapport, or polite brush-off. This is Mode A from Step 2.
+- **pitch**: our reply named a project from \$PROJECTS, shared a project link, or appended the booking_link. This is Mode B from Step 2 (with or without Step 2.8's booking link).
+
+Rules:
+- Base the label on what WE sent on THIS turn, not on the thread's overall direction.
+- \`mode\` is INDEPENDENT of \`tier\` and \`first_product_mention_at\`. A thread that pitched on turn 2 (tier=2, first_product_mention_at stamped) can still have \`mode='rapport'\` on turn 5 if we stepped back to a casual reply.
+- If you SKIPPED (no reply sent) or flagged for human, do NOT call set-mode; mode only updates on turns where we actually sent an outbound message.
+- Re-setting the same mode as the prior turn is fine and expected (e.g. three rapport turns in a row all re-stamp \`rapport\`).
+- \`current_mode\` is included in the PENDING_CONVOS payload so you can see what the previous outbound was labeled.
 
 ### Step 6: Let go when it's time
 Mark as stale if:
