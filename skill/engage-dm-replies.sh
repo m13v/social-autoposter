@@ -712,7 +712,7 @@ You are in Mode B on this turn if EITHER of the following is true:
 - **Organic trigger**: they described a problem a project in \$PROJECTS solves, OR they asked for tool recommendations.
 - **Timeline trigger (Step 2)**: total messages in this thread are 4+. By this point Mode B is mandatory unless the DM is already \`qualification_status = disqualified\`, in which case stay in Mode A permanently.
 
-AND ALL of the following are true (floor conditions — never pivot without them):
+AND ALL of the following are true (floor conditions, never pivot without them):
 - There are 2+ total messages in the conversation (they have replied at least once). This mirrors HARD RULE 4.
 - The mention fits naturally in the reply without any "btw" or topic change.
 - You would genuinely recommend this tool to a friend in their situation.
@@ -729,7 +729,7 @@ When you pivot to Mode B (with or without a booking link), stamp project and tie
 python3 scripts/dm_conversation.py set-project --dm-id DM_ID --project "EXACT_PROJECT_NAME_FROM_CONFIG"
 python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier 2
 \`\`\`
-\`set-tier\` auto-stamps \`first_product_mention_at = NOW()\` on first transition to tier >= 2. Soft pivots (category named, product name deferred) stay at tier 1 until the next turn — see PIVOT EXAMPLES below.
+\`set-tier\` auto-stamps \`first_product_mention_at = NOW()\` on first transition to tier >= 2. Soft pivots (category named, product name deferred) stay at tier 1 until the next turn; see PIVOT EXAMPLES below.
 
 ### Step 2.8: Append the booking link (Mode B only, when eligible)
 
@@ -737,7 +737,7 @@ If all of the following are true, append the matched project's \`booking_link\` 
 - \`qualification_status = qualified\` for this DM (set in Step 2.5 or earlier)
 - The matched project has \`booking_link\` AND \`booking_link_auto_share: true\` in config
 - \`booking_link_sent_at\` is NULL (we haven't already sent it)
-- The conversation is at a natural place to propose a call (they've surfaced pain or asked for more; not just "cool"). You do NOT need them to have explicitly asked for a call — see the updated COMMITMENT GUARDRAILS in Step 2.
+- The conversation is at a natural place to propose a call (they've surfaced pain or asked for more; not just "cool"). You do NOT need them to have explicitly asked for a call; see the updated COMMITMENT GUARDRAILS in Step 2.
 
 Phrase it naturally, one sentence, link embedded:
 "makes sense, if you want to see how it'd work on your setup, grab a time here: <booking_link>"
