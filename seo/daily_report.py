@@ -8,9 +8,12 @@ Usage:
     python3 daily_report.py --dry-run    # print to stdout, no email
 """
 
+import atexit
 import json
 import os
+import subprocess
 import sys
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -20,6 +23,24 @@ sys.path.insert(0, str(GMAIL_DIR))
 
 SCRIPT_DIR = Path(__file__).parent
 ENV_PATH = SCRIPT_DIR.parent / ".env"
+
+_RUN_START = time.time()
+
+
+def _emit_run_log() -> None:
+    elapsed = max(0, int(time.time() - _RUN_START))
+    subprocess.run(
+        [
+            "python3", str(SCRIPT_DIR.parent / "scripts" / "log_run.py"),
+            "--script", "seo_daily_report",
+            "--posted", "0", "--skipped", "0", "--failed", "0",
+            "--cost", "0", "--elapsed", str(elapsed),
+        ],
+        check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+
+atexit.register(_emit_run_log)
 TO_EMAIL = "i@m13v.com"
 TOKEN_PATH = GMAIL_DIR / "token_i_at_m13v.com.json"
 CREDENTIALS_PATH = GMAIL_DIR / "credentials.json"
