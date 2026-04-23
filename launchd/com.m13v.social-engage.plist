@@ -9,15 +9,8 @@
 		<string>/bin/bash</string>
 		<string>/Users/matthewdi/social-autoposter/skill/engage.sh</string>
 	</array>
-	<key>StartCalendarInterval</key>
-	<array>
-		<dict><key>Hour</key><integer>1</integer><key>Minute</key><integer>0</integer></dict>
-		<dict><key>Hour</key><integer>5</integer><key>Minute</key><integer>0</integer></dict>
-		<dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
-		<dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>0</integer></dict>
-		<dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>0</integer></dict>
-		<dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
-	</array>
+	<key>StartInterval</key>
+	<integer>600</integer>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-engage-stdout.log</string>
 	<key>StandardErrorPath</key>
