@@ -398,7 +398,7 @@ async function enrichLinkEditRuns(runs) {
       total++;
       if (p.skip) skipped++; else success++;
     }
-    run.result = { type: 'link-edit', total, success, skipped };
+    run.result = { type: 'link-edit', total, success, skipped, cost_usd: run.result && run.result.cost_usd ? run.result.cost_usd : 0 };
   }
 }
 
@@ -521,6 +521,7 @@ async function enrichCheckRepliesRuns(runs) {
       type: 'check-replies',
       found,
       pending_now: pendingByPlatform[dbPlatform] || 0,
+      cost_usd: run.result && run.result.cost_usd ? run.result.cost_usd : 0,
     };
   }
 }
