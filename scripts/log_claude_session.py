@@ -132,10 +132,19 @@ def parse_transcript(path: str):
         return None
 
     total_cost = sum(m["cost_usd"] for m in by_model.values())
+    # Dominant model = the one that produced the most output tokens in this
+    # session. For single-model sessions this is just the only key; for mixed
+    # sessions (e.g. a sub-agent hop) it reflects where the actual generation
+    # happened rather than whichever model responded first.
+    primary_model = max(
+        by_model.items(),
+        key=lambda kv: (kv[1].get("output_tokens", 0), kv[1].get("input_tokens", 0)),
+    )[0]
     return {
         "by_model": by_model,
         "totals": totals,
         "total_cost_usd": total_cost,
+        "primary_model": primary_model,
         "first_ts": first_ts,
         "last_ts": last_ts,
     }
@@ -180,8 +189,8 @@ def main():
         """INSERT INTO claude_sessions (
             session_id, script, started_at, ended_at, duration_ms,
             total_cost_usd, input_tokens, output_tokens,
-            cache_read_tokens, cache_creation_tokens, model_breakdown
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            cache_read_tokens, cache_creation_tokens, model_breakdown, model
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
         ON CONFLICT (session_id) DO UPDATE SET
             ended_at = EXCLUDED.ended_at,
             duration_ms = EXCLUDED.duration_ms,
@@ -190,7 +199,8 @@ def main():
             output_tokens = EXCLUDED.output_tokens,
             cache_read_tokens = EXCLUDED.cache_read_tokens,
             cache_creation_tokens = EXCLUDED.cache_creation_tokens,
-            model_breakdown = EXCLUDED.model_breakdown
+            model_breakdown = EXCLUDED.model_breakdown,
+            model = EXCLUDED.model
         """,
         [
             args.session_id, args.script, started, ended, duration_ms,
@@ -198,8 +208,21 @@ def main():
             parsed["totals"]["input"], parsed["totals"]["output"],
             parsed["totals"]["cache_read"], parsed["totals"]["cache_creation"],
             json.dumps(parsed["by_model"]),
+            parsed["primary_model"],
         ],
     )
+
+    # Backfill dominant model onto any activity rows stamped with this session.
+    # Only overwrites rows where model IS NULL so re-runs of log_claude_session
+    # against the same session_id stay idempotent.
+    backfill_counts = {}
+    for table in ("posts", "replies", "dms", "dm_messages"):
+        cur = conn.execute(
+            f"UPDATE {table} SET model = %s "
+            f"WHERE claude_session_id = %s AND model IS NULL",
+            [parsed["primary_model"], args.session_id],
+        )
+        backfill_counts[table] = cur.rowcount
     conn.commit()
     conn.close()
 
@@ -209,7 +232,9 @@ def main():
         "script": args.script,
         "total_cost_usd": round(parsed["total_cost_usd"], 6),
         "duration_ms": duration_ms,
+        "model": parsed["primary_model"],
         "models": list(parsed["by_model"].keys()),
+        "backfilled": backfill_counts,
     }))
 
 
