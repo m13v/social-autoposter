@@ -4946,6 +4946,26 @@ function initTopFilters() {
     _topDmDir = v || 'all';
     if (_topDmsPayload) renderTopDms(_topDmsPayload);
   });
+  wireTopPillRow('top-dm-interest-pills', (v) => {
+    _topDmInterest = v || 'all';
+    if (_topDmsPayload) renderTopDms(_topDmsPayload);
+  });
+  wireTopPillRow('top-dm-mode-pills', (v) => {
+    _topDmMode = v || 'all';
+    if (_topDmsPayload) renderTopDms(_topDmsPayload);
+  });
+  wireTopPillRow('top-dm-tier-pills', (v) => {
+    _topDmTier = v || 'all';
+    if (_topDmsPayload) renderTopDms(_topDmsPayload);
+  });
+  wireTopPillRow('top-dm-qual-pills', (v) => {
+    _topDmQual = v || 'all';
+    if (_topDmsPayload) renderTopDms(_topDmsPayload);
+  });
+  wireTopPillRow('top-dm-status-pills', (v) => {
+    _topDmStatus = v || 'all';
+    if (_topDmsPayload) renderTopDms(_topDmsPayload);
+  });
   const searchEl = document.getElementById('top-search');
   if (searchEl && !searchEl._wired) {
     searchEl.value = _topTableState.globalQuery || '';
@@ -4970,6 +4990,13 @@ function initTopFilters() {
       const projRowEl = document.getElementById('top-project-pills');
       const srcRowEl  = document.getElementById('top-pages-source-pills');
       const dirRowEl  = document.getElementById('top-dm-dir-pills');
+      const dmOnlyRowIds = ['top-dm-dir-pills', 'top-dm-interest-pills', 'top-dm-mode-pills', 'top-dm-tier-pills', 'top-dm-qual-pills', 'top-dm-status-pills'];
+      const setDmRowsHidden = (hidden) => {
+        dmOnlyRowIds.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.classList.toggle('hidden', hidden);
+        });
+      };
       const totalEl = document.getElementById('top-total');
       if (projRowEl) projRowEl.classList.remove('hidden');
       if (sub === 'pages') {
@@ -4979,7 +5006,7 @@ function initTopFilters() {
         if (pagesUnknownC) pagesUnknownC.classList.remove('hidden');
         if (platRowEl) platRowEl.classList.add('hidden');
         if (srcRowEl) srcRowEl.classList.remove('hidden');
-        if (dirRowEl) dirRowEl.classList.add('hidden');
+        setDmRowsHidden(true);
         if (totalEl) totalEl.textContent = '';
         loadTopPages();
       } else if (sub === 'dms') {
@@ -4989,7 +5016,7 @@ function initTopFilters() {
         if (dmsC) dmsC.classList.remove('hidden');
         if (platRowEl) platRowEl.classList.remove('hidden');
         if (srcRowEl) srcRowEl.classList.add('hidden');
-        if (dirRowEl) dirRowEl.classList.remove('hidden');
+        setDmRowsHidden(false);
         if (totalEl) totalEl.textContent = '';
         loadTopDms(true);
       } else {
@@ -4999,7 +5026,7 @@ function initTopFilters() {
         postsC.classList.remove('hidden');
         if (platRowEl) platRowEl.classList.remove('hidden');
         if (srcRowEl) srcRowEl.classList.add('hidden');
-        if (dirRowEl) dirRowEl.classList.add('hidden');
+        setDmRowsHidden(true);
         if (totalEl) totalEl.textContent = '';
         loadTopPosts(true);
       }
@@ -5334,11 +5361,19 @@ function renderTopDms(payload) {
   const projectScoped = (_topProject && _topProject !== 'all')
     ? allDms.filter(d => dmProjectName(d) === _topProject)
     : allDms;
-  const dms = _topDmDir === 'in'
+  const dirScoped = _topDmDir === 'in'
     ? projectScoped.filter(d => d.last_dir === 'inbound')
     : (_topDmDir === 'out'
       ? projectScoped.filter(d => d.last_dir === 'outbound')
       : projectScoped);
+  const dms = dirScoped.filter(d => {
+    if (_topDmInterest !== 'all' && (d.interest_level || '') !== _topDmInterest) return false;
+    if (_topDmMode !== 'all' && (d.mode || 'rapport') !== _topDmMode) return false;
+    if (_topDmTier !== 'all' && String(Number(d.tier) || 1) !== _topDmTier) return false;
+    if (_topDmQual !== 'all' && (d.qualification_status || '') !== _topDmQual) return false;
+    if (_topDmStatus !== 'all' && (d.conversation_status || '') !== _topDmStatus) return false;
+    return true;
+  });
   if (totalEl) {
     const suffix = _topDmDir === 'in' ? ' (IN)' : (_topDmDir === 'out' ? ' (OUT)' : '');
     totalEl.textContent = dms.length + ' thread' + (dms.length === 1 ? '' : 's') + suffix;
@@ -5365,6 +5400,7 @@ function renderTopDms(payload) {
     last_ts: (() => { const p = parseServerUtcTs(d.last_message_at || d.discovered_at); return p ? p.getTime() : 0; })(),
     conversation_status: d.conversation_status || '',
     interest_level: d.interest_level || '',
+    mode: d.mode || 'rapport',
     human_reason: d.human_reason || '',
     project_name: d.project_name || '',
     target_project: d.target_project || '',
