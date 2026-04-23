@@ -5,17 +5,40 @@ Queries the Neon DB for the last 24h of social-autoposter activity,
 formats an HTML email, and sends it via Gmail API to i@m13v.com.
 """
 
+import atexit
 import os
+import subprocess
 import sys
+import time
 import base64
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from pathlib import Path
 
 import psycopg2
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+
+_RUN_START = time.time()
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _emit_run_log() -> None:
+    elapsed = max(0, int(time.time() - _RUN_START))
+    subprocess.run(
+        [
+            "python3", str(_REPO_ROOT / "scripts" / "log_run.py"),
+            "--script", "daily_report",
+            "--posted", "0", "--skipped", "0", "--failed", "0",
+            "--cost", "0", "--elapsed", str(elapsed),
+        ],
+        check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+
+atexit.register(_emit_run_log)
 
 # Config
 RECIPIENT = "i@m13v.com"
