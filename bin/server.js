@@ -2905,6 +2905,7 @@ const HTML = `<!DOCTYPE html>
 <script>
 const INTERVALS = [
   { label: '5 min', value: 300 },
+  { label: '10 min', value: 600 },
   { label: '30 min', value: 1800 },
   { label: '1 hour', value: 3600 },
   { label: '2 hours', value: 7200 },
