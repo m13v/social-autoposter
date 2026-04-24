@@ -275,7 +275,10 @@ def log_inbound(conn, dm_id, author, content, message_at=None, event_id=None):
 
     conn.execute("""
         UPDATE dms SET last_message_at = NOW(), message_count = message_count + 1,
-                       conversation_status = 'needs_reply'
+                       conversation_status = CASE
+                           WHEN conversation_status IN ('needs_human','converted','closed') THEN conversation_status
+                           ELSE 'needs_reply'
+                       END
         WHERE id = %s
     """, (dm_id,))
     conn.commit()
