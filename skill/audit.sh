@@ -152,72 +152,14 @@ if [ "$RUN_TWITTER" -eq 1 ]; then
 fi
 
 # ═══════════════════════════════════════════════════════
-# LinkedIn audit (Python CDP — no LLM tokens)
+# LinkedIn audit — retired 2026-04-17 (flagged CDP fingerprint).
+# Post-engagement stats are now collected in stats.sh Step 4 via the
+# linkedin-agent MCP (headed Chrome). Deletion detection is not currently
+# covered; if needed, extend stats.sh Step 4 to parse 404 / "This post
+# isn't available" screens.
 # ═══════════════════════════════════════════════════════
 if [ "$RUN_LINKEDIN" -eq 1 ]; then
-    LINKEDIN_COUNT=$(psql "$DATABASE_URL" -t -A -c "
-        SELECT COUNT(*) FROM posts
-        WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
-          AND our_url LIKE '%linkedin.com/feed/update/%';" 2>/dev/null || echo "0")
-
-    if [ "$LINKEDIN_COUNT" -gt 0 ]; then
-        log "LinkedIn: audit — $LINKEDIN_COUNT active posts (Python CDP)"
-
-        OFFSET=0
-        TOTAL_CHECKED=0
-
-        while true; do
-            BATCH_JSON=$(psql "$DATABASE_URL" -t -A -c "
-                SELECT json_agg(q) FROM (
-                    SELECT id, our_url as url
-                    FROM posts
-                    WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
-                      AND our_url LIKE '%linkedin.com/feed/update/%'
-                    ORDER BY id
-                    LIMIT 30 OFFSET $OFFSET
-                ) q;" 2>/dev/null)
-
-            [ "$BATCH_JSON" = "" ] || [ "$BATCH_JSON" = "null" ] && break
-
-            AUDIT_TMPFILE=$(mktemp)
-            python3 "$REPO_DIR/scripts/linkedin_browser.py" audit-batch "$BATCH_JSON" > "$AUDIT_TMPFILE" 2>/dev/null
-
-            if [ $? -eq 0 ] && [ -s "$AUDIT_TMPFILE" ]; then
-                DATABASE_URL="$DATABASE_URL" python3 - "$AUDIT_TMPFILE" <<'PYEOF' 2>&1 | tee -a "$LOG_FILE"
-import json, os, sys, psycopg2
-
-with open(sys.argv[1]) as f:
-    results = json.load(f)
-conn = psycopg2.connect(os.environ['DATABASE_URL'])
-cur = conn.cursor()
-deleted = 0
-for r in results:
-    if r.get('status') == 'deleted':
-        cur.execute('UPDATE posts SET status=%s, status_checked_at=NOW() WHERE id=%s', ('deleted', r['id']))
-        deleted += 1
-    elif r.get('status') != 'error':
-        cur.execute('UPDATE posts SET upvotes=%s, comments_count=%s, views=%s, engagement_updated_at=NOW(), status_checked_at=NOW() WHERE id=%s',
-            (r.get('reactions', 0), r.get('comments', 0), r.get('views', 0), r['id']))
-conn.commit()
-cur.close()
-conn.close()
-print(f'Batch: {len(results)} checked, {deleted} deleted')
-PYEOF
-                rm -f "$AUDIT_TMPFILE"
-            else
-                rm -f "$AUDIT_TMPFILE"
-            fi
-
-            BATCH_SIZE=$(echo "$BATCH_JSON" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
-            TOTAL_CHECKED=$((TOTAL_CHECKED + BATCH_SIZE))
-            [ "$BATCH_SIZE" -lt 30 ] && break
-            OFFSET=$((OFFSET + 30))
-        done
-
-        log "LinkedIn: Done — $TOTAL_CHECKED posts audited"
-    else
-        log "LinkedIn: SKIPPED — no active posts to audit"
-    fi
+    log "LinkedIn: SKIPPED — CDP audit retired (see stats.sh Step 4 for engagement stats via MCP)"
 fi
 
 # ═══════════════════════════════════════════════════════
