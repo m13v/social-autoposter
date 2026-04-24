@@ -10,7 +10,7 @@
         <string>/Users/matthewdi/social-autoposter/seo/cron_gsc.sh</string>
     </array>
     <key>StartInterval</key>
-    <integer>600</integer>
+    <integer>1200</integer>
     <key>StandardOutPath</key>
     <string>/Users/matthewdi/social-autoposter/skill/logs/launchd-gsc-seo-stdout.log</string>
     <key>StandardErrorPath</key>
