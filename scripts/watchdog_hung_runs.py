@@ -19,9 +19,26 @@ REPO = Path("/Users/matthewdi/social-autoposter")
 LOG_RUN_PY = REPO / "scripts" / "log_run.py"
 SKILL_PATH_MARKER = "/social-autoposter/skill/"
 MAX_AGE_SEC = 45 * 60
+# Per-script cap overrides for pipelines that legitimately run longer than
+# the 45 min global (update_stats.py over ~4-5k posts + rate-limit sleeps).
+# Key is (script_file, platform_or_None). Lookup order: (script, platform),
+# (script, None), then global MAX_AGE_SEC. Raised 2026-04-24 after the global
+# 45 min cap was killing stats.sh reddit at ~90% and github-engage every 2h.
+PER_SCRIPT_CAP_SEC = {
+    ("github-engage.sh", None): 120 * 60,
+    ("stats.sh", "reddit"): 120 * 60,
+}
 WATCHDOG_LOG = REPO / "skill" / "logs" / "watchdog.log"
 RUN_MONITOR_LOG = REPO / "skill" / "logs" / "run_monitor.log"
 TRAP_GRACE_SEC = 5
+
+
+def cap_for(script_file, platform):
+    return (
+        PER_SCRIPT_CAP_SEC.get((script_file, platform))
+        or PER_SCRIPT_CAP_SEC.get((script_file, None))
+        or MAX_AGE_SEC
+    )
 
 # Map skill/*.sh filename -> script label used by the script's own log_run.py
 # calls. Keeps dashboard job-history grouping consistent (e.g. a killed
@@ -243,12 +260,13 @@ def main() -> None:
     for pid, ppid, etimes, script_file, platform in procs:
         if ppid != 1:
             continue
-        if etimes < MAX_AGE_SEC:
+        cap = cap_for(script_file, platform)
+        if etimes < cap:
             continue
         label = resolve_label(script_file, platform)
         plat_tag = f" platform={platform}" if platform else ""
         watchdog_log(
-            f"KILL {script_file}{plat_tag} pid={pid} elapsed={etimes}s cap={MAX_AGE_SEC}s label={label}"
+            f"KILL {script_file}{plat_tag} pid={pid} elapsed={etimes}s cap={cap}s label={label}"
         )
         kill_started = time.time() - 1
         killed = kill_tree(pid)
