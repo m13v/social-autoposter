@@ -149,12 +149,16 @@ def build_content_angle(project, config):
 def build_prompt(project, config, limit, top_report, recent_comments):
     content_angle = build_content_angle(project, config)
 
-    project_json = json.dumps({k: project.get(k) for k in
-        ["name", "description", "github_search_topics"]
-        if project.get(k)}, indent=2)
-
-    topics_list = project.get("github_search_topics") or \
+    # Prefer unified search_topics (shared across platforms); fall back to the
+    # legacy github_search_topics if a project hasn't been migrated yet.
+    topics_list = project.get("search_topics") or project.get("github_search_topics") or \
         config.get("accounts", {}).get("github", {}).get("search_topics", [])
+
+    project_json = json.dumps({
+        "name": project.get("name"),
+        "description": project.get("description"),
+        "search_topics": topics_list,
+    }, indent=2)
 
     recent_ctx = ""
     if recent_comments:
@@ -216,11 +220,15 @@ Links are added later by a separate pipeline (Phase D) after the comment earns e
 - Do NOT include any links.
 
 ## Steps
-1. Search 2-3 topics from: {json.dumps(topics_list)}. Rotate topics across runs, don't always search the same ones.
+1. Pick 2-3 concepts from the project's search_topics list: {json.dumps(topics_list)}.
+   These are shared concept seeds across platforms (Twitter, Reddit, GitHub, LinkedIn). Some
+   phrases are tuned for other platforms — rephrase each into natural GitHub issue-search
+   terms (e.g. library names, API names, error messages) before running the search. Rotate
+   concepts across runs; don't always pick the same 2-3.
 2. Skip any entry where already_posted=true.
 3. Pick {limit} best issues where we have genuine expertise. View each one for full context.
 4. Draft a helpful comment (400-600 chars, NO links).
-5. Output each as a JSON object, then DONE.
+5. Output each as a JSON object, then DONE. Include the seed concept you used in "search_topic".
 
 ## Content rules
 {get_content_rules("github")}
@@ -230,13 +238,14 @@ Links are added later by a separate pipeline (Phase D) after the comment earns e
 ## CRITICAL OUTPUT FORMAT
 You MUST output each draft as a raw JSON object on its own line. No commentary before or after. Example:
 
-{{"action": "post", "thread_url": "https://github.com/owner/repo/issues/123", "text": "full comment body here", "thread_author": "alice", "thread_title": "Issue title", "engagement_style": "critic", "language": "en"}}
+{{"action": "post", "thread_url": "https://github.com/owner/repo/issues/123", "text": "full comment body here", "thread_author": "alice", "thread_title": "Issue title", "engagement_style": "critic", "search_topic": "the seed concept you picked", "language": "en"}}
 
 Rules for the JSON:
 - `text`: the full comment body (400-600 chars, NO links, NO em dashes). Reply in the SAME LANGUAGE as the issue.
 - `engagement_style`: one of {', '.join(sorted(VALID_STYLES))}
 - `thread_author`: issue opener's GitHub username (from the search/view output)
 - `thread_title`: exact issue title
+- `search_topic`: the seed concept (from the project's search_topics list) you used to find this issue. Feedback-loop signal.
 - `language`: ISO 639-1 language code of the issue (e.g. "en", "ja", "zh", "es")
 
 After all {limit} JSON objects, output DONE on its own line.
@@ -415,7 +424,7 @@ def post_comment(owner, repo, number, body):
 
 
 def log_post(thread_url, our_url, text, project_name, thread_author, thread_title,
-             github_username, engagement_style=None):
+             github_username, engagement_style=None, search_topic=None):
     """Log a successful post to the DB via github_tools.py."""
     try:
         cmd = ["python3", GITHUB_TOOLS, "log-post",
@@ -424,6 +433,8 @@ def log_post(thread_url, our_url, text, project_name, thread_author, thread_titl
                "--account", github_username]
         if engagement_style:
             cmd.extend(["--engagement-style", engagement_style])
+        if search_topic:
+            cmd.extend(["--search-topic", search_topic])
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if result.stdout.strip():
             try:
@@ -543,9 +554,11 @@ def main():
 
         comment_url = url_or_err
         decision_project = decision.get("project_name") or project_name or "general"
+        decision_search_topic = decision.get("search_topic") or None
         log_post(thread_url, comment_url, text, decision_project,
                  thread_author, thread_title, github_username,
-                 engagement_style=engagement_style)
+                 engagement_style=engagement_style,
+                 search_topic=decision_search_topic)
         posted += 1
         print(f"[post_github] POSTED: {comment_url or 'ok'}")
 
