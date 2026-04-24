@@ -165,7 +165,7 @@ CRITICAL: Process EVERY reply in this batch. For each: either post a response an
 
 CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql):
   python3 $REPO_DIR/scripts/reply_db.py processing ID          # BEFORE browser action
-  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url] [engagement_style]   # AFTER posting (include the style name)
+  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url] [engagement_style] [is_recommendation]   # AFTER posting. engagement_style is TONE (critic, storyteller, etc). Pass "1" for is_recommendation ONLY when the reply casually recommends a project (Tier 2/3); leave blank otherwise.
   python3 $REPO_DIR/scripts/reply_db.py skipped ID "reason"
   python3 $REPO_DIR/scripts/reply_db.py skip_batch '{"ids":[1,2,3],"reason":"..."}'
   python3 $REPO_DIR/scripts/reply_db.py status
@@ -174,7 +174,7 @@ NEVER use psql directly. reply_db.py is faster (persistent connection, no env so
 MANDATORY reply flow for every item:
   Step 1: python3 reply_db.py processing ID      ← mark BEFORE touching browser
   Step 2: post reply via browser
-  Step 3: python3 reply_db.py replied ID "text" [url] [engagement_style]   ← mark AFTER success (e.g. critic, storyteller)
+  Step 3: python3 reply_db.py replied ID "text" [url] [engagement_style] [is_recommendation]   ← mark AFTER success. engagement_style is TONE (e.g. critic, storyteller). Pass is_recommendation="1" ONLY when you casually mentioned a project (Tier 2/3); leave blank otherwise. Tone and intent are independent.
 If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run — safe to retry.
 
 GitHub issues engagement is handled by a separate pipeline (github-engage.sh). Skip any github replies in this batch.
