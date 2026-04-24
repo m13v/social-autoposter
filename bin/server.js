@@ -1738,6 +1738,45 @@ async function handleApi(req, res) {
     return perDayMetric('comments', commentsPerDayCache, 'comments_gained');
   }
 
+  // GET /api/bookings/per-day?days=N - real Cal.com bookings per day from
+  // the separate BOOKINGS_DATABASE_URL Neon DB. Filters out test bookings
+  // the same way project_stats_json.py does (attendee_email NOT ILIKE
+  // '%test%'). Grouped by the local date of created_at. When project is
+  // passed, filters by client_slug = <project>.
+  if (p === '/api/bookings/per-day' && req.method === 'GET') {
+    if (!req.user.admin) return json(res, { error: 'forbidden' }, 403);
+    const url = new URL(req.url, 'http://localhost');
+    const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get('days') || '30', 10) || 30));
+    const rawProject = (url.searchParams.get('project') || '').trim();
+    const project = (rawProject === '' || rawProject.toLowerCase() === 'all') ? '' : rawProject;
+    const projectOk = project === '' || /^[A-Za-z0-9_\-]{1,64}$/.test(project);
+    if (!projectOk) return json(res, { error: 'invalid project' }, 400);
+    const cacheKey = days + '|' + project;
+    const cached = bookingsPerDayCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < 300000) {
+      return json(res, { days, rows: cached.value, cachedAt: cached.at });
+    }
+    const projectFilter = project
+      ? " AND client_slug = '" + project.replace(/'/g, "''") + "'"
+      : '';
+    const q =
+      "SELECT json_agg(row_to_json(r)) FROM (" +
+        "SELECT to_char(created_at::date, 'YYYY-MM-DD') AS day, " +
+          "COUNT(*)::int AS bookings_gained " +
+        "FROM cal_bookings " +
+        "WHERE created_at >= CURRENT_DATE - INTERVAL '" + days + " days' " +
+          "AND COALESCE(attendee_email, '') NOT ILIKE '%test%'" +
+          projectFilter +
+        " GROUP BY created_at::date ORDER BY created_at::date ASC" +
+      ") r";
+    return (async () => {
+      const rows = await pqBookings(q);
+      const value = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
+      bookingsPerDayCache.set(cacheKey, { at: Date.now(), value });
+      return json(res, { days, rows: value });
+    })().catch(e => json(res, { error: e.message }, 500));
+  }
+
   // GET /api/cost/stats - per-activity-type count + total cost over a trailing
   // window. Types: thread (posts.posted_at), comment (replies.replied),
   // page (seo_keywords + gsc_queries), dm_thread (dms.sent_at). Cost is
