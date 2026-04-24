@@ -538,6 +538,14 @@ const styleStatsCache = new Map();
 const funnelStatsCache = new Map();
 // Views-per-day: cached by days. Value shape: { at, value }.
 const viewsPerDayCache = new Map();
+// Upvotes-per-day: cached by days. Value shape: { at, value }.
+const upvotesPerDayCache = new Map();
+// Comments-per-day: cached by days. Value shape: { at, value }.
+const commentsPerDayCache = new Map();
+// Bookings-per-day: cached by days. Value shape: { at, value }.
+const bookingsPerDayCache = new Map();
+// Funnel-per-day (PostHog-backed metrics): cached by days.
+const funnelPerDayCache = new Map();
 
 // On-disk snapshots written by scripts/precompute_dashboard_stats.py every
 // ~5 min via launchd com.m13v.social-precompute-stats. When a snapshot is
