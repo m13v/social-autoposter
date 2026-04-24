@@ -183,7 +183,7 @@ def kill_tree(root_pid: int) -> list:
     return pids
 
 
-def emit_job_log(script_file: str, elapsed_sec: int, platform: str | None) -> None:
+def emit_job_log(script_file, elapsed_sec, platform):
     prefix = SHARED_SCRIPT_PREFIX.get(script_file)
     if prefix and platform:
         label = prefix + platform
@@ -207,17 +207,18 @@ def emit_job_log(script_file: str, elapsed_sec: int, platform: str | None) -> No
 
 def main() -> None:
     procs = list_skill_shell_processes()
-    for pid, ppid, etimes, script_file in procs:
+    for pid, ppid, etimes, script_file, platform in procs:
         if ppid != 1:
             continue
         if etimes < MAX_AGE_SEC:
             continue
+        plat_tag = f" platform={platform}" if platform else ""
         watchdog_log(
-            f"KILL {script_file} pid={pid} elapsed={etimes}s cap={MAX_AGE_SEC}s"
+            f"KILL {script_file}{plat_tag} pid={pid} elapsed={etimes}s cap={MAX_AGE_SEC}s"
         )
         killed = kill_tree(pid)
         watchdog_log(f"  killed pids: {killed}")
-        emit_job_log(script_file, etimes)
+        emit_job_log(script_file, etimes, platform)
 
 
 if __name__ == "__main__":
