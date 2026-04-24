@@ -6196,9 +6196,9 @@ async function loadDeployHealth() {
 }
 
 // Project Status: per-weighted-project distribution of posts in the last N
-// hours by platform, with target/actual/deficit against config.json weights.
-// Mirrors the scoring in scripts/pick_project.py so operators can see at a
-// glance whether the autoposter is honoring the weight targets.
+// hours by platform against config.json weight targets. Each platform cell
+// shows the count plus that project's share of the platform's posts in
+// brackets, so operators can spot imbalance without a separate deficit field.
 const PROJECT_STATUS_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github'];
 const PROJECT_STATUS_PLATFORM_LABELS = {
   reddit: 'Reddit', twitter: 'Twitter', linkedin: 'LinkedIn',
@@ -6206,11 +6206,6 @@ const PROJECT_STATUS_PLATFORM_LABELS = {
 };
 let _projectStatusLoading = false;
 function formatPct(v) { return (Number(v || 0) * 100).toFixed(1) + '%'; }
-function formatSignedPct(v) {
-  const n = Number(v || 0) * 100;
-  if (Math.abs(n) < 0.05) return '0.0%';
-  return (n > 0 ? '+' : '') + n.toFixed(1) + '%';
-}
 function renderProjectStatus(data) {
   const body = document.getElementById('project-status-body');
   const totalEl = document.getElementById('project-status-total');
@@ -6226,6 +6221,7 @@ function renderProjectStatus(data) {
   const projects = (data && data.projects) || [];
   const unassigned = (data && data.unassigned) || [];
   const grandTotal = Number(data && data.grand_total) || 0;
+  const totals = (data && data.platform_totals) || {};
   if (totalEl) {
     totalEl.textContent = grandTotal.toLocaleString() + ' post' + (grandTotal === 1 ? '' : 's') +
       ' · ' + projects.length + ' project' + (projects.length === 1 ? '' : 's');
@@ -6243,18 +6239,31 @@ function renderProjectStatus(data) {
         '<th style="text-align:right;">' + PROJECT_STATUS_PLATFORM_LABELS[p] + '</th>'
       ).join('') +
       '<th style="text-align:right;">Total</th>' +
-      '<th style="text-align:right;">Actual&nbsp;%</th>' +
-      '<th style="text-align:right;">Deficit</th>' +
     '</tr></thead>';
+  const cellWithShare = (n, platformTotal, targetShare, opts) => {
+    const num = Number(n) || 0;
+    const pt = Number(platformTotal) || 0;
+    const style = 'text-align:right;font-variant-numeric:tabular-nums;' + (opts && opts.extra || '');
+    if (num === 0 && !(opts && opts.showZeroShare)) {
+      return '<td style="' + style + 'color:var(--text-very-faint);">0</td>';
+    }
+    const share = pt > 0 ? num / pt : 0;
+    let shareColor = 'var(--text-muted)';
+    if (targetShare != null && pt > 0) {
+      const diff = share - targetShare;
+      if (diff > 0.02) shareColor = '#15803d';
+      else if (diff < -0.02) shareColor = '#b91c1c';
+    }
+    return '<td style="' + style + '">' +
+      '<span style="font-weight:600;">' + num + '</span>' +
+      ' <span style="color:' + shareColor + ';font-size:11px;">(' + formatPct(share) + ')</span>' +
+    '</td>';
+  };
   const rowHtml = (r) => {
-    const deficitPct = Number(r.deficit || 0) * 100;
-    let deficitColor = 'var(--text-muted)';
-    if (deficitPct > 2) deficitColor = '#15803d';
-    else if (deficitPct < -2) deficitColor = '#b91c1c';
+    const targetShare = r.unassigned ? null : Number(r.target_share) || 0;
     const platformCells = PROJECT_STATUS_PLATFORMS.map(p => {
       const n = (r.by_platform && r.by_platform[p]) || 0;
-      const cls = n === 0 ? 'color:var(--text-very-faint);' : '';
-      return '<td style="text-align:right;font-variant-numeric:tabular-nums;' + cls + '">' + n + '</td>';
+      return cellWithShare(n, totals[p], targetShare);
     }).join('');
     const nameCell = r.website
       ? '<a href="' + escapeHtml(r.website) + '" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;border-bottom:1px dotted var(--text-very-faint);">' + escapeHtml(r.name) + '</a>'
@@ -6262,18 +6271,16 @@ function renderProjectStatus(data) {
     const nameLabel = r.unassigned
       ? nameCell + ' <span style="color:var(--text-muted);font-size:11px;font-weight:400;">(not weighted)</span>'
       : nameCell;
+    const totalCell = cellWithShare(r.total, grandTotal, targetShare, { extra: 'font-weight:600;', showZeroShare: true });
     return '<tr>' +
       '<td style="text-align:left;font-weight:600;">' + nameLabel + '</td>' +
       '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (r.weight || 0) + '</td>' +
-      '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-muted);">' + formatPct(r.target_share) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-muted);">' + (r.unassigned ? '&mdash;' : formatPct(r.target_share)) + '</td>' +
       platformCells +
-      '<td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">' + (r.total || 0) + '</td>' +
-      '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-muted);">' + formatPct(r.actual_share) + '</td>' +
-      '<td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:' + deficitColor + ';">' + formatSignedPct(r.deficit) + '</td>' +
+      totalCell +
     '</tr>';
   };
   const bodyRows = projects.map(rowHtml).join('') + unassigned.map(rowHtml).join('');
-  const totals = (data && data.platform_totals) || {};
   const footerCells = PROJECT_STATUS_PLATFORMS.map(p =>
     '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (Number(totals[p]) || 0) + '</td>'
   ).join('');
@@ -6282,11 +6289,10 @@ function renderProjectStatus(data) {
       '<td style="text-align:left;">Total</td>' +
       '<td></td><td></td>' + footerCells +
       '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + grandTotal + '</td>' +
-      '<td></td><td></td>' +
     '</tr>';
   const legend =
     '<div style="font-size:11px;color:var(--text-muted);padding:8px 2px 2px;">' +
-      'Deficit = target share − actual share. Green means underrepresented (eligible for picking), red means overrepresented. Weights live in config.json.' +
+      'Bracketed % is this project’s share of that platform’s posts in the window. Green means above target share (overposting), red means below (eligible for the picker).' +
     '</div>';
   body.innerHTML =
     '<div style="overflow-x:auto;">' +
