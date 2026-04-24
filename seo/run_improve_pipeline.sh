@@ -108,6 +108,19 @@ _run_one() {
     return "$rc"
 }
 
+# API-quota markers. When a per-product log contains one of these, every
+# remaining product would fail the same way and burn credits for nothing —
+# short-circuit the outer loop instead. Matches the roundup / top_pages
+# pipelines so behavior stays consistent across SEO jobs.
+QUOTA_MARKERS='monthly usage limit|rate.?limit|429 Too Many|insufficient_quota'
+
+_product_log_latest() {
+    # Path to the most-recent per-product log under $SCRIPT_DIR/logs/<lower>/improve.
+    local lower
+    lower=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+    ls -t "$SCRIPT_DIR/logs/${lower}/improve/"*.log 2>/dev/null | head -1
+}
+
 case "${1:-}" in
     --list-enabled)
         _enabled_products
@@ -120,9 +133,21 @@ case "${1:-}" in
             exit 0
         fi
         overall=0
+        quota_hit=0
         while IFS= read -r p; do
             [ -z "$p" ] && continue
+            if [ "$quota_hit" = "1" ]; then
+                echo "[$(date '+%H:%M:%S')] skipping $p — quota hit earlier this tick" >&2
+                continue
+            fi
             _run_one "$p" || overall=$?
+            # Quota short-circuit: peek at the latest per-product log and stop
+            # if the lane surfaced a usage-limit signal.
+            plog=$(_product_log_latest "$p")
+            if [ -n "$plog" ] && grep -qiE "$QUOTA_MARKERS" "$plog" 2>/dev/null; then
+                quota_hit=1
+                echo "[$(date '+%H:%M:%S')] !! $p hit API quota — halting tick" >&2
+            fi
         done <<< "$PRODUCTS"
         exit "$overall"
         ;;
