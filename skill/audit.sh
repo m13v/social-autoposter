@@ -5,7 +5,10 @@
 #   --platform reddit    Reddit API audit via update_stats.py --reddit-only
 #   --platform moltbook  Moltbook API audit via update_stats.py --moltbook-only
 #   --platform twitter   Twitter API audit via update_stats.py --twitter-audit
-#   --platform linkedin  LinkedIn CDP audit (python scripts/linkedin_browser.py)
+#   --platform linkedin  Retired 2026-04-17 (flagged CDP pattern). Engagement
+#                        stats now collected via stats.sh Step 4 (linkedin-agent
+#                        MCP, headed Chrome). Branch kept as no-op so the
+#                        audit-linkedin launchd job doesn't error.
 #
 # Every run also executes the orphan/summary step at the end (DB-only, cheap).
 # With no --platform, runs all four sequentially (legacy manual path).
