@@ -291,12 +291,25 @@ function updateInterval(unitPath, seconds) {
   return true;
 }
 
-// Read the daily start time from a plist, if it has a single-dict
-// StartCalendarInterval with Hour/Minute. Array-form (multi-fire) schedules
-// return null because they don't reduce to one time. Interval jobs return null.
+// Read the "start time" from a plist: for a single-dict calendar schedule,
+// the Hour/Minute; for an array-form calendar schedule, the earliest entry.
+// Returns null for interval-only jobs (no wall-clock anchor).
 function startTimeFromUnit(xml) {
   try {
-    if (/<key>StartCalendarInterval<\/key>\s*<array>/.test(xml)) return null;
+    const arrM = xml.match(/<key>StartCalendarInterval<\/key>\s*<array>([\s\S]*?)<\/array>/);
+    if (arrM) {
+      const entries = [...arrM[1].matchAll(/<dict>([\s\S]*?)<\/dict>/g)];
+      const times = [];
+      for (const e of entries) {
+        const h = e[1].match(/<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/);
+        if (!h) continue;
+        const m = e[1].match(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/);
+        times.push({ hour: parseInt(h[1], 10), minute: m ? parseInt(m[1], 10) : 0 });
+      }
+      if (!times.length) return null;
+      times.sort((a, b) => (a.hour * 60 + a.minute) - (b.hour * 60 + b.minute));
+      return times[0];
+    }
     const dictM = xml.match(/<key>StartCalendarInterval<\/key>\s*<dict>([\s\S]*?)<\/dict>/);
     if (!dictM) return null;
     const body = dictM[1];
@@ -310,32 +323,109 @@ function startTimeFromUnit(xml) {
   } catch { return null; }
 }
 
-// Convert any plist schedule to a single daily StartCalendarInterval at
-// Hour/Minute. Replaces StartInterval and/or an existing StartCalendarInterval
-// (dict or array). Returns true on success, false if the XML can't be parsed.
+// Count the fires-per-day implied by a plist's schedule, and the cadence
+// (minutes between fires). Used to decide whether a user-supplied start time
+// produces a single-fire or a multi-fire calendar array.
+// Returns { count, cadenceMin }. count=1 means a single daily/weekly fire;
+// count>1 means a multi-fire array.
+function cadenceFromUnit(xml) {
+  const arrM = xml.match(/<key>StartCalendarInterval<\/key>\s*<array>([\s\S]*?)<\/array>/);
+  if (arrM) {
+    const entries = [...arrM[1].matchAll(/<dict>/g)];
+    const count = Math.max(1, entries.length);
+    return { count, cadenceMin: count > 1 ? Math.round(1440 / count) : null };
+  }
+  const dictM = xml.match(/<key>StartCalendarInterval<\/key>\s*<dict>/);
+  if (dictM) return { count: 1, cadenceMin: null };
+  const siM = xml.match(/<key>StartInterval<\/key>\s*<integer>(\d+)<\/integer>/);
+  if (siM) {
+    const secs = parseInt(siM[1], 10);
+    if (secs <= 0) return { count: 1, cadenceMin: null };
+    if (secs >= 86400) return { count: 1, cadenceMin: null };
+    return {
+      count: Math.max(1, Math.floor(86400 / secs)),
+      cadenceMin: Math.max(1, Math.round(secs / 60)),
+    };
+  }
+  return { count: 1, cadenceMin: null };
+}
+
+// Shift a plist's start time to {hour, minute}, preserving cadence and count.
+//   - Single-dict calendar (incl. Weekday-qualified weekly jobs): surgical
+//     H/M rewrite so Weekday (and any other keys) are preserved.
+//   - Array-form calendar or StartInterval sub-daily: replace the schedule
+//     with an evenly-spaced array of the same count, starting at HH:MM.
+//   - StartInterval >= 1 day or no schedule: emit a single daily dict.
+// Returns { ok, kind, count } on success, { ok: false, reason } otherwise.
 // Caller is responsible for reloading the job so launchd picks up the change.
 function updateStartTime(unitPath, hour, minute) {
   const xml = fs.readFileSync(unitPath, 'utf8');
   const h = Math.max(0, Math.min(23, parseInt(hour, 10)));
   const m = Math.max(0, Math.min(59, parseInt(minute, 10)));
-  if (Number.isNaN(h) || Number.isNaN(m)) return false;
+  if (Number.isNaN(h) || Number.isNaN(m)) return { ok: false, reason: 'invalid time' };
 
-  // Match the plist's existing indent style so the file stays consistent.
-  // Most plists in this repo use tabs; a few (seo/*) use 4-space indent.
-  const spaceIndented = /^    <key>/m.test(xml) && !/^\t<key>/m.test(xml);
-  const indent = spaceIndented ? '    ' : '\t';
-  const block =
-    `${indent}<key>StartCalendarInterval</key>\n` +
-    `${indent}<dict>\n` +
-    `${indent}${indent}<key>Hour</key>\n` +
-    `${indent}${indent}<integer>${h}</integer>\n` +
-    `${indent}${indent}<key>Minute</key>\n` +
-    `${indent}${indent}<integer>${m}</integer>\n` +
-    `${indent}</dict>\n`;
+  // Case 1: single-dict calendar — edit Hour/Minute in place so extra keys
+  // (Weekday for weekly jobs, etc.) survive untouched.
+  const hasArray = /<key>StartCalendarInterval<\/key>\s*<array>/.test(xml);
+  if (!hasArray) {
+    const singleM = xml.match(/(<key>StartCalendarInterval<\/key>[ \t\r\n]*<dict>)([\s\S]*?)(<\/dict>)/);
+    if (singleM) {
+      let body = singleM[2];
+      const hadHour = /<key>Hour<\/key>/.test(body);
+      const hadMin = /<key>Minute<\/key>/.test(body);
+      if (hadHour) {
+        body = body.replace(/(<key>Hour<\/key>[ \t\r\n]*<integer>)\d+(<\/integer>)/, `$1${h}$2`);
+      }
+      if (hadMin) {
+        body = body.replace(/(<key>Minute<\/key>[ \t\r\n]*<integer>)\d+(<\/integer>)/, `$1${m}$2`);
+      }
+      if (!hadHour || !hadMin) {
+        // Rare: single-dict schedule with only Weekday. Append missing keys.
+        const indent = detectIndent(xml);
+        const inner = indent + indent;
+        const trimmed = body.replace(/\s+$/, '');
+        const addHour = hadHour ? '' : `\n${inner}<key>Hour</key>\n${inner}<integer>${h}</integer>`;
+        const addMin = hadMin ? '' : `\n${inner}<key>Minute</key>\n${inner}<integer>${m}</integer>`;
+        body = trimmed + addHour + addMin + `\n${indent}`;
+      }
+      const next = xml.replace(singleM[0], singleM[1] + body + singleM[3]);
+      fs.writeFileSync(unitPath, next);
+      return { ok: true, kind: 'single', count: 1 };
+    }
+  }
 
-  // Strip any existing schedule entry along with exactly its trailing newline.
-  // Using \s* here would greedily consume the indent of the *next* key, so we
-  // anchor on \n? only to preserve the leading whitespace of the following line.
+  // Case 2: array-form or interval — regenerate the schedule block with the
+  // same count/cadence, shifted to start at HH:MM.
+  const { count, cadenceMin } = cadenceFromUnit(xml);
+  const indent = detectIndent(xml);
+  const i2 = indent + indent;
+
+  let block;
+  if (count <= 1 || cadenceMin == null) {
+    block =
+      `${indent}<key>StartCalendarInterval</key>\n` +
+      `${indent}<dict>\n` +
+      `${i2}<key>Hour</key>\n` +
+      `${i2}<integer>${h}</integer>\n` +
+      `${i2}<key>Minute</key>\n` +
+      `${i2}<integer>${m}</integer>\n` +
+      `${indent}</dict>\n`;
+  } else {
+    const startMin = h * 60 + m;
+    const lines = [];
+    for (let i = 0; i < count; i++) {
+      const t = (startMin + i * cadenceMin) % 1440;
+      const hh = Math.floor(t / 60);
+      const mm = t % 60;
+      lines.push(`${i2}<dict><key>Hour</key><integer>${hh}</integer><key>Minute</key><integer>${mm}</integer></dict>`);
+    }
+    block =
+      `${indent}<key>StartCalendarInterval</key>\n` +
+      `${indent}<array>\n` +
+      lines.join('\n') + '\n' +
+      `${indent}</array>\n`;
+  }
+
   let next = xml.replace(
     /[ \t]*<key>StartInterval<\/key>[ \t\r\n]*<integer>\d+<\/integer>\n?/,
     ''
@@ -345,10 +435,15 @@ function updateStartTime(unitPath, hour, minute) {
     ''
   );
   const idx = next.lastIndexOf('</dict>');
-  if (idx === -1) return false;
+  if (idx === -1) return { ok: false, reason: 'malformed plist' };
   next = next.slice(0, idx) + block + next.slice(idx);
   fs.writeFileSync(unitPath, next);
-  return true;
+  return { ok: true, kind: count > 1 ? 'array' : 'single', count };
+}
+
+function detectIndent(xml) {
+  const spaceIndented = /^    <key>/m.test(xml) && !/^\t<key>/m.test(xml);
+  return spaceIndented ? '    ' : '\t';
 }
 
 module.exports = {
@@ -371,4 +466,5 @@ module.exports = {
   updateInterval,
   startTimeFromUnit,
   updateStartTime,
+  cadenceFromUnit,
 };
