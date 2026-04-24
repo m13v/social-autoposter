@@ -329,7 +329,11 @@ def main():
     )
 
     # --- Phase 1: scan T0 ---------------------------------------------------
-    topics = (project.get("github_topics") or project.get("topics") or [])[:MAX_TOPICS_PER_PROJECT]
+    # Prefer unified search_topics (per 2026-04-24 migration); fall back to legacy lists.
+    topics = (project.get("search_topics")
+              or project.get("github_topics")
+              or project.get("topics")
+              or [])[:MAX_TOPICS_PER_PROJECT]
     if not topics:
         log("Project has no topics to search. Exiting.")
         return 0
