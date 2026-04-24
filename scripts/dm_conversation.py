@@ -695,6 +695,15 @@ def mark_booking_sent(conn, dm_id):
     print(f"  Set booking_link_sent_at=NOW() for DM #{dm_id}")
 
 
+def mark_skipped(conn, dm_id, reason):
+    conn.execute(
+        "UPDATE dms SET status='skipped', skip_reason=%s WHERE id=%s AND status='pending'",
+        (reason, dm_id),
+    )
+    conn.commit()
+    print(f"  Set status=skipped (reason: {reason}) for DM #{dm_id}")
+
+
 def set_icp_precheck(conn, dm_id, label, project, notes=None):
     """Upsert a per-project ICP verdict into dms.icp_matches (JSONB array).
     Does NOT gate sending. Also syncs icp_precheck TEXT with the entry matching
@@ -838,6 +847,10 @@ def main():
     p_book = sub.add_parser("mark-booking-sent", help="Record that a booking link was shared")
     p_book.add_argument("--dm-id", type=int, required=True)
 
+    p_skip = sub.add_parser("mark-skipped", help="Skip a pending outreach DM (sets status=skipped). No-op on non-pending rows.")
+    p_skip.add_argument("--dm-id", type=int, required=True)
+    p_skip.add_argument("--reason", required=True)
+
     p_icp = sub.add_parser("set-icp-precheck", help="Upsert per-project ICP verdict into icp_matches array (no filter)")
     p_icp.add_argument("--dm-id", type=int, required=True)
     p_icp.add_argument("--label", required=True,
@@ -933,6 +946,8 @@ def main():
         set_qualification(conn, args.dm_id, args.status, args.notes)
     elif args.command == "mark-booking-sent":
         mark_booking_sent(conn, args.dm_id)
+    elif args.command == "mark-skipped":
+        mark_skipped(conn, args.dm_id, args.reason)
     elif args.command == "set-icp-precheck":
         set_icp_precheck(conn, args.dm_id, args.label, args.project, args.notes)
 
