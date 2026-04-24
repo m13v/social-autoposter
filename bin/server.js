@@ -4622,35 +4622,37 @@ function renderDailyMetrics() {
     });
   });
 
-  // Chart. Normalize all values to a single Y-axis computed from the max
-  // of currently-visible metrics so toggling off a dominant series (e.g.
-  // Pageviews) rescales the remaining lines to fill the space.
+  // Chart. Each metric gets its own independent Y-axis — every line is
+  // normalized to its own 30-day peak so all nine shapes are comparable
+  // regardless of raw magnitude (pageviews at 2K vs bookings at 5 both
+  // use the full canvas height). No numeric Y-axis is rendered; peak
+  // values live in the legend + tooltip instead.
   const visibleMetrics = DAILY_METRICS.filter(m => active.has(m.id));
   if (!visibleMetrics.length) {
     chartEl.innerHTML = '<div class="views-chart-empty">Select at least one metric above to render the chart.</div>';
     if (statusEl) statusEl.textContent = '0 of ' + DAILY_METRICS.length + ' series';
     return;
   }
-  let rawMax = 0;
-  visibleMetrics.forEach(m => {
+  // Per-series peak over the 30-day window; used for independent scaling.
+  const seriesPeak = {};
+  DAILY_METRICS.forEach(m => {
     const byDay = _dailyMetricsSeries[m.id] || {};
-    days.forEach(d => { rawMax = Math.max(rawMax, Number(byDay[d]) || 0); });
+    let p = 0;
+    days.forEach(d => { p = Math.max(p, Number(byDay[d]) || 0); });
+    seriesPeak[m.id] = p;
   });
-  const yMax = _niceMax(rawMax);
   const width = 960;
   const height = 260;
-  const padL = 44, padR = 12, padT = 12, padB = 24;
+  const padL = 12, padR = 12, padT = 12, padB = 24;
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
   const xStep = days.length > 1 ? plotW / (days.length - 1) : 0;
   const xOf = i => padL + xStep * i;
-  const yOf = v => padT + plotH - (yMax > 0 ? (v / yMax) * plotH : 0);
-  // Y-axis gridlines + labels at 0 / 0.25 / 0.5 / 0.75 / 1 of yMax.
-  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(t => {
-    const v = yMax * t;
-    const y = yOf(v);
-    return '<line class="gridline" x1="' + padL + '" x2="' + (width - padR) + '" y1="' + y + '" y2="' + y + '"/>' +
-           '<text class="axis-text" x="' + (padL - 6) + '" y="' + (y + 3) + '" text-anchor="end">' + escapeHtml(_fmtShort(Math.round(v))) + '</text>';
+  // A baseline at the bottom + three subtle unlabeled gridlines for visual
+  // grounding. No numeric labels because the scale differs per line.
+  const yGrid = [0, 0.25, 0.5, 0.75, 1].map(t => {
+    const y = padT + plotH - t * plotH;
+    return '<line class="gridline" x1="' + padL + '" x2="' + (width - padR) + '" y1="' + y + '" y2="' + y + '"/>';
   }).join('');
   // X-axis day labels: first, ~25%, mid, ~75%, last.
   const xLabelIdxs = days.length <= 1
@@ -4660,16 +4662,19 @@ function renderDailyMetrics() {
     const x = xOf(i);
     return '<text class="axis-text" x="' + x + '" y="' + (height - 6) + '" text-anchor="middle">' + escapeHtml(_fmtDay(days[i])) + '</text>';
   }).join('');
-  // One polyline per visible metric.
+  // One polyline per visible metric, each normalized to its own peak so
+  // every series fills the canvas vertically.
   const lines = visibleMetrics.map(m => {
     const byDay = _dailyMetricsSeries[m.id] || {};
+    const peak = seriesPeak[m.id] || 0;
+    const yOf = v => padT + plotH - (peak > 0 ? (v / peak) * plotH : 0);
     const pts = days.map((d, i) => xOf(i) + ',' + yOf(Number(byDay[d]) || 0)).join(' ');
     return '<polyline class="series-line" data-metric="' + escapeHtml(m.id) + '" stroke="' + m.color + '" points="' + pts + '"/>';
   }).join('');
   // Transparent rect captures pointer events for the tooltip.
   const svg =
     '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" role="img" aria-label="Daily metrics line chart">' +
-      yTicks + xLabels + lines +
+      yGrid + xLabels + lines +
       '<line class="hover-line" id="daily-metrics-hover-line" x1="0" y1="' + padT + '" x2="0" y2="' + (padT + plotH) + '"/>' +
       '<rect id="daily-metrics-hover-rect" x="' + padL + '" y="' + padT + '" width="' + plotW + '" height="' + plotH + '" fill="transparent"/>' +
     '</svg>' +
