@@ -45,7 +45,12 @@ log "=== weekly-roundup tick $TICK_ID starting ==="
 
 # Produce the eligible product list: anything with seo_roundup.category set
 # and a real landing_pages.repo on disk. Emits TSV rows: name<TAB>category.
-mapfile -t ELIGIBLE < <(python3 - <<PY
+# macOS /bin/bash is 3.2 which lacks `mapfile`, so read the lines into the
+# array with a while-read loop instead.
+ELIGIBLE=()
+while IFS= read -r __line; do
+    ELIGIBLE+=("$__line")
+done < <(python3 - <<PY
 import json, os
 with open("$CONFIG") as f:
     cfg = json.load(f)
