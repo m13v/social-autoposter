@@ -1519,11 +1519,18 @@ def validate_theme_classes(repo_path: str,
     }
 
 
-def typecheck_and_cleanup(repo_path: str, expected_file_candidates: list[str]) -> dict:
+def typecheck_and_cleanup(repo_path: str, expected_file_candidates: list[str],
+                          restore_on_fail: bool = True) -> dict:
     """Run `npx tsc --noEmit` in the repo to catch type errors the inner Claude
-    session may have left behind. If typecheck fails, restore/remove any
-    uncommitted page files under expected_file_candidates so the background
-    auto-commit daemon cannot push broken work to main.
+    session may have left behind. If typecheck fails and restore_on_fail is
+    True, restore/remove any uncommitted page files under
+    expected_file_candidates so the background auto-commit daemon cannot push
+    broken work to main.
+
+    restore_on_fail=False is used by the typecheck-retry path in the caller:
+    we need Claude to still see the broken file during the resume session so
+    it can diff/read/fix it. The caller re-invokes with the default True if
+    the retry also fails.
 
     Returns {ok: bool, error?: str, cleaned?: list[str], skipped?: str}.
     Skipped if the repo is not a TypeScript project.
@@ -1546,6 +1553,9 @@ def typecheck_and_cleanup(repo_path: str, expected_file_candidates: list[str]) -
         return {"ok": True}
 
     tsc_output = (r.stdout + r.stderr).strip()
+    if not restore_on_fail:
+        return {"ok": False, "error": tsc_output}
+
     cleaned: list[str] = []
     for rel in expected_file_candidates:
         abs_path = root / rel
@@ -1919,8 +1929,56 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
     # (PieLine aiphoneordering.com incident, 2026-04-21). On failure we
     # restore/remove the candidate page files so auto-commit has nothing to
     # push, then mark the row pending.
-    tc = typecheck_and_cleanup(repo_path, expected_file_candidates)
+    tc = typecheck_and_cleanup(repo_path, expected_file_candidates,
+                               restore_on_fail=False)
+    if not tc["ok"] and session_id and not tc.get("skipped"):
+        # Typecheck-fix retry. Resume the same Claude session with the tsc
+        # errors appended, ask for a targeted patch, then re-run typecheck.
+        # Salvages lanes where Claude wrote mostly-right TSX with a small
+        # type slip (unknown prop, missing local module, wrong generic).
+        # Only one retry — if it still fails, fall through to cleanup.
+        tsc_err = tc.get("error", "")[-4000:]
+        retry_prompt = (
+            "Your previous work failed `npx tsc --noEmit`. The errors are "
+            "below. Fix them in the files you already wrote. Constraints: "
+            "do NOT rename or create new files, do NOT change behavior or "
+            "copy, keep edits minimal. After editing, run "
+            "`npx tsc --noEmit` yourself to confirm it passes, then "
+            "`git add -A && git commit -m \"fix(typecheck): " + slug + "\"`.\n\n"
+            "End your final message with exactly one JSON block on its own "
+            "line. If fixed successfully: `{\"success\": true}`. "
+            "If the errors are structural and you cannot fix in place "
+            "without a rewrite: `{\"success\": false, \"error\": "
+            "\"cannot fix in place\"}` and stop.\n\n"
+            "Typecheck output:\n" + tsc_err
+        )
+        retry_log_dir = Path(stream["stream_log_path"]).parent
+        retry = run_claude_stream_resume(
+            session_id, retry_prompt, cwd=repo_path,
+            log_dir=retry_log_dir, slug=slug,
+        )
+        # Re-check. On second failure this also performs the restore/remove
+        # so auto-commit can't push a broken page.
+        tc = typecheck_and_cleanup(repo_path, expected_file_candidates)
+        if tc["ok"]:
+            # Second pass passed. Prefer the retry's final result text for
+            # the downstream JSON-parse since it's the most recent signal.
+            new_final = retry.get("final_result_text") or ""
+            if new_final:
+                stream = dict(stream)
+                stream["final_result_text"] = new_final
+                final_json = parse_final_json(new_final)
+                claimed_success = bool(final_json and final_json.get("success"))
+                claimed_err = (final_json or {}).get("error",
+                                                     "no final success JSON from claude")
+
     if not tc["ok"]:
+        # Ensure the cleanup step ran — first pass used restore_on_fail=False
+        # so Claude could see the broken file during the retry. If retry was
+        # attempted, the second call above already did the cleanup; otherwise
+        # run it now so auto-commit can't push broken TS.
+        if "cleaned" not in tc:
+            tc = typecheck_and_cleanup(repo_path, expected_file_candidates)
         tsc_err = tc.get("error", "")[-800:]
         cleaned = tc.get("cleaned", [])
         note = f"typecheck_failed; cleaned={cleaned}; tsc_tail={tsc_err}"[:500]
