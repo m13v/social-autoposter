@@ -6969,7 +6969,7 @@ function saStartApp() {
   }
   loadActivityStats();
   loadStyleStats();
-  loadViewsPerDay();
+  loadAllPerDayCharts();
   // Deploy Health is inside the Status tab, which is local-only. On the
   // hosted client dashboard we skip the fetch entirely; Cloud Run has no
   // mirror for project_deploy_status.py, so polling it just spams 503.
