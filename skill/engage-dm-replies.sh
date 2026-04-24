@@ -560,6 +560,7 @@ Check conversation_history. SKIP (do nothing, don't mark stale) if:
 - Their message is a polite brush-off ("thanks", "cool", "will check it out", "good luck")
 - Their message is a one-word/emoji response with nothing to respond to
 - The conversation has no natural continuation
+- \`qualification_status\` is already \`disqualified\` (we closed on a prior turn; do not generate fresh rapport on later inbounds)
 
 ### Step 1: Should a HUMAN handle this? (with booking link exception)
 
@@ -700,7 +701,7 @@ Branch on \`qualification_status\` of the DM row:
 
 4. \`qualified\` → proceed to Step 2.8 (auto-share the booking link if eligible).
 
-5. \`disqualified\` → never share the booking link. Do NOT pitch. Set \`--interest not_our_prospect\` in Step 5b and send a short, polite close (1-2 sentences max, no new open question). Do NOT revive the thread on later inbounds with fresh substantive rapport, however tempting the topic; a disqualified thread that keeps drawing thoughtful paragraph replies turn after turn is the same failure mode as never disqualifying at all.
+5. \`disqualified\` → send a short, polite close (1-2 sentences, no new open question), never the booking link, never a pitch. Then in Step 5b set \`--interest not_our_prospect\` AND run \`set-status --status stale\` so later inbounds don't resurface the thread. If the row is ALREADY \`disqualified\` on entry to this step (we closed on a prior turn and they replied again), SKIP entirely in Step 0 rather than generating fresh rapport.
 
 ### Step 2.6: Use prospect profile context in the reply
 
