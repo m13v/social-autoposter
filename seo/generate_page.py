@@ -1310,7 +1310,12 @@ def verify_commit_landed(repo_path: str, expected_file: str,
 
 
 RAW_BOOKING_HREF_RE = re.compile(
-    r"""href\s*=\s*\{?\s*["'`][^"'`]*?(cal\.com|calendly\.com)""",
+    # Match `href=` at a word boundary so `bookingHref=` on a BookCallCTA
+    # prop doesn't false-positive. Case-insensitive so `Href` on a native
+    # attribute still matches. Catches `<a href="cal.com/...">` — that
+    # bypasses withBookingAttribution. Skips `<BookCallCTA bookingHref="...">`
+    # — that's the sanctioned wrapper which owns attribution internally.
+    r"""\bhref\s*=\s*\{?\s*["'`][^"'`]*?(cal\.com|calendly\.com)""",
     re.IGNORECASE,
 )
 
