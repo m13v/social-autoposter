@@ -25,6 +25,15 @@ WATCHDOG_LOG = REPO / "skill" / "logs" / "watchdog.log"
 # calls. Keeps dashboard job-history grouping consistent (e.g. a killed
 # run-twitter-cycle.sh shows under the same "Post · Twitter" row as a normal
 # post_twitter run). Unknown scripts fall through to a watchdog_killed_* label.
+# Shared scripts (stats.sh, audit.sh, octolens.sh, engage.sh) dispatch on
+# `--platform X`; the watchdog appends the platform to the label at kill time.
+SHARED_SCRIPT_PREFIX = {
+    "stats.sh": "stats_",
+    "audit.sh": "audit-",
+    "octolens.sh": "octolens-",
+    "engage.sh": "engage_",
+}
+
 SCRIPT_LABELS = {
     "run-twitter-cycle.sh": "post_twitter",
     "run-linkedin.sh": "post_linkedin",
@@ -78,7 +87,7 @@ def watchdog_log(msg: str) -> None:
 
 
 def list_skill_shell_processes():
-    """Return [(pid, ppid, etimes_sec, script_filename)] for skill/*.sh bash procs."""
+    """Return [(pid, ppid, etimes_sec, script_filename, platform)] for skill/*.sh bash procs."""
     res = subprocess.run(
         ["ps", "-A", "-o", "pid=,ppid=,etime=,command="],
         capture_output=True, text=True, check=True,
@@ -97,7 +106,8 @@ def list_skill_shell_processes():
         if SKILL_PATH_MARKER not in command:
             continue
         script_name = None
-        for tok in command.split():
+        tokens = command.split()
+        for tok in tokens:
             if tok.endswith(".sh") and SKILL_PATH_MARKER in tok:
                 script_name = os.path.basename(tok)
                 break
@@ -106,7 +116,12 @@ def list_skill_shell_processes():
         etimes = _parse_etime(etime_s)
         if etimes is None:
             continue
-        procs.append((pid, ppid, etimes, script_name))
+        platform = None
+        if "--platform" in tokens:
+            idx = tokens.index("--platform")
+            if idx + 1 < len(tokens):
+                platform = tokens[idx + 1]
+        procs.append((pid, ppid, etimes, script_name, platform))
     return procs
 
 
@@ -168,11 +183,14 @@ def kill_tree(root_pid: int) -> list:
     return pids
 
 
-def emit_job_log(script_file: str, elapsed_sec: int) -> None:
-    label = SCRIPT_LABELS.get(
-        script_file,
-        "watchdog_killed_" + script_file.replace(".sh", "").replace("-", "_"),
-    )
+def emit_job_log(script_file: str, elapsed_sec: int, platform: str | None) -> None:
+    prefix = SHARED_SCRIPT_PREFIX.get(script_file)
+    if prefix and platform:
+        label = prefix + platform
+    elif script_file in SCRIPT_LABELS:
+        label = SCRIPT_LABELS[script_file]
+    else:
+        label = "watchdog_killed_" + script_file.replace(".sh", "").replace("-", "_")
     subprocess.run(
         [
             "python3", str(LOG_RUN_PY),
