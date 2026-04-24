@@ -254,6 +254,25 @@ SCRAPE_JS:
 async (page) => {
   await page.waitForTimeout(4000);
 
+  // Early check: is the post itself unavailable? LinkedIn shows specific copy
+  // for removed / restricted / non-existent posts. When matched, emit an
+  // explicit `unavailable: true` flag so Python-side can mark status='removed'
+  // on first detection instead of waiting for the 2-strike ambiguity rule.
+  const bodyText = (document.body && document.body.innerText) || '';
+  const unavailableSignals = [
+    "This post is unavailable",
+    "This post isn't available",
+    "This post is no longer available",
+    "This content isn't available",
+    "This content is no longer available",
+    "Page not found",
+    "We can't find the page",
+  ];
+  const matchedSignal = unavailableSignals.find(s => bodyText.includes(s));
+  if (matchedSignal) {
+    return JSON.stringify({ reactions: 0, found: false, unavailable: true, signal: matchedSignal });
+  }
+
   // CRITICAL: Comments don't render until you interact with the page.
   // Scroll down past the post, then click the "Comment" action button.
   // Do NOT use commentUrn param in the URL — it breaks comment rendering.
@@ -339,8 +358,9 @@ async (page) => {
 IMPORTANT: For each post, replace CONTENT_PREFIX_JS_PLACEHOLDER in the JS with the first 80 chars of content_prefix from the DB query (escaped for JS string). This helps match our comment even if the author name format differs.
 
 Step 3: Collect all results into a JSON array and save to /tmp/linkedin_stats.json. Each entry should be:
-  {"url": "<the linkedin post url>", "reactions": N, "found": true/false}
-Only include entries where found=true.
+  {"url": "<the linkedin post url>", "reactions": N, "found": true/false, "unavailable": true/false (optional)}
+Include ALL entries (both found=true and found=false), so the Python-side can detect removals.
+When the SCRAPE_JS returned `unavailable: true`, propagate that flag into the JSON entry so Python can mark the post removed on first detection instead of waiting for the 2-strike confirmation.
 
 Process in batches of 10 with 5-second delays between page loads to avoid LinkedIn rate limiting.
 
