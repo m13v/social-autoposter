@@ -445,7 +445,8 @@ def post_comment(owner, repo, number, body):
 
 
 def log_post(thread_url, our_url, text, project_name, thread_author, thread_title,
-             github_username, engagement_style=None, search_topic=None, language=None):
+             github_username, engagement_style=None, search_topic=None, language=None,
+             claude_session_id=None):
     """Defers to github_tools.py log-post, which handles dedup + INSERT."""
     try:
         cmd = ["python3", GITHUB_TOOLS, "log-post",
@@ -458,6 +459,8 @@ def log_post(thread_url, our_url, text, project_name, thread_author, thread_titl
             cmd.extend(["--search-topic", search_topic])
         if language:
             cmd.extend(["--language", language])
+        if claude_session_id:
+            cmd.extend(["--claude-session-id", claude_session_id])
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if result.stdout.strip():
             try:
@@ -515,13 +518,19 @@ def main():
             f"(weight={project.get('weight', 0)}, posts_7d={recent_counts.get(project_name, 0)})")
 
     # ---- Phase 1: search topics, T0 snapshot -------------------------------
-    topics = (project.get("search_topics")
-              or project.get("github_search_topics")
-              or project.get("topics")
-              or [])[:MAX_TOPICS_PER_PROJECT]
-    if not topics:
+    topics_pool = list(project.get("search_topics")
+                       or project.get("github_search_topics")
+                       or project.get("topics")
+                       or [])
+    if not topics_pool:
         log("Project has no topics to search. Exiting.")
         sys.exit(0)
+    # Shuffle before slicing so each run samples a different MAX_TOPICS_PER_PROJECT
+    # subset. Without this, projects with >6 seeds always query the first 6, which
+    # starves diverse coverage and biases top_search_topics scoring (c0nsl run on
+    # 2026-04-24 yielded only 2 candidates because its first 6 seeds were narrow).
+    random.shuffle(topics_pool)
+    topics = topics_pool[:MAX_TOPICS_PER_PROJECT]
 
     log(f"Phase 1: searching {len(topics)} topic queries...")
     raw = []
@@ -676,6 +685,7 @@ def main():
             engagement_style=engagement_style,
             search_topic=(decision.get("search_topic") or "").strip() or None,
             language=language,
+            claude_session_id=claude_session_id,
         )
         posted += 1
         log(f"POSTED: {url_or_err or 'ok'}")
