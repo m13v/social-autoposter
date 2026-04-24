@@ -30,7 +30,7 @@ IMPROVE="python3 $SCRIPT_DIR/improve_page.py"
 mkdir -p "$SCRIPT_DIR/.locks/improve" "$SCRIPT_DIR/logs"
 
 RUN_START=$(date +%s)
-trap '__e=$?; python3 "$ROOT_DIR/scripts/log_run.py" --script "seo_improve" --posted 0 --skipped 0 --failed "$__e" --cost 0 --elapsed "$(( $(date +%s) - RUN_START ))" >/dev/null 2>&1 || true' EXIT
+trap '__e=$?; python3 "$SCRIPT_DIR/log_seo_run.py" --script "seo_improve" --since "$RUN_START" --failed "$__e" --elapsed "$(( $(date +%s) - RUN_START ))" >/dev/null 2>&1 || true' EXIT
 
 # Load .env for DATABASE_URL etc.
 [ -f "$ROOT_DIR/.env" ] && set -a && source "$ROOT_DIR/.env" && set +a
