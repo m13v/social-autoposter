@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """
 Octolens Twitter batch: wait for browser lock, read tweets, post replies, log to DB.
+
+Each entry in TWEETS MUST include `engagement_style` (e.g. "critic",
+"pattern_recognizer") so the A/B system can track which style was used.
+See scripts/engagement_styles.py for the valid set and pick targets per
+platform; the caller should choose a style that fits the thread AND is
+under-represented vs target in recent posts.
 """
 import sys, os, time, json, subprocess, psycopg2
 from playwright.sync_api import sync_playwright
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from engagement_styles import VALID_STYLES
 
 DB_URL = None
 with open(os.path.expanduser('~/social-autoposter/.env')) as f:
@@ -50,6 +59,12 @@ def wait_for_browser_free(max_wait=300):
 def post_reply_and_log(browser, tweet, db_conn):
     url = tweet["url"]
     reply_text = tweet["reply"]
+    style = tweet.get("engagement_style")
+    if not style or style not in VALID_STYLES:
+        raise ValueError(
+            f"TWEETS entry for {url} is missing a valid engagement_style "
+            f"(got {style!r}). Valid styles: {sorted(VALID_STYLES)}."
+        )
 
     page = browser.new_page()
     try:
@@ -123,8 +138,8 @@ def post_reply_and_log(browser, tweet, db_conn):
         cur.execute("""
             INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
                 thread_title, thread_content, our_url, our_content, our_account,
-                source_summary, project_name, status, posted_at)
-            VALUES ('twitter', %s, %s, %s, %s, %s, %s, %s, '@m13v_', %s, %s, 'active', NOW())
+                source_summary, project_name, engagement_style, status, posted_at)
+            VALUES ('twitter', %s, %s, %s, %s, %s, %s, %s, '@m13v_', %s, %s, %s, 'active', NOW())
             RETURNING id
         """, (
             url,
@@ -135,7 +150,8 @@ def post_reply_and_log(browser, tweet, db_conn):
             our_url,
             reply_text,
             f"octolens: {tweet['keyword']}",
-            tweet['project_name']
+            tweet['project_name'],
+            style,
         ))
         post_id = cur.fetchone()[0]
         db_conn.commit()
