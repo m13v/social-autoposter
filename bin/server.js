@@ -3157,6 +3157,78 @@ const HTML = `<!DOCTYPE html>
       <div class="views-chart-empty">Loading…</div>
     </div>
   </details>
+  <details class="style-stats-section" id="upvotes-per-day" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="upvotes-per-day-heading">Total Upvotes per Day (last 30d)</span></span>
+      <span class="style-stats-total" id="upvotes-per-day-total"></span>
+    </summary>
+    <div id="upvotes-per-day-body">
+      <div class="views-chart-empty">Loading…</div>
+    </div>
+  </details>
+  <details class="style-stats-section" id="comments-per-day" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="comments-per-day-heading">Total Comments per Day (last 30d)</span></span>
+      <span class="style-stats-total" id="comments-per-day-total"></span>
+    </summary>
+    <div id="comments-per-day-body">
+      <div class="views-chart-empty">Loading…</div>
+    </div>
+  </details>
+  <details class="style-stats-section" id="pageviews-per-day" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="pageviews-per-day-heading">Domain Pageviews per Day (last 30d)</span></span>
+      <span class="style-stats-total" id="pageviews-per-day-total"></span>
+    </summary>
+    <div id="pageviews-per-day-body">
+      <div class="views-chart-empty">Loading…</div>
+    </div>
+  </details>
+  <details class="style-stats-section" id="email-signups-per-day" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="email-signups-per-day-heading">Email Signups per Day (last 30d)</span></span>
+      <span class="style-stats-total" id="email-signups-per-day-total"></span>
+    </summary>
+    <div id="email-signups-per-day-body">
+      <div class="views-chart-empty">Loading…</div>
+    </div>
+  </details>
+  <details class="style-stats-section" id="schedule-clicks-per-day" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="schedule-clicks-per-day-heading">Schedule Clicks per Day (last 30d)</span></span>
+      <span class="style-stats-total" id="schedule-clicks-per-day-total"></span>
+    </summary>
+    <div id="schedule-clicks-per-day-body">
+      <div class="views-chart-empty">Loading…</div>
+    </div>
+  </details>
+  <details class="style-stats-section" id="get-started-per-day" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="get-started-per-day-heading">Get Started Clicks per Day (last 30d)</span></span>
+      <span class="style-stats-total" id="get-started-per-day-total"></span>
+    </summary>
+    <div id="get-started-per-day-body">
+      <div class="views-chart-empty">Loading…</div>
+    </div>
+  </details>
+  <details class="style-stats-section" id="cross-product-per-day" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="cross-product-per-day-heading">Cross-Product Clicks per Day (last 30d)</span></span>
+      <span class="style-stats-total" id="cross-product-per-day-total"></span>
+    </summary>
+    <div id="cross-product-per-day-body">
+      <div class="views-chart-empty">Loading…</div>
+    </div>
+  </details>
+  <details class="style-stats-section" id="bookings-per-day" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="bookings-per-day-heading">Bookings per Day (last 30d)</span></span>
+      <span class="style-stats-total" id="bookings-per-day-total"></span>
+    </summary>
+    <div id="bookings-per-day-body">
+      <div class="views-chart-empty">Loading…</div>
+    </div>
+  </details>
   <details class="style-stats-section" id="style-stats" open>
     <summary>
       <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="style-stats-heading">Posts by Engagement Style (24h)</span></span>
@@ -4413,7 +4485,7 @@ function currentStatsProject() {
 function reloadStatsTabSections() {
   loadActivityStats();
   loadStyleStats();
-  loadViewsPerDay();
+  loadAllPerDayCharts();
   const funnelEl = document.getElementById('funnel-stats');
   if (funnelEl && funnelEl.open) {
     if (_lastFunnelPayload) renderFunnelStats(_lastFunnelPayload);
@@ -4437,8 +4509,10 @@ function syncStatsHeadings() {
   if (dm) dm.textContent = 'DM Funnel Stats (' + win.labelLong + ')';
   const cost = document.getElementById('cost-stats-heading');
   if (cost) cost.textContent = 'Cost per Activity (' + win.labelLong + ')';
-  const views = document.getElementById('views-per-day-heading');
-  if (views) views.textContent = 'Total Social Views per Day (' + win.labelShort + ')';
+  Object.keys(PER_DAY_CHARTS).forEach(chartId => {
+    const el = document.getElementById(chartId + '-per-day-heading');
+    if (el) el.textContent = PER_DAY_CHARTS[chartId].title + ' (' + win.labelShort + ')';
+  });
 }
 
 function renderActivityStats(payload) {
@@ -4494,31 +4568,55 @@ async function loadActivityStats() {
   } catch {}
 }
 
-function renderViewsPerDay(payload) {
-  const body = document.getElementById('views-per-day-body');
-  const totalEl = document.getElementById('views-per-day-total');
-  const heading = document.getElementById('views-per-day-heading');
+// Per-day chart renderer. Shared by every chart card in the stats tab
+// (views, upvotes, comments, bookings, plus the PostHog-backed pageviews /
+// signups / schedule / get-started / cross-product cards). All cards use
+// the same bars+axis layout; the config here captures what varies: the
+// container prefix, the row field name, and the noun for totals.
+//
+// Per-post daily charts (views/upvotes/comments) show an empty day 1
+// because the first-ever snapshot per post is excluded to avoid attributing
+// a post's lifetime count to the capture day. PostHog-backed charts and
+// bookings fill in back 30 days immediately.
+const PER_DAY_CHARTS = {
+  views:            { title: 'Total Social Views per Day',     noun: 'view',               valueKey: 'views_gained',      endpoint: '/api/views/per-day',    supportsPlatform: true,  emptyNote: 'No view snapshots yet. Snapshots accumulate as the Reddit and Twitter refresh jobs run; the chart fills in from today forward.' },
+  upvotes:          { title: 'Total Upvotes per Day',          noun: 'upvote',             valueKey: 'upvotes_gained',    endpoint: '/api/upvotes/per-day',  supportsPlatform: true,  emptyNote: 'No upvote snapshots yet. Day 1 is empty by design; real gains appear from day 2 onward.' },
+  comments:         { title: 'Total Comments per Day',         noun: 'comment',            valueKey: 'comments_gained',   endpoint: '/api/comments/per-day', supportsPlatform: true,  emptyNote: 'No comment snapshots yet. Day 1 is empty by design; real gains appear from day 2 onward.' },
+  bookings:         { title: 'Bookings per Day',               noun: 'booking',            valueKey: 'bookings_gained',   endpoint: '/api/bookings/per-day', supportsPlatform: false, emptyNote: 'No bookings in this window.' },
+  pageviews:        { title: 'Domain Pageviews per Day',       noun: 'pageview',           valueKey: 'pageviews',         funnel: true, emptyNote: 'No pageviews reported by PostHog in this window.' },
+  'email-signups':  { title: 'Email Signups per Day',          noun: 'signup',             valueKey: 'email_signups',     funnel: true, emptyNote: 'No email signups in this window.' },
+  'schedule-clicks':{ title: 'Schedule Clicks per Day',        noun: 'schedule click',     valueKey: 'schedule_clicks',   funnel: true, emptyNote: 'No schedule clicks in this window.' },
+  'get-started':    { title: 'Get Started Clicks per Day',     noun: 'get started click',  valueKey: 'get_started_clicks',funnel: true, emptyNote: 'No get-started clicks in this window.' },
+  'cross-product':  { title: 'Cross-Product Clicks per Day',   noun: 'cross-product click',valueKey: 'cross_product_clicks', funnel: true, emptyNote: 'No cross-product clicks in this window.' },
+};
+
+function renderPerDayChart(chartId, payload) {
+  const cfg = PER_DAY_CHARTS[chartId];
+  if (!cfg) return;
+  const body = document.getElementById(chartId + '-per-day-body');
+  const totalEl = document.getElementById(chartId + '-per-day-total');
+  const heading = document.getElementById(chartId + '-per-day-heading');
   if (!body) return;
   const days = (payload && payload.days) || 30;
-  if (heading) heading.textContent = 'Total Social Views per Day (last ' + days + 'd)';
+  if (heading) heading.textContent = cfg.title + ' (last ' + days + 'd)';
   const rows = (payload && payload.rows) || [];
   if (!rows.length) {
-    if (totalEl) totalEl.textContent = '0 views';
-    body.innerHTML = '<div class="views-chart-empty">No view snapshots yet. Snapshots accumulate as the Reddit and Twitter refresh jobs run; the chart fills in from today forward.</div>';
+    if (totalEl) totalEl.textContent = '0 ' + cfg.noun + 's';
+    body.innerHTML = '<div class="views-chart-empty">' + escapeHtml(cfg.emptyNote) + '</div>';
     return;
   }
   const byDay = {};
-  rows.forEach(r => { byDay[r.day] = Number(r.views_gained) || 0; });
+  rows.forEach(r => { byDay[r.day] = Number(r[cfg.valueKey]) || 0; });
   const end = new Date();
   const start = new Date(); start.setDate(end.getDate() - (days - 1));
   const series = [];
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     const key = d.toISOString().slice(0, 10);
-    series.push({ day: key, views: byDay[key] || 0 });
+    series.push({ day: key, value: byDay[key] || 0 });
   }
-  const total = series.reduce((a, r) => a + r.views, 0);
-  const max = series.reduce((m, r) => Math.max(m, r.views), 0);
-  if (totalEl) totalEl.textContent = total.toLocaleString() + ' view' + (total === 1 ? '' : 's');
+  const total = series.reduce((a, r) => a + r.value, 0);
+  const max = series.reduce((m, r) => Math.max(m, r.value), 0);
+  if (totalEl) totalEl.textContent = total.toLocaleString() + ' ' + cfg.noun + (total === 1 ? '' : 's');
   const fmtShort = n => {
     if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + 'M';
     if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + 'K';
@@ -4529,10 +4627,10 @@ function renderViewsPerDay(payload) {
     return (d.getMonth() + 1) + '/' + d.getDate();
   };
   const bars = series.map(r => {
-    const pct = max > 0 ? (r.views / max) * 100 : 0;
-    const title = fmtDay(r.day) + ': ' + r.views.toLocaleString() + ' views';
-    const cls = r.views > 0 ? 'views-chart-bar' : 'views-chart-bar empty';
-    const h = max > 0 ? Math.max(pct, r.views > 0 ? 2 : 0) : 0;
+    const pct = max > 0 ? (r.value / max) * 100 : 0;
+    const title = fmtDay(r.day) + ': ' + r.value.toLocaleString() + ' ' + cfg.noun + (r.value === 1 ? '' : 's');
+    const cls = r.value > 0 ? 'views-chart-bar' : 'views-chart-bar empty';
+    const h = max > 0 ? Math.max(pct, r.value > 0 ? 2 : 0) : 0;
     return '<div class="' + cls + '" style="height:' + h + '%;" title="' + escapeHtml(title) + '"></div>';
   }).join('');
   const firstDay = fmtDay(series[0].day);
@@ -4551,26 +4649,62 @@ function renderViewsPerDay(payload) {
     '</div>';
 }
 
-async function loadViewsPerDay() {
+async function _fetchPerDay(endpoint, includePlatform) {
+  const days = currentStatsWindow().days || 30;
+  const plat = currentStatsPlatform();
+  const proj = currentStatsProject();
+  const params = ['days=' + days];
+  if (includePlatform && plat && plat !== 'all') params.push('platform=' + encodeURIComponent(plat));
+  if (proj && proj !== 'all') params.push('project=' + encodeURIComponent(proj));
+  const res = await fetch(endpoint + '?' + params.join('&'));
+  if (!res.ok) throw new Error('status ' + res.status);
+  return res.json();
+}
+
+async function _loadSimpleChart(chartId) {
+  const cfg = PER_DAY_CHARTS[chartId];
+  if (!cfg || cfg.funnel) return;
   try {
-    const days = currentStatsWindow().days || 30;
-    const plat = currentStatsPlatform();
-    const proj = currentStatsProject();
-    const params = ['days=' + days];
-    if (plat && plat !== 'all') params.push('platform=' + encodeURIComponent(plat));
-    if (proj && proj !== 'all') params.push('project='  + encodeURIComponent(proj));
-    const res = await fetch('/api/views/per-day?' + params.join('&'));
-    if (!res.ok) {
-      const body = document.getElementById('views-per-day-body');
-      if (body) body.innerHTML = '<div class="views-chart-empty">Unable to load views (' + res.status + ').</div>';
-      return;
-    }
-    const data = await res.json();
-    renderViewsPerDay(data);
-  } catch {
-    const body = document.getElementById('views-per-day-body');
-    if (body) body.innerHTML = '<div class="views-chart-empty">Unable to load views.</div>';
+    const data = await _fetchPerDay(cfg.endpoint, !!cfg.supportsPlatform);
+    renderPerDayChart(chartId, data);
+  } catch (e) {
+    const body = document.getElementById(chartId + '-per-day-body');
+    if (body) body.innerHTML = '<div class="views-chart-empty">Unable to load ' + escapeHtml(cfg.noun) + 's.</div>';
   }
+}
+
+async function loadViewsPerDay()    { return _loadSimpleChart('views'); }
+async function loadUpvotesPerDay()  { return _loadSimpleChart('upvotes'); }
+async function loadCommentsPerDay() { return _loadSimpleChart('comments'); }
+async function loadBookingsPerDay() { return _loadSimpleChart('bookings'); }
+
+// The five PostHog-backed charts share one payload (one HogQL batch per
+// metric). Fetch once, split into the per-chart shape each renderer expects.
+async function loadFunnelPerDay() {
+  const FUNNEL_IDS = ['pageviews', 'email-signups', 'schedule-clicks', 'get-started', 'cross-product'];
+  try {
+    const data = await _fetchPerDay('/api/funnel/per-day', false);
+    const rows = (data && data.rows) || [];
+    const days = (data && data.days) || 30;
+    FUNNEL_IDS.forEach(chartId => {
+      const cfg = PER_DAY_CHARTS[chartId];
+      const perChart = rows.map(r => ({ day: r.day, [cfg.valueKey]: r[cfg.valueKey] }));
+      renderPerDayChart(chartId, { days, rows: perChart });
+    });
+  } catch (e) {
+    FUNNEL_IDS.forEach(chartId => {
+      const body = document.getElementById(chartId + '-per-day-body');
+      if (body) body.innerHTML = '<div class="views-chart-empty">Unable to load PostHog metrics.</div>';
+    });
+  }
+}
+
+function loadAllPerDayCharts() {
+  loadViewsPerDay();
+  loadUpvotesPerDay();
+  loadCommentsPerDay();
+  loadBookingsPerDay();
+  loadFunnelPerDay();
 }
 
 // Shared helper: mount a sortable + per-column-filterable table into containerId.
@@ -6714,7 +6848,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     } else {
       stopActivityAutoRefresh();
     }
-    if (name === 'stats') { loadActivityStats(); loadStyleStats(); loadDmStats(); loadViewsPerDay(); }
+    if (name === 'stats') { loadActivityStats(); loadStyleStats(); loadDmStats(); loadAllPerDayCharts(); }
     if (name === 'top') {
       initTopFilters();
       if (_topSubtab === 'pages') {
@@ -6753,7 +6887,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     syncStatsHeadings();
     loadActivityStats();
     loadStyleStats();
-    loadViewsPerDay();
+    loadAllPerDayCharts();
     const funnelEl = document.getElementById('funnel-stats');
     if (funnelEl && funnelEl.open) loadFunnelStats(true);
     const dmEl = document.getElementById('dm-stats');
