@@ -171,7 +171,10 @@ PY
         exit_code=$?
         echo "[$(ts)] $product: generator exit=$exit_code" >> "$lane_log"
         exit "$exit_code"
-    )
+    ) || true
+    # `|| true` so a single lane's non-zero exit (or an unexpected signal
+    # killing the subshell — e.g. the 22:32 claude-meter incident) doesn't
+    # trip the parent's `set -e` and abandon the remaining queued lanes.
 
     # Quota short-circuit: the lane just finished; if its log contains a
     # quota marker the next lane will hit the same wall. Flag it so the
