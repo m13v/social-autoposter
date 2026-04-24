@@ -347,7 +347,7 @@ function classifyScript(script) {
     match(/^scan_(\w+?)_(?:replies|followups|mentions)$/, 'check-replies', 'Check Replies') ||
     match(/^octolens_(\w+)$/, 'octolens', 'Octolens') ||
     match(/^stats_(\w+)$/, 'stats', 'Stats') ||
-    match(/^audit_(\w+)$/, 'audit', 'Audit') ||
+    match(/^audit[-_]([\w-]+)$/, 'audit', 'Audit') ||
     { job_type: 'other', job_label: script, platform: null, platform_key: null, human_name: script }
   );
 }
@@ -1342,9 +1342,24 @@ async function handleApi(req, res) {
   // log_run.py counters for link-edit are not populated reliably.
   if (p === '/api/job-runs' && req.method === 'GET') {
     return (async () => {
-      const limitRaw = parseInt(url.searchParams.get('limit') || '100', 10);
-      const limit = Math.min(Math.max(limitRaw, 1), 500);
-      const runs = parseRunMonitorLog(Math.max(limit * 3, 300)).slice(0, limit);
+      const hoursRaw = url.searchParams.get('hours');
+      const hoursNum = hoursRaw != null ? parseInt(hoursRaw, 10) : NaN;
+      const hours = Number.isFinite(hoursNum) && hoursNum > 0 ? Math.min(hoursNum, 24 * 90) : null;
+      let runs;
+      if (hours != null) {
+        // run_monitor.log is small (a few thousand lines), so parsing the
+        // whole file is cheap. Time-filter server-side so the client gets
+        // exactly what the Status tab window asked for.
+        const cutoffMs = Date.now() - hours * 3600 * 1000;
+        runs = parseRunMonitorLog(100000).filter(r => {
+          const t = r.started_at ? Date.parse(r.started_at) : NaN;
+          return Number.isFinite(t) && t >= cutoffMs;
+        });
+      } else {
+        const limitRaw = parseInt(url.searchParams.get('limit') || '100', 10);
+        const limit = Math.min(Math.max(limitRaw, 1), 500);
+        runs = parseRunMonitorLog(Math.max(limit * 3, 300)).slice(0, limit);
+      }
       await enrichLinkEditRuns(runs);
       await enrichEngageRuns(runs);
       await enrichCheckRepliesRuns(runs);
