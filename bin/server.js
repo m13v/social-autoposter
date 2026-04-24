@@ -4064,6 +4064,8 @@ function syncStatsHeadings() {
   if (dm) dm.textContent = 'DM Funnel Stats (' + win.labelLong + ')';
   const cost = document.getElementById('cost-stats-heading');
   if (cost) cost.textContent = 'Cost per Activity (' + win.labelLong + ')';
+  const views = document.getElementById('views-per-day-heading');
+  if (views) views.textContent = 'Total Social Views per Day (' + win.labelShort + ')';
 }
 
 function renderActivityStats(payload) {
@@ -6316,6 +6318,7 @@ function saStartApp() {
   }
   loadActivityStats();
   loadStyleStats();
+  loadViewsPerDay();
   // Deploy Health is inside the Status tab, which is local-only. On the
   // hosted client dashboard we skip the fetch entirely; Cloud Run has no
   // mirror for project_deploy_status.py, so polling it just spams 503.
@@ -6332,6 +6335,7 @@ function saStartApp() {
   if (dmEl && dmEl.open) loadDmStats();
   setInterval(loadActivityStats, 300000);
   setInterval(loadStyleStats, 300000);
+  setInterval(loadViewsPerDay, 300000);
   setTimeout(() => {
     // Logs + Settings tabs are admin-only (hidden via body.sa-non-admin);
     // their endpoints are admin-only too, so guard the preload for scoped users.
