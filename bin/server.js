@@ -1384,7 +1384,7 @@ async function handleApi(req, res) {
       ") " +
       "SELECT json_agg(row_to_json(r)) FROM (" +
       "SELECT * FROM (SELECT posted_at AS occurred_at, 'posted' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, engagement_style AS detail, our_url AS link, ('p' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id WHERE posted_at IS NOT NULL AND our_content <> '(mention - no original post)' ORDER BY posted_at DESC LIMIT 150) x1 " +
-      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 140), LEFT(r2.their_content, 140)), r2.engagement_style, r2.our_reply_url, ('r' || r2.id), p.project_name, sc.per_row_cost FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id LEFT JOIN session_cost sc ON sc.session_id = r2.claude_session_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 150) x2 " +
+      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 140), LEFT(r2.their_content, 140)), CASE WHEN r2.is_recommendation THEN 'rec · ' || COALESCE(r2.engagement_style, '') ELSE r2.engagement_style END, r2.our_reply_url, ('r' || r2.id), p.project_name, sc.per_row_cost FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id LEFT JOIN session_cost sc ON sc.session_id = r2.claude_session_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 150) x2 " +
       "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name, sc.per_row_cost FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id LEFT JOIN session_cost sc ON sc.session_id = r3.claude_session_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 150) x3 " +
       "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text, NULL::numeric FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
       "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || dms.id), NULL::text, sc.per_row_cost FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
@@ -2498,6 +2498,7 @@ const HTML = `<!DOCTYPE html>
   .top-kind-pill { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid var(--border); line-height: 1.5; }
   .top-kind-pill--thread { background: rgba(96, 165, 250, 0.12); color: #60a5fa; border-color: rgba(96, 165, 250, 0.35); }
   .top-kind-pill--comment { background: rgba(167, 139, 250, 0.12); color: #a78bfa; border-color: rgba(167, 139, 250, 0.35); }
+  .top-kind-pill--rec { background: rgba(251, 191, 36, 0.14); color: #fbbf24; border-color: rgba(251, 191, 36, 0.4); margin-left: 4px; }
   .top-stats-cell { display: flex; flex-direction: column; gap: 2px; font-variant-numeric: tabular-nums; font-size: 12px; }
   .top-stats-bit { color: var(--text); white-space: nowrap; }
   .top-stats-k { color: var(--text-muted); font-weight: 600; margin-right: 4px; }
@@ -4139,6 +4140,31 @@ let _statsWindow = '24h';
 function currentStatsWindow() {
   return STATS_WINDOWS[_statsWindow] || STATS_WINDOWS['24h'];
 }
+// Top-of-Stats-tab platform and project selection. Same contract as the window
+// filter: a change re-fetches every section on the page so the whole tab
+// reflects the chosen scope.
+function currentStatsPlatform() {
+  const row = document.getElementById('style-stats-platform-pills');
+  return (row && row.dataset.selected) || 'all';
+}
+function currentStatsProject() {
+  const row = document.getElementById('style-stats-project-pills');
+  return (row && row.dataset.selected) || 'all';
+}
+function reloadStatsTabSections() {
+  loadActivityStats();
+  loadStyleStats();
+  loadViewsPerDay();
+  const funnelEl = document.getElementById('funnel-stats');
+  if (funnelEl && funnelEl.open) {
+    if (_lastFunnelPayload) renderFunnelStats(_lastFunnelPayload);
+    else loadFunnelStats(true);
+  }
+  const dmEl = document.getElementById('dm-stats');
+  if (dmEl && dmEl.open) loadDmStats(true);
+  const costEl = document.getElementById('cost-stats');
+  if (costEl && costEl.open) loadCostStats(true);
+}
 function syncStatsHeadings() {
   const win = currentStatsWindow();
   const titleCased = win.labelLong.charAt(0).toUpperCase() + win.labelLong.slice(1);
@@ -4198,7 +4224,12 @@ function renderActivityStats(payload) {
 async function loadActivityStats() {
   try {
     const hours = currentStatsWindow().hours;
-    const res = await fetch('/api/activity/stats?hours=' + hours);
+    const plat = currentStatsPlatform();
+    const proj = currentStatsProject();
+    const params = ['hours=' + hours];
+    if (plat && plat !== 'all') params.push('platform=' + encodeURIComponent(plat));
+    if (proj && proj !== 'all') params.push('project='  + encodeURIComponent(proj));
+    const res = await fetch('/api/activity/stats?' + params.join('&'));
     const data = await res.json();
     renderActivityStats(data);
   } catch {}
@@ -4264,7 +4295,12 @@ function renderViewsPerDay(payload) {
 async function loadViewsPerDay() {
   try {
     const days = currentStatsWindow().days || 30;
-    const res = await fetch('/api/views/per-day?days=' + days);
+    const plat = currentStatsPlatform();
+    const proj = currentStatsProject();
+    const params = ['days=' + days];
+    if (plat && plat !== 'all') params.push('platform=' + encodeURIComponent(plat));
+    if (proj && proj !== 'all') params.push('project='  + encodeURIComponent(proj));
+    const res = await fetch('/api/views/per-day?' + params.join('&'));
     if (!res.ok) {
       const body = document.getElementById('views-per-day-body');
       if (body) body.innerHTML = '<div class="views-chart-empty">Unable to load views (' + res.status + ').</div>';
@@ -4495,7 +4531,12 @@ function renderStyleStatsPills(containerId, values, selected, labelAll) {
   row.querySelectorAll('.style-stats-pill').forEach(btn => {
     btn.addEventListener('click', () => {
       row.dataset.selected = btn.getAttribute('data-value') || 'all';
-      loadStyleStats();
+      // Reflect selection immediately so later clicks on stale siblings don't
+      // re-toggle before the style-stats refetch returns and re-renders pills.
+      row.querySelectorAll('.style-stats-pill').forEach(b => {
+        b.classList.toggle('active', b === btn);
+      });
+      reloadStatsTabSections();
     });
   });
 }
@@ -5150,6 +5191,7 @@ function renderTopPosts(payload) {
     thread_content:p.thread_content || '',
     our_account:   p.our_account || '',
     project_name:  p.project_name || '',
+    is_recommendation: !!p.is_recommendation,
   }));
   _topTableHandle = mountSortableTable({
     containerId: 'top-table-container',
@@ -5167,7 +5209,10 @@ function renderTopPosts(payload) {
           const name = v ? escapeHtml(String(v)) : '';
           const kind = r.is_thread ? 'thread' : 'comment';
           const pill = '<span class="top-kind-pill top-kind-pill--' + kind + '">' + kind + '</span>';
-          return '<div class="top-project-cell">' + (name ? '<div class="top-project-name">' + name + '</div>' : '') + pill + '</div>';
+          const recPill = r.is_recommendation
+            ? '<span class="top-kind-pill top-kind-pill--rec" title="flagged as project recommendation (is_recommendation=true)">rec</span>'
+            : '';
+          return '<div class="top-project-cell">' + (name ? '<div class="top-project-name">' + name + '</div>' : '') + pill + recPill + '</div>';
         },
         filterMode: 'dropdown',
         filterOptions: distinctOptions(normalized, 'project_name', 'All'),
@@ -6267,17 +6312,23 @@ async function loadDmStats(force) {
   if (_dmStatsLoading) return;
   if (saAuthNotReady()) return;
   const days = currentStatsWindow().days;
-  if (_dmStatsLoadedFor === days && !force) return;
+  const plat = currentStatsPlatform();
+  const proj = currentStatsProject();
+  const key  = days + '|' + plat + '|' + proj;
+  if (_dmStatsLoadedFor === key && !force) return;
   _dmStatsLoading = true;
   const totalEl = document.getElementById('dm-stats-total');
   const body = document.getElementById('dm-stats-body');
   if (totalEl) totalEl.textContent = 'loading\u2026';
   if (body) body.innerHTML = '<div class="style-stats-empty">Loading\u2026</div>';
   try {
-    const res = await fetch('/api/dm/stats?days=' + days);
+    const params = ['days=' + days];
+    if (plat && plat !== 'all') params.push('platform=' + encodeURIComponent(plat));
+    if (proj && proj !== 'all') params.push('project='  + encodeURIComponent(proj));
+    const res = await fetch('/api/dm/stats?' + params.join('&'));
     const data = await res.json();
     renderDmStats(data);
-    _dmStatsLoadedFor = days;
+    _dmStatsLoadedFor = key;
   } catch (e) {
     if (body) body.innerHTML = '<div class="style-stats-empty">Failed to load.</div>';
   } finally {
@@ -6439,25 +6490,10 @@ document.querySelectorAll('.tab').forEach(tab => {
   syncStatsHeadings();
 })();
 
-// Top-of-stats-tab platform/project filter pills. Re-run style stats and
-// re-render funnel stats (client-side project filter against cached payload).
-(function wireStatsPlatformProjectPills() {
-  const tabStats = document.getElementById('tab-stats');
-  if (!tabStats) return;
-  tabStats.addEventListener('click', ev => {
-    const btn = ev.target.closest('.style-stats-pill');
-    if (!btn) return;
-    const row = btn.closest('.style-stats-pill-row');
-    if (!row) return;
-    if (row.id !== 'style-stats-platform-pills' && row.id !== 'style-stats-project-pills') return;
-    // renderStyleStatsPills already handles active state + loadStyleStats() via its own handler.
-    // Here we add funnel stats re-render using the cached payload.
-    if (_lastFunnelPayload) {
-      const funnelEl = document.getElementById('funnel-stats');
-      if (funnelEl && funnelEl.open) renderFunnelStats(_lastFunnelPayload);
-    }
-  });
-})();
+// Top-of-stats-tab platform/project pill click handling lives in
+// renderStyleStatsPills (pills are rebuilt from the /api/style/stats payload),
+// which invokes reloadStatsTabSections() to re-fetch every stats-tab section
+// so platform+project scope flows through the whole page.
 
 // Lazy-load funnel stats the first time the user opens the section. The fetch
 // shells out to PostHog and two Postgres DBs, so we don't want to run it on
