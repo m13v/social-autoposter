@@ -38,6 +38,44 @@ def _translate_sql(sql):
     return sql
 
 
+_DNS_TRANSIENT_MARKERS = (
+    "could not translate host name",
+    "nodename nor servname provided",
+    "Temporary failure in name resolution",
+    "Name or service not known",
+)
+
+
+def _connect_with_retry(url):
+    """psycopg2.connect with 3-try backoff on DNS resolution failures.
+
+    Transient DNS blips from the local resolver (observed ~40 min on
+    2026-04-23 PDT) crashed every tick that happened to run during the
+    window. Retry only on name-resolution OperationalError messages so
+    auth or hard-down errors fail fast.
+    """
+    import time
+    import psycopg2
+    backoffs = (1.0, 2.0)
+    last_exc = None
+    for attempt in range(3):
+        try:
+            return psycopg2.connect(url, keepalives=1,
+                                    keepalives_idle=30,
+                                    keepalives_interval=10,
+                                    keepalives_count=5)
+        except psycopg2.OperationalError as exc:
+            msg = str(exc)
+            if not any(m in msg for m in _DNS_TRANSIENT_MARKERS):
+                raise
+            last_exc = exc
+            if attempt < len(backoffs):
+                print(f"[db] DNS transient, retrying in {backoffs[attempt]}s: {msg.strip()}",
+                      file=sys.stderr)
+                time.sleep(backoffs[attempt])
+    raise last_exc
+
+
 class PGConn:
     """Thin psycopg2 wrapper with a sqlite3-compatible execute/commit/close API."""
 
@@ -48,15 +86,11 @@ class PGConn:
         self._cursor_factory = psycopg2.extras.DictCursor
 
     def _reconnect(self):
-        import psycopg2
         try:
             self._conn.close()
         except Exception:
             pass
-        self._conn = psycopg2.connect(self._url, keepalives=1,
-                                       keepalives_idle=30,
-                                       keepalives_interval=10,
-                                       keepalives_count=5)
+        self._conn = _connect_with_retry(self._url)
 
     def execute(self, sql, params=None):
         import psycopg2
@@ -130,13 +164,10 @@ def get_conn():
         print("  Re-run: npx social-autoposter init", file=sys.stderr)
         sys.exit(1)
     try:
-        import psycopg2
+        import psycopg2  # noqa: F401 — verifies availability before retry helper imports it
     except ImportError:
         print("ERROR: psycopg2-binary not installed.", file=sys.stderr)
         print("  Run: pip3 install psycopg2-binary", file=sys.stderr)
         sys.exit(1)
-    conn = psycopg2.connect(url, keepalives=1,
-                            keepalives_idle=30,
-                            keepalives_interval=10,
-                            keepalives_count=5)
+    conn = _connect_with_retry(url)
     return PGConn(conn, url=url)
