@@ -10,7 +10,7 @@ import re
 import sys
 from pathlib import Path
 
-TARGETS = {"GuideNavbar", "GuideFooter"}
+TARGETS = {"GuideNavbar", "GuideFooter", "Navbar", "Footer"}
 
 # Named imports from the site-local guide modules.
 IMPORT_MODULES = {
@@ -18,7 +18,24 @@ IMPORT_MODULES = {
     "@/components/guide-navbar",
     "@/components/guide-footer",
     "@/components/guide-theme",
+    "@/components/navbar",
+    "@/components/footer",
+    "@/components/nav",
 }
+
+# Only sweep files under these SEO route prefixes. Keeps home/marketing
+# pages (which legitimately render their own <Navbar>) untouched.
+SEO_ROUTE_PREFIXES = (
+    "src/app/t/",
+    "src/app/alternative/",
+    "src/app/use-case/",
+    "src/app/best/",
+    "src/app/(content)/",
+    "src/app/(main)/t/",
+    "src/app/(main)/alternative/",
+    "src/app/(main)/use-case/",
+    "src/app/(main)/best/",
+)
 
 
 def process_imports(src: str) -> tuple[str, bool]:
@@ -176,8 +193,18 @@ def main():
     app_dir = root / "src" / "app"
     changed = 0
     for path in app_dir.rglob("*.tsx"):
+        rel = str(path.relative_to(root))
+        if not any(rel.startswith(p) for p in SEO_ROUTE_PREFIXES):
+            continue
         if process_file(path):
             changed += 1
+    # Also sweep SEO page-template components (e.g. AlternativePageShell).
+    # These are rendered by SEO pages so they get the layout-level chrome.
+    seo_components_dir = root / "src" / "components" / "seo"
+    if seo_components_dir.is_dir():
+        for path in seo_components_dir.rglob("*.tsx"):
+            if process_file(path):
+                changed += 1
     print(f"rewrote {changed} file(s)")
 
 
