@@ -89,6 +89,9 @@ LOGFILE="$LOG_DIR/stats-${LOG_TAG}-$(date +%Y-%m-%d_%H%M%S).log"
 
 log() { echo "[$(date +%H:%M:%S)] $*" >> "$LOGFILE"; echo "[$(date +%H:%M:%S)] $*"; }
 
+RUN_START=$(date +%s)
+STEP1_EXIT=0; STEP2_EXIT=0; STEP3_EXIT=0; STEP4_EXIT=0
+
 log "=== Stats Pipeline Run: $(date) ==="
 if [ -n "$PLATFORM" ]; then
     log "Platform filter: $PLATFORM (step1=$RUN_STEP1 step2=$RUN_STEP2 step3=$RUN_STEP3 step4=$RUN_STEP4)"
@@ -371,6 +374,16 @@ else
 fi
 
 log "=== Stats Pipeline complete: $(date) ==="
+
+# Log run to persistent monitor (matches audit.sh pattern so run_monitor.log
+# covers every launchd job). SCRIPT_TAG uses underscores so the dashboard
+# regex in bin/server.js (^stats_(\w+)$) classifies the row correctly.
+RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+STATS_FAILED=$(( (STEP1_EXIT != 0 ? 1 : 0) + (STEP2_EXIT != 0 ? 1 : 0) + (STEP3_EXIT != 0 ? 1 : 0) + (STEP4_EXIT != 0 ? 1 : 0) ))
+ACTIVE=$(psql "${DATABASE_URL:-}" -t -A -c "SELECT COUNT(*) FROM posts WHERE status='active';" 2>/dev/null | tr -d '[:space:]')
+[ -z "$ACTIVE" ] && ACTIVE=0
+SCRIPT_TAG="stats${PLATFORM:+_$PLATFORM}"
+python3 "$REPO_DIR/scripts/log_run.py" --script "$SCRIPT_TAG" --posted "$ACTIVE" --skipped 0 --failed "$STATS_FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
 
 # Clean up old logs (keep last 7 days). Covers both new `stats-<platform>-*`
 # and any legacy `stats-YYYY-*` filenames.
