@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
+import progress
 from moltbook_tools import (
     fetch_moltbook_json,
     HttpNotFoundError as MoltbookNotFoundError,
@@ -185,6 +186,12 @@ def update_reddit(db, user_agent, config=None, quiet=False):
         total += 1
         if total % BATCH_SIZE == 0:
             db.commit()
+            progress.tick("reddit", total, len(posts),
+                          updated=updated, errors=errors,
+                          errors_404=errors_404,
+                          errors_rate_limited=errors_rate_limited,
+                          errors_empty=errors_empty,
+                          errors_other=errors_other)
             if not quiet:
                 rem = _reddit_rate_state.get("remaining")
                 rem_str = f", rem={int(rem)}" if rem is not None else ""
@@ -423,6 +430,9 @@ def update_reddit(db, user_agent, config=None, quiet=False):
         # Pacing now happens at top of loop (before API call) via _reddit_pacing_sleep().
 
     db.commit()
+    progress.done("reddit", len(posts),
+                  updated=updated, deleted=deleted, removed=removed,
+                  errors=errors, skipped=skipped, skipped_fresh=skipped_fresh)
     if skipped and not quiet:
         print(f"  Skipped {skipped} stable posts (2+ scans unchanged, older than 3 days)")
     if skipped_fresh and not quiet:
@@ -916,12 +926,16 @@ def update_github(db, quiet=False, limit=None):
 
         if total % 100 == 0:
             db.commit()
+            progress.tick("github", total, len(posts),
+                          updated=updated, deleted=deleted, errors=errors)
             if not quiet:
                 print(f"  github: {total}/{len(posts)} processed "
                       f"(updated={updated}, deleted={deleted}, errors={errors})",
                       flush=True)
 
     db.commit()
+    progress.done("github", len(posts),
+                  updated=updated, deleted=deleted, errors=errors)
     return {"total": total, "updated": updated, "deleted": deleted,
             "errors": errors, "results": results}
 
