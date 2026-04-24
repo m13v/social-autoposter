@@ -80,6 +80,51 @@ def get_recent_comments(limit=5):
     return results
 
 
+def recent_github_posts_by_project(days=7):
+    """project_name -> count of github posts in last N days.
+
+    Mirrors pick_thread_target.recent_posts_by_project so the GitHub
+    pipeline uses the same 7-day deficit signal as Reddit.
+    """
+    dbmod.load_env()
+    conn = dbmod.get_conn()
+    rows = conn.execute(
+        "SELECT project_name, COUNT(*) FROM posts "
+        "WHERE platform='github' "
+        "  AND posted_at > NOW() - INTERVAL '%s days' "
+        "  AND project_name IS NOT NULL "
+        "GROUP BY project_name" % int(days)
+    ).fetchall()
+    conn.close()
+    return {name: int(cnt) for name, cnt in rows}
+
+
+def pick_github_project(config, recent_counts):
+    """Pick one eligible project using inverse-recent-share weighting.
+
+    Matches scripts/pick_thread_target.pick formula:
+      effective = config_weight / (1 + posts_last_7d)
+
+    Eligibility: enabled=True, weight>0, non-empty github_search_topics
+    (projects without a public GitHub repo have no search topics configured
+    and should never be picked for GitHub posts).
+    """
+    import random
+    pool = [
+        p for p in config.get("projects", [])
+        if p.get("enabled", True)
+        and p.get("weight", 0) > 0
+        and p.get("github_search_topics")
+    ]
+    if not pool:
+        return None
+    weights = [
+        p["weight"] / (1 + recent_counts.get(p["name"], 0))
+        for p in pool
+    ]
+    return random.choices(pool, weights=weights, k=1)[0]
+
+
 def build_content_angle(project, config):
     if project.get("content_angle"):
         return project["content_angle"]
@@ -101,30 +146,15 @@ def build_content_angle(project, config):
     return config.get("content_angle", "")
 
 
-def build_prompt(project, config, limit, top_report, recent_comments, all_projects=None):
+def build_prompt(project, config, limit, top_report, recent_comments):
     content_angle = build_content_angle(project, config)
 
-    # If all_projects provided, pass all of them for LLM-driven selection
-    if all_projects:
-        project_json = json.dumps([
-            {k: p.get(k) for k in ["name", "description", "github_search_topics"] if p.get(k)}
-            for p in all_projects
-        ], indent=2)
-    else:
-        project_json = json.dumps({k: project.get(k) for k in
-            ["name", "description", "github_search_topics"]
-            if project.get(k)}, indent=2)
+    project_json = json.dumps({k: project.get(k) for k in
+        ["name", "description", "github_search_topics"]
+        if project.get(k)}, indent=2)
 
-    # Collect all topics across projects
-    topics_list = []
-    if all_projects:
-        for p in all_projects:
-            topics_list.extend(p.get("github_search_topics", []))
-        if not topics_list:
-            topics_list = config.get("accounts", {}).get("github", {}).get("search_topics", [])
-    else:
-        topics_list = project.get("github_search_topics") or \
-            config.get("accounts", {}).get("github", {}).get("search_topics", [])
+    topics_list = project.get("github_search_topics") or \
+        config.get("accounts", {}).get("github", {}).get("search_topics", [])
 
     recent_ctx = ""
     if recent_comments:
@@ -146,16 +176,9 @@ Your last {len(recent_comments)} comments (don't repeat talking points):
     excluded_repos = config.get("exclusions", {}).get("github_repos", [])
     excluded_authors = config.get("exclusions", {}).get("authors", [])
 
-    project_selection = ""
-    if all_projects:
-        project_selection = """
-## PROJECT SELECTION (LLM-driven, you choose)
-For each issue, pick the project that fits best from the list below.
-Include the project name in your JSON output as "project_name".
-"""
     return f"""Find {limit} GitHub issues where you can add genuine value.
-{project_selection}
-Available projects: {project_json}
+
+Project: {project_json}
 Content angle: {content_angle}
 
 Your role: You are a practitioner sharing real experience. The comment should be indistinguishable from
@@ -207,14 +230,13 @@ Links are added later by a separate pipeline (Phase D) after the comment earns e
 ## CRITICAL OUTPUT FORMAT
 You MUST output each draft as a raw JSON object on its own line. No commentary before or after. Example:
 
-{{"action": "post", "thread_url": "https://github.com/owner/repo/issues/123", "text": "full comment body here", "thread_author": "alice", "thread_title": "Issue title", "engagement_style": "critic", "project_name": "fazm", "language": "en"}}
+{{"action": "post", "thread_url": "https://github.com/owner/repo/issues/123", "text": "full comment body here", "thread_author": "alice", "thread_title": "Issue title", "engagement_style": "critic", "language": "en"}}
 
 Rules for the JSON:
 - `text`: the full comment body (400-600 chars, NO links, NO em dashes). Reply in the SAME LANGUAGE as the issue.
 - `engagement_style`: one of {', '.join(sorted(VALID_STYLES))}
 - `thread_author`: issue opener's GitHub username (from the search/view output)
 - `thread_title`: exact issue title
-- `project_name`: the project this comment relates to (from the available projects list)
 - `language`: ISO 639-1 language code of the issue (e.g. "en", "ja", "zh", "es")
 
 After all {limit} JSON objects, output DONE on its own line.
@@ -438,19 +460,24 @@ def main():
             sys.exit(1)
         project_name = project.get("name", "general")
         print(f"[post_github] Project (forced): {project_name}")
-        use_all = False
     else:
-        # LLM-driven: pass all projects, let LLM choose per-issue
-        project = all_projects[0] if all_projects else {"name": "general"}
-        project_name = None  # per-decision
-        print(f"[post_github] LLM-driven project selection ({len(all_projects)} projects)")
-        use_all = True
+        # Deterministic deficit-weighted pick, mirrors pick_thread_target.pick
+        # (7-day window, effective = weight / (1 + posts_7d)). Eligibility:
+        # enabled, weight>0, non-empty github_search_topics.
+        recent_counts = recent_github_posts_by_project(days=7)
+        project = pick_github_project(config, recent_counts)
+        if project is None:
+            print("[post_github] ERROR: no eligible project (none have github_search_topics)")
+            sys.exit(1)
+        project_name = project.get("name", "general")
+        rc = recent_counts.get(project_name, 0)
+        print(f"[post_github] Project (deficit-weighted): {project_name} "
+              f"(weight={project.get('weight', 0)}, posts_7d={rc})")
 
-    top_report = get_top_performers(project_name or "general")
+    top_report = get_top_performers(project_name)
     recent_comments = get_recent_comments()
 
-    prompt = build_prompt(project, config, args.limit, top_report, recent_comments,
-                          all_projects=all_projects if use_all else None)
+    prompt = build_prompt(project, config, args.limit, top_report, recent_comments)
 
     if args.dry_run:
         print(f"=== DRY RUN ===")
