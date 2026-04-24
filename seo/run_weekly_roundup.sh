@@ -27,7 +27,7 @@ CONFIG="$ROOT_DIR/config.json"
 GENERATOR="python3 $SCRIPT_DIR/generate_page.py"
 
 RUN_START=$(date +%s)
-trap '__e=$?; python3 "$ROOT_DIR/scripts/log_run.py" --script "seo_weekly_roundup" --posted 0 --skipped 0 --failed "$__e" --cost 0 --elapsed "$(( $(date +%s) - RUN_START ))" >/dev/null 2>&1 || true' EXIT
+trap '__e=$?; python3 "$SCRIPT_DIR/log_seo_run.py" --script "seo_weekly_roundup" --since "$RUN_START" --failed "$__e" --elapsed "$(( $(date +%s) - RUN_START ))" >/dev/null 2>&1 || true' EXIT
 
 TICK_ID=$(date +%Y-%m-%d_%H%M%S)
 TICK_LOG_DIR="$SCRIPT_DIR/logs/roundup"
