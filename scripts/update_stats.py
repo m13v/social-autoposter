@@ -818,6 +818,9 @@ def update_moltbook(db, api_key, quiet=False):
                             "comments": comment_count})
 
     db.commit()
+    progress.done("moltbook", len(posts),
+                  updated=updated, deleted=deleted,
+                  errors=errors, skipped=skipped)
     if skipped and not quiet:
         print(f"  Skipped {skipped} stable Moltbook posts (3+ scans unchanged, older than 3 days)")
     return {"total": total, "updated": updated, "deleted": deleted, "errors": errors,
