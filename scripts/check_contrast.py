@@ -85,14 +85,22 @@ PAGE_SCRIPT = r"""
     return (a + 0.05) / (b + 0.05);
   }
   function effectiveBg(el) {
+    // Returns { bg, src, painted } where painted=true means we found a
+    // concrete background paint (solid color OR image/gradient). If the
+    // first painted ancestor is an image/gradient we can't meaningfully
+    // compute a contrast ratio, so callers should skip the check.
     let cur = el;
     while (cur) {
       const cs = getComputedStyle(cur);
       const bg = parseRgb(cs.backgroundColor);
-      if (bg && bg.a > 0.05) return { bg, src: cur };
+      const img = cs.backgroundImage || 'none';
+      if (bg && bg.a > 0.05) return { bg, src: cur, painted: true, image: false };
+      if (img !== 'none' && img !== 'initial') {
+        return { bg: null, src: cur, painted: true, image: true };
+      }
       cur = cur.parentElement;
     }
-    return { bg: { r: 255, g: 255, b: 255, a: 1 }, src: null }; // assume white
+    return { bg: { r: 255, g: 255, b: 255, a: 1 }, src: null, painted: false, image: false };
   }
   function isVisible(el) {
     const r = el.getBoundingClientRect();
@@ -151,16 +159,20 @@ PAGE_SCRIPT = r"""
       continue;
     }
 
-    // Case B: contrast ratio against effective background.
-    const { bg } = effectiveBg(el);
-    const ratio = contrast(relLum(color), relLum(bg));
+    // Case B: contrast ratio against effective background. Skip when
+    // the effective paint is an image/gradient (can't compute ratio
+    // without sampling pixels) — too many false positives on CTAs with
+    // bg-gradient-to-r that are perfectly readable.
+    const eff = effectiveBg(el);
+    if (eff.image || !eff.bg) continue;
+    const ratio = contrast(relLum(color), relLum(eff.bg));
     if (ratio < {minContrast}) {
       findings.push({
         kind: 'low_contrast',
         tag: describe(el),
         text: snippet(text),
         color: cs.color,
-        bg: `rgb(${bg.r}, ${bg.g}, ${bg.b})`,
+        bg: `rgb(${eff.bg.r}, ${eff.bg.g}, ${eff.bg.b})`,
         ratio: Math.round(ratio * 100) / 100,
       });
     }
