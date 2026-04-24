@@ -111,6 +111,65 @@ LOG_FILE="$LOG_DIR/${TS}.log"
 
 echo "=== Top-Pages pipeline (cross-project): $TS ===" | tee -a "$LOG_FILE"
 
+# API-quota markers. Once any lane surfaces one of these, every remaining
+# lane would fail the same way and burn credits — short-circuit instead.
+QUOTA_MARKERS='monthly usage limit|rate.?limit|429 Too Many|insufficient_quota'
+QUOTA_HIT=0
+
+# Phase 1: drain stale pending rows from prior ticks. Each pending row is a
+# (product, keyword, slug) that a prior run proposed and inserted but whose
+# generator exited mid-flight (quota, typecheck, commit race, etc.). Retry
+# the generator directly — the proposal already lives in seo_keywords, so
+# we don't need the picker or the opus proposal step again. --force overrides
+# any half-committed page file on disk.
+DRAINED_PRODUCTS=()
+pending_rows=$(python3 - <<'PY' 2>/dev/null
+import os, psycopg2
+try:
+    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT product, keyword, slug FROM seo_keywords "
+        "WHERE source='top_page' AND status='pending' "
+        "AND updated_at > NOW() - INTERVAL '14 days' "
+        "ORDER BY updated_at ASC"
+    )
+    for r in cur.fetchall():
+        print("\t".join(r))
+except Exception:
+    pass
+PY
+)
+
+if [ -n "$pending_rows" ]; then
+    echo "=== draining stale pending top_page rows ===" | tee -a "$LOG_FILE"
+    while IFS=$'\t' read -r DRAIN_PRODUCT DRAIN_KW DRAIN_SLUG; do
+        [ -z "$DRAIN_PRODUCT" ] && continue
+        DRAIN_LOWER=$(echo "$DRAIN_PRODUCT" | tr '[:upper:]' '[:lower:]')
+        DRAIN_LOG_DIR="$LOG_ROOT/${DRAIN_LOWER}/top_pages"
+        mkdir -p "$DRAIN_LOG_DIR"
+        DRAIN_LOG="$DRAIN_LOG_DIR/${TS}_retry.log"
+        echo "=== retry: $DRAIN_PRODUCT / $DRAIN_SLUG ===" | tee -a "$LOG_FILE" "$DRAIN_LOG"
+        $GENERATOR --product "$DRAIN_PRODUCT" --keyword "$DRAIN_KW" --slug "$DRAIN_SLUG" --trigger top_page --force >> "$DRAIN_LOG" 2>&1
+        RETRY_RC=$?
+        echo "=== retry rc=$RETRY_RC ===" | tee -a "$LOG_FILE" "$DRAIN_LOG"
+        DRAINED_PRODUCTS+=("$DRAIN_PRODUCT")
+        if grep -qiE "$QUOTA_MARKERS" "$DRAIN_LOG" 2>/dev/null; then
+            QUOTA_HIT=1
+            echo "  !! $DRAIN_PRODUCT hit API quota during retry — halting tick" | tee -a "$LOG_FILE"
+            break
+        fi
+    done <<< "$pending_rows"
+fi
+
+if [ "$QUOTA_HIT" = "1" ]; then
+    {
+        echo "=== Top-Pages pipeline halted on quota ==="
+        echo "  drained (${#DRAINED_PRODUCTS[@]}): ${DRAINED_PRODUCTS[*]:-none}"
+    } | tee -a "$LOG_FILE"
+    exit 0
+fi
+
 # Pick global winner + full target list.
 BRIEF_FILE="$LOG_DIR/${TS}.brief.json"
 if ! $PICK --global-mode --days 14 --top-n 15 --out "$BRIEF_FILE" 2>>"$LOG_FILE"; then
@@ -149,6 +208,26 @@ OK_TARGETS=()
 FAIL_TARGETS=()
 while read -r TARGET_PRODUCT; do
     [ -z "$TARGET_PRODUCT" ] && continue
+
+    if [ "$QUOTA_HIT" = "1" ]; then
+        echo "=== $TARGET_PRODUCT: skipping — quota hit earlier this tick ===" | tee -a "$LOG_FILE"
+        continue
+    fi
+
+    # If Phase 1 already drained a pending row for this product, don't also
+    # ship today's fresh page — one top_page per product per tick is enough.
+    already_drained=0
+    for dp in "${DRAINED_PRODUCTS[@]:-}"; do
+        if [ "$dp" = "$TARGET_PRODUCT" ]; then
+            already_drained=1
+            break
+        fi
+    done
+    if [ "$already_drained" = "1" ]; then
+        echo "=== $TARGET_PRODUCT: covered by retry phase, skipping fresh proposal ===" | tee -a "$LOG_FILE"
+        OK_TARGETS+=("$TARGET_PRODUCT")
+        continue
+    fi
 
     LOWER=$(echo "$TARGET_PRODUCT" | tr '[:upper:]' '[:lower:]')
     PER_LOCK="$LOCK_ROOT/${LOWER}.lock"
@@ -313,6 +392,13 @@ PY
             OVERALL_RC="$TARGET_RC"
             ;;
     esac
+
+    # Quota short-circuit: if this target hit the usage wall, the next one
+    # will too. Set the flag so the loop stops on the next iteration.
+    if grep -qiE "$QUOTA_MARKERS" "$PER_LOG" 2>/dev/null; then
+        QUOTA_HIT=1
+        echo "  !! $TARGET_PRODUCT hit API quota — halting tick" | tee -a "$LOG_FILE"
+    fi
 
 done <<< "$TARGETS"
 
