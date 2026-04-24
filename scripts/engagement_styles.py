@@ -219,71 +219,194 @@ def get_dynamic_tiers(platform, context="posting"):
     return dominant, secondary, rare
 
 
+# ── Target distribution ─────────────────────────────────────────────
+
+def _last_picks(platform, limit=10):
+    """Return the last `limit` engagement_style picks on `platform`, newest first.
+
+    Used by the prompt to show recent pick history so the LLM can cool off a
+    style that's been over-used. Returns [] on any DB error.
+    """
+    try:
+        import os
+        import sys as _sys
+        _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import db as dbmod
+        dbmod.load_env()
+        conn = dbmod.get_conn()
+        cur = conn.execute(
+            "SELECT engagement_style FROM posts "
+            "WHERE platform = %s AND engagement_style IS NOT NULL AND engagement_style != '' "
+            "AND our_content IS NOT NULL AND LENGTH(our_content) >= 30 "
+            "AND our_content <> '(mention - no original post)' "
+            "ORDER BY posted_at DESC LIMIT %s",
+            [platform, int(limit)],
+        )
+        rows = cur.fetchall()
+        conn.close()
+        return [r[0] for r in rows]
+    except Exception:
+        return []
+
+
+def compute_target_distribution(platform, context="posting"):
+    """Compute per-style target pick% using sharpened avg_upvotes with floor+cap.
+
+    Returns a list of dicts sorted by target pct DESC:
+        [{"style": name, "pct": float, "n": int, "avg_up": float, "trusted": bool}]
+
+    Policy:
+      - Styles in PLATFORM_POLICY[platform].never are excluded.
+      - Styles with N >= MIN_SAMPLE_SIZE get weight = avg_up ** WEIGHT_EXPONENT.
+      - Styles with N < MIN_SAMPLE_SIZE (incl. zero) get STYLE_FLOOR_PCT only
+        so noisy small-n styles (e.g. n=1 with avg_up=14) don't dominate.
+      - STYLE_FLOOR_PCT is applied to every remaining style so nothing hits 0%.
+      - STYLE_CAP_PCT caps the top style; overflow redistributes pro-rata.
+      - Cold start (no trusted data): equal share across non-never styles.
+    """
+    never = set(PLATFORM_POLICY.get(platform, {}).get("never", []))
+    candidates = [s for s in STYLES.keys() if s not in never]
+    stats = _fetch_style_stats(platform)
+
+    rows = []
+    trusted_total = 0.0
+    for style in candidates:
+        s = stats.get(style)
+        n = int(s["n"]) if s else 0
+        avg = float(s["avg_up"]) if s else 0.0
+        trusted = s is not None and n >= MIN_SAMPLE_SIZE
+        weight = (avg ** WEIGHT_EXPONENT) if trusted else 0.0
+        if trusted:
+            trusted_total += weight
+        rows.append({"style": style, "n": n, "avg_up": avg, "trusted": trusted,
+                     "weight": weight, "pct": 0.0})
+
+    if not rows:
+        return []
+
+    # Cold start: no trusted data. Equal share across all non-never styles.
+    if trusted_total <= 0:
+        share = 100.0 / len(rows)
+        for r in rows:
+            r["pct"] = share
+        rows.sort(key=lambda r: r["style"])
+        return rows
+
+    # Raw score%: weight / total. Explore styles stay at 0.
+    for r in rows:
+        r["pct"] = (r["weight"] / trusted_total) * 100.0 if r["trusted"] else 0.0
+
+    # Apply floor: every style gets at least STYLE_FLOOR_PCT.
+    # Redistribute remaining mass pro-rata among styles that were already above floor.
+    below = [r for r in rows if r["pct"] < STYLE_FLOOR_PCT]
+    above = [r for r in rows if r["pct"] >= STYLE_FLOOR_PCT]
+    floored_total = STYLE_FLOOR_PCT * len(below)
+    remaining = max(0.0, 100.0 - floored_total)
+    above_sum = sum(r["pct"] for r in above) or 1.0
+    for r in below:
+        r["pct"] = STYLE_FLOOR_PCT
+    for r in above:
+        r["pct"] = (r["pct"] / above_sum) * remaining
+
+    # Apply cap: top style can't exceed STYLE_CAP_PCT. Overflow redistributes
+    # pro-rata among others (their current pct as the weight).
+    rows.sort(key=lambda r: r["pct"], reverse=True)
+    if rows and rows[0]["pct"] > STYLE_CAP_PCT:
+        overflow = rows[0]["pct"] - STYLE_CAP_PCT
+        rows[0]["pct"] = STYLE_CAP_PCT
+        others = rows[1:]
+        others_sum = sum(r["pct"] for r in others) or 1.0
+        for r in others:
+            r["pct"] += overflow * (r["pct"] / others_sum)
+
+    return rows
+
+
 # ── Prompt generators ───────────────────────────────────────────────
 
 def get_styles_prompt(platform, context="posting"):
     """Generate the engagement styles prompt block for a given platform.
 
-    Tiers (dominant / secondary / rare) are pulled from live DB stats via
-    get_dynamic_tiers(). Only `never` and `note` come from static policy.
+    Shows an explicit per-style target pick% (computed from live avg_upvotes
+    via compute_target_distribution) plus the last 10 picks on this platform,
+    so the LLM can preferentially pick styles that are under-used vs target.
+
+    Replaces the old PRIMARY/SECONDARY/RARE buckets, which tended to make
+    the LLM fixate on one "safe" style regardless of actual performance data.
 
     Args:
         platform: "reddit", "twitter", "linkedin", "github", "moltbook"
         context: "posting" (new posts) or "replying" (engagement replies)
-
-    Returns:
-        Multi-line string to embed in a prompt.
     """
     policy = PLATFORM_POLICY.get(platform, PLATFORM_POLICY["reddit"])
     never_styles = set(policy.get("never", []))
 
-    dominant_list, secondary_list, rare_list = get_dynamic_tiers(platform, context)
-    dominant = [s for s in dominant_list if s not in never_styles]
-    secondary = [s for s in secondary_list if s not in never_styles]
-    rare = [s for s in rare_list if s not in never_styles]
+    targets = compute_target_distribution(platform, context)
+    targets = [t for t in targets if t["style"] not in never_styles]
+    last_picks = _last_picks(platform, limit=10)
+
+    recent_counts = {t["style"]: 0 for t in targets}
+    for p in last_picks:
+        if p in recent_counts:
+            recent_counts[p] += 1
+    pick_n = max(1, len(last_picks))
+    under_represented = []
+    over_represented = []
+    for t in targets:
+        recent_pct = (recent_counts[t["style"]] / pick_n) * 100.0
+        if recent_pct < t["pct"] - 5.0:
+            under_represented.append(t["style"])
+        elif recent_pct > t["pct"] + 10.0:
+            over_represented.append(t["style"])
 
     lines = []
-    lines.append("## Engagement styles (CRITICAL: pick the best style for each thread/post)")
+    lines.append("## Engagement styles (pick the one that fits — and that we're under-using)")
     lines.append("")
     lines.append(f"Match your style to the conversation. {policy['note']}")
     lines.append("")
-    lines.append("Tiers below are ranked by live average upvotes from past posts on this platform. "
-                 "Styles without enough data are listed as secondary so they still get tested.")
+    lines.append(
+        f"Target pick distribution on {platform} (derived from live avg_upvotes, "
+        f"sharpened by exponent {WEIGHT_EXPONENT:g} so the winner gets most traffic; "
+        f"{STYLE_FLOOR_PCT:g}% floor per style so every style keeps getting tested):"
+    )
+    lines.append("")
+    for t in targets:
+        if t["trusted"]:
+            sample = f"avg_up {t['avg_up']:.2f} · n={t['n']}"
+        else:
+            sample = f"n={t['n']} (below trust threshold; floor only)"
+        lines.append(f"- **{t['style']}**: {t['pct']:.0f}%  ({sample})")
+    lines.append("")
+    if last_picks:
+        lines.append(f"Your last {len(last_picks)} picks on {platform} (newest first): {', '.join(last_picks)}")
+    else:
+        lines.append(f"Your last picks on {platform}: (none yet)")
+    if under_represented:
+        lines.append(f"Under-used vs target right now (lean toward these): {', '.join(under_represented)}")
+    if over_represented:
+        lines.append(f"Over-used vs target right now (lean away): {', '.join(over_represented)}")
+    lines.append("")
+    lines.append("Rules:")
+    lines.append("- Prefer a style whose recent pick-rate is BELOW its target% unless another style clearly fits the thread better.")
+    lines.append("- The top style is the winner to reach for, not the default — pick it when it fits, not by habit.")
+    lines.append("- Every style in the list is allowed; there is no hard tier.")
+    if never_styles:
+        lines.append(f"- Never on {platform}: {', '.join(sorted(never_styles))}.")
     lines.append("")
 
-    def format_style(name, style):
-        result = []
+    for t in targets:
+        style = STYLES.get(t["style"])
+        if not style:
+            continue
         best = style["best_in"].get(platform, [])
-        best_str = ", ".join(best) if best else ""
-        result.append(f'**{name}**: {style["description"]}')
-        result.append(f'  "{style["example"]}"')
-        if best_str:
-            result.append(f"  Best in: {best_str}.")
+        lines.append(f"**{t['style']}**: {style['description']}")
+        lines.append(f'  "{style["example"]}"')
+        if best:
+            lines.append(f"  Best in: {', '.join(best)}.")
         if style.get("note"):
-            result.append(f"  {style['note']}")
-        result.append("")
-        return result
+            lines.append(f"  {style['note']}")
+        lines.append("")
 
-    if dominant:
-        lines.append("### PRIMARY styles (top performers by avg upvotes — use these ~60% of the time):")
-        for name in dominant:
-            if name in STYLES:
-                lines.extend(format_style(name, STYLES[name]))
-
-    if secondary:
-        lines.append("### SECONDARY styles (mid performers or untested — use these ~30% of the time):")
-        for name in secondary:
-            if name in STYLES:
-                lines.extend(format_style(name, STYLES[name]))
-
-    if rare:
-        lines.append("### RARE styles (lowest avg upvotes — use sparingly, ~10% of the time):")
-        for name in rare:
-            if name in STYLES:
-                lines.extend(format_style(name, STYLES[name]))
-
-    # Add recommendation style for reply contexts (tier-independent; governed by
-    # the Tier 1/2/3 link strategy in the surrounding prompt, not by performance data).
     if context == "replying":
         lines.append("**recommendation**: Recommend a project from config casually. MAX 20% of replies.")
         lines.append("")
