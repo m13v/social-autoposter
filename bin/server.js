@@ -1867,7 +1867,7 @@ async function handleApi(req, res) {
         "(our_url IS NOT NULL AND thread_url = our_url) AS is_thread, " +
         "posted_at, engagement_updated_at, our_content, our_url, thread_url, thread_title, " +
         "LEFT(COALESCE(thread_content, ''), 400) AS thread_content, " +
-        "our_account, project_name, engagement_style " +
+        "our_account, project_name, engagement_style, is_recommendation " +
       "FROM posts " +
       "WHERE " + whereParts.join(' AND ') + " " +
       "ORDER BY upvotes DESC NULLS LAST, comments_count DESC NULLS LAST, views DESC NULLS LAST " +
@@ -4591,6 +4591,9 @@ function renderStyleStats(payload) {
       { key: 'upvotes',  label: 'Upvotes',  type: 'numeric', align: 'right', accessor: perPostAccessor('upvotes'),  formatter: makeFmtPerPost('upvotes'),  footer: (_rows, synth) => makeFmtPerPost('upvotes')(null, synth) },
       { key: 'comments', label: 'Comments', type: 'numeric', align: 'right', accessor: perPostAccessor('comments'), formatter: makeFmtPerPost('comments'), footer: (_rows, synth) => makeFmtPerPost('comments')(null, synth) },
       { key: 'views',    label: 'Views',    type: 'numeric', align: 'right', accessor: perPostAccessor('views'),    formatter: makeFmtPerPost('views'),    footer: (_rows, synth) => makeFmtPerPost('views')(null, synth) },
+      // Intent column: count of posts in this tone that were ALSO flagged as a
+      // project recommendation. Independent dimension from style.
+      { key: 'recommendations', label: 'Recs', type: 'numeric', align: 'right', formatter: fmt },
     ],
   });
 }
