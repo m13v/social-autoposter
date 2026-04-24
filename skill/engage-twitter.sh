@@ -132,7 +132,7 @@ CRITICAL: Process EVERY reply. For each: either post a response and mark as 'rep
 
 CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql):
   python3 $REPO_DIR/scripts/reply_db.py processing ID          # BEFORE posting
-  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url] [engagement_style]   # AFTER posting (include the style name)
+  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url] [engagement_style] [is_recommendation]   # AFTER posting. engagement_style is TONE (critic, storyteller, etc). is_recommendation is "1" ONLY when you casually mentioned a project (Tier 2/3); leave blank otherwise. Tone and intent are independent.
   python3 $REPO_DIR/scripts/reply_db.py skipped ID "reason"
   python3 $REPO_DIR/scripts/reply_db.py skip_batch '{"ids":[1,2,3],"reason":"..."}'
   python3 $REPO_DIR/scripts/reply_db.py status
@@ -151,7 +151,7 @@ MANDATORY reply flow for every item:
           Returns JSON with {ok: true, tweet_url, verified} on success.
           Use their_comment_url as TWEET_URL and your generated reply as YOUR_REPLY_TEXT.
           Extract tweet_url from the JSON response for Step 3.
-  Step 3: python3 reply_db.py replied ID "reply text" REPLY_URL ENGAGEMENT_STYLE   <- mark AFTER success (e.g. critic, snarky_oneliner)
+  Step 3: python3 reply_db.py replied ID "reply text" REPLY_URL ENGAGEMENT_STYLE [IS_RECOMMENDATION]   <- mark AFTER success. ENGAGEMENT_STYLE is TONE (e.g. critic, storyteller). Pass IS_RECOMMENDATION="1" ONLY when the reply casually recommends a project (Tier 2/3); leave unset otherwise. Tone and intent are independent.
 If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run.
 If the tweet has been deleted or is unavailable, mark as 'skipped' with reason 'tweet_not_found'.
 
