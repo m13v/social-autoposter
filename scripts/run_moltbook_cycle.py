@@ -38,7 +38,7 @@ RUN_CLAUDE = os.path.join(SCRIPTS, "run_claude.sh")
 HISTORICAL = os.path.join(SCRIPTS, "historical_engagement.py")
 
 # --- Momentum + cap thresholds (single source of truth, tune here) ----------
-DELTA_THRESHOLD = 2.0          # candidate counts as "high momentum" if delta_score >= this
+DELTA_THRESHOLD = 5.0          # candidate counts as "high momentum" if delta_score >= this
 HIGH_DELTA_BUMP = 3            # need this many high-momentum candidates to bump cap
 CAP_DEFAULT = 2
 CAP_BUMPED = 5
@@ -413,6 +413,10 @@ def main():
     candidates.sort(key=lambda c: c["delta_score"], reverse=True)
     top = candidates[:CLAUDE_CANDIDATE_LIMIT]
     log(f"Phase 2b: showing Claude top {len(top)} by delta, cap = {cap}")
+    for c in top:
+        log(f"  #{c['id']} delta={c['delta_score']:.1f} "
+            f"t0={c['upvotes_t0']}up/{c['comments_t0']}cm "
+            f"t1={c['upvotes_t1']}up/{c['comments_t1']}cm")
 
     if args.dry_run:
         log("Dry run: skipping Claude + post.")
