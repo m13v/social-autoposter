@@ -2861,7 +2861,9 @@ const HTML = `<!DOCTYPE html>
     display: flex; flex-direction: column; gap: 6px;
   }
   .stat-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-  .stat-card-label { font-size: 11px; color: var(--text); text-transform: lowercase; letter-spacing: 0.02em; }
+  .stat-card-label { font-size: 11px; color: var(--text); text-transform: lowercase; letter-spacing: 0.02em; display: inline-flex; align-items: center; gap: 5px; }
+  .stat-card-info { display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--border-strong, var(--border)); color: var(--text-muted); font-size: 9px; font-weight: 600; font-style: italic; font-family: Georgia, serif; line-height: 1; cursor: help; user-select: none; opacity: 0.7; transition: opacity 0.1s, color 0.1s, border-color 0.1s; }
+  .stat-card-info:hover { opacity: 1; color: var(--text); border-color: var(--text-muted); }
   .stat-card-count { font-size: 22px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1; }
   .stat-card.zero .stat-card-count { color: var(--text-very-faint); }
   .stat-card.ev-posted              { border-left: 3px solid #10b981; }
@@ -4212,6 +4214,21 @@ async function saveSettings() {
 // Activity tab
 const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'dm_reply_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit', 'page_published_top', 'page_published_roundup', 'page_improved', 'resurrected'];
 const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', dm_reply_sent: 'dm reply', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)', page_published_top: 'page (top)', page_published_roundup: 'page (roundup)', page_improved: 'page (improved)', resurrected: 'resurrected' };
+const EVENT_DESCRIPTIONS = {
+  posted: 'Original post the bot created on a platform (new thread, tweet, LinkedIn post, Reddit submission, etc.).',
+  replied: 'Comment or reply the bot left on someone else’s thread, tweet, or post.',
+  skipped: 'Candidate thread the bot reviewed but chose not to engage with (off-topic, already answered, low value, or filtered out by rules).',
+  mention: 'Someone mentioned one of our products on a tracked platform. Detection only, no engagement action.',
+  dm_sent: 'New direct-message conversation the bot started with a prospect.',
+  dm_reply_sent: 'Follow-up message sent inside an existing DM conversation.',
+  page_published_serp: 'SEO landing page generated from the SERP pipeline (based on ranked search results for target keywords).',
+  page_published_gsc: 'SEO page generated from a Google Search Console query the site already gets impressions for.',
+  page_published_reddit: 'SEO page generated from a high-intent Reddit thread.',
+  page_published_top: 'SEO page generated for a top-of-funnel ranking opportunity.',
+  page_published_roundup: 'Roundup or list-style SEO page (comparisons, best-of, alternatives).',
+  page_improved: 'Existing SEO page that was updated or rewritten to improve rankings.',
+  resurrected: 'Previously archived or unavailable item brought back into rotation (e.g., a removed post restored after reappearing).',
+};
 const ACTIVITY_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github', 'seo'];
 const PROJECT_LABELS = { tenxats: '10xats' };
 const ACTIVITY_PROJECT_NONE = '(none)';
@@ -4526,9 +4543,13 @@ function renderActivityStats(payload) {
           return '<span class="stat-plat" title="' + escapeHtml(p) + '">' + icon + '<span class="stat-plat-count">' + bucket.platforms[p] + '</span></span>';
         }).join('')
       : '<span style="color:var(--text-very-faint);">\u2014</span>';
+    const desc = EVENT_DESCRIPTIONS[t] || '';
+    const infoIcon = desc
+      ? '<span class="stat-card-info" title="' + escapeHtml(desc) + '" aria-label="' + escapeHtml(desc) + '">i</span>'
+      : '';
     return '<div class="stat-card ev-' + escapeHtml(t) + (total === 0 ? ' zero' : '') + '">' +
       '<div class="stat-card-head">' +
-        '<span class="stat-card-label">' + escapeHtml(EVENT_LABELS[t] || t) + '</span>' +
+        '<span class="stat-card-label">' + escapeHtml(EVENT_LABELS[t] || t) + infoIcon + '</span>' +
         '<span class="stat-card-count">' + total + '</span>' +
       '</div>' +
       '<div class="stat-card-breakdown">' + platHtml + '</div>' +
