@@ -60,12 +60,11 @@ def process_imports(src: str) -> tuple[str, bool]:
                     new_chunk = (
                         header + " " + ", ".join(names) + " " + footer
                     )
+                    if not new_chunk.endswith("\n"):
+                        new_chunk += "\n"
                     if new_chunk != chunk:
                         changed = True
-                        # Preserve original trailing newline
-                        if not new_chunk.endswith("\n"):
-                            new_chunk += "\n"
-                        out.append(new_chunk)
+                    out.append(new_chunk)
             else:
                 out.append(chunk)
             i += 1
