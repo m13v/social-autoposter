@@ -3017,6 +3017,15 @@ const HTML = `<!DOCTYPE html>
 </div>
 
 <div class="content hidden sa-local-only" id="tab-status">
+  <div class="stats-top-filters">
+    <div class="style-stats-pill-row" id="status-window-pills" data-selected="24h">
+      <span class="label">Window</span>
+      <button type="button" class="style-stats-pill active" data-value="24h">Last 24h</button>
+      <button type="button" class="style-stats-pill" data-value="7d">Last 7d</button>
+      <button type="button" class="style-stats-pill" data-value="14d">Last 14d</button>
+      <button type="button" class="style-stats-pill" data-value="30d">Last 30d</button>
+    </div>
+  </div>
   <details class="style-stats-section" id="cost-stats" open>
     <summary>
       <span class="style-stats-title"><span class="style-stats-caret">&#9654;</span><span id="cost-stats-heading">Cost per Activity (last 24 hours)</span></span>
@@ -3812,10 +3821,17 @@ function applyJobsHistoryFilter() {
   const body = document.getElementById('jobs-history-body');
   if (!body) return;
   const pf = _jobHistoryPlatformFilter, tf = _jobHistoryTypeFilter;
-  const filtered = _jobHistoryRuns.filter(r =>
-    (pf === 'all' || r.platform_key === pf) &&
-    (tf === 'all' || r.job_type === tf)
-  );
+  const winHours = currentStatusWindow().hours;
+  const cutoffMs = winHours ? Date.now() - winHours * 3600 * 1000 : null;
+  const filtered = _jobHistoryRuns.filter(r => {
+    if (pf !== 'all' && r.platform_key !== pf) return false;
+    if (tf !== 'all' && r.job_type !== tf) return false;
+    if (cutoffMs != null) {
+      const t = r.started_at ? Date.parse(r.started_at) : NaN;
+      if (isNaN(t) || t < cutoffMs) return false;
+    }
+    return true;
+  });
   body.innerHTML = buildJobsHistoryTable(filtered);
 }
 
@@ -4414,6 +4430,12 @@ let _statsWindow = '24h';
 function currentStatsWindow() {
   return STATS_WINDOWS[_statsWindow] || STATS_WINDOWS['24h'];
 }
+// Status-tab has its own window selector, independent of Stats-tab. Drives
+// Cost per Activity, Project Status, and Job History filtering.
+let _statusWindow = '24h';
+function currentStatusWindow() {
+  return STATS_WINDOWS[_statusWindow] || STATS_WINDOWS['24h'];
+}
 // Top-of-Stats-tab platform and project selection. Same contract as the window
 // filter: a change re-fetches every section on the page so the whole tab
 // reflects the chosen scope.
@@ -4438,8 +4460,6 @@ function reloadStatsTabSections() {
   }
   const dmEl = document.getElementById('dm-stats');
   if (dmEl && dmEl.open) loadDmStats(true);
-  const costEl = document.getElementById('cost-stats');
-  if (costEl && costEl.open) loadCostStats(true);
 }
 function syncStatsHeadings() {
   const win = currentStatsWindow();
@@ -4452,8 +4472,13 @@ function syncStatsHeadings() {
   if (funnel) funnel.textContent = 'Project Funnel Stats (' + win.labelLong + ')';
   const dm = document.getElementById('dm-stats-heading');
   if (dm) dm.textContent = 'DM Funnel Stats (' + win.labelLong + ')';
+}
+function syncStatusHeadings() {
+  const win = currentStatusWindow();
   const cost = document.getElementById('cost-stats-heading');
   if (cost) cost.textContent = 'Cost per Activity (' + win.labelLong + ')';
+  const proj = document.getElementById('project-status-heading');
+  if (proj) proj.textContent = 'Project Status (last ' + win.hours + 'h)';
 }
 
 function renderActivityStats(payload) {
@@ -5420,7 +5445,7 @@ let _costStatsLoadedFor = null;
 let _costStatsLoading = false;
 async function loadCostStats(force) {
   if (_costStatsLoading) return;
-  const hours = currentStatsWindow().hours;
+  const hours = currentStatusWindow().hours;
   const row = document.getElementById('cost-stats-platform-pills');
   const platform = (row && row.dataset.selected) || 'all';
   const key = hours + '|' + platform;
@@ -6720,7 +6745,8 @@ async function loadProjectStatus(force) {
   if (saAuthNotReady()) return;
   _projectStatusLoading = true;
   try {
-    const res = await fetch('/api/project/status?hours=24');
+    const hours = currentStatusWindow().hours;
+    const res = await fetch('/api/project/status?hours=' + hours);
     const data = await res.json();
     renderProjectStatus(data);
   } catch (e) {
@@ -6946,10 +6972,33 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (funnelEl && funnelEl.open) loadFunnelStats(true);
     const dmEl = document.getElementById('dm-stats');
     if (dmEl && dmEl.open) loadDmStats(true);
-    const costEl = document.getElementById('cost-stats');
-    if (costEl && costEl.open) loadCostStats(true);
   });
   syncStatsHeadings();
+})();
+
+// Top-of-Status-tab window pills. Drives cost-stats, project-status,
+// and the Job History table's time filter. Independent of the Stats-tab
+// window so the operator can scope each page separately.
+(function wireStatusWindowPills() {
+  const row = document.getElementById('status-window-pills');
+  if (!row) return;
+  row.addEventListener('click', ev => {
+    const btn = ev.target.closest('.style-stats-pill');
+    if (!btn) return;
+    const v = btn.getAttribute('data-value') || '24h';
+    if (!STATS_WINDOWS[v] || v === _statusWindow) return;
+    _statusWindow = v;
+    row.dataset.selected = v;
+    row.querySelectorAll('.style-stats-pill').forEach(b => {
+      b.classList.toggle('active', b === btn);
+    });
+    syncStatusHeadings();
+    const costEl = document.getElementById('cost-stats');
+    if (costEl && costEl.open) loadCostStats(true);
+    loadProjectStatus(true);
+    applyJobsHistoryFilter();
+  });
+  syncStatusHeadings();
 })();
 
 // Top-of-stats-tab platform/project pill click handling lives in
