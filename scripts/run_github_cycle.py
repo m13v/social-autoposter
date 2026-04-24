@@ -346,6 +346,9 @@ def main():
             url = item.get("url")
             if url and url not in seen_urls:
                 seen_urls.add(url)
+                # Stamp the originating seed so we can carry it through to the
+                # INSERT and feed it back into top_search_topics scoring.
+                item["search_topic"] = topic
                 raw.append(item)
 
     log(f"Phase 1: {len(raw)} unique issues after dedup + already-posted filter")
@@ -371,6 +374,7 @@ def main():
             "author": counts["author"],
             "comment_count_t0": counts["comment_count"],
             "reaction_count_t0": counts["reaction_count"],
+            "search_topic": item.get("search_topic"),
         })
 
     log(f"Phase 1: {len(candidates)} candidates with T0 snapshot")
