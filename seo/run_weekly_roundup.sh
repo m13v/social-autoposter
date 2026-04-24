@@ -74,9 +74,23 @@ for row in "${ELIGIBLE[@]}"; do
     log "  $(echo "$row" | awk -F'\t' '{printf "%-20s %s", $1, $2}')"
 done
 
-# Spawn one background lane per product with a small jitter (0-30s) so we
-# don't fire 14 Claude sessions at the exact same millisecond.
+# API-quota markers. A lane's final_result_text will surface one of these
+# when the org has exhausted its monthly usage or a provider-side rate limit
+# trips. Once any lane reports it, every remaining lane would fail the same
+# way and burn credits for nothing — short-circuit instead.
+QUOTA_MARKERS='monthly usage limit|rate.?limit|429 Too Many|insufficient_quota'
+QUOTA_HIT=0
+
+# Run products sequentially instead of in parallel. Parallel fanout used to
+# fire 15 Claude sessions in a 30s window, so a single quota wall could wipe
+# the entire tick; serial keeps pre-wall lanes durable and lets the loop
+# break cleanly on the first wall hit. Weekly cadence has the wall-clock
+# headroom — this tick can take hours.
 for row in "${ELIGIBLE[@]}"; do
+    if [ "$QUOTA_HIT" = "1" ]; then
+        log "  skipping remaining lanes — quota hit earlier this tick"
+        break
+    fi
     product=$(echo "$row" | awk -F'\t' '{print $1}')
     category=$(echo "$row" | awk -F'\t' '{print $2}')
     product_lower=$(echo "$product" | tr '[:upper:] ' '[:lower:]-')
@@ -84,9 +98,6 @@ for row in "${ELIGIBLE[@]}"; do
     lane_log="$TICK_LOG_DIR/${TICK_ID}_${product_lower}.log"
 
     (
-        jitter=$((RANDOM % 30))
-        sleep "$jitter"
-
         if [ -f "$lock" ]; then
             age=$(( $(date +%s) - $(stat -f %m "$lock" 2>/dev/null || stat -c %Y "$lock" 2>/dev/null || echo 0) ))
             if [ "$age" -gt 1800 ]; then
@@ -100,36 +111,79 @@ for row in "${ELIGIBLE[@]}"; do
         echo "$$" > "$lock"
         trap 'rm -f "$lock"' EXIT
 
-        today=$(date +%Y-%m-%d)
-        month_name=$(date +%B)
-        day_num=$(date +%-d)
-        year=$(date +%Y)
-        # Slug: best-<category-kebab>-YYYY-MM-DD. Weekly cadence means each
-        # run produces a distinct slug even if two fire in the same month.
-        cat_slug=$(echo "$category" | tr '[:upper:] ' '[:lower:]-' | sed -E 's/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-|-$//g')
-        slug="best-${cat_slug}-${today}"
-        keyword="Best ${category} for ${month_name} ${day_num}, ${year}"
+        # If a recent prior tick left a pending row for this product (lane
+        # bounced on quota / typecheck / commit race), retry THAT row's
+        # original slug+keyword so we finish the job instead of abandoning
+        # it. The slug was date-stamped to the prior run so --force is
+        # required to overwrite any half-committed page file.
+        pending=$(python3 - "$product" <<'PY' 2>/dev/null
+import os, sys, psycopg2
+try:
+    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT keyword, slug FROM seo_keywords "
+        "WHERE source='roundup' AND status='pending' "
+        "AND product=%s AND updated_at > NOW() - INTERVAL '14 days' "
+        "ORDER BY updated_at DESC LIMIT 1",
+        (sys.argv[1],),
+    )
+    row = cur.fetchone()
+    if row:
+        print(f"{row[0]}\t{row[1]}")
+except Exception:
+    pass
+PY
+)
 
-        echo "[$(ts)] $product: starting roundup" >> "$lane_log"
-        echo "  slug=$slug" >> "$lane_log"
-        echo "  keyword='$keyword'" >> "$lane_log"
+        force_flag=""
+        if [ -n "$pending" ]; then
+            keyword=$(echo "$pending" | awk -F'\t' '{print $1}')
+            slug=$(echo "$pending" | awk -F'\t' '{print $2}')
+            force_flag="--force"
+            echo "[$(ts)] $product: retrying pending row  slug=$slug" >> "$lane_log"
+            echo "  keyword='$keyword'" >> "$lane_log"
+        else
+            today=$(date +%Y-%m-%d)
+            month_name=$(date +%B)
+            day_num=$(date +%-d)
+            year=$(date +%Y)
+            # Slug: best-<category-kebab>-YYYY-MM-DD. New weekly page.
+            cat_slug=$(echo "$category" | tr '[:upper:] ' '[:lower:]-' | sed -E 's/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-|-$//g')
+            slug="best-${cat_slug}-${today}"
+            keyword="Best ${category} for ${month_name} ${day_num}, ${year}"
+            echo "[$(ts)] $product: starting roundup" >> "$lane_log"
+            echo "  slug=$slug" >> "$lane_log"
+            echo "  keyword='$keyword'" >> "$lane_log"
+        fi
 
         # Hand off to the unified generator. content_type=cross_roundup
         # routes to /best/<slug>; trigger=roundup writes seo_keywords rows
-        # with source='roundup'. force=false by default; each week's slug
-        # is distinct so there's no overwrite to guard against.
+        # with source='roundup'.
         $GENERATOR \
             --product "$product" \
             --keyword "$keyword" \
             --slug "$slug" \
             --trigger roundup \
             --content-type cross_roundup \
+            $force_flag \
             >> "$lane_log" 2>&1
         exit_code=$?
         echo "[$(ts)] $product: generator exit=$exit_code" >> "$lane_log"
         exit "$exit_code"
-    ) &
+    )
+
+    # Quota short-circuit: the lane just finished; if its log contains a
+    # quota marker the next lane will hit the same wall. Flag it so the
+    # outer loop breaks on the next iteration.
+    if grep -qiE "$QUOTA_MARKERS" "$lane_log" 2>/dev/null; then
+        QUOTA_HIT=1
+        log "  !! $product hit API quota — halting tick, ${#ELIGIBLE[@]} lanes still pending"
+    fi
 done
 
-wait
-log "=== weekly-roundup tick $TICK_ID complete ==="
+if [ "$QUOTA_HIT" = "1" ]; then
+    log "=== weekly-roundup tick $TICK_ID halted on quota ==="
+else
+    log "=== weekly-roundup tick $TICK_ID complete ==="
+fi
