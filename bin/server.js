@@ -6101,6 +6101,121 @@ async function loadDeployHealth() {
   }
 }
 
+// Project Status: per-weighted-project distribution of posts in the last N
+// hours by platform, with target/actual/deficit against config.json weights.
+// Mirrors the scoring in scripts/pick_project.py so operators can see at a
+// glance whether the autoposter is honoring the weight targets.
+const PROJECT_STATUS_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github'];
+const PROJECT_STATUS_PLATFORM_LABELS = {
+  reddit: 'Reddit', twitter: 'Twitter', linkedin: 'LinkedIn',
+  moltbook: 'MoltBook', github: 'GitHub',
+};
+let _projectStatusLoading = false;
+function formatPct(v) { return (Number(v || 0) * 100).toFixed(1) + '%'; }
+function formatSignedPct(v) {
+  const n = Number(v || 0) * 100;
+  if (Math.abs(n) < 0.05) return '0.0%';
+  return (n > 0 ? '+' : '') + n.toFixed(1) + '%';
+}
+function renderProjectStatus(data) {
+  const body = document.getElementById('project-status-body');
+  const totalEl = document.getElementById('project-status-total');
+  const heading = document.getElementById('project-status-heading');
+  if (!body) return;
+  if (data && data.error) {
+    if (totalEl) totalEl.textContent = 'error';
+    body.innerHTML = '<div class="style-stats-empty">' + escapeHtml(data.error) + '</div>';
+    return;
+  }
+  const hours = Number(data && data.hours) || 24;
+  if (heading) heading.textContent = 'Project Status (last ' + hours + 'h)';
+  const projects = (data && data.projects) || [];
+  const unassigned = (data && data.unassigned) || [];
+  const grandTotal = Number(data && data.grand_total) || 0;
+  if (totalEl) {
+    totalEl.textContent = grandTotal.toLocaleString() + ' post' + (grandTotal === 1 ? '' : 's') +
+      ' · ' + projects.length + ' project' + (projects.length === 1 ? '' : 's');
+  }
+  if (!projects.length && !unassigned.length) {
+    body.innerHTML = '<div class="style-stats-empty">No projects configured with weight &gt; 0.</div>';
+    return;
+  }
+  const header =
+    '<thead><tr>' +
+      '<th style="text-align:left;">Project</th>' +
+      '<th style="text-align:right;">Weight</th>' +
+      '<th style="text-align:right;">Target&nbsp;%</th>' +
+      PROJECT_STATUS_PLATFORMS.map(p =>
+        '<th style="text-align:right;">' + PROJECT_STATUS_PLATFORM_LABELS[p] + '</th>'
+      ).join('') +
+      '<th style="text-align:right;">Total</th>' +
+      '<th style="text-align:right;">Actual&nbsp;%</th>' +
+      '<th style="text-align:right;">Deficit</th>' +
+    '</tr></thead>';
+  const rowHtml = (r) => {
+    const deficitPct = Number(r.deficit || 0) * 100;
+    let deficitColor = 'var(--text-muted)';
+    if (deficitPct > 2) deficitColor = '#15803d';
+    else if (deficitPct < -2) deficitColor = '#b91c1c';
+    const platformCells = PROJECT_STATUS_PLATFORMS.map(p => {
+      const n = (r.by_platform && r.by_platform[p]) || 0;
+      const cls = n === 0 ? 'color:var(--text-very-faint);' : '';
+      return '<td style="text-align:right;font-variant-numeric:tabular-nums;' + cls + '">' + n + '</td>';
+    }).join('');
+    const nameCell = r.website
+      ? '<a href="' + escapeHtml(r.website) + '" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;border-bottom:1px dotted var(--text-very-faint);">' + escapeHtml(r.name) + '</a>'
+      : escapeHtml(r.name);
+    const nameLabel = r.unassigned
+      ? nameCell + ' <span style="color:var(--text-muted);font-size:11px;font-weight:400;">(not weighted)</span>'
+      : nameCell;
+    return '<tr>' +
+      '<td style="text-align:left;font-weight:600;">' + nameLabel + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (r.weight || 0) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-muted);">' + formatPct(r.target_share) + '</td>' +
+      platformCells +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">' + (r.total || 0) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-muted);">' + formatPct(r.actual_share) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:' + deficitColor + ';">' + formatSignedPct(r.deficit) + '</td>' +
+    '</tr>';
+  };
+  const bodyRows = projects.map(rowHtml).join('') + unassigned.map(rowHtml).join('');
+  const totals = (data && data.platform_totals) || {};
+  const footerCells = PROJECT_STATUS_PLATFORMS.map(p =>
+    '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (Number(totals[p]) || 0) + '</td>'
+  ).join('');
+  const footerHtml =
+    '<tr style="border-top:2px solid var(--border);font-weight:600;background:var(--bg-subtle);">' +
+      '<td style="text-align:left;">Total</td>' +
+      '<td></td><td></td>' + footerCells +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + grandTotal + '</td>' +
+      '<td></td><td></td>' +
+    '</tr>';
+  const legend =
+    '<div style="font-size:11px;color:var(--text-muted);padding:8px 2px 2px;">' +
+      'Deficit = target share − actual share. Green means underrepresented (eligible for picking), red means overrepresented. Weights live in config.json.' +
+    '</div>';
+  body.innerHTML =
+    '<div style="overflow-x:auto;">' +
+      '<table class="style-stats-table">' + header +
+        '<tbody>' + bodyRows + footerHtml + '</tbody>' +
+      '</table>' +
+    '</div>' + legend;
+}
+async function loadProjectStatus(force) {
+  if (_projectStatusLoading) return;
+  if (saAuthNotReady()) return;
+  _projectStatusLoading = true;
+  try {
+    const res = await fetch('/api/project/status?hours=24');
+    const data = await res.json();
+    renderProjectStatus(data);
+  } catch (e) {
+    renderProjectStatus({ error: String(e && e.message || e) });
+  } finally {
+    _projectStatusLoading = false;
+  }
+}
+
 // In CLIENT_MODE, /api/* calls need the Firebase ID token on Authorization.
 // Any fetch that fires before the fetch wrapper has a token returns
 // {error:"missing_token"}, which the section renderers display as-is.
@@ -6410,6 +6525,8 @@ function saStartApp() {
   if (!isCloud) {
     loadDeployHealth();
     setInterval(loadDeployHealth, 60000);
+    loadProjectStatus();
+    setInterval(loadProjectStatus, 60000);
   }
   // Funnel + DM stats sections are \`<details open>\` by default; load them
   // here (post-auth) rather than in their wire IIFEs, which fire before
