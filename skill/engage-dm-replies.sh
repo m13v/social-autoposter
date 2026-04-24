@@ -621,7 +621,7 @@ Every reply is one of two modes. Pick the mode based on the timeline rule and Mo
 
 **TIMELINE RULE (overrides the default):**
 - Total messages 1-3 in the thread: Mode A is the default. Switch to Mode B only if the Mode B triggers in Step 2.7 are already met.
-- Total messages 4+: you MUST be in Mode B. Either mention the best-fit product naturally OR, if no project in \$PROJECTS plausibly fits this prospect, set \`qualification_status = disqualified\` per Step 2.5 with a one-line reason and stay in Mode A permanently. Do NOT let a thread drift past 3 outbound turns of pure rapport without either pitching or disqualifying.
+- Total messages 4+: you MUST be in Mode B. Either mention the best-fit product naturally OR, if no project in \$PROJECTS plausibly fits this prospect, set \`qualification_status = disqualified\` per Step 2.5 with a one-line reason and stay in Mode A permanently. Auto-disqualify triggers (set disqualified at turn 4 without trying to pivot): prospect is building a competing OSS tool in the same space and is soliciting our contributions (e.g. "you can help!", shares their own roadmap for feedback); prospect is a teacher, facilitator, coach, or session-giver running their own practice or community in that domain (peer, not buyer); target_project exists in \$PROJECTS but has no \`qualification\` block in config, so Step 2.5 cannot run. Do NOT let a thread drift past 3 outbound turns of pure rapport without either pitching or disqualifying. \`scripts/dm_conversation.py log-outbound\` enforces this with a TIMELINE BLOCKED error once msg_count >= 3 and both qualification_status=pending and icp_matches=[].
 
 Total messages = inbound + outbound count in this thread (use conversation_history length). The message you're about to send counts, so by the time you send message 4 it must be a Mode B pivot (or a Mode A rapport reply after a disqualification has been recorded).
 
@@ -672,7 +672,7 @@ The qualification funnel in Step 2.5 then runs against the (possibly updated) ta
 
 Goal: before we ever drop a booking link or pitch, know whether the prospect matches the project's must_have list and doesn't trigger the disqualify list. Do this as a natural conversational question, not a form.
 
-Pull the matched project's \`qualifying_question\`, \`must_have\`, and \`disqualify\` from the \$PROJECTS block. If the DM has no target_project (and no project_name), skip this step entirely; Step 2 already produced a rapport reply.
+Pull the matched project's \`qualifying_question\`, \`must_have\`, and \`disqualify\` from the \$PROJECTS block. If the DM has no target_project (and no project_name) AND message_count < 4, skip this step entirely; Step 2 already produced a rapport reply. If message_count >= 4 and Step 2.4 couldn't assign a target_project, set \`qualification_status = disqualified\` here with a one-line reason like "no product fit after rescore" and send a short Mode A close in Step 2 — do NOT keep generating substantive rapport turn after turn.
 
 Branch on \`qualification_status\` of the DM row:
 
@@ -700,7 +700,7 @@ Branch on \`qualification_status\` of the DM row:
 
 4. \`qualified\` → proceed to Step 2.8 (auto-share the booking link if eligible).
 
-5. \`disqualified\` → never share the booking link. Do NOT pitch. Also set \`--interest not_our_prospect\` in Step 5b and usually let the conversation rest with a short, polite reply.
+5. \`disqualified\` → never share the booking link. Do NOT pitch. Set \`--interest not_our_prospect\` in Step 5b and send a short, polite close (1-2 sentences max, no new open question). Do NOT revive the thread on later inbounds with fresh substantive rapport, however tempting the topic; a disqualified thread that keeps drawing thoughtful paragraph replies turn after turn is the same failure mode as never disqualifying at all.
 
 ### Step 2.6: Use prospect profile context in the reply
 
