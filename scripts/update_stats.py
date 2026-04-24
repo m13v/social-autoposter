@@ -1046,6 +1046,7 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
                 "engagement_updated_at=NOW(), deletion_detect_count=0 WHERE id=%s",
                 [views, likes, replies, post_id],
             )
+        dbmod.snapshot_post_views(db, post_id, views)
 
         updated += 1
         results.append({"id": post_id, "views": views, "likes": likes,
