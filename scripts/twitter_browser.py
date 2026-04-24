@@ -726,9 +726,61 @@ def read_conversation(thread_url, max_messages=20):
 
                     if (!content || content.length < 1) continue;
 
-                    // Our sent messages have SVG checkmarks (delivery status)
-                    const svgCount = item.querySelectorAll('svg').length;
-                    isFromUs = svgCount > 0;
+                    // Determine isFromUs via multiple signals. The previous
+                    // heuristic (any SVG present => ours) misclassified inbound
+                    // messages that contained a link-preview card, because the
+                    // card itself renders SVG icons (GitHub logo, external-link
+                    // glyph, etc.). See DM #1486 / session d986d23e where an
+                    // inbound "U can check its open source" + auto-unfurled
+                    // GitHub card was labeled as ours and the agent then
+                    // reconciled to DB with a bare-URL outbound.
+                    //
+                    // Signal 1 (strong): delivery receipt text. Seen/Delivered/
+                    //   Sent only render on our outgoing messages.
+                    let hasStatusText = false;
+                    const statusCandidates = item.querySelectorAll('span, div');
+                    for (const s of statusCandidates) {
+                        const t = (s.textContent || '').trim();
+                        if (t === 'Seen' || t === 'Delivered' || t === 'Sent') {
+                            hasStatusText = true;
+                            break;
+                        }
+                        if (/^Seen\\s+\\d/.test(t) || /^Delivered\\s+\\d/.test(t)) {
+                            hasStatusText = true;
+                            break;
+                        }
+                    }
+
+                    // Signal 2: horizontal alignment. X right-aligns our bubbles.
+                    let hasRightAlign = false;
+                    const alignCandidates = item.querySelectorAll('div[style]');
+                    for (const a of alignCandidates) {
+                        const style = a.getAttribute('style') || '';
+                        if (style.indexOf('flex-end') !== -1 ||
+                            style.indexOf('justify-content: end') !== -1) {
+                            hasRightAlign = true;
+                            break;
+                        }
+                    }
+
+                    // Signal 3 (fallback): SVG presence, but only delivery-status
+                    //   SVGs. Exclude SVGs inside <a>, inside card/article wrappers,
+                    //   and inside any element that also contains an <img>
+                    //   (all strong tells of a link-preview, not a receipt).
+                    let hasDeliverySvg = false;
+                    const allSvgs = item.querySelectorAll('svg');
+                    for (const svg of allSvgs) {
+                        if (svg.closest('a')) continue;
+                        if (svg.closest('article')) continue;
+                        if (svg.closest('[data-testid*="card"]')) continue;
+                        if (svg.closest('[role="link"]')) continue;
+                        const wrapperWithImg = svg.closest('div');
+                        if (wrapperWithImg && wrapperWithImg.querySelector('img')) continue;
+                        hasDeliverySvg = true;
+                        break;
+                    }
+
+                    isFromUs = hasStatusText || hasRightAlign || hasDeliverySvg;
 
                     messages.push({
                         sender: isFromUs ? 'us' : partnerName || partnerHandle || 'them',
