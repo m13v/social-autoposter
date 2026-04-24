@@ -1832,14 +1832,14 @@ async function handleApi(req, res) {
     }
     if (includeComment) {
       rowQueries.push(
-        "SELECT 'comment' AS type, COUNT(*)::int, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) " +
+        "SELECT 'comment' AS type, COUNT(*)::int AS count, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) AS total_cost_usd " +
         "FROM replies LEFT JOIN session_cost sc ON sc.session_id = replies.claude_session_id " +
         "WHERE replies.status='replied' AND replies.replied_at >= NOW() - " + win + platClause('replies.platform') + repliesPc.clause
       );
     }
     if (includePage) {
       rowQueries.push(
-        "SELECT 'page' AS type, COUNT(*)::int, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) " +
+        "SELECT 'page' AS type, COUNT(*)::int AS count, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) AS total_cost_usd " +
         "FROM (" +
           "SELECT claude_session_id FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL" + seoProdPc.clause +
           " UNION ALL " +
@@ -1849,7 +1849,7 @@ async function handleApi(req, res) {
     }
     if (includeDm) {
       rowQueries.push(
-        "SELECT 'dm_thread' AS type, COUNT(*)::int, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) " +
+        "SELECT 'dm_thread' AS type, COUNT(*)::int AS count, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) AS total_cost_usd " +
         "FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id " +
         "WHERE dms.status='sent' AND dms.sent_at >= NOW() - " + win + platClause('dms.platform') + dmsPc.clause
       );
