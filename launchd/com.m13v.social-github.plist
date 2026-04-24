@@ -24,7 +24,9 @@
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-github-stdout.log</string>
 	<key>StartCalendarInterval</key>
 	<array>
+		<dict><key>Minute</key><integer>0</integer></dict>
 		<dict><key>Minute</key><integer>15</integer></dict>
+		<dict><key>Minute</key><integer>30</integer></dict>
 		<dict><key>Minute</key><integer>45</integer></dict>
 	</array>
 </dict>
