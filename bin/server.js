@@ -32,7 +32,7 @@ function agentPath(job) {
 // Matrix: rows = job types, columns = platforms
 // Each cell is a job (or null if that combo doesn't exist)
 const PLATFORMS = ['Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
-const JOB_TYPES = ['Post', 'Engage', 'DM Outreach', 'DM Replies', 'Link Edit', 'Stats', 'Health Check', 'Octolens'];
+const JOB_TYPES = ['Post', 'Engage', 'DM Outreach', 'DM Replies', 'Link Edit', 'Stats', 'Post Audit', 'Octolens'];
 
 const JOBS = [
   // Post row
@@ -70,12 +70,12 @@ const JOBS = [
   { label: 'com.m13v.social-stats-twitter', name: 'Stats Twitter', type: 'Stats', platform: 'Twitter', script: 'stats-twitter.sh', logPrefix: 'stats-twitter-', plist: 'com.m13v.social-stats-twitter.plist' },
   { label: 'com.m13v.social-stats-linkedin', name: 'Stats LinkedIn', type: 'Stats', platform: 'LinkedIn', script: 'stats-linkedin.sh', logPrefix: 'stats-linkedin-', plist: 'com.m13v.social-stats-linkedin.plist' },
   { label: 'com.m13v.social-stats-moltbook', name: 'Stats MoltBook', type: 'Stats', platform: 'MoltBook', script: 'stats-moltbook.sh', logPrefix: 'stats-moltbook-', plist: 'com.m13v.social-stats-moltbook.plist' },
-  // Health Check row (verify posts still exist / API health)
-  { label: 'com.m13v.social-audit-reddit', name: 'Health Check Reddit', type: 'Health Check', platform: 'Reddit', script: 'audit-reddit.sh', logPrefix: 'audit-reddit-', plist: 'com.m13v.social-audit-reddit.plist' },
-  { label: 'com.m13v.social-audit-twitter', name: 'Health Check Twitter', type: 'Health Check', platform: 'Twitter', script: 'audit-twitter.sh', logPrefix: 'audit-twitter-', plist: 'com.m13v.social-audit-twitter.plist' },
-  { label: 'com.m13v.social-audit-linkedin', name: 'Health Check LinkedIn', type: 'Health Check', platform: 'LinkedIn', script: 'audit-linkedin.sh', logPrefix: 'audit-linkedin-', plist: 'com.m13v.social-audit-linkedin.plist' },
-  { label: 'com.m13v.social-audit-moltbook', name: 'Health Check MoltBook', type: 'Health Check', platform: 'MoltBook', script: 'audit-moltbook.sh', logPrefix: 'audit-moltbook-', plist: 'com.m13v.social-audit-moltbook.plist' },
-  { label: 'com.m13v.social-audit-reddit-resurrect', name: 'Resurrect Reddit', type: 'Health Check', platform: 'Reddit', script: 'audit-reddit-resurrect.sh', logPrefix: 'audit-reddit-resurrect-', plist: 'com.m13v.social-audit-reddit-resurrect.plist' },
+  // Post Audit row (verify posts still exist / API health)
+  { label: 'com.m13v.social-audit-reddit', name: 'Post Audit Reddit', type: 'Post Audit', platform: 'Reddit', script: 'audit-reddit.sh', logPrefix: 'audit-reddit-', plist: 'com.m13v.social-audit-reddit.plist' },
+  { label: 'com.m13v.social-audit-twitter', name: 'Post Audit Twitter', type: 'Post Audit', platform: 'Twitter', script: 'audit-twitter.sh', logPrefix: 'audit-twitter-', plist: 'com.m13v.social-audit-twitter.plist' },
+  { label: 'com.m13v.social-audit-linkedin', name: 'Post Audit LinkedIn', type: 'Post Audit', platform: 'LinkedIn', script: 'audit-linkedin.sh', logPrefix: 'audit-linkedin-', plist: 'com.m13v.social-audit-linkedin.plist' },
+  { label: 'com.m13v.social-audit-moltbook', name: 'Post Audit MoltBook', type: 'Post Audit', platform: 'MoltBook', script: 'audit-moltbook.sh', logPrefix: 'audit-moltbook-', plist: 'com.m13v.social-audit-moltbook.plist' },
+  { label: 'com.m13v.social-audit-reddit-resurrect', name: 'Resurrect Reddit', type: 'Post Audit', platform: 'Reddit', script: 'audit-reddit-resurrect.sh', logPrefix: 'audit-reddit-resurrect-', plist: 'com.m13v.social-audit-reddit-resurrect.plist' },
   // Octolens row
   { label: 'com.m13v.social-octolens-reddit', name: 'Octolens Reddit', type: 'Octolens', platform: 'Reddit', script: 'octolens-reddit.sh', logPrefix: 'octolens-reddit-', plist: 'com.m13v.social-octolens-reddit.plist' },
   { label: 'com.m13v.social-octolens-twitter', name: 'Octolens Twitter', type: 'Octolens', platform: 'Twitter', script: 'octolens-twitter.sh', logPrefix: 'octolens-twitter-', plist: 'com.m13v.social-octolens-twitter.plist' },
@@ -3471,7 +3471,7 @@ function fmtInterval(secs) {
 
 let _initialized = false;
 const PLATFORMS = ['Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
-const JOB_TYPES = ['Post', 'Engage', 'DM Outreach', 'DM Replies', 'Link Edit', 'Stats', 'Health Check', 'Octolens'];
+const JOB_TYPES = ['Post', 'Engage', 'DM Outreach', 'DM Replies', 'Link Edit', 'Stats', 'Post Audit', 'Octolens'];
 
 function renderToggle(label, loaded) {
   return '<label class="toggle-switch" data-field="toggle" title="' + (loaded ? 'On — click to disable' : 'Off — click to enable') + '">' +
