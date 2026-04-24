@@ -107,7 +107,13 @@ def main():
     parser.add_argument("--thread-title", default="")
     parser.add_argument("--account", default=None,
                         help="Override default account for the platform")
-    parser.add_argument("--engagement-style", default=None)
+    parser.add_argument("--engagement-style", default=None,
+                        help="Tone style (e.g. critic, storyteller). Separate from "
+                             "--is-recommendation, which is intent.")
+    parser.add_argument("--is-recommendation", action="store_true",
+                        help="Mark this post as a project mention/recommendation. "
+                             "Composes with --engagement-style; tone and intent are "
+                             "independent dimensions.")
     parser.add_argument("--language", default=None,
                         help="ISO 639-1 language code (e.g. en, ja, zh, es)")
     args = parser.parse_args()
@@ -163,17 +169,20 @@ def main():
             platform, thread_url, thread_author, thread_author_handle,
             thread_title, thread_content, our_url, our_content, our_account,
             source_summary, project_name, status, posted_at,
-            feedback_report_used, engagement_style, language, claude_session_id
+            feedback_report_used, engagement_style, is_recommendation,
+            language, claude_session_id
         ) VALUES (
             %s, %s, %s, %s,
             %s, '', %s, %s, %s,
             '', %s, 'active', NOW(),
-            TRUE, %s, %s, %s
+            TRUE, %s, %s,
+            %s, %s
         ) RETURNING id""",
         [
             args.platform, args.thread_url, args.thread_author, args.thread_author,
             args.thread_title, args.our_url, args.our_content, account,
-            args.project, args.engagement_style, args.language, claude_session_id,
+            args.project, args.engagement_style, bool(args.is_recommendation),
+            args.language, claude_session_id,
         ],
     )
     row = cur.fetchone()
