@@ -825,6 +825,10 @@ You must use at least 3 visual content components (not counting trust signals). 
 
 If you reference a Lottie animation via `LottiePlayer`, you MUST also create the JSON file at a real path in `public/` (e.g. `public/lottie/<slug>-hero.json`). Do not reference a Lottie path that does not exist. If you cannot produce a real Lottie JSON, skip it.
 
+### Page chrome: do NOT render a navbar or footer
+
+The site's intermediate layout (`src/app/t/layout.tsx` or `src/app/(main)/layout.tsx`) renders the shared `<SiteNavbar>` and `<SiteFooter>` once for every SEO page. Your page.tsx MUST start directly with the article body (`<article>`, breadcrumbs, hero, etc.) and MUST NOT import or render any of: `SiteNavbar`, `SiteFooter`, `GuideNavbar`, `GuideFooter`, `Navbar`, `Header`, `Footer`. No top-level `<nav>`, `<header>`, or `<footer>` elements either. Rendering one yourself causes a double-navbar / double-footer. If you read an existing page for syntax reference and it renders one of these, IGNORE that part and omit it from your output.
+
 ### Color palette (mandatory)
 
 CONSUMER THEME DETECTED: {consumer_theme}. The consumer site's root layout uses a {consumer_theme}-mode global, so your page MUST match. Using the wrong theme renders the article body as a contrasting slab between the navbar and footer.
