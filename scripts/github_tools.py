@@ -198,18 +198,24 @@ def cmd_log_post(args):
         }))
         return
 
+    # claude_session_id may come either via --claude-session-id or via the
+    # CLAUDE_SESSION_ID env var (set by run_claude.sh). CLI arg wins.
+    session_id = (getattr(args, "claude_session_id", None)
+                  or os.environ.get("CLAUDE_SESSION_ID")
+                  or None)
     conn.execute(
         """INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
            thread_title, thread_content, our_url, our_content, our_account,
            source_summary, project_name, status, posted_at, feedback_report_used,
-           engagement_style, search_topic, language)
+           engagement_style, search_topic, language, claude_session_id)
            VALUES ('github', %s, %s, %s, %s, '', %s, %s, %s, '', %s, 'active', NOW(), TRUE,
-                   %s, %s, %s)""",
+                   %s, %s, %s, %s::uuid)""",
         [args.thread_url, args.thread_author, args.thread_author, args.thread_title,
          args.our_url, args.our_text, args.account, args.project,
          getattr(args, "engagement_style", None),
          getattr(args, "search_topic", None),
-         (getattr(args, "language", None) or "en")],
+         (getattr(args, "language", None) or "en"),
+         session_id],
     )
     conn.commit()
     conn.close()
@@ -248,6 +254,8 @@ def main():
                        help="The seed topic/query used to find this issue (feedback loop input)")
     p_log.add_argument("--language", dest="language", default=None,
                        help="ISO 639-1 language code of the issue (defaults to en if omitted)")
+    p_log.add_argument("--claude-session-id", dest="claude_session_id", default=None,
+                       help="UUID of the Claude session that drafted this post (falls back to CLAUDE_SESSION_ID env var)")
 
     args = parser.parse_args()
     if args.command == "search":
