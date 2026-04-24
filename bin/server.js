@@ -1468,7 +1468,10 @@ async function handleApi(req, res) {
           "THEN GREATEST(0, COALESCE(upvotes,0) - 1) " +
           "ELSE COALESCE(upvotes,0) END), 0)::int AS upvotes_discounted, " +
         "COALESCE(SUM(comments_count), 0)::int AS comments, " +
-        "COALESCE(SUM(views) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues')), 0)::int AS views " +
+        "COALESCE(SUM(views) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues')), 0)::int AS views, " +
+        // Intent dimension (is_recommendation) is independent of tone (engagement_style).
+        // This sum tells us "of N posts in this tone, how many carried a project mention".
+        "COALESCE(SUM(CASE WHEN is_recommendation THEN 1 ELSE 0 END), 0)::int AS recommendations " +
       "FROM posts WHERE posted_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
       "AND our_content <> '(mention - no original post)' " +
       platformFilter + projectFilter +
@@ -4559,6 +4562,7 @@ function renderStyleStats(payload) {
       upvotes:     Number(r.upvotes)     || 0,
       comments,
       views:       Number(r.views)       || 0,
+      recommendations: Number(r.recommendations) || 0,
       score,
     };
   });
