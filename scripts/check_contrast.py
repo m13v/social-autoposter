@@ -62,16 +62,26 @@ USER_AGENT = "check-contrast/1.0 (+https://github.com/m13v/social-autoposter)"
 # findings. Kept self-contained so we can inject via page.evaluate().
 PAGE_SCRIPT = r"""
 (({minContrast}) => {
+  // Canvas-based color parser. Handles every CSS color notation the
+  // browser understands: rgb(), rgba(), hsl(), lab(), oklch(), named,
+  // hex, color(). Returns null for 'transparent' / invalid input.
+  const __canvas = document.createElement('canvas');
+  __canvas.width = __canvas.height = 1;
+  const __ctx = __canvas.getContext('2d', { willReadFrequently: true });
   function parseRgb(s) {
     if (!s) return null;
-    // rgb(r, g, b), rgba(r, g, b, a), rgb(r g b / a), color(...)
-    const m = s.match(/rgba?\(\s*([0-9.]+)\s*[ ,]\s*([0-9.]+)\s*[ ,]\s*([0-9.]+)(?:\s*[ ,/]\s*([0-9.%]+))?\s*\)/i);
-    if (m) {
-      let a = 1;
-      if (m[4]) a = m[4].endsWith('%') ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
-      return { r: +m[1], g: +m[2], b: +m[3], a };
+    try {
+      __ctx.fillStyle = '#000000';      // reset so failed parse shows
+      __ctx.fillStyle = s;              // browser parses
+      __ctx.clearRect(0, 0, 1, 1);
+      __ctx.fillRect(0, 0, 1, 1);
+      const d = __ctx.getImageData(0, 0, 1, 1).data;
+      const a = d[3] / 255;
+      if (a < 0.001 && s !== 'rgb(0, 0, 0)' && s !== '#000000') return { r: 0, g: 0, b: 0, a: 0 };
+      return { r: d[0], g: d[1], b: d[2], a };
+    } catch (e) {
+      return null;
     }
-    return null;
   }
   function relLum({ r, g, b }) {
     const f = (v) => {
