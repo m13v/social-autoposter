@@ -17,8 +17,8 @@ import json
 import os
 import re
 import sys
-import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
@@ -73,17 +73,14 @@ def main():
 
     print(f"Re-polling {len(rows)} candidates for batch {args.batch_id}", file=sys.stderr)
 
-    for row in rows:
+    def fetch_row(row):
         cid, url, l0, r0, p0, v0, b0 = row
         handle, tweet_id = parse(url)
         if not handle:
-            continue
-
+            return None
         data = fetch_fxtwitter(handle, tweet_id)
         if not data or not data.get("tweet"):
-            time.sleep(0.3)
-            continue
-
+            return None
         t = data["tweet"]
         t1 = {
             "likes": t.get("likes", 0),
@@ -93,8 +90,15 @@ def main():
             "bookmarks": t.get("bookmarks", 0),
         }
         t0 = {"likes": l0 or 0, "retweets": r0 or 0, "replies": p0 or 0, "views": v0 or 0, "bookmarks": b0 or 0}
-        delta = compute_delta(t0, t1)
+        return (cid, url, t1, compute_delta(t0, t1))
 
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        results = list(ex.map(fetch_row, rows))
+
+    for result in results:
+        if result is None:
+            continue
+        cid, url, t1, delta = result
         conn.execute(
             """
             UPDATE twitter_candidates
@@ -109,7 +113,6 @@ def main():
              cid],
         )
         print(f"  #{cid} {url} Δ={delta:.1f}", file=sys.stderr)
-        time.sleep(0.3)
 
     conn.commit()
     conn.close()
