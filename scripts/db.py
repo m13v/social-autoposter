@@ -63,8 +63,7 @@ def _connect_with_retry(url):
             return psycopg2.connect(url, keepalives=1,
                                     keepalives_idle=30,
                                     keepalives_interval=10,
-                                    keepalives_count=5,
-                                    options="-c statement_timeout=300000")
+                                    keepalives_count=5)
         except psycopg2.OperationalError as exc:
             msg = str(exc)
             if not any(m in msg for m in _DNS_TRANSIENT_MARKERS):
