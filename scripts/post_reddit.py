@@ -537,6 +537,7 @@ def run_one_iteration(args, config, reddit_username, already_picked):
         if engagement_style and engagement_style not in VALID_STYLES:
             print(f"[post_reddit] unknown style '{engagement_style}', clearing")
             engagement_style = None
+        search_topic = decision.get("search_topic") or None
 
         print(f"[post_reddit] Posting {i + 1}/{len(decisions)}: {thread_title[:50]}...")
         result = post_via_cdp(thread_url, reply_to_url, text)
@@ -552,7 +553,8 @@ def run_one_iteration(args, config, reddit_username, already_picked):
                 continue
             log_post(thread_url, permalink, text, project_name,
                      thread_author, thread_title, reddit_username,
-                     engagement_style=engagement_style)
+                     engagement_style=engagement_style,
+                     search_topic=search_topic)
             posted += 1
             print(f"[post_reddit] POSTED: {permalink}")
         else:
