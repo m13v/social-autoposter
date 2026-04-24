@@ -2042,6 +2042,24 @@ async function handleApi(req, res) {
     const weighted = configuredProjects.filter(p => (p.weight || 0) > 0);
     const totalWeight = weighted.reduce((a, p) => a + (p.weight || 0), 0) || 1;
     const platforms = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github'];
+    // Per-platform eligibility: a project is eligible to be picked for a
+    // platform only if it has the data that platform's picker needs. Mirrors
+    // scripts/pick_project.py and scripts/pick_thread_target.py. Projects
+    // ineligible for a platform get target_share=null (shown as "NA" in the
+    // dashboard) and are excluded from that platform's target-weight denom.
+    const platformEligible = {
+      github:   p => Array.isArray(p.github_search_topics) && p.github_search_topics.length > 0,
+      twitter:  p => Array.isArray(p.twitter_topics) && p.twitter_topics.length > 0,
+      linkedin: p => Array.isArray(p.linkedin_topics) && p.linkedin_topics.length > 0,
+      reddit:   p => !!(p.threads && p.threads.enabled === true),
+      moltbook: () => true,
+    };
+    const totalWeightByPlatform = {};
+    for (const plat of platforms) {
+      totalWeightByPlatform[plat] = weighted
+        .filter(p => platformEligible[plat](p))
+        .reduce((a, p) => a + (p.weight || 0), 0);
+    }
     const rows = await pq(
       "SELECT COALESCE(project_name, '(none)') AS project_name, platform, COUNT(*)::int AS n " +
       "FROM posts WHERE posted_at >= NOW() - INTERVAL '" + hours + " hours' " +
@@ -2068,11 +2086,21 @@ async function handleApi(req, res) {
       const target_share = (p.weight || 0) / totalWeight;
       const actual_share = grandTotal > 0 ? stats.total / grandTotal : 0;
       const per_platform = {};
-      for (const plat of platforms) per_platform[plat] = stats.by_platform[plat] || 0;
+      const target_share_by_platform = {};
+      for (const plat of platforms) {
+        per_platform[plat] = stats.by_platform[plat] || 0;
+        if (!platformEligible[plat](p)) {
+          target_share_by_platform[plat] = null;
+        } else {
+          const denom = totalWeightByPlatform[plat] || 0;
+          target_share_by_platform[plat] = denom > 0 ? (p.weight || 0) / denom : 0;
+        }
+      }
       return {
         name,
         weight: p.weight || 0,
         target_share,
+        target_share_by_platform,
         total: stats.total,
         actual_share,
         deficit: target_share - actual_share,
@@ -2099,6 +2127,7 @@ async function handleApi(req, res) {
       hours,
       generated_at_ms: Date.now(),
       total_weight: totalWeight,
+      total_weight_by_platform: totalWeightByPlatform,
       grand_total: grandTotal,
       platform_totals: platformTotals,
       projects,
@@ -6261,9 +6290,18 @@ function renderProjectStatus(data) {
   };
   const rowHtml = (r) => {
     const targetShare = r.unassigned ? null : Number(r.target_share) || 0;
+    const perPlatformTarget = (r && r.target_share_by_platform) || {};
     const platformCells = PROJECT_STATUS_PLATFORMS.map(p => {
       const n = (r.by_platform && r.by_platform[p]) || 0;
-      return cellWithShare(n, totals[p], targetShare);
+      // NA: project is weighted but ineligible for this platform (e.g. no
+      // github_search_topics → not in the GitHub picker's pool).
+      if (!r.unassigned && perPlatformTarget[p] === null) {
+        return '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-very-faint);">NA</td>';
+      }
+      const platTarget = r.unassigned
+        ? null
+        : (Object.prototype.hasOwnProperty.call(perPlatformTarget, p) ? perPlatformTarget[p] : targetShare);
+      return cellWithShare(n, totals[p], platTarget);
     }).join('');
     const nameCell = r.website
       ? '<a href="' + escapeHtml(r.website) + '" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;border-bottom:1px dotted var(--text-very-faint);">' + escapeHtml(r.name) + '</a>'
@@ -6292,7 +6330,7 @@ function renderProjectStatus(data) {
     '</tr>';
   const legend =
     '<div style="font-size:11px;color:var(--text-muted);padding:8px 2px 2px;">' +
-      'Bracketed % is this project’s share of that platform’s posts in the window. Green means above target share (overposting), red means below (eligible for the picker).' +
+      'Bracketed % is this project’s share of that platform’s posts in the window. Green means above target share (overposting), red means below (eligible for the picker). NA means the project is ineligible for that platform (no topics configured or threads disabled) and is excluded from that platform’s target denominator.' +
     '</div>';
   body.innerHTML =
     '<div style="overflow-x:auto;">' +
