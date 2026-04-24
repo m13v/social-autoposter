@@ -1581,8 +1581,9 @@ async function handleApi(req, res) {
   // summed across all posts and platforms. Reads post_views_daily, which is
   // populated by the Reddit + Twitter refresh jobs (LinkedIn and Moltbook
   // have no views metric). Daily delta per post via LAG; GREATEST(.,0)
-  // clamps negatives (counter resets, post deletions). Rows with no prior
-  // snapshot count as views-on-their-first-recorded-day (prev treated as 0).
+  // clamps negatives (counter resets, post deletions). Each post's FIRST
+  // snapshot is excluded (prev_views IS NULL) so cold-start days don't
+  // inflate by attributing a post's lifetime views to the capture day.
   if (p === '/api/views/per-day' && req.method === 'GET') {
     if (!req.user.admin) return json(res, { error: 'forbidden' }, 403);
     const url = new URL(req.url, 'http://localhost');
@@ -1622,9 +1623,9 @@ async function handleApi(req, res) {
       ") " +
       "SELECT json_agg(row_to_json(r)) FROM (" +
         "SELECT day::text AS day, " +
-          "SUM(GREATEST(views - COALESCE(prev_views, 0), 0))::bigint AS views_gained, " +
+          "SUM(GREATEST(views - prev_views, 0))::bigint AS views_gained, " +
           "COUNT(DISTINCT post_id)::int AS posts_observed " +
-        "FROM daily GROUP BY day ORDER BY day ASC" +
+        "FROM daily WHERE prev_views IS NOT NULL GROUP BY day ORDER BY day ASC" +
       ") r";
     return (async () => {
       const rows = await pq(q);
