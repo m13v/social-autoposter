@@ -84,6 +84,21 @@ class PGConn:
         self._conn = conn
         self._url = url
         self._cursor_factory = psycopg2.extras.DictCursor
+        self._apply_session_defaults()
+
+    def _apply_session_defaults(self):
+        # 5 min per-statement ceiling. Prevents silent hangs when Neon's
+        # pgbouncer drops an idle socket and psycopg2's recv stalls forever
+        # (observed 2026-04-23/24 on update_stats.py --github-only). Neon's
+        # pooler rejects libpq `options=` at connect time, so we set this via
+        # SQL after connect. Reapplied after commit() because transaction-mode
+        # pooling resets session state on COMMIT.
+        try:
+            cur = self._conn.cursor()
+            cur.execute("SET statement_timeout = 300000")
+            cur.close()
+        except Exception:
+            pass
 
     def _reconnect(self):
         try:
@@ -91,6 +106,7 @@ class PGConn:
         except Exception:
             pass
         self._conn = _connect_with_retry(self._url)
+        self._apply_session_defaults()
 
     def execute(self, sql, params=None):
         import psycopg2
@@ -118,6 +134,9 @@ class PGConn:
         except psycopg2.OperationalError:
             self._reconnect()
             self._conn.commit()
+        # Neon's transaction-mode pooler resets session state on COMMIT, so
+        # re-apply statement_timeout for the next transaction.
+        self._apply_session_defaults()
 
     def close(self):
         self._conn.close()
