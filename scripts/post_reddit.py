@@ -212,11 +212,15 @@ def build_prompt(project, config, limit, top_report, recent_comments):
     """Build prompt for Claude to search, evaluate, and draft replies (no posting)."""
     content_angle = build_content_angle(project, config)
 
-    project_json = json.dumps({k: project.get(k) for k in
-        ["name", "description", "topics"]
-        if project.get(k)}, indent=2)
+    # Prefer unified search_topics (shared across platforms); fall back to the
+    # legacy topics list for pre-migration safety.
+    topics_list = project.get("search_topics") or project.get("topics", [])
 
-    topics_list = project.get("topics", [])
+    project_json = json.dumps({
+        "name": project.get("name"),
+        "description": project.get("description"),
+        "search_topics": topics_list,
+    }, indent=2)
 
     recent_ctx = ""
     if recent_comments:
@@ -273,10 +277,13 @@ Search defaults to sort=relevance and time=week. Use --time month for broader re
 - Statements beat questions. Be authoritative, not inquisitive.
 
 ## Steps
-1. Search 2 topics from: {json.dumps(topics_list)}. Skip already_posted=true threads.
+1. Pick 2 concepts from the project's search_topics list: {json.dumps(topics_list)}.
+   These are shared concept seeds across platforms (Twitter, Reddit, GitHub, LinkedIn). Some
+   phrases are tuned for other platforms — rephrase each into natural Reddit search terms
+   (vernacular, problem-framing, pain points) before running the search. Skip already_posted=true threads.
 2. Pick {limit} best threads where you have genuine expertise to contribute. Prefer replying to OP. Fetch each one.
 3. Draft the comment following the CRITICAL CONTENT RULES above. Quality over quantity.
-4. Output each as a JSON object, then DONE.
+4. Output each as a JSON object, then DONE. Include the seed concept you used in "search_topic".
 
 ## Content rules
 {get_content_rules("reddit")}
@@ -284,7 +291,7 @@ Search defaults to sort=relevance and time=week. Use --time month for broader re
 ## CRITICAL OUTPUT FORMAT
 You MUST output each draft as a raw JSON object on its own line. No commentary before or after. Example:
 
-{{"action": "post", "thread_url": "https://old.reddit.com/r/sub/comments/abc/title/", "reply_to_url": null, "text": "your comment here", "thread_author": "username", "thread_title": "thread title", "engagement_style": "critic"}}
+{{"action": "post", "thread_url": "https://old.reddit.com/r/sub/comments/abc/title/", "reply_to_url": null, "text": "your comment here", "thread_author": "username", "thread_title": "thread title", "engagement_style": "critic", "search_topic": "the seed concept you picked"}}
 
 After all {limit} JSON objects, output DONE on its own line.
 Do NOT describe what you are doing. Do NOT narrate. Just search, draft, output JSON, DONE.
@@ -437,7 +444,7 @@ def post_via_cdp(thread_url, reply_to_url, text):
     return {"ok": False, "error": "all_attempts_failed"}
 
 
-def log_post(thread_url, permalink, text, project_name, thread_author, thread_title, reddit_username, engagement_style=None):
+def log_post(thread_url, permalink, text, project_name, thread_author, thread_title, reddit_username, engagement_style=None, search_topic=None):
     """Log a successful post to the database."""
     try:
         cmd = ["python3", REDDIT_TOOLS, "log-post",
@@ -446,6 +453,8 @@ def log_post(thread_url, permalink, text, project_name, thread_author, thread_ti
              "--account", reddit_username]
         if engagement_style:
             cmd.extend(["--engagement-style", engagement_style])
+        if search_topic:
+            cmd.extend(["--search-topic", search_topic])
         subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     except Exception as e:
         print(f"[post_reddit] WARNING: log-post failed: {e}")
