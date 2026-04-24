@@ -3540,7 +3540,22 @@ function phaseInterval(rowJobs) {
   return best.v;
 }
 
+function formatIntervalSecs(secs) {
+  if (!Number.isFinite(secs) || secs <= 0) return secs + 's';
+  if (secs % 86400 === 0) { const d = secs / 86400; return d + (d === 1 ? ' day' : ' days'); }
+  if (secs % 3600 === 0)  { const h = secs / 3600;  return h + (h === 1 ? ' hour' : ' hours'); }
+  if (secs % 60 === 0)    return (secs / 60) + ' min';
+  return secs + 's';
+}
+
 function renderFreqCell(jobType, interval, jobs) {
+  // If the plist's real interval isn't in the canonical list (e.g. 15 min /
+  // 900s calendar jobs), synthesize an option so the select displays the
+  // true cadence instead of silently falling back to the first option.
+  const hasCanonical = INTERVALS.some(i => i.value === interval);
+  const extra = (interval != null && !hasCanonical)
+    ? '<option value="' + interval + '" selected>' + formatIntervalSecs(interval) + '</option>'
+    : '';
   const intervalOptions = INTERVALS.map(i =>
     '<option value="' + i.value + '"' + (i.value === interval ? ' selected' : '') + '>' + i.label + '</option>'
   ).join('');
@@ -3552,7 +3567,7 @@ function renderFreqCell(jobType, interval, jobs) {
   }
   return '<td class="freq-cell" data-freq="' + jobType + '">' +
     '<div class="cell-info" data-field="freq-lastrun">' + nextRunTime(latestRun, interval) + '</div>' +
-    '<select onchange="setPhaseInterval(\\'' + jobType + '\\', this.value)">' + intervalOptions + '</select>' +
+    '<select onchange="setPhaseInterval(\\'' + jobType + '\\', this.value)">' + extra + intervalOptions + '</select>' +
   '</td>';
 }
 
@@ -3683,8 +3698,17 @@ function updateFreqCells(jobs) {
     const el = td.querySelector('[data-field="freq-lastrun"]');
     if (el) el.textContent = nextRunTime(latestRun, interval);
     const sel = td.querySelector('select');
-    if (sel && interval != null && String(sel.value) !== String(interval)) {
-      sel.value = String(interval);
+    if (sel && interval != null) {
+      // If the real interval isn't in the canonical INTERVALS list, make sure
+      // the select has a matching option so sel.value assignment sticks.
+      const hasOpt = Array.from(sel.options).some(o => Number(o.value) === interval);
+      if (!hasOpt) {
+        const opt = document.createElement('option');
+        opt.value = String(interval);
+        opt.textContent = formatIntervalSecs(interval);
+        sel.insertBefore(opt, sel.firstChild);
+      }
+      if (String(sel.value) !== String(interval)) sel.value = String(interval);
     }
   }
 }
