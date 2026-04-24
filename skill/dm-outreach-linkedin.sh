@@ -179,7 +179,7 @@ For each DM row, BEFORE you compose or send, do this in order. USE mcp__linkedin
    \`\`\`
    Run this once per project from the list. Each call upserts one entry in dms.icp_matches (JSONB array) keyed by project.
 
-5. PROCEED TO SEND THE DM regardless of the ICP labels. The labels are informational; they do NOT gate outreach at this phase.
+5. If ANY entry in icp_matches has label=disqualified, skip the send: run \`python3 scripts/dm_conversation.py mark-skipped --dm-id DM_ID --reason "disqualified: PROJECT - SHORT_NOTES"\` and move on. \`icp_miss\` alone does NOT gate; send when every project scored miss. Only explicit \`disqualified\` blocks the opener.
 
 ## How to send messages on LinkedIn (use mcp__linkedin-agent__* tools):
 1. Navigate to https://www.linkedin.com/messaging/
