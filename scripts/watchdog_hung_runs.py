@@ -20,6 +20,8 @@ LOG_RUN_PY = REPO / "scripts" / "log_run.py"
 SKILL_PATH_MARKER = "/social-autoposter/skill/"
 MAX_AGE_SEC = 45 * 60
 WATCHDOG_LOG = REPO / "skill" / "logs" / "watchdog.log"
+RUN_MONITOR_LOG = REPO / "skill" / "logs" / "run_monitor.log"
+TRAP_GRACE_SEC = 5
 
 # Map skill/*.sh filename -> script label used by the script's own log_run.py
 # calls. Keeps dashboard job-history grouping consistent (e.g. a killed
@@ -172,7 +174,7 @@ def kill_tree(root_pid: int) -> list:
             pass
         except PermissionError:
             pass
-    time.sleep(2)
+    time.sleep(TRAP_GRACE_SEC)
     for p in reversed(pids):
         try:
             os.kill(p, 9)
@@ -183,14 +185,45 @@ def kill_tree(root_pid: int) -> list:
     return pids
 
 
-def emit_job_log(script_file, elapsed_sec, platform):
+def resolve_label(script_file, platform):
     prefix = SHARED_SCRIPT_PREFIX.get(script_file)
     if prefix and platform:
-        label = prefix + platform
-    elif script_file in SCRIPT_LABELS:
-        label = SCRIPT_LABELS[script_file]
-    else:
-        label = "watchdog_killed_" + script_file.replace(".sh", "").replace("-", "_")
+        return prefix + platform
+    if script_file in SCRIPT_LABELS:
+        return SCRIPT_LABELS[script_file]
+    return "watchdog_killed_" + script_file.replace(".sh", "").replace("-", "_")
+
+
+def recent_emit_exists(label, since_epoch):
+    """True if run_monitor.log has an entry for `label` at or after since_epoch.
+
+    The bash EXIT trap in scripts like run-twitter-cycle.sh runs log_run.py on
+    SIGTERM, so a fresh entry here means the watchdog's own emit would be a
+    duplicate.
+    """
+    try:
+        with open(RUN_MONITOR_LOG) as f:
+            tail = f.readlines()[-80:]
+    except FileNotFoundError:
+        return False
+    for raw in tail:
+        parts = raw.split("|", 2)
+        if len(parts) < 2:
+            continue
+        ts_str = parts[0].strip()
+        script = parts[1].strip()
+        if script != label:
+            continue
+        try:
+            ts = time.mktime(time.strptime(ts_str, "%Y-%m-%dT%H:%M:%S"))
+        except ValueError:
+            continue
+        if ts >= since_epoch:
+            return True
+    return False
+
+
+def emit_job_log(label, elapsed_sec):
     subprocess.run(
         [
             "python3", str(LOG_RUN_PY),
@@ -212,13 +245,18 @@ def main() -> None:
             continue
         if etimes < MAX_AGE_SEC:
             continue
+        label = resolve_label(script_file, platform)
         plat_tag = f" platform={platform}" if platform else ""
         watchdog_log(
-            f"KILL {script_file}{plat_tag} pid={pid} elapsed={etimes}s cap={MAX_AGE_SEC}s"
+            f"KILL {script_file}{plat_tag} pid={pid} elapsed={etimes}s cap={MAX_AGE_SEC}s label={label}"
         )
+        kill_started = time.time() - 1
         killed = kill_tree(pid)
         watchdog_log(f"  killed pids: {killed}")
-        emit_job_log(script_file, etimes, platform)
+        if recent_emit_exists(label, kill_started):
+            watchdog_log(f"  script trap already logged {label} — skipping watchdog emit")
+        else:
+            emit_job_log(label, etimes)
 
 
 if __name__ == "__main__":
