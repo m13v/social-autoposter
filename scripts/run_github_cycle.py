@@ -128,19 +128,49 @@ def parse_repo_number(url):
     return f"{m.group(1)}/{m.group(2)}", int(m.group(3))
 
 
-def build_prompt(candidates, cap, project, history_block, styles_block, content_angle):
+def get_top_search_topics(project_name, platform="github", limit=8, window_days=30):
+    """Top-performing search_topic seeds for this project on this platform.
+    Empty string if no signal yet. Mirrors the Reddit pattern."""
+    try:
+        result = subprocess.run(
+            ["python3", os.path.join(SCRIPTS, "top_search_topics.py"),
+             "--project", project_name, "--platform", platform,
+             "--window-days", str(window_days), "--limit", str(limit)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def build_prompt(candidates, cap, project, history_block, styles_block, content_angle,
+                 top_topics_report=""):
     cand_block = []
     for i, c in enumerate(candidates, 1):
+        topic_line = f"seed: {c['search_topic']}\n" if c.get("search_topic") else ""
         cand_block.append(
             f"--- #{i} {c['repo']}#{c['number']} delta={c['delta_score']:.1f} "
             f"(cm {c['comment_count_t0']}->{c['comment_count_t1']}, "
             f"rx {c['reaction_count_t0']}->{c['reaction_count_t1']}) ---\n"
+            f"{topic_line}"
             f"title: {c['title']}\n"
             f"author: {c['author']}\n"
             f"body: {c['body']}\n"
             f"url: {c['url']}\n"
         )
     candidates_text = "\n".join(cand_block)
+
+    top_topics_ctx = ""
+    if top_topics_report:
+        top_topics_ctx = f"""
+## Search-topic feedback (which seeds actually led to engagement):
+{top_topics_report}
+
+Prefer issues whose seed has a higher total/avg score when the fit is genuine.
+New seeds with 0 posts are fine, we need to explore.
+"""
 
     return f"""You are the Social Autoposter drafting GitHub issue comments for project {project['name']}.
 
@@ -149,14 +179,17 @@ Read {SKILL_FILE} for content rules (no em dashes, anti-AI tells, voice).
 ## Project context
 {content_angle}
 
-## Pre-filtered candidates (top {len(candidates)} by 10-minute engagement delta)
+## Pre-filtered candidates (top {len(candidates)} by recent engagement delta)
+
+Each candidate carries the search seed it came from. Echo that seed back in
+"search_topic" so we can score which seeds produce engagement.
 
 {candidates_text}
 
 {styles_block}
 
 {history_block}
-
+{top_topics_ctx}
 ## YOUR JOB
 
 Pick AT MOST {cap} issues and draft a helpful, technical comment for each.
@@ -186,6 +219,7 @@ Return ONLY a single JSON object, no prose, no markdown fencing:
       "thread_author": "<issue author>",
       "matched_project": "{project['name']}",
       "engagement_style": "<style>",
+      "search_topic": "<the seed from the candidate block, copied verbatim>",
       "comment_text": "<the actual comment to post>"
     }}
   ],
@@ -265,9 +299,9 @@ def post_and_log(decisions, claude_session_id):
             INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
                 thread_title, thread_content, our_url, our_content, our_account,
                 source_summary, project_name, engagement_style, feedback_report_used,
-                language, status, posted_at, claude_session_id)
+                language, status, posted_at, claude_session_id, search_topic)
             VALUES ('github', %s, %s, %s, %s, %s, %s, %s, 'm13v',
-                'github cycle comment', %s, %s, TRUE, 'en', 'active', NOW(), %s::uuid)
+                'github cycle comment', %s, %s, TRUE, 'en', 'active', NOW(), %s::uuid, %s)
             """,
             [
                 p.get("thread_url", ""),
@@ -280,6 +314,7 @@ def post_and_log(decisions, claude_session_id):
                 p.get("matched_project", ""),
                 p.get("engagement_style", ""),
                 claude_session_id,
+                (p.get("search_topic") or "").strip() or None,
             ],
         )
         posted += 1
@@ -420,7 +455,9 @@ def main():
 
     claude_session_id = str(uuid.uuid4())
     os.environ["CLAUDE_SESSION_ID"] = claude_session_id
-    prompt = build_prompt(top, cap, project, history_block, styles_block, content_angle)
+    top_topics_report = get_top_search_topics(project.get("name", ""), platform="github")
+    prompt = build_prompt(top, cap, project, history_block, styles_block, content_angle,
+                          top_topics_report=top_topics_report)
 
     log("Phase 2b: invoking Claude for drafting...")
     try:
