@@ -4439,7 +4439,9 @@ function currentStatsProject() {
 function reloadStatsTabSections() {
   loadActivityStats();
   loadStyleStats();
-  loadAllPerDayCharts();
+  // daily-metrics chart is intentionally NOT reloaded on window/platform/
+  // project changes — it's fixed to a 30-day rolling window, independent
+  // of the filter bar.
   const funnelEl = document.getElementById('funnel-stats');
   if (funnelEl && funnelEl.open) {
     if (_lastFunnelPayload) renderFunnelStats(_lastFunnelPayload);
@@ -4463,10 +4465,6 @@ function syncStatsHeadings() {
   if (dm) dm.textContent = 'DM Funnel Stats (' + win.labelLong + ')';
   const cost = document.getElementById('cost-stats-heading');
   if (cost) cost.textContent = 'Cost per Activity (' + win.labelLong + ')';
-  Object.keys(PER_DAY_CHARTS).forEach(chartId => {
-    const el = document.getElementById(chartId + '-per-day-heading');
-    if (el) el.textContent = PER_DAY_CHARTS[chartId].title + ' (' + win.labelShort + ')';
-  });
 }
 
 function renderActivityStats(payload) {
@@ -4522,144 +4520,252 @@ async function loadActivityStats() {
   } catch {}
 }
 
-// Per-day chart renderer. Shared by every chart card in the stats tab
-// (views, upvotes, comments, bookings, plus the PostHog-backed pageviews /
-// signups / schedule / get-started / cross-product cards). All cards use
-// the same bars+axis layout; the config here captures what varies: the
-// container prefix, the row field name, and the noun for totals.
+// Combined daily-metrics line chart. Fetches 4 endpoints (2 post-series
+// endpoints, bookings, and a batched funnel PostHog endpoint covering 5
+// metrics) and renders one SVG with a toggleable colored line per metric.
+// The chart is fixed to a 30-day window and ignores the stats tab's
+// top window/platform/project filters by design.
 //
-// Per-post daily charts (views/upvotes/comments) show an empty day 1
-// because the first-ever snapshot per post is excluded to avoid attributing
-// a post's lifetime count to the capture day. PostHog-backed charts and
-// bookings fill in back 30 days immediately.
-const PER_DAY_CHARTS = {
-  views:            { title: 'Total Social Views per Day',     noun: 'view',               valueKey: 'views_gained',      endpoint: '/api/views/per-day',    supportsPlatform: true,  emptyNote: 'No view snapshots yet. Snapshots accumulate as the Reddit and Twitter refresh jobs run; the chart fills in from today forward.' },
-  upvotes:          { title: 'Total Upvotes per Day',          noun: 'upvote',             valueKey: 'upvotes_gained',    endpoint: '/api/upvotes/per-day',  supportsPlatform: true,  emptyNote: 'No upvote snapshots yet. Day 1 is empty by design; real gains appear from day 2 onward.' },
-  comments:         { title: 'Total Comments per Day',         noun: 'comment',            valueKey: 'comments_gained',   endpoint: '/api/comments/per-day', supportsPlatform: true,  emptyNote: 'No comment snapshots yet. Day 1 is empty by design; real gains appear from day 2 onward.' },
-  bookings:         { title: 'Bookings per Day',               noun: 'booking',            valueKey: 'bookings_gained',   endpoint: '/api/bookings/per-day', supportsPlatform: false, emptyNote: 'No bookings in this window.' },
-  pageviews:        { title: 'Domain Pageviews per Day',       noun: 'pageview',           valueKey: 'pageviews',         funnel: true, emptyNote: 'No pageviews reported by PostHog in this window.' },
-  'email-signups':  { title: 'Email Signups per Day',          noun: 'signup',             valueKey: 'email_signups',     funnel: true, emptyNote: 'No email signups in this window.' },
-  'schedule-clicks':{ title: 'Schedule Clicks per Day',        noun: 'schedule click',     valueKey: 'schedule_clicks',   funnel: true, emptyNote: 'No schedule clicks in this window.' },
-  'get-started':    { title: 'Get Started Clicks per Day',     noun: 'get started click',  valueKey: 'get_started_clicks',funnel: true, emptyNote: 'No get-started clicks in this window.' },
-  'cross-product':  { title: 'Cross-Product Clicks per Day',   noun: 'cross-product click',valueKey: 'cross_product_clicks', funnel: true, emptyNote: 'No cross-product clicks in this window.' },
-};
+// Three post-derived metrics (views, upvotes, comments) exclude each
+// post's first-ever snapshot so day 1 never attributes lifetime counts
+// to a capture day; expect those lines to sit at 0 until at least two
+// consecutive days of snapshots have accumulated per post.
+const DAILY_METRICS = [
+  { id: 'views',           label: 'Views',             color: '#6366f1', endpoint: '/api/views/per-day',    valueKey: 'views_gained' },
+  { id: 'upvotes',         label: 'Upvotes',           color: '#f97316', endpoint: '/api/upvotes/per-day',  valueKey: 'upvotes_gained' },
+  { id: 'comments',        label: 'Comments',          color: '#14b8a6', endpoint: '/api/comments/per-day', valueKey: 'comments_gained' },
+  { id: 'bookings',        label: 'Bookings',          color: '#ef4444', endpoint: '/api/bookings/per-day', valueKey: 'bookings_gained' },
+  { id: 'pageviews',       label: 'Pageviews',         color: '#8b5cf6', funnel: true, valueKey: 'pageviews' },
+  { id: 'email_signups',   label: 'Email Signups',     color: '#10b981', funnel: true, valueKey: 'email_signups' },
+  { id: 'schedule_clicks', label: 'Schedule Clicks',   color: '#f59e0b', funnel: true, valueKey: 'schedule_clicks' },
+  { id: 'get_started',     label: 'Get Started',       color: '#06b6d4', funnel: true, valueKey: 'get_started_clicks' },
+  { id: 'cross_product',   label: 'Cross Product',     color: '#ec4899', funnel: true, valueKey: 'cross_product_clicks' },
+];
+const DAILY_METRICS_DAYS = 30;
 
-function renderPerDayChart(chartId, payload) {
-  const cfg = PER_DAY_CHARTS[chartId];
-  if (!cfg) return;
-  const body = document.getElementById(chartId + '-per-day-body');
-  const totalEl = document.getElementById(chartId + '-per-day-total');
-  const heading = document.getElementById(chartId + '-per-day-heading');
-  if (!body) return;
-  const days = (payload && payload.days) || 30;
-  if (heading) heading.textContent = cfg.title + ' (last ' + days + 'd)';
-  const rows = (payload && payload.rows) || [];
-  if (!rows.length) {
-    if (totalEl) totalEl.textContent = '0 ' + cfg.noun + 's';
-    body.innerHTML = '<div class="views-chart-empty">' + escapeHtml(cfg.emptyNote) + '</div>';
+// series: { [metricId]: { [dayISO]: number } }. Rebuilt by loadDailyMetrics,
+// read by renderDailyMetrics. Persisted selection lives in localStorage.
+let _dailyMetricsSeries = null;
+let _dailyMetricsDays = [];
+let _dailyMetricsActive = null;
+
+function _loadDailyMetricsActive() {
+  if (_dailyMetricsActive) return _dailyMetricsActive;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('dailyMetricsActive') || 'null'); } catch {}
+  const set = new Set(Array.isArray(saved) ? saved : DAILY_METRICS.map(m => m.id));
+  _dailyMetricsActive = set;
+  return set;
+}
+function _saveDailyMetricsActive() {
+  try { localStorage.setItem('dailyMetricsActive', JSON.stringify(Array.from(_dailyMetricsActive))); } catch {}
+}
+
+function _fmtShort(n) {
+  if (n == null) return '—';
+  n = Number(n);
+  if (!isFinite(n)) return '—';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + 'K';
+  return String(n);
+}
+function _fmtDay(dayIso) {
+  const d = new Date(dayIso + 'T00:00:00');
+  return (d.getMonth() + 1) + '/' + d.getDate();
+}
+function _niceMax(v) {
+  // Round up to a "nice" axis cap (1/2/5 * 10^k) so Y-axis ticks line up on round numbers.
+  if (!v || v <= 0) return 1;
+  const exp = Math.floor(Math.log10(v));
+  const base = Math.pow(10, exp);
+  const m = v / base;
+  let nice;
+  if (m <= 1)       nice = 1;
+  else if (m <= 2)  nice = 2;
+  else if (m <= 5)  nice = 5;
+  else              nice = 10;
+  return nice * base;
+}
+
+function renderDailyMetrics() {
+  const legendEl = document.getElementById('daily-metrics-legend');
+  const chartEl = document.getElementById('daily-metrics-chart');
+  const statusEl = document.getElementById('daily-metrics-status');
+  if (!legendEl || !chartEl) return;
+  if (!_dailyMetricsSeries) {
+    chartEl.innerHTML = '<div class="views-chart-empty">Loading…</div>';
     return;
   }
-  const byDay = {};
-  rows.forEach(r => { byDay[r.day] = Number(r[cfg.valueKey]) || 0; });
-  const end = new Date();
-  const start = new Date(); start.setDate(end.getDate() - (days - 1));
-  const series = [];
-  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    const key = d.toISOString().slice(0, 10);
-    series.push({ day: key, value: byDay[key] || 0 });
-  }
-  const total = series.reduce((a, r) => a + r.value, 0);
-  const max = series.reduce((m, r) => Math.max(m, r.value), 0);
-  if (totalEl) totalEl.textContent = total.toLocaleString() + ' ' + cfg.noun + (total === 1 ? '' : 's');
-  const fmtShort = n => {
-    if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + 'M';
-    if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + 'K';
-    return String(n);
-  };
-  const fmtDay = key => {
-    const d = new Date(key + 'T00:00:00');
-    return (d.getMonth() + 1) + '/' + d.getDate();
-  };
-  const bars = series.map(r => {
-    const pct = max > 0 ? (r.value / max) * 100 : 0;
-    const title = fmtDay(r.day) + ': ' + r.value.toLocaleString() + ' ' + cfg.noun + (r.value === 1 ? '' : 's');
-    const cls = r.value > 0 ? 'views-chart-bar' : 'views-chart-bar empty';
-    const h = max > 0 ? Math.max(pct, r.value > 0 ? 2 : 0) : 0;
-    return '<div class="' + cls + '" style="height:' + h + '%;" title="' + escapeHtml(title) + '"></div>';
+  const active = _loadDailyMetricsActive();
+  const days = _dailyMetricsDays;
+  // Legend pills: always render all metrics; off ones get .off.
+  const totals = {};
+  DAILY_METRICS.forEach(m => {
+    const byDay = _dailyMetricsSeries[m.id] || {};
+    totals[m.id] = days.reduce((acc, d) => acc + (Number(byDay[d]) || 0), 0);
+  });
+  legendEl.innerHTML = DAILY_METRICS.map(m => {
+    const off = !active.has(m.id);
+    return '<button type="button" class="daily-metrics-legend-pill' + (off ? ' off' : '') +
+      '" data-metric="' + escapeHtml(m.id) + '" aria-pressed="' + (off ? 'false' : 'true') + '">' +
+      '<span class="swatch" style="background:' + m.color + ';"></span>' +
+      '<span class="label">' + escapeHtml(m.label) + '</span>' +
+      '<span class="count">' + _fmtShort(totals[m.id]) + '</span>' +
+      '</button>';
   }).join('');
-  const firstDay = fmtDay(series[0].day);
-  const lastDay = fmtDay(series[series.length - 1].day);
-  const midIdx = Math.floor(series.length / 2);
-  const midDay = fmtDay(series[midIdx].day);
-  body.innerHTML =
-    '<div class="views-chart">' +
-      '<div class="views-chart-bars">' + bars + '</div>' +
-      '<div class="views-chart-axis">' +
-        '<span>' + escapeHtml(firstDay) + '</span>' +
-        '<span>' + escapeHtml(midDay) + '</span>' +
-        '<span>' + escapeHtml(lastDay) + '</span>' +
-      '</div>' +
-      '<div class="views-chart-axis"><span>peak ' + escapeHtml(fmtShort(max)) + '/day</span><span></span><span>total ' + escapeHtml(fmtShort(total)) + '</span></div>' +
-    '</div>';
-}
+  legendEl.querySelectorAll('.daily-metrics-legend-pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.metric;
+      if (active.has(id)) active.delete(id); else active.add(id);
+      _saveDailyMetricsActive();
+      renderDailyMetrics();
+    });
+  });
 
-async function _fetchPerDay(endpoint, includePlatform) {
-  const days = currentStatsWindow().days || 30;
-  const plat = currentStatsPlatform();
-  const proj = currentStatsProject();
-  const params = ['days=' + days];
-  if (includePlatform && plat && plat !== 'all') params.push('platform=' + encodeURIComponent(plat));
-  if (proj && proj !== 'all') params.push('project=' + encodeURIComponent(proj));
-  const res = await fetch(endpoint + '?' + params.join('&'));
-  if (!res.ok) throw new Error('status ' + res.status);
-  return res.json();
-}
+  // Chart. Normalize all values to a single Y-axis computed from the max
+  // of currently-visible metrics so toggling off a dominant series (e.g.
+  // Pageviews) rescales the remaining lines to fill the space.
+  const visibleMetrics = DAILY_METRICS.filter(m => active.has(m.id));
+  if (!visibleMetrics.length) {
+    chartEl.innerHTML = '<div class="views-chart-empty">Select at least one metric above to render the chart.</div>';
+    if (statusEl) statusEl.textContent = '0 of ' + DAILY_METRICS.length + ' series';
+    return;
+  }
+  let rawMax = 0;
+  visibleMetrics.forEach(m => {
+    const byDay = _dailyMetricsSeries[m.id] || {};
+    days.forEach(d => { rawMax = Math.max(rawMax, Number(byDay[d]) || 0); });
+  });
+  const yMax = _niceMax(rawMax);
+  const width = 960;
+  const height = 260;
+  const padL = 44, padR = 12, padT = 12, padB = 24;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const xStep = days.length > 1 ? plotW / (days.length - 1) : 0;
+  const xOf = i => padL + xStep * i;
+  const yOf = v => padT + plotH - (yMax > 0 ? (v / yMax) * plotH : 0);
+  // Y-axis gridlines + labels at 0 / 0.25 / 0.5 / 0.75 / 1 of yMax.
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(t => {
+    const v = yMax * t;
+    const y = yOf(v);
+    return '<line class="gridline" x1="' + padL + '" x2="' + (width - padR) + '" y1="' + y + '" y2="' + y + '"/>' +
+           '<text class="axis-text" x="' + (padL - 6) + '" y="' + (y + 3) + '" text-anchor="end">' + escapeHtml(_fmtShort(Math.round(v))) + '</text>';
+  }).join('');
+  // X-axis day labels: first, ~25%, mid, ~75%, last.
+  const xLabelIdxs = days.length <= 1
+    ? [0]
+    : [0, Math.floor(days.length * 0.25), Math.floor(days.length / 2), Math.floor(days.length * 0.75), days.length - 1];
+  const xLabels = Array.from(new Set(xLabelIdxs)).map(i => {
+    const x = xOf(i);
+    return '<text class="axis-text" x="' + x + '" y="' + (height - 6) + '" text-anchor="middle">' + escapeHtml(_fmtDay(days[i])) + '</text>';
+  }).join('');
+  // One polyline per visible metric.
+  const lines = visibleMetrics.map(m => {
+    const byDay = _dailyMetricsSeries[m.id] || {};
+    const pts = days.map((d, i) => xOf(i) + ',' + yOf(Number(byDay[d]) || 0)).join(' ');
+    return '<polyline class="series-line" data-metric="' + escapeHtml(m.id) + '" stroke="' + m.color + '" points="' + pts + '"/>';
+  }).join('');
+  // Transparent rect captures pointer events for the tooltip.
+  const svg =
+    '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" role="img" aria-label="Daily metrics line chart">' +
+      yTicks + xLabels + lines +
+      '<line class="hover-line" id="daily-metrics-hover-line" x1="0" y1="' + padT + '" x2="0" y2="' + (padT + plotH) + '"/>' +
+      '<rect id="daily-metrics-hover-rect" x="' + padL + '" y="' + padT + '" width="' + plotW + '" height="' + plotH + '" fill="transparent"/>' +
+    '</svg>' +
+    '<div class="daily-metrics-tooltip" id="daily-metrics-tooltip"></div>';
+  chartEl.innerHTML = svg;
+  if (statusEl) statusEl.textContent = visibleMetrics.length + ' of ' + DAILY_METRICS.length + ' series';
 
-async function _loadSimpleChart(chartId) {
-  const cfg = PER_DAY_CHARTS[chartId];
-  if (!cfg || cfg.funnel) return;
-  try {
-    const data = await _fetchPerDay(cfg.endpoint, !!cfg.supportsPlatform);
-    renderPerDayChart(chartId, data);
-  } catch (e) {
-    const body = document.getElementById(chartId + '-per-day-body');
-    if (body) body.innerHTML = '<div class="views-chart-empty">Unable to load ' + escapeHtml(cfg.noun) + 's.</div>';
+  // Hover interactions — snap to nearest day index, move dashed line,
+  // populate tooltip. Positioned relative to the chart container so the
+  // tooltip can use absolute CSS coords off the DOM rect.
+  const rect = chartEl.querySelector('#daily-metrics-hover-rect');
+  const hoverLine = chartEl.querySelector('#daily-metrics-hover-line');
+  const tip = chartEl.querySelector('#daily-metrics-tooltip');
+  if (rect && hoverLine && tip) {
+    const show = e => {
+      const svgEl = chartEl.querySelector('svg');
+      const box = svgEl.getBoundingClientRect();
+      const relX = e.clientX - box.left;
+      const scale = width / box.width;
+      const svgX = relX * scale;
+      const idxRaw = (svgX - padL) / (xStep || 1);
+      const idx = Math.max(0, Math.min(days.length - 1, Math.round(idxRaw)));
+      const snapX = xOf(idx);
+      hoverLine.setAttribute('x1', snapX);
+      hoverLine.setAttribute('x2', snapX);
+      hoverLine.style.opacity = '1';
+      const day = days[idx];
+      const rows = visibleMetrics.map(m => {
+        const v = Number((_dailyMetricsSeries[m.id] || {})[day]) || 0;
+        return '<div class="tt-row"><span class="swatch" style="background:' + m.color + ';"></span>' +
+               '<span>' + escapeHtml(m.label) + '</span>' +
+               '<span class="val">' + escapeHtml(v.toLocaleString()) + '</span></div>';
+      }).join('');
+      tip.innerHTML = '<div class="tt-day">' + escapeHtml(_fmtDay(day)) + '</div>' + rows;
+      // Position the tooltip in CSS px relative to the chart container.
+      const cssX = snapX / scale;
+      tip.style.left = (cssX) + 'px';
+      tip.style.top = (padT - 10) + 'px';
+      tip.style.opacity = '1';
+    };
+    const hide = () => { hoverLine.style.opacity = '0'; tip.style.opacity = '0'; };
+    rect.addEventListener('mousemove', show);
+    rect.addEventListener('mouseleave', hide);
   }
 }
 
-async function loadViewsPerDay()    { return _loadSimpleChart('views'); }
-async function loadUpvotesPerDay()  { return _loadSimpleChart('upvotes'); }
-async function loadCommentsPerDay() { return _loadSimpleChart('comments'); }
-async function loadBookingsPerDay() { return _loadSimpleChart('bookings'); }
+async function loadDailyMetrics() {
+  const chartEl = document.getElementById('daily-metrics-chart');
+  const series = {};
+  // Prebuild the 30-day axis (end-exclusive so last entry is today UTC).
+  const today = new Date();
+  const axis = [];
+  for (let i = DAILY_METRICS_DAYS - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    axis.push(d.toISOString().slice(0, 10));
+  }
+  _dailyMetricsDays = axis;
 
-// The five PostHog-backed charts share one payload (one HogQL batch per
-// metric). Fetch once, split into the per-chart shape each renderer expects.
-async function loadFunnelPerDay() {
-  const FUNNEL_IDS = ['pageviews', 'email-signups', 'schedule-clicks', 'get-started', 'cross-product'];
+  const fetchOne = async (url, mapRow) => {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('status ' + res.status);
+    return (await res.json()).rows || [];
+  };
   try {
-    const data = await _fetchPerDay('/api/funnel/per-day', false);
-    const rows = (data && data.rows) || [];
-    const days = (data && data.days) || 30;
-    FUNNEL_IDS.forEach(chartId => {
-      const cfg = PER_DAY_CHARTS[chartId];
-      const perChart = rows.map(r => ({ day: r.day, [cfg.valueKey]: r[cfg.valueKey] }));
-      renderPerDayChart(chartId, { days, rows: perChart });
+    const qs = 'days=' + DAILY_METRICS_DAYS;
+    const [viewsRows, upvotesRows, commentsRows, bookingsRows, funnelRows] = await Promise.all([
+      fetchOne('/api/views/per-day?' + qs),
+      fetchOne('/api/upvotes/per-day?' + qs),
+      fetchOne('/api/comments/per-day?' + qs),
+      fetchOne('/api/bookings/per-day?' + qs),
+      fetchOne('/api/funnel/per-day?' + qs),
+    ]);
+    const intoSeries = (id, rows, key) => {
+      const map = {};
+      rows.forEach(r => { if (r && r.day) map[r.day] = Number(r[key]) || 0; });
+      series[id] = map;
+    };
+    intoSeries('views',    viewsRows,    'views_gained');
+    intoSeries('upvotes',  upvotesRows,  'upvotes_gained');
+    intoSeries('comments', commentsRows, 'comments_gained');
+    intoSeries('bookings', bookingsRows, 'bookings_gained');
+    DAILY_METRICS.filter(m => m.funnel).forEach(m => {
+      intoSeries(m.id, funnelRows, m.valueKey);
     });
+    _dailyMetricsSeries = series;
+    renderDailyMetrics();
   } catch (e) {
-    FUNNEL_IDS.forEach(chartId => {
-      const body = document.getElementById(chartId + '-per-day-body');
-      if (body) body.innerHTML = '<div class="views-chart-empty">Unable to load PostHog metrics.</div>';
-    });
+    if (chartEl) chartEl.innerHTML = '<div class="views-chart-empty">Unable to load daily metrics (' + escapeHtml(String(e.message || e)) + ').</div>';
   }
 }
 
-function loadAllPerDayCharts() {
-  loadViewsPerDay();
-  loadUpvotesPerDay();
-  loadCommentsPerDay();
-  loadBookingsPerDay();
-  loadFunnelPerDay();
-}
+// Back-compat shim: earlier versions of this file exposed loadAllPerDayCharts
+// for the 9-card layout. The tab wiring still calls that name — keep it as
+// an alias so there's one refresh entry point.
+function loadAllPerDayCharts() { return loadDailyMetrics(); }
 
 // Shared helper: mount a sortable + per-column-filterable table into containerId.
 // Only tbody and the sort-arrow glyphs are rewritten on state changes, so the
@@ -6841,7 +6947,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     syncStatsHeadings();
     loadActivityStats();
     loadStyleStats();
-    loadAllPerDayCharts();
+    // daily-metrics is window-independent; don't refetch on pill change.
     const funnelEl = document.getElementById('funnel-stats');
     if (funnelEl && funnelEl.open) loadFunnelStats(true);
     const dmEl = document.getElementById('dm-stats');
