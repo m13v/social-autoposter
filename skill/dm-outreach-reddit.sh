@@ -179,7 +179,7 @@ For each DM row, BEFORE you compose or send, do this in order:
    \`\`\`
    Run this once per project from the list. Each call upserts one entry in dms.icp_matches (JSONB array) keyed by project.
 
-5. PROCEED TO SEND THE DM regardless of the ICP labels. The labels are informational; they do NOT gate outreach at this phase. Do not skip a DM because of \`icp_miss\` or \`disqualified\`.
+5. If ANY entry in icp_matches has label=disqualified, skip the send: run \`python3 scripts/dm_conversation.py mark-skipped --dm-id DM_ID --reason "disqualified: PROJECT - SHORT_NOTES"\` and move on. \`icp_miss\` alone does NOT gate; send when every project scored miss. Only explicit \`disqualified\` blocks the opener.
 
 ## How to send DMs on Reddit (use mcp__reddit-agent__* tools):
 1. Navigate to https://www.reddit.com/message/compose/?to=THEIR_AUTHOR
