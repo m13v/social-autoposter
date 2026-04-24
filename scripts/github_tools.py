@@ -201,11 +201,12 @@ def cmd_log_post(args):
     conn.execute(
         """INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
            thread_title, thread_content, our_url, our_content, our_account,
-           source_summary, project_name, status, posted_at, feedback_report_used, engagement_style)
-           VALUES ('github', %s, %s, %s, %s, '', %s, %s, %s, '', %s, 'active', NOW(), TRUE, %s)""",
+           source_summary, project_name, status, posted_at, feedback_report_used, engagement_style, search_topic)
+           VALUES ('github', %s, %s, %s, %s, '', %s, %s, %s, '', %s, 'active', NOW(), TRUE, %s, %s)""",
         [args.thread_url, args.thread_author, args.thread_author, args.thread_title,
          args.our_url, args.our_text, args.account, args.project,
-         getattr(args, "engagement_style", None)],
+         getattr(args, "engagement_style", None),
+         getattr(args, "search_topic", None)],
     )
     conn.commit()
     conn.close()
@@ -240,6 +241,8 @@ def main():
     p_log.add_argument("thread_title")
     p_log.add_argument("--account", default="m13v")
     p_log.add_argument("--engagement-style", dest="engagement_style", default=None)
+    p_log.add_argument("--search-topic", dest="search_topic", default=None,
+                       help="The seed topic/query used to find this issue (feedback loop input)")
 
     args = parser.parse_args()
     if args.command == "search":
