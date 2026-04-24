@@ -2921,6 +2921,29 @@ const HTML = `<!DOCTYPE html>
   .views-chart-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
   .views-chart-axis span { white-space: nowrap; }
   .views-chart-empty { padding: 24px 20px; color: var(--text-secondary); font-size: 13px; text-align: center; }
+
+  /* Combined daily-metrics line chart (stats tab, above filters). Legend
+     pills double as series toggles: click to hide/show a line, Y-axis
+     auto-rescales to the max of currently-visible series. */
+  #daily-metrics { margin-bottom: 16px; }
+  .daily-metrics-legend { display: flex; flex-wrap: wrap; gap: 6px 8px; padding: 14px 20px 8px; }
+  .daily-metrics-legend-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-subtle); color: var(--text); font-size: 12px; font-family: inherit; cursor: pointer; user-select: none; transition: background 0.1s, border-color 0.1s, opacity 0.1s; }
+  .daily-metrics-legend-pill:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+  .daily-metrics-legend-pill .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .daily-metrics-legend-pill .count { color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+  .daily-metrics-legend-pill.off { opacity: 0.4; }
+  .daily-metrics-legend-pill.off .swatch { background: var(--border) !important; }
+  .daily-metrics-chart { padding: 4px 20px 16px; position: relative; }
+  .daily-metrics-chart svg { display: block; width: 100%; height: 260px; overflow: visible; }
+  .daily-metrics-chart .gridline { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 3; }
+  .daily-metrics-chart .axis-text { fill: var(--text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .daily-metrics-chart .series-line { fill: none; stroke-width: 1.75; stroke-linejoin: round; stroke-linecap: round; }
+  .daily-metrics-chart .hover-line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0; pointer-events: none; }
+  .daily-metrics-tooltip { position: absolute; pointer-events: none; background: var(--bg-panel, #fff); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); min-width: 180px; opacity: 0; transform: translate(-50%, -100%); transition: opacity 0.08s; z-index: 5; }
+  .daily-metrics-tooltip .tt-day { font-weight: 600; margin-bottom: 4px; color: var(--text); }
+  .daily-metrics-tooltip .tt-row { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; color: var(--text); }
+  .daily-metrics-tooltip .tt-row .swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+  .daily-metrics-tooltip .tt-row .val { margin-left: auto; }
   /* Deploy Health: slim inline bar when collapsed, alert colors when there is something worth attention */
   #deploy-health:not([open]) { margin-bottom: 10px; border-radius: 8px; }
   #deploy-health:not([open]) > summary { padding: 6px 14px; }
@@ -3126,6 +3149,18 @@ const HTML = `<!DOCTYPE html>
 </div>
 
 <div class="content" id="tab-stats">
+  <details class="style-stats-section" id="daily-metrics" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span>Daily Metrics (last 30 days)</span></span>
+      <span class="style-stats-total" id="daily-metrics-status"></span>
+    </summary>
+    <div id="daily-metrics-body">
+      <div id="daily-metrics-legend" class="daily-metrics-legend"></div>
+      <div id="daily-metrics-chart" class="daily-metrics-chart">
+        <div class="views-chart-empty">Loading…</div>
+      </div>
+    </div>
+  </details>
   <div class="stats-top-filters">
     <div class="style-stats-pill-row" id="stats-window-pills" data-selected="24h">
       <span class="label">Window</span>
@@ -3148,87 +3183,6 @@ const HTML = `<!DOCTYPE html>
     </div>
     <div class="stats-grid" id="stats-grid"></div>
   </div>
-  <details class="style-stats-section" id="views-per-day" open>
-    <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="views-per-day-heading">Total Social Views per Day (last 30d)</span></span>
-      <span class="style-stats-total" id="views-per-day-total"></span>
-    </summary>
-    <div id="views-per-day-body">
-      <div class="views-chart-empty">Loading…</div>
-    </div>
-  </details>
-  <details class="style-stats-section" id="upvotes-per-day" open>
-    <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="upvotes-per-day-heading">Total Upvotes per Day (last 30d)</span></span>
-      <span class="style-stats-total" id="upvotes-per-day-total"></span>
-    </summary>
-    <div id="upvotes-per-day-body">
-      <div class="views-chart-empty">Loading…</div>
-    </div>
-  </details>
-  <details class="style-stats-section" id="comments-per-day" open>
-    <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="comments-per-day-heading">Total Comments per Day (last 30d)</span></span>
-      <span class="style-stats-total" id="comments-per-day-total"></span>
-    </summary>
-    <div id="comments-per-day-body">
-      <div class="views-chart-empty">Loading…</div>
-    </div>
-  </details>
-  <details class="style-stats-section" id="pageviews-per-day" open>
-    <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="pageviews-per-day-heading">Domain Pageviews per Day (last 30d)</span></span>
-      <span class="style-stats-total" id="pageviews-per-day-total"></span>
-    </summary>
-    <div id="pageviews-per-day-body">
-      <div class="views-chart-empty">Loading…</div>
-    </div>
-  </details>
-  <details class="style-stats-section" id="email-signups-per-day" open>
-    <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="email-signups-per-day-heading">Email Signups per Day (last 30d)</span></span>
-      <span class="style-stats-total" id="email-signups-per-day-total"></span>
-    </summary>
-    <div id="email-signups-per-day-body">
-      <div class="views-chart-empty">Loading…</div>
-    </div>
-  </details>
-  <details class="style-stats-section" id="schedule-clicks-per-day" open>
-    <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="schedule-clicks-per-day-heading">Schedule Clicks per Day (last 30d)</span></span>
-      <span class="style-stats-total" id="schedule-clicks-per-day-total"></span>
-    </summary>
-    <div id="schedule-clicks-per-day-body">
-      <div class="views-chart-empty">Loading…</div>
-    </div>
-  </details>
-  <details class="style-stats-section" id="get-started-per-day" open>
-    <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="get-started-per-day-heading">Get Started Clicks per Day (last 30d)</span></span>
-      <span class="style-stats-total" id="get-started-per-day-total"></span>
-    </summary>
-    <div id="get-started-per-day-body">
-      <div class="views-chart-empty">Loading…</div>
-    </div>
-  </details>
-  <details class="style-stats-section" id="cross-product-per-day" open>
-    <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="cross-product-per-day-heading">Cross-Product Clicks per Day (last 30d)</span></span>
-      <span class="style-stats-total" id="cross-product-per-day-total"></span>
-    </summary>
-    <div id="cross-product-per-day-body">
-      <div class="views-chart-empty">Loading…</div>
-    </div>
-  </details>
-  <details class="style-stats-section" id="bookings-per-day" open>
-    <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="bookings-per-day-heading">Bookings per Day (last 30d)</span></span>
-      <span class="style-stats-total" id="bookings-per-day-total"></span>
-    </summary>
-    <div id="bookings-per-day-body">
-      <div class="views-chart-empty">Loading…</div>
-    </div>
-  </details>
   <details class="style-stats-section" id="style-stats" open>
     <summary>
       <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="style-stats-heading">Posts by Engagement Style (24h)</span></span>
