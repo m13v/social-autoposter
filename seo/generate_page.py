@@ -1076,6 +1076,99 @@ def run_claude_stream(prompt: str, cwd: str, log_dir: Path, slug: str) -> dict:
     }
 
 
+def run_claude_stream_resume(session_id: str, prompt: str, cwd: str,
+                             log_dir: Path, slug: str,
+                             timeout: int = 600) -> dict:
+    """Resume a prior Claude session with a follow-up prompt and stream its
+    output. Used by the typecheck-fix retry path where we want Claude to
+    keep full context of the work it just did. Shorter timeout than a fresh
+    session (default 10 min) because we expect a targeted patch, not a full
+    rewrite. Same return shape as run_claude_stream."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stream_log = log_dir / f"{ts}_{slug}_retry_stream.jsonl"
+
+    cmd = [
+        "claude", "-p", prompt,
+        "--resume", session_id,
+        "--output-format", "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions",
+    ]
+
+    tool_calls: list[dict] = []
+    final_text = ""
+    start = time.time()
+
+    if not wait_for_claude():
+        return {"exit_code": 127, "final_result_text": "",
+                "tool_summary": {}, "stream_log_path": str(stream_log),
+                "session_id": session_id,
+                "error": "claude CLI not on PATH after wait_for_claude timeout"}
+
+    with open(stream_log, "w") as log_f:
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+        except FileNotFoundError:
+            return {"exit_code": 127, "final_result_text": "",
+                    "tool_summary": {}, "stream_log_path": str(stream_log),
+                    "session_id": session_id,
+                    "error": "claude CLI not found on PATH"}
+
+        assert proc.stdout is not None
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                if proc.poll() is not None:
+                    break
+                continue
+            log_f.write(line)
+            log_f.flush()
+
+            if time.time() - start > timeout:
+                proc.kill()
+                _log_claude_session(session_id, "seo_generate_page_retry")
+                return {"exit_code": 124, "final_result_text": final_text,
+                        "tool_summary": _summarize_tools(tool_calls),
+                        "stream_log_path": str(stream_log),
+                        "session_id": session_id,
+                        "error": f"retry timeout after {timeout}s"}
+
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if event.get("type") == "assistant":
+                msg = event.get("message", {})
+                for block in msg.get("content", []):
+                    if block.get("type") == "tool_use":
+                        tool_calls.append({
+                            "name": block.get("name"),
+                            "input": block.get("input", {}),
+                        })
+            elif event.get("type") == "result":
+                final_text = event.get("result", "") or ""
+
+        proc.wait()
+
+    _log_claude_session(session_id, "seo_generate_page_retry")
+    return {
+        "exit_code": proc.returncode,
+        "final_result_text": final_text,
+        "tool_summary": _summarize_tools(tool_calls),
+        "stream_log_path": str(stream_log),
+        "session_id": session_id,
+    }
+
+
 def _log_claude_session(session_id: str, script_tag: str) -> None:
     """Best-effort: invoke log_claude_session.py to record cost into claude_sessions."""
     logger = ROOT_DIR / "scripts" / "log_claude_session.py"
@@ -1169,11 +1262,14 @@ def parse_concept(text: str) -> dict:
     return out
 
 
-def verify_commit_landed(repo_path: str, expected_file: str) -> dict:
+def verify_commit_landed(repo_path: str, expected_file: str,
+                         max_wait: float = 180.0,
+                         poll_interval: float = 20.0) -> dict:
     """Check origin/main (or local HEAD if no remote) for the expected file.
+    When the repo has an 'origin' remote, polls with git fetch for up to
+    max_wait seconds so the background auto-commit agent (which pushes on a
+    ~60s cadence) has time to land the commit before we call it a failure.
     Returns {ok, commit_sha, error}."""
-    # Detect whether an 'origin' remote exists. Some projects are local-only
-    # (no GitHub remote configured), in which case we verify against HEAD.
     try:
         r = subprocess.run(["git", "remote"], cwd=repo_path,
                            capture_output=True, text=True, check=True, timeout=10)
@@ -1181,28 +1277,32 @@ def verify_commit_landed(repo_path: str, expected_file: str) -> dict:
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         return {"ok": False, "error": f"git remote failed: {e}"}
 
-    if "origin" in remotes:
-        ref = "origin/main"
+    has_origin = "origin" in remotes
+    ref = "origin/main" if has_origin else "HEAD"
+    deadline = time.time() + max_wait
+    last_err = f"no commit on {ref} touching {expected_file}"
+    while True:
+        if has_origin:
+            try:
+                subprocess.run(["git", "fetch", "origin"], cwd=repo_path,
+                               check=True, capture_output=True, timeout=60)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                last_err = f"git fetch failed: {e}"
         try:
-            subprocess.run(["git", "fetch", "origin"], cwd=repo_path,
-                           check=True, capture_output=True, timeout=60)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            return {"ok": False, "error": f"git fetch failed: {e}"}
-    else:
-        ref = "HEAD"
+            r = subprocess.run(
+                ["git", "log", ref, "-1", "--format=%h", "--", expected_file],
+                cwd=repo_path, capture_output=True, text=True, check=True,
+            )
+            sha = r.stdout.strip()
+        except subprocess.CalledProcessError as e:
+            last_err = f"git log {ref} failed: {e.stderr}"
+            sha = ""
 
-    try:
-        r = subprocess.run(
-            ["git", "log", ref, "-1", "--format=%h", "--", expected_file],
-            cwd=repo_path, capture_output=True, text=True, check=True,
-        )
-        sha = r.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        return {"ok": False, "error": f"git log {ref} failed: {e.stderr}"}
-
-    if not sha:
-        return {"ok": False, "error": f"no commit on {ref} touching {expected_file}"}
-    return {"ok": True, "commit_sha": sha, "ref": ref}
+        if sha:
+            return {"ok": True, "commit_sha": sha, "ref": ref}
+        if not has_origin or time.time() >= deadline:
+            return {"ok": False, "error": last_err}
+        time.sleep(poll_interval)
 
 
 RAW_BOOKING_HREF_RE = re.compile(
@@ -1885,7 +1985,12 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
         verify["error"] = f"{last_verify_err} (tried {len(expected_file_candidates)} candidates)"
 
     if not verify["ok"]:
-        err = claimed_err if not claimed_success else verify.get("error", "")
+        # Surface the real gate error (e.g. "no commit on origin/main ...").
+        # When Claude also skipped the final success JSON, append that as
+        # secondary context so we can tell apart "Claude finished but push
+        # races lost" from "Claude never finished at all".
+        gate_err = verify.get("error", "") or "commit not on origin/main"
+        err = gate_err if claimed_success else f"{gate_err}; claude={claimed_err}"
         update_state(trigger, product, keyword, "pending",
                      notes=f"commit not on origin/main: {err}"[:500],
                      slug=slug, content_type=content_type,
@@ -1908,12 +2013,17 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
     if has_website and page_url:
         live = probe_url_live(page_url)
         if not live["ok"]:
+            # Same pattern as the commit verify gate: surface the real probe
+            # error primarily. The DB note already kept both sides; mirror
+            # that shape in the return so the lane log isn't misleading.
+            live_err = live.get("error", "") or "url not live"
+            ret_err = live_err if claimed_success else f"{live_err}; claude={claimed_err}"
             update_state(trigger, product, keyword, "pending",
-                         notes=f"url not live: claude={'ok' if claimed_success else claimed_err}; live={live.get('error','')}"[:500],
+                         notes=f"url not live: claude={'ok' if claimed_success else claimed_err}; live={live_err}"[:500],
                          slug=slug, content_type=content_type,
                          claude_session_id=session_id)
             return {"success": False,
-                    "error": claimed_err if not claimed_success else live.get("error"),
+                    "error": ret_err,
                     "content_type": content_type,
                     "stream_log": stream["stream_log_path"],
                     "tool_summary": stream["tool_summary"]}
