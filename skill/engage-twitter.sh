@@ -56,9 +56,11 @@ rm -f "$NOTIFS_JSON"
 
 # Reset any 'processing' items older than 2 hours back to 'pending'
 RESET_COUNT=$(psql "$DATABASE_URL" -t -A -c "
-    UPDATE replies SET status='pending'
-    WHERE platform='x' AND status='processing' AND processing_at < NOW() - INTERVAL '2 hours'
-    RETURNING id;" | wc -l | tr -d ' ')
+    WITH upd AS (
+        UPDATE replies SET status='pending'
+        WHERE platform='x' AND status='processing' AND processing_at < NOW() - INTERVAL '2 hours'
+        RETURNING id
+    ) SELECT COUNT(*) FROM upd;")
 [ "$RESET_COUNT" -gt 0 ] && log "Phase B: Reset $RESET_COUNT stuck 'processing' Twitter items back to pending"
 
 PENDING_COUNT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM replies WHERE platform='x' AND status='pending';")
@@ -162,9 +164,11 @@ fi
 
 # Reset any items left in 'processing' after subprocess exit
 POST_RESET=$(psql "$DATABASE_URL" -t -A -c "
-    UPDATE replies SET status='pending'
-    WHERE platform='x' AND status='processing'
-    RETURNING id;" | wc -l | tr -d ' ')
+    WITH upd AS (
+        UPDATE replies SET status='pending'
+        WHERE platform='x' AND status='processing'
+        RETURNING id
+    ) SELECT COUNT(*) FROM upd;")
 [ "$POST_RESET" -gt 0 ] && log "Post-run: Reset $POST_RESET 'processing' Twitter items back to pending"
 
 # ═══════════════════════════════════════════════════════
