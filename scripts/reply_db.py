@@ -17,15 +17,23 @@ if cmd == "processing":
     db.commit()
     print(f"ok {rid}")
 elif cmd == "replied":
-    # reply_db.py replied ID "content" [url] [engagement_style]
+    # reply_db.py replied ID "content" [url] [engagement_style] [is_recommendation]
+    # is_recommendation is "1" / "true" to mark this reply as a project mention;
+    # anything else (or absent) leaves the column at its default FALSE. Style
+    # and is_recommendation are independent: style is TONE, is_recommendation
+    # is INTENT. Do not pass style="recommendation" — that value is deprecated.
     rid, content = int(sys.argv[2]), sys.argv[3]
     url = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
     style = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] else None
+    is_rec_arg = sys.argv[6] if len(sys.argv) > 6 and sys.argv[6] else None
+    is_rec = is_rec_arg is not None and is_rec_arg.lower() in ("1", "true", "yes")
     db.execute(
         "UPDATE replies SET status='replied', our_reply_content=%s, our_reply_url=%s, "
-        "engagement_style=COALESCE(%s, engagement_style), replied_at=NOW(), "
+        "engagement_style=COALESCE(%s, engagement_style), "
+        "is_recommendation=CASE WHEN %s THEN TRUE ELSE is_recommendation END, "
+        "replied_at=NOW(), "
         "claude_session_id=COALESCE(%s, claude_session_id) WHERE id=%s",
-        [content, url, style, CLAUDE_SESSION_ID, rid],
+        [content, url, style, is_rec, CLAUDE_SESSION_ID, rid],
     )
     db.commit()
     print(f"ok {rid}")
