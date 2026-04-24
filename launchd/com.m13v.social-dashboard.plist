@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.m13v.social-dashboard</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/matthewdi/.nvm/versions/node/v20.19.4/bin/node</string>
+		<string>/Users/matthewdi/social-autoposter/bin/server.js</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/matthewdi/social-autoposter</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>StandardOutPath</key>
+	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-dashboard-stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-dashboard-stderr.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/Users/matthewdi/.nvm/versions/node/v20.19.4/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+		<key>HOME</key>
+		<string>/Users/matthewdi</string>
+	</dict>
+</dict>
+</plist>
