@@ -66,9 +66,11 @@ def render_block(rows, platform):
     for project, style, n, med_up, med_cm, max_up, max_cm in rows:
         med_up = float(med_up or 0)
         med_cm = float(med_cm or 0)
-        if med_up >= 2 or med_cm >= 1:
+        # Self-upvote inflates med_up by 1 on platforms like MoltBook;
+        # lean on max_up (organic high-water) and med_cm (replies) instead.
+        if max_cm >= 2 or max_up >= 3 or med_cm >= 1:
             label = "[good]"
-        elif med_up <= 0.1 and med_cm <= 0.1 and n >= 5:
+        elif max_up <= 1 and med_cm == 0 and n >= 5:
             label = "[dead]"
         else:
             label = ""
