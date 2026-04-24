@@ -67,6 +67,27 @@ def get_top_performers(project_name, platform="github"):
     return ""
 
 
+def get_top_search_topics(project_name, platform="github", limit=8, window_days=30):
+    """Return a short text block of best-performing search_topic seeds for
+    this project on this platform, or '' if no data yet.
+
+    Feeds into the prompt as a feedback signal so the LLM prefers seeds
+    that have led to engagement in the past. Mirrors the role of
+    top_twitter_queries.py for the posts table."""
+    try:
+        result = subprocess.run(
+            ["python3", os.path.join(REPO_DIR, "scripts", "top_search_topics.py"),
+             "--project", project_name, "--platform", platform,
+             "--window-days", str(window_days), "--limit", str(limit)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
 def get_recent_comments(limit=5):
     dbmod.load_env()
     conn = dbmod.get_conn()
@@ -146,7 +167,7 @@ def build_content_angle(project, config):
     return config.get("content_angle", "")
 
 
-def build_prompt(project, config, limit, top_report, recent_comments):
+def build_prompt(project, config, limit, top_report, recent_comments, top_topics_report=""):
     content_angle = build_content_angle(project, config)
 
     # Prefer unified search_topics (shared across platforms); fall back to the
@@ -177,6 +198,17 @@ Your last {len(recent_comments)} comments (don't repeat talking points):
 {chr(10).join(lines)}
 """
 
+    top_topics_ctx = ""
+    if top_topics_report:
+        top_topics_ctx = f"""
+## Search-topic feedback (which seeds actually led to engagement):
+{top_topics_report}
+
+Prefer seeds with higher total/avg scores when they fit. If none of the top
+seeds match this run's angle, pick any seed from the project's search_topics
+list. New seeds with 0 posts are fine — we need to explore.
+"""
+
     excluded_repos = config.get("exclusions", {}).get("github_repos", [])
     excluded_authors = config.get("exclusions", {}).get("authors", [])
 
@@ -188,7 +220,7 @@ Content angle: {content_angle}
 Your role: You are a practitioner sharing real experience. The comment should be indistinguishable from
 any other knowledgeable person in the conversation. Do NOT include any links to our repos in the comment.
 Links are added later by a separate pipeline (Phase D) after the comment earns engagement.
-{recent_ctx}{top_ctx}
+{recent_ctx}{top_ctx}{top_topics_ctx}
 {get_styles_prompt("github", context="posting")}
 
 ## Tools (via Bash) - ALWAYS foreground, NEVER run_in_background
@@ -487,8 +519,10 @@ def main():
 
     top_report = get_top_performers(project_name)
     recent_comments = get_recent_comments()
+    top_topics_report = get_top_search_topics(project_name, platform="github")
 
-    prompt = build_prompt(project, config, args.limit, top_report, recent_comments)
+    prompt = build_prompt(project, config, args.limit, top_report, recent_comments,
+                          top_topics_report=top_topics_report)
 
     if args.dry_run:
         print(f"=== DRY RUN ===")
