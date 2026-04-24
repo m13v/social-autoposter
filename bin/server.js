@@ -5022,6 +5022,34 @@ function mountSortableTable(opts) {
 }
 
 let _styleStatsTableState = { sortField: 'score', sortDir: 'desc', filters: {} };
+// Per-column help shown by the info icon next to the section heading. Edit
+// here when columns change so the tooltip stays in sync with what's rendered.
+const STYLE_STATS_FIELD_HELP = [
+  ['Style', 'Engagement tone Claude used to draft each post (slug from scripts/engagement_styles.py). The A/B testing system uses these stats to decide which tones to imitate next.'],
+  ['Score', 'Per-post quality signal. Formula: (comments * 3 + upvotes_discounted) / posts. upvotes_discounted subtracts the OP self-upvote on Reddit and Moltbook so those platforms compare fairly with X/LinkedIn. Views are deliberately excluded so low-volume styles compare fairly with high-volume ones. Same signal the feedback report uses.'],
+  ['Posts', 'Number of posts published in this style during the selected window.'],
+  ['Upvotes', 'Sum of upvotes across all posts in this style. Per-post average shown in parentheses (raw, not discounted).'],
+  ['Comments', 'Sum of replies/comments across all posts. Per-post average in parentheses.'],
+  ['Views', 'Sum of impressions. Per-post average in parentheses. Moltbook and GitHub rows are excluded from both the total and the per-post denominator since neither platform exposes a views metric.'],
+  ['Recs', 'Number of posts in this tone that ALSO carried a project recommendation (is_recommendation = true). Independent dimension from style: it tells you how often this tone was used to deliver a product mention.'],
+];
+function ensureStyleStatsInfoIcon() {
+  if (document.getElementById('style-stats-info')) return;
+  const heading = document.getElementById('style-stats-heading');
+  if (!heading) return;
+  const NL = String.fromCharCode(10);
+  const tip = STYLE_STATS_FIELD_HELP.map(p => p[0] + ': ' + p[1]).join(NL + NL);
+  const icon = document.createElement('span');
+  icon.id = 'style-stats-info';
+  icon.className = 'stat-card-info';
+  icon.textContent = 'i';
+  icon.setAttribute('title', tip);
+  icon.setAttribute('aria-label', tip);
+  icon.style.marginLeft = '6px';
+  // Stop the click from toggling the <details> when users click the icon.
+  icon.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); });
+  heading.parentNode.insertBefore(icon, heading.nextSibling);
+}
 function renderStyleStatsPills(containerId, values, selected, labelAll) {
   const row = document.getElementById(containerId);
   if (!row) return;
@@ -5053,6 +5081,7 @@ function renderStyleStats(payload) {
   const body = document.getElementById('style-stats-body');
   const totalEl = document.getElementById('style-stats-total');
   if (!body) return;
+  ensureStyleStatsInfoIcon();
   const selectedPlatform = (payload && payload.platform) || 'all';
   const selectedProject  = (payload && payload.project)  || 'all';
   renderStyleStatsPills('style-stats-platform-pills', (payload && payload.platforms) || [], selectedPlatform, 'All');
