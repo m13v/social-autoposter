@@ -101,9 +101,38 @@ def get_our_account(config, platform):
 
 def log_outbound(conn, dm_id, content, author=None):
     """Log a message we sent. Includes dedup guard to prevent double-sending."""
-    row = conn.execute("SELECT platform, their_author FROM dms WHERE id = %s", (dm_id,)).fetchone()
+    row = conn.execute(
+        "SELECT platform, their_author, message_count, qualification_status, icp_matches "
+        "FROM dms WHERE id = %s",
+        (dm_id,),
+    ).fetchone()
     if not row:
         print(f"ERROR: DM #{dm_id} not found")
+        return False
+
+    # Bare-URL guard: real replies contain prose. A content string that is
+    # nothing but a URL is almost always a scraper misattribution being
+    # reconciled by the agent (see DM #1486 / session d986d23e where the
+    # twitter-agent surfaced a profile card URL as "is_from_us=true").
+    stripped = (content or "").strip()
+    if re.match(r'^https?://\S+$', stripped):
+        print(f"  BAREURL BLOCKED: DM #{dm_id} content is a lone URL with no prose ({stripped[:100]}).")
+        print(f"  This is usually a scraper misattribution. If the URL really was sent, add a sentence of context before logging.")
+        return False
+
+    # Timeline gate: the Phase D prompt requires that by the 4th message in
+    # a thread, qualification_status is not 'pending' (either 'asked',
+    # 'answered', 'qualified', or 'disqualified'), and Step 2.4 has rescored
+    # ICP so icp_matches is non-empty. If we are about to send message 4+
+    # with neither done, the agent skipped both gates. Refuse and force a
+    # rerun instead of letting the thread drift further into rapport-only.
+    cur_count = (row.get("message_count") or 0)
+    qual_status = (row.get("qualification_status") or "pending")
+    icp_list = row.get("icp_matches") or []
+    if cur_count >= 3 and qual_status == "pending" and not icp_list:
+        print(f"  TIMELINE BLOCKED: DM #{dm_id} is at msg {cur_count} with qualification_status=pending and empty icp_matches.")
+        print(f"  Run Step 2.4 (set-icp-precheck for every project in $PROJECTS) before logging this outbound.")
+        print(f"  If nothing in $PROJECTS plausibly fits this prospect, call set-qualification --status disqualified --notes 'reason' and retry.")
         return False
 
     # Dedup guard: check if last message is already outbound (no inbound since our last reply)
