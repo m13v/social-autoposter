@@ -1777,6 +1777,51 @@ async function handleApi(req, res) {
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
+  // GET /api/funnel/per-day?days=N - PostHog-backed per-day metrics aggregated
+  // across every project's domains: pageviews, email_signups, schedule_clicks,
+  // get_started_clicks, cross_product_clicks, cta_clicks. Shells out to
+  // scripts/funnel_per_day.py which issues one HogQL query per metric per
+  // PostHog bucket. Cached 5 min (PostHog calls are slow and rate-limited).
+  // Admin-only because the underlying data isn't project-scoped.
+  if (p === '/api/funnel/per-day' && req.method === 'GET') {
+    if (!req.user.admin) return json(res, { error: 'forbidden' }, 403);
+    const url = new URL(req.url, 'http://localhost');
+    const days = Math.max(1, Math.min(90, parseInt(url.searchParams.get('days') || '30', 10) || 30));
+    const rawProject = (url.searchParams.get('project') || '').trim();
+    const project = (rawProject === '' || rawProject.toLowerCase() === 'all') ? '' : rawProject;
+    const projectOk = project === '' || /^[A-Za-z0-9_\-]{1,64}$/.test(project);
+    if (!projectOk) return json(res, { error: 'invalid project' }, 400);
+    const cacheKey = days + '|' + project;
+    const cached = funnelPerDayCache.get(cacheKey);
+    if (cached && cached.value && Date.now() - cached.at < 300000) {
+      return json(res, { days, rows: cached.value.rows || [], cachedAt: cached.at, error: cached.value.error });
+    }
+    if (auth.CLIENT_MODE) {
+      return json(res, { days, rows: [], error: 'snapshot_missing' }, 503);
+    }
+    const scriptPath = path.join(DEST, 'scripts', 'funnel_per_day.py');
+    const argv = [scriptPath, '--days', String(days)];
+    if (project) argv.push('--project', project);
+    const pending = new Promise((resolve, reject) => {
+      const child = spawn('python3', argv, { env: process.env, cwd: DEST });
+      let out = '', err = '';
+      child.stdout.on('data', d => out += d);
+      child.stderr.on('data', d => err += d);
+      child.on('error', reject);
+      child.on('close', code => {
+        if (code !== 0) return reject(new Error(err || ('exit ' + code)));
+        try { resolve(JSON.parse(out)); } catch (e) { reject(e); }
+      });
+    });
+    pending.then(val => {
+      funnelPerDayCache.set(cacheKey, { at: Date.now(), value: val });
+      json(res, { days, rows: val.rows || [], cachedAt: Date.now(), error: val.error });
+    }).catch(err => {
+      json(res, { error: String(err && err.message || err) }, 500);
+    });
+    return;
+  }
+
   // GET /api/cost/stats - per-activity-type count + total cost over a trailing
   // window. Types: thread (posts.posted_at), comment (replies.replied),
   // page (seo_keywords + gsc_queries), dm_thread (dms.sent_at). Cost is
