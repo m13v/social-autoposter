@@ -124,9 +124,17 @@ PLATFORM_POLICY = {
     },
 }
 
-# Minimum sample size before we trust a style's avg_upvotes for tiering.
-# Below this, the style is treated as "explore" (secondary).
+# Minimum sample size before we trust a style's avg_upvotes.
+# Below this, the style is "explore" and gets the STYLE_FLOOR_PCT only.
 MIN_SAMPLE_SIZE = 5
+
+# Target-distribution tuning knobs (used by compute_target_distribution).
+# WEIGHT_EXPONENT > 1 sharpens the distribution toward the winner.
+# STYLE_FLOOR_PCT guarantees every non-never style still gets tested.
+# STYLE_CAP_PCT prevents a runaway winner from starving the rest.
+WEIGHT_EXPONENT = 2.0
+STYLE_FLOOR_PCT = 5.0
+STYLE_CAP_PCT = 50.0
 
 
 def _fetch_style_stats(platform):
