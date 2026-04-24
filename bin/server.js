@@ -1502,6 +1502,13 @@ async function handleApi(req, res) {
     const url = new URL(req.url, 'http://localhost');
     const windowHours = Math.max(1, Math.min(720, parseInt(url.searchParams.get('hours') || '24', 10) || 24));
     const rawProject = (url.searchParams.get('project') || '').trim();
+    // Top-of-tab platform filter. Normalize 'x' → 'twitter' so reddit/twitter/
+    // linkedin/moltbook/github/seo all map cleanly. 'all' or empty = no filter.
+    const rawPlatform = (url.searchParams.get('platform') || '').trim().toLowerCase();
+    const platform = (rawPlatform === '' || rawPlatform === 'all') ? '' :
+                     (rawPlatform === 'x' ? 'twitter' : rawPlatform);
+    const platformOk = platform === '' || /^[a-z0-9_]{1,32}$/.test(platform);
+    if (!platformOk) return json(res, { error: 'invalid platform' }, 400);
     // Resolve project scope: null = admin + all, [] = non-admin with no matching projects, otherwise a list.
     const scopeList = auth.scopedProjects(req.user, rawProject || null);
     if (scopeList !== null && scopeList.length === 0) {
@@ -1509,7 +1516,7 @@ async function handleApi(req, res) {
     }
     // Cache key varies by scope so scoped users don't see admin's cached aggregate.
     const scopeKey = scopeList === null ? 'all' : scopeList.slice().sort().join(',');
-    const cacheKey = windowHours + '|' + scopeKey;
+    const cacheKey = windowHours + '|' + scopeKey + '|' + platform;
     const cached = activityStatsCache.get(cacheKey);
     // 5-min TTL. The 9-way UNION runs via execSync(psql), blocking Node's
     // event loop; caching prevents dashboard polling from stalling /api/status
@@ -1517,8 +1524,9 @@ async function handleApi(req, res) {
     if (cached && Date.now() - cached.at < 300000) {
       return json(res, { windowHours, rows: cached.value, cachedAt: cached.at });
     }
-    // Precomputed snapshot is a cross-project aggregate; only valid for admin+all.
-    if (scopeList === null) {
+    // Precomputed snapshot is a cross-project aggregate with no platform filter;
+    // only valid for admin + all projects + all platforms.
+    if (scopeList === null && !platform) {
       const aSnap = await readSnapshotCached(`activity_stats_${windowHours}h.json`);
       if (aSnap && aSnap.value && Array.isArray(aSnap.value.rows)) {
         activityStatsCache.set(cacheKey, { at: aSnap.at, value: aSnap.value.rows });
@@ -1552,10 +1560,15 @@ async function handleApi(req, res) {
     parts.push("SELECT 'page_published_roundup' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='roundup'" + seoProdPc.clause);
     parts.push("SELECT 'page_improved' AS type, 'seo' AS pl FROM seo_page_improvements WHERE completed_at >= NOW() - " + win + " AND status='committed'" + seoProdPc.clause);
     parts.push("SELECT 'resurrected' AS type, platform AS pl FROM posts WHERE resurrected_at >= NOW() - " + win + postsPc.clause);
+    // Platform filter runs after the UNION so 'x' (raw) and 'twitter' (SEO etc)
+    // both fold into the same bucket via the same CASE normalization used below.
+    const platformWhere = platform
+      ? " WHERE CASE WHEN LOWER(pl) = 'x' THEN 'twitter' ELSE LOWER(pl) END = '" + platform + "'"
+      : '';
     const q = "SELECT json_agg(row_to_json(r)) FROM (" +
       "SELECT type, " + norm + " AS platform, COUNT(*)::int AS count FROM (" +
         parts.join(' UNION ALL ') +
-      ") u GROUP BY type, platform ORDER BY type, platform) r";
+      ") u" + platformWhere + " GROUP BY type, platform ORDER BY type, platform) r";
     return (async () => {
       const rows = await pq(q);
       const value = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
