@@ -297,3 +297,17 @@ CREATE TABLE IF NOT EXISTS dashboard_cache (
 );
 CREATE INDEX IF NOT EXISTS idx_dashboard_cache_updated ON dashboard_cache(updated_at DESC);
 
+-- Per-post per-day snapshot of posts.views. Written by the Reddit + Twitter
+-- refresh jobs every time they scrape a current view count. The latest
+-- observation for a given (post_id, day) overwrites the prior one via
+-- UPSERT, so end-of-day has the final number. The dashboard computes
+-- daily deltas with LAG() to render "views earned on day D".
+CREATE TABLE IF NOT EXISTS post_views_daily (
+  post_id     INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  day         DATE NOT NULL,
+  views       INTEGER NOT NULL,
+  captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (post_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_post_views_daily_day ON post_views_daily(day);
+
