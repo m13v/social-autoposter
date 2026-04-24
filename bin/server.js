@@ -1072,16 +1072,9 @@ async function handleApi(req, res) {
         return json(res, { error: (result && result.reason) || 'Could not rewrite plist schedule' }, 500);
       }
       const agentLink = getLaunchAgentPath(job.plist);
-      // If the installed agent file is a regular copy (not a symlink to the
-      // repo unit), we need to replace it so the new schedule takes effect.
       if (isJobLoaded(label)) {
         try {
           driver.unload(label, agentLink);
-          try {
-            const st = fs.lstatSync(agentLink);
-            if (!st.isSymbolicLink()) fs.unlinkSync(agentLink);
-          } catch {}
-          driver.install(unitPath, AGENT_DIR);
           driver.load(agentLink);
         } catch {}
       }
