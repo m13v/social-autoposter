@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """
 Connect to running Twitter Chrome via CDP, read tweets, post replies, log to DB.
+
+Each entry in TWEETS MUST include `engagement_style` (e.g. "critic",
+"pattern_recognizer") so the A/B system can track which style was used.
+See scripts/engagement_styles.py for the valid set and pick targets per
+platform.
 """
 import sys, os, time, json, psycopg2
 from playwright.sync_api import sync_playwright
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from engagement_styles import VALID_STYLES
 
 DB_URL = None
 with open(os.path.expanduser('~/social-autoposter/.env')) as f:
@@ -108,6 +116,10 @@ def main():
         context = browser.contexts[0] if browser.contexts else browser.new_context()
 
         for tweet in TWEETS:
+            style = tweet.get("engagement_style")
+            if not style or style not in VALID_STYLES:
+                print(f"SKIPPED (missing/invalid engagement_style): {tweet['url']}")
+                continue
             page = context.new_page()
             try:
                 result = post_reply(page, tweet)
@@ -116,8 +128,8 @@ def main():
                     cur.execute("""
                         INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
                             thread_title, thread_content, our_url, our_content, our_account,
-                            source_summary, project_name, status, posted_at)
-                        VALUES ('twitter', %s, %s, %s, %s, %s, %s, %s, '@m13v_', %s, %s, 'active', NOW())
+                            source_summary, project_name, engagement_style, status, posted_at)
+                        VALUES ('twitter', %s, %s, %s, %s, %s, %s, %s, '@m13v_', %s, %s, %s, 'active', NOW())
                         RETURNING id
                     """, (
                         tweet['url'],
@@ -128,7 +140,8 @@ def main():
                         tweet['url'],
                         tweet['reply'],
                         f"octolens: {tweet['keyword']}",
-                        tweet['project_name']
+                        tweet['project_name'],
+                        style,
                     ))
                     post_id = cur.fetchone()[0]
                     conn.commit()
