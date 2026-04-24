@@ -1587,10 +1587,29 @@ async function handleApi(req, res) {
     if (!req.user.admin) return json(res, { error: 'forbidden' }, 403);
     const url = new URL(req.url, 'http://localhost');
     const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get('days') || '30', 10) || 30));
-    const cached = viewsPerDayCache.get(days);
+    // Optional platform / project scope. 'x' aliases to 'twitter' like elsewhere.
+    const rawPlatform = (url.searchParams.get('platform') || '').trim().toLowerCase();
+    const platform = (rawPlatform === '' || rawPlatform === 'all') ? '' :
+                     (rawPlatform === 'x' ? 'twitter' : rawPlatform);
+    const platformOk = platform === '' || /^[a-z0-9_]{1,32}$/.test(platform);
+    if (!platformOk) return json(res, { error: 'invalid platform' }, 400);
+    const rawProject = (url.searchParams.get('project') || '').trim();
+    const project = (rawProject === '' || rawProject.toLowerCase() === 'all') ? '' : rawProject;
+    const projectOk = project === '' || /^[A-Za-z0-9_\-]{1,64}$/.test(project);
+    if (!projectOk) return json(res, { error: 'invalid project' }, 400);
+    const cacheKey = days + '|' + platform + '|' + project;
+    const cached = viewsPerDayCache.get(cacheKey);
     if (cached && Date.now() - cached.at < 300000) {
       return json(res, { days, rows: cached.value, cachedAt: cached.at });
     }
+    // Platform filter folds 'x' into 'twitter' to match how posts.platform
+    // stores both raw values.
+    const platformFilter = platform
+      ? " AND CASE WHEN LOWER(p.platform) = 'x' THEN 'twitter' ELSE LOWER(p.platform) END = '" + platform + "'"
+      : '';
+    const projectFilter = project
+      ? " AND p.project_name = '" + project.replace(/'/g, "''") + "'"
+      : '';
     const q =
       "WITH daily AS (" +
         "SELECT pvd.post_id, pvd.day, pvd.views, " +
@@ -1599,6 +1618,7 @@ async function handleApi(req, res) {
         "JOIN posts p ON p.id = pvd.post_id " +
         "WHERE LOWER(p.platform) NOT IN ('moltbook', 'github', 'github_issues') " +
           "AND pvd.day >= CURRENT_DATE - INTERVAL '" + days + " days'" +
+          platformFilter + projectFilter +
       ") " +
       "SELECT json_agg(row_to_json(r)) FROM (" +
         "SELECT day::text AS day, " +
@@ -1609,7 +1629,7 @@ async function handleApi(req, res) {
     return (async () => {
       const rows = await pq(q);
       const value = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
-      viewsPerDayCache.set(days, { at: Date.now(), value });
+      viewsPerDayCache.set(cacheKey, { at: Date.now(), value });
       return json(res, { days, rows: value });
     })().catch(e => json(res, { error: e.message }, 500));
   }
@@ -1955,12 +1975,21 @@ async function handleApi(req, res) {
     const url = new URL(req.url, 'http://localhost');
     const days = Math.max(1, Math.min(90, parseInt(url.searchParams.get('days') || '1', 10) || 1));
     const windowHours = days * 24;
+    // Normalize platform: 'x' folds into 'twitter' to match dms.platform storage.
+    const rawPlatform = (url.searchParams.get('platform') || '').trim().toLowerCase();
+    const platform = (rawPlatform === '' || rawPlatform === 'all') ? '' :
+                     (rawPlatform === 'x' ? 'twitter' : rawPlatform);
+    const platformOk = platform === '' || /^[a-z0-9_]{1,32}$/.test(platform);
+    if (!platformOk) return json(res, { error: 'invalid platform' }, 400);
     const dmPc = auth.projectClause(req.user, "COALESCE(p_direct.project_name, p_via_reply.project_name, d.target_project)", url.searchParams.get('project'));
     if (!dmPc.ok) return json(res, { days, projects: [] });
     const whereParts = [
       "COALESCE(d.last_message_at, d.discovered_at) >= NOW() - INTERVAL '" + windowHours + " hours'",
       "COALESCE(p_direct.project_name, p_via_reply.project_name, d.target_project) IS NOT NULL",
     ];
+    if (platform) {
+      whereParts.push("CASE WHEN LOWER(d.platform) = 'x' THEN 'twitter' ELSE LOWER(d.platform) END = '" + platform + "'");
+    }
     if (dmPc.clause) whereParts.push(dmPc.clause.replace(/^\s*AND\s+/, ''));
     const whereSql = 'WHERE ' + whereParts.join(' AND ');
     const q =
