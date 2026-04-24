@@ -37,7 +37,7 @@ GENERATOR="python3 $SCRIPT_DIR/generate_page.py"
 DB="python3 $SCRIPT_DIR/db_helpers.py"
 
 RUN_START=$(date +%s)
-trap '__e=$?; python3 "$ROOT_DIR/scripts/log_run.py" --script "seo_top_pages" --posted 0 --skipped 0 --failed "$__e" --cost 0 --elapsed "$(( $(date +%s) - RUN_START ))" >/dev/null 2>&1 || true' EXIT
+trap '__e=$?; python3 "$SCRIPT_DIR/log_seo_run.py" --script "seo_top_pages" --since "$RUN_START" --failed "$__e" --elapsed "$(( $(date +%s) - RUN_START ))" >/dev/null 2>&1 || true' EXIT
 
 # Retry wrapper for `claude` (guards against auto-update unlink window).
 # shellcheck source=./claude_helpers.sh
