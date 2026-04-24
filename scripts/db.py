@@ -98,6 +98,29 @@ class PGConn:
         pass
 
 
+def snapshot_post_views(db, post_id, views):
+    """UPSERT one row of post_views_daily with today's view count.
+
+    Called from the Reddit + Twitter refresh jobs whenever a fresh view count
+    is observed for a post. Later observations on the same day overwrite the
+    earlier ones so end-of-day has the final number. The dashboard computes
+    daily deltas with LAG() over (post_id ORDER BY day) to render views
+    earned on day D across all posts.
+    """
+    if post_id is None or views is None:
+        return
+    try:
+        db.execute(
+            "INSERT INTO post_views_daily (post_id, day, views, captured_at) "
+            "VALUES (%s, CURRENT_DATE, %s, NOW()) "
+            "ON CONFLICT (post_id, day) DO UPDATE SET "
+            "views = EXCLUDED.views, captured_at = EXCLUDED.captured_at",
+            [post_id, int(views)],
+        )
+    except Exception:
+        pass
+
+
 def get_conn():
     """Return a PGConn connected to the central Neon database."""
     load_env()
