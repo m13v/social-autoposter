@@ -85,11 +85,13 @@ STYLES = {
     },
 }
 
-# Posting pipelines (no recommendation style)
+# Valid tone styles. Same set for posting and replying: tone is a separate
+# dimension from project-recommendation intent, which is now tracked on its
+# own boolean column (posts.is_recommendation / replies.is_recommendation).
+# REPLY_STYLES is kept as an alias for backwards compatibility with callers
+# that historically treated it as a superset.
 VALID_STYLES = set(STYLES.keys())
-
-# Reply/engagement pipelines add recommendation
-REPLY_STYLES = VALID_STYLES | {"recommendation"}
+REPLY_STYLES = VALID_STYLES
 
 # ── Platform-specific policy overlay ────────────────────────────────
 #
@@ -408,7 +410,16 @@ def get_styles_prompt(platform, context="posting"):
         lines.append("")
 
     if context == "replying":
-        lines.append("**recommendation**: Recommend a project from config casually. MAX 20% of replies.")
+        lines.append(
+            "## Project recommendation (separate dimension from tone)"
+        )
+        lines.append(
+            "Tone and intent are independent. Pick one tone from the list above. "
+            "SEPARATELY, up to ~20% of replies should casually mention a project "
+            "from config (Tier 2 / Tier 3 of the link strategy). When you do, "
+            "pass --is-recommendation to reply_db.py so the DB reflects the intent. "
+            "Do NOT pick a tone called 'recommendation' — that field is tone, not intent."
+        )
         lines.append("")
 
     lines.append('AVOID the "pleaser/validator" style ("this is great", "had similar results", "100% agree"). It consistently gets the lowest engagement across all platforms.')
