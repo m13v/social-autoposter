@@ -70,7 +70,6 @@ Claude decides WHAT (pick project, write text). Scripts execute HOW (navigate, c
 
 | Script | Platform | Action |
 |--------|----------|--------|
-| `scripts/browser/edit_linkedin_comment.js` | LinkedIn | Append text to our comment |
 | `scripts/browser/scrape_reddit_views.js` | Reddit | Scroll profile page and extract post view counts |
 
 For Reddit chat ingestion, use `scripts/reddit_chat_sync.py` (ingest-unread /
