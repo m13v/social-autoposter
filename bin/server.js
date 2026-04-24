@@ -6988,7 +6988,7 @@ function saStartApp() {
   if (dmEl && dmEl.open) loadDmStats();
   setInterval(loadActivityStats, 300000);
   setInterval(loadStyleStats, 300000);
-  setInterval(loadViewsPerDay, 300000);
+  setInterval(loadAllPerDayCharts, 300000);
   setTimeout(() => {
     // Logs + Settings tabs are admin-only (hidden via body.sa-non-admin);
     // their endpoints are admin-only too, so guard the preload for scoped users.
