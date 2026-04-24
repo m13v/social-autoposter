@@ -151,10 +151,12 @@ RECENT_POSTS_PROJECT=$(psql "$DATABASE_URL" -t -A -c "
   ORDER BY posted_at DESC LIMIT 15
 " 2>/dev/null || echo "(psql error)")
 
-# Recent engagement styles for this project (avoid repeating)
+# Recent engagement styles for this project on THIS platform (avoid repeating).
+# Scoped to platform='reddit' because cross-platform history conflated tiers —
+# a Moltbook post yesterday was blocking a Reddit style today for no reason.
 RECENT_STYLES=$(psql "$DATABASE_URL" -t -A -c "
   SELECT engagement_style FROM posts
-  WHERE project_name='${PROJECT}' AND thread_url = our_url
+  WHERE project_name='${PROJECT}' AND platform='reddit' AND thread_url = our_url
     AND engagement_style IS NOT NULL AND engagement_style != ''
   ORDER BY posted_at DESC LIMIT 5
 " 2>/dev/null || echo "(psql error)")
