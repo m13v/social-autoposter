@@ -155,6 +155,8 @@ def update_views(db, scraped_data, quiet=False):
                 f"UPDATE posts SET {', '.join(sets)} WHERE id=%s",
                 params,
             )
+            if views is not None:
+                dbmod.snapshot_post_views(db, db_id, views)
             matched += 1
             if comment_id and score_val is not None:
                 matched_comment_score += 1
