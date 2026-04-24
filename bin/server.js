@@ -1619,71 +1619,22 @@ async function handleApi(req, res) {
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
-  // GET /api/views/per-day?days=N - total social media views earned per day,
-  // summed across all posts and platforms. Reads post_views_daily, which is
-  // populated by the Reddit + Twitter refresh jobs (LinkedIn and Moltbook
-  // have no views metric). Daily delta per post via LAG; GREATEST(.,0)
-  // clamps negatives (counter resets, post deletions). Each post's FIRST
-  // snapshot is excluded (prev_views IS NULL) so cold-start days don't
-  // inflate by attributing a post's lifetime views to the capture day.
-  if (p === '/api/views/per-day' && req.method === 'GET') {
-    if (!req.user.admin) return json(res, { error: 'forbidden' }, 403);
-    const url = new URL(req.url, 'http://localhost');
-    const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get('days') || '30', 10) || 30));
-    // Optional platform / project scope. 'x' aliases to 'twitter' like elsewhere.
-    const rawPlatform = (url.searchParams.get('platform') || '').trim().toLowerCase();
-    const platform = (rawPlatform === '' || rawPlatform === 'all') ? '' :
-                     (rawPlatform === 'x' ? 'twitter' : rawPlatform);
-    const platformOk = platform === '' || /^[a-z0-9_]{1,32}$/.test(platform);
-    if (!platformOk) return json(res, { error: 'invalid platform' }, 400);
-    const rawProject = (url.searchParams.get('project') || '').trim();
-    const project = (rawProject === '' || rawProject.toLowerCase() === 'all') ? '' : rawProject;
-    const projectOk = project === '' || /^[A-Za-z0-9_\-]{1,64}$/.test(project);
-    if (!projectOk) return json(res, { error: 'invalid project' }, 400);
-    const cacheKey = days + '|' + platform + '|' + project;
-    const cached = viewsPerDayCache.get(cacheKey);
-    if (cached && Date.now() - cached.at < 300000) {
-      return json(res, { days, rows: cached.value, cachedAt: cached.at });
-    }
-    // Platform filter folds 'x' into 'twitter' to match how posts.platform
-    // stores both raw values.
-    const platformFilter = platform
-      ? " AND CASE WHEN LOWER(p.platform) = 'x' THEN 'twitter' ELSE LOWER(p.platform) END = '" + platform + "'"
-      : '';
-    const projectFilter = project
-      ? " AND p.project_name = '" + project.replace(/'/g, "''") + "'"
-      : '';
-    const q =
-      "WITH daily AS (" +
-        "SELECT pvd.post_id, pvd.day, pvd.views, " +
-          "LAG(pvd.views) OVER (PARTITION BY pvd.post_id ORDER BY pvd.day) AS prev_views " +
-        "FROM post_views_daily pvd " +
-        "JOIN posts p ON p.id = pvd.post_id " +
-        "WHERE LOWER(p.platform) NOT IN ('moltbook', 'github', 'github_issues') " +
-          "AND pvd.day >= CURRENT_DATE - INTERVAL '" + days + " days'" +
-          platformFilter + projectFilter +
-      ") " +
-      "SELECT json_agg(row_to_json(r)) FROM (" +
-        "SELECT day::text AS day, " +
-          "SUM(GREATEST(views - prev_views, 0))::bigint AS views_gained, " +
-          "COUNT(DISTINCT post_id)::int AS posts_observed " +
-        "FROM daily WHERE prev_views IS NOT NULL GROUP BY day ORDER BY day ASC" +
-      ") r";
-    return (async () => {
-      const rows = await pq(q);
-      const value = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
-      viewsPerDayCache.set(cacheKey, { at: Date.now(), value });
-      return json(res, { days, rows: value });
-    })().catch(e => json(res, { error: e.message }, 500));
-  }
-
-  // GET /api/upvotes/per-day?days=N and /api/comments/per-day?days=N
-  // Same shape as /api/views/per-day. LAG delta per post from the upvotes /
-  // comments columns of post_views_daily (backfilled at capture time from
-  // posts.upvotes / posts.comments_count). Same cold-start exclusion: a
-  // post's first snapshot does NOT contribute (prev IS NULL), so day 1 is
-  // empty, day 2 onward is real day-over-day gain.
-  const perDayMetric = (metricCol, cache, gainedKey) => {
+  // GET /api/views|upvotes|comments/per-day?days=N - total per-post metric
+  // earned each day across all platforms. Two data sources merged:
+  //   1) post_views_daily LAG delta (per-post snapshots, live from 2026-04-24
+  //      onward). Each post's FIRST snapshot is excluded (prev IS NULL).
+  //   2) aggregate_stats_daily (cross-platform audit-log backfill covering
+  //      2026-04-19 -> 2026-04-24). Pre-existence-of-post_views_daily
+  //      history, reconstructed from daily-audit cumulative totals.
+  // UNION ALL + SUM by day so overlapping 2026-04-24 row totals correctly:
+  // aggregate has a non-zero value, per-post yields 0 (cold start), sum is
+  // the aggregate value.
+  //
+  // Platform/project filter: the aggregate table is cross-platform/cross-
+  // project and cannot honor these filters. When either filter is active,
+  // the aggregate UNION branch is skipped entirely so reconstructed days
+  // return 0 rather than misleading totals.
+  const perDayMetric = (metricCol, cache, gainedKey, aggregateCol) => {
     if (!req.user.admin) return json(res, { error: 'forbidden' }, 403);
     const url = new URL(req.url, 'http://localhost');
     const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get('days') || '30', 10) || 30));
@@ -1707,8 +1658,14 @@ async function handleApi(req, res) {
     const projectFilter = project
       ? " AND p.project_name = '" + project.replace(/'/g, "''") + "'"
       : '';
+    const includeAggregate = !platform && !project;
+    const aggregateUnion = includeAggregate
+      ? "UNION ALL SELECT day, " + aggregateCol + "::bigint AS metric_gained " +
+        "FROM aggregate_stats_daily " +
+        "WHERE day >= CURRENT_DATE - INTERVAL '" + days + " days'"
+      : '';
     const q =
-      "WITH daily AS (" +
+      "WITH per_post_daily AS (" +
         "SELECT pvd.post_id, pvd.day, pvd." + metricCol + " AS metric, " +
           "LAG(pvd." + metricCol + ") OVER (PARTITION BY pvd.post_id ORDER BY pvd.day) AS prev_metric " +
         "FROM post_views_daily pvd " +
@@ -1717,12 +1674,17 @@ async function handleApi(req, res) {
           "AND pvd." + metricCol + " IS NOT NULL " +
           "AND pvd.day >= CURRENT_DATE - INTERVAL '" + days + " days'" +
           platformFilter + projectFilter +
+      "), per_post AS (" +
+        "SELECT day, SUM(GREATEST(metric - prev_metric, 0))::bigint AS metric_gained " +
+        "FROM per_post_daily WHERE prev_metric IS NOT NULL GROUP BY day" +
+      "), merged AS (" +
+        "SELECT day, metric_gained FROM per_post " +
+        aggregateUnion +
       ") " +
       "SELECT json_agg(row_to_json(r)) FROM (" +
         "SELECT day::text AS day, " +
-          "SUM(GREATEST(metric - prev_metric, 0))::bigint AS " + gainedKey + ", " +
-          "COUNT(DISTINCT post_id)::int AS posts_observed " +
-        "FROM daily WHERE prev_metric IS NOT NULL GROUP BY day ORDER BY day ASC" +
+          "SUM(metric_gained)::bigint AS " + gainedKey + " " +
+        "FROM merged GROUP BY day ORDER BY day ASC" +
       ") r";
     return (async () => {
       const rows = await pq(q);
@@ -1731,11 +1693,14 @@ async function handleApi(req, res) {
       return json(res, { days, rows: value });
     })().catch(e => json(res, { error: e.message }, 500));
   };
+  if (p === '/api/views/per-day' && req.method === 'GET') {
+    return perDayMetric('views', viewsPerDayCache, 'views_gained', 'views_gained');
+  }
   if (p === '/api/upvotes/per-day' && req.method === 'GET') {
-    return perDayMetric('upvotes', upvotesPerDayCache, 'upvotes_gained');
+    return perDayMetric('upvotes', upvotesPerDayCache, 'upvotes_gained', 'upvotes_gained');
   }
   if (p === '/api/comments/per-day' && req.method === 'GET') {
-    return perDayMetric('comments', commentsPerDayCache, 'comments_gained');
+    return perDayMetric('comments', commentsPerDayCache, 'comments_gained', 'comments_gained');
   }
 
   // GET /api/bookings/per-day?days=N - real Cal.com bookings per day from
