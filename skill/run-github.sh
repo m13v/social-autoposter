@@ -13,7 +13,7 @@
 #   (2) Adaptive cap gated by per-cycle momentum.
 #   (3) T0 -> T1 delta filter: stale issues drop out before Claude sees them.
 #
-# Called by launchd every 30 minutes.
+# Called by launchd. Cadence is owned by the .plist, not this script.
 
 set -euo pipefail
 
