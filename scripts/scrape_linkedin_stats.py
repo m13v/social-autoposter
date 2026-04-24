@@ -83,8 +83,25 @@ def update_linkedin_stats(db, scraped_data, quiet=False):
             item = stats_by_activity[activity_id]
 
             if not item.get("found", False):
-                # Comment not found — use 2-detection confirmation
-                # to avoid false positives from page load failures
+                # Two paths:
+                # 1) `unavailable: true` means the scraper matched an explicit
+                #    LinkedIn "post unavailable / not found" string on the page.
+                #    That's a strong signal; flip status=removed on first hit.
+                # 2) Otherwise the comment just didn't match our author/content
+                #    heuristics. Use the 2-strike rule to avoid false positives
+                #    from DOM changes or transient rendering failures.
+                if item.get("unavailable"):
+                    db.execute(
+                        "UPDATE posts SET status='removed', deletion_detect_count=0, "
+                        "status_checked_at=NOW() WHERE id=%s",
+                        [db_id],
+                    )
+                    removed += 1
+                    if not quiet:
+                        signal = item.get("signal", "<unavailable>")
+                        print(f"  [{db_id}] REMOVED (post unavailable: {signal})")
+                    continue
+
                 row = db.execute(
                     "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [db_id]
                 ).fetchone()
