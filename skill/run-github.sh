@@ -1,17 +1,20 @@
 #!/bin/bash
-# Social Autoposter - GitHub Issues phased posting cycle.
+# Social Autoposter - GitHub Issues momentum-gated posting.
 #
-# Delegates to scripts/run_github_cycle.py which implements:
+# Delegates to scripts/post_github.py which implements:
 #   - Phase 1: gh search across project topics, snapshot T0 comment + reaction counts
-#   - Sleep 600s (T0 -> T1 momentum window)
+#   - Sleep (T0 -> T1 momentum window, default 600s, owned by post_github --sleep)
 #   - Phase 2a: re-fetch same issues, compute delta_score
 #   - Phase 2b: adaptive cap (default 1, bump to 3 when >=3 candidates show momentum),
-#              Claude drafts, Python posts via `gh issue comment`
+#              Claude drafts (one-shot, no Bash tools), Python posts via `gh issue comment`
+#              and persists search_topic, language, engagement_style to the posts table.
 #
-# Three reduction levers baked in:
+# Reduction levers baked in:
 #   (1) Historical (project, style) engagement block in drafter prompt.
-#   (2) Adaptive cap gated by per-cycle momentum.
-#   (3) T0 -> T1 delta filter: stale issues drop out before Claude sees them.
+#   (2) top_search_topics feedback so high-scoring seeds get preferred.
+#   (3) Adaptive cap gated by per-cycle momentum.
+#   (4) T0 -> T1 delta filter: stale issues drop out before Claude sees them.
+#   (5) Pre-filter eliminates Claude's tool budget; one JSON in one shot.
 #
 # Called by launchd. Cadence is owned by the .plist, not this script.
 
@@ -26,7 +29,7 @@ LOG_FILE="$LOG_DIR/github-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== GitHub Issues Run: $(date) ===" | tee "$LOG_FILE"
 
-python3 "$REPO_DIR/scripts/run_github_cycle.py" 2>&1 | tee -a "$LOG_FILE"
+python3 "$REPO_DIR/scripts/post_github.py" 2>&1 | tee -a "$LOG_FILE"
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 
