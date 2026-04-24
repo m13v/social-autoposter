@@ -298,17 +298,19 @@ function startTimeFromUnit(xml) {
   try {
     const arrM = xml.match(/<key>StartCalendarInterval<\/key>\s*<array>([\s\S]*?)<\/array>/);
     if (arrM) {
-      const entries = [...arrM[1].matchAll(/<dict>([\s\S]*?)<\/dict>/g)];
-      const times = [];
-      for (const e of entries) {
-        const h = e[1].match(/<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/);
-        if (!h) continue;
-        const m = e[1].match(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/);
-        times.push({ hour: parseInt(h[1], 10), minute: m ? parseInt(m[1], 10) : 0 });
-      }
-      if (!times.length) return null;
-      times.sort((a, b) => (a.hour * 60 + a.minute) - (b.hour * 60 + b.minute));
-      return times[0];
+      // Return the first entry in document order, which is the user-chosen
+      // anchor when this plist was written by updateStartTime. For legacy
+      // hand-written arrays (typically sorted ascending) this also happens to
+      // be the earliest fire of the day.
+      const first = arrM[1].match(/<dict>([\s\S]*?)<\/dict>/);
+      if (!first) return null;
+      const fh = first[1].match(/<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/);
+      const fm = first[1].match(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/);
+      if (!fh && !fm) return null;
+      return {
+        hour: fh ? parseInt(fh[1], 10) : 0,
+        minute: fm ? parseInt(fm[1], 10) : 0,
+      };
     }
     const dictM = xml.match(/<key>StartCalendarInterval<\/key>\s*<dict>([\s\S]*?)<\/dict>/);
     if (!dictM) return null;
