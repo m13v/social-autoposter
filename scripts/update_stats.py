@@ -569,6 +569,10 @@ def update_moltbook(db, api_key, quiet=False):
     rate_limited = False
 
     for post in posts:
+        if total and total % 50 == 0:
+            progress.tick("moltbook", total, len(posts),
+                          updated=updated, deleted=deleted,
+                          errors=errors, skipped=skipped)
         if rate_limited:
             break
         total += 1
@@ -1078,8 +1082,14 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
         # Commit every 50 tweets to save progress
         if total % 50 == 0:
             db.commit()
+            progress.tick("twitter", total, len(posts),
+                          updated=updated, deleted=deleted,
+                          suspended=suspended, errors=errors, skipped=skipped)
 
     db.commit()
+    progress.done("twitter", len(posts),
+                  updated=updated, deleted=deleted,
+                  suspended=suspended, errors=errors, skipped=skipped)
     if skipped and not quiet:
         print(f"  Skipped {skipped} stable tweets (3+ scans unchanged, older than 5 days)")
     return {"total": total, "updated": updated, "deleted": deleted, "suspended": suspended,
