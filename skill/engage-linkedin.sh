@@ -256,7 +256,7 @@ CRITICAL: Process EVERY reply. For each: either post a response and mark as 'rep
 
 CRITICAL: For ALL database operations, use the reply_db.py helper (NOT raw psql):
   python3 $REPO_DIR/scripts/reply_db.py processing ID          # BEFORE posting
-  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url] [engagement_style]   # AFTER posting (include the style name)
+  python3 $REPO_DIR/scripts/reply_db.py replied ID "reply text" [url] [engagement_style] [is_recommendation]   # AFTER posting. engagement_style is TONE (critic, storyteller, etc). Pass "1" for is_recommendation ONLY when the reply casually recommends a project (Tier 2/3); leave blank otherwise.
   python3 $REPO_DIR/scripts/reply_db.py skipped ID "reason"
   python3 $REPO_DIR/scripts/reply_db.py skip_batch '{"ids":[1,2,3],"reason":"..."}'
   python3 $REPO_DIR/scripts/reply_db.py status
@@ -270,7 +270,7 @@ When you recommend a project in a reply (Tier 2 or Tier 3), set project_name on 
 MANDATORY reply flow for every item:
   Step 1: python3 reply_db.py processing ID      <- mark BEFORE posting
   Step 2: post reply (OAuth API first, browser fallback)
-  Step 3: python3 reply_db.py replied ID "text" [url] [engagement_style]   <- mark AFTER success
+  Step 3: python3 reply_db.py replied ID "text" [url] [engagement_style] [is_recommendation]   <- mark AFTER success. engagement_style is TONE; pass is_recommendation="1" only when you mentioned a project (Tier 2/3).
 If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run.
 
 For LinkedIn replies - use the OAuth API first:
