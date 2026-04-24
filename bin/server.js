@@ -1065,11 +1065,11 @@ async function handleApi(req, res) {
       if (!job) return json(res, { error: 'Unknown job' }, 404);
       let unitPath = path.join(UNIT_DIR, driver.unitFileName(job.plist));
       if (!fs.existsSync(unitPath)) unitPath = getLaunchAgentPath(job.plist);
-      let ok;
-      try { ok = driver.updateStartTime(unitPath, hour, minute); }
+      let result;
+      try { result = driver.updateStartTime(unitPath, hour, minute); }
       catch (e) { return json(res, { error: e.message }, 500); }
-      if (!ok) {
-        return json(res, { error: 'Could not rewrite plist schedule' }, 500);
+      if (!result || !result.ok) {
+        return json(res, { error: (result && result.reason) || 'Could not rewrite plist schedule' }, 500);
       }
       const agentLink = getLaunchAgentPath(job.plist);
       // If the installed agent file is a regular copy (not a symlink to the
@@ -1086,7 +1086,7 @@ async function handleApi(req, res) {
         } catch {}
       }
       invalidateStatusCache();
-      return json(res, { hour, minute });
+      return json(res, { hour, minute, kind: result.kind, count: result.count });
     }).catch(e => json(res, { error: e.message }, 400));
   }
 
