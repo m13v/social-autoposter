@@ -62,8 +62,11 @@ for _ in range(min(k, len(remaining))):
             chosen.append({
                 'name': p.get('name'),
                 'description': p.get('description', ''),
-                'topics': p.get('topics', []),
-                'twitter_topics': p.get('twitter_topics', []),
+                # Unified search_topics (Phase 1 shared-seed migration); fall back
+                # to legacy per-platform lists for pre-migration safety.
+                'search_topics': p.get('search_topics') or (
+                    (p.get('twitter_topics') or []) + (p.get('topics') or [])
+                ),
             })
             remaining.pop(i)
             break
@@ -103,7 +106,7 @@ Query guidelines:
 - Favor discussions/opinions (people sharing experience, asking questions), not news/promos/giveaways
 - Pick a query likely to surface tweets RELEVANT to that project's actual domain
 - Mix it up each run, don't always use the same query for the same project
-- Use the projects' topics/twitter_topics/description as grounding
+- Use the projects' search_topics/description as grounding (search_topics is a shared concept seed list across platforms — some phrases are tuned for Reddit or GitHub, so rephrase into natural Twitter search terms with hashtag-adjacent vernacular)
 
 ## Step 2: Search and extract
 
