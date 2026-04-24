@@ -171,15 +171,6 @@ function generatePlists() {
       stdoutLog: `${DEST}/skill/logs/launchd-stats-stdout.log`,
       stderrLog: `${DEST}/skill/logs/launchd-stats-stderr.log`,
     },
-    {
-      file: 'com.m13v.social-engage.plist',
-      label: 'com.m13v.social-engage',
-      script: `${DEST}/skill/engage.sh`,
-      interval: 21600,
-      runAtLoad: false,
-      stdoutLog: `${DEST}/skill/logs/launchd-engage-stdout.log`,
-      stderrLog: `${DEST}/skill/logs/launchd-engage-stderr.log`,
-    },
   ];
 
   const driver = scheduler.driverFor();
