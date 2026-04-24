@@ -43,7 +43,12 @@ python3 "$REPO_DIR/scripts/scan_github_replies.py" 2>&1 | tee -a "$LOG_FILE"
 # posts.comments_count.
 # ═══════════════════════════════════════════════════════
 log "Phase A.5: Updating github engagement stats (reactions + reply counts)..."
-python3 "$REPO_DIR/scripts/update_stats.py" --github-only --quiet 2>&1 | tee -a "$LOG_FILE"
+# Best-effort: stats failures (Neon disconnects, gh rate limits) must not block
+# Phase B reply handling. Subshell scopes the set-flags, `|| true` absorbs rc.
+( set +e +o pipefail
+  python3 "$REPO_DIR/scripts/update_stats.py" --github-only 2>&1 | tee -a "$LOG_FILE"
+) || true
+log "Phase A.5: done"
 
 # ═══════════════════════════════════════════════════════
 # PHASE B: Respond to pending GitHub replies
