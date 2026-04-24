@@ -22,7 +22,16 @@
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-dm-replies-reddit-stderr.log</string>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-dm-replies-reddit-stdout.log</string>
-	<key>StartInterval</key>
-	<integer>1800</integer>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict>
+			<key>Minute</key>
+			<integer>13</integer>
+		</dict>
+		<dict>
+			<key>Minute</key>
+			<integer>43</integer>
+		</dict>
+	</array>
 </dict>
 </plist>
