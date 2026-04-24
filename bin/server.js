@@ -2573,6 +2573,15 @@ const HTML = `<!DOCTYPE html>
   .style-stats-caret { display: inline-block; width: 10px; font-size: 10px; color: var(--text-muted); transition: transform 0.15s; }
   .style-stats-section[open] .style-stats-caret { transform: rotate(90deg); }
   .style-stats-total { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  /* Views-per-day bar chart in the Stats tab */
+  .views-chart { padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--border); }
+  .views-chart-bars { display: flex; align-items: flex-end; gap: 2px; height: 140px; min-height: 140px; }
+  .views-chart-bar { flex: 1 1 0; min-width: 4px; background: var(--accent, #3b82f6); border-radius: 2px 2px 0 0; position: relative; transition: background 0.1s; }
+  .views-chart-bar:hover { background: var(--accent-hover, #2563eb); }
+  .views-chart-bar.empty { background: var(--bg-subtle); }
+  .views-chart-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .views-chart-axis span { white-space: nowrap; }
+  .views-chart-empty { padding: 24px 20px; color: var(--text-secondary); font-size: 13px; text-align: center; }
   /* Deploy Health: slim inline bar when collapsed, alert colors when there is something worth attention */
   #deploy-health:not([open]) { margin-bottom: 10px; border-radius: 8px; }
   #deploy-health:not([open]) > summary { padding: 6px 14px; }
@@ -2791,6 +2800,15 @@ const HTML = `<!DOCTYPE html>
     </div>
     <div class="stats-grid" id="stats-grid"></div>
   </div>
+  <details class="style-stats-section" id="views-per-day" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="views-per-day-heading">Total Social Views per Day (last 30d)</span></span>
+      <span class="style-stats-total" id="views-per-day-total"></span>
+    </summary>
+    <div id="views-per-day-body">
+      <div class="views-chart-empty">Loading…</div>
+    </div>
+  </details>
   <details class="style-stats-section" id="style-stats" open>
     <summary>
       <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="style-stats-heading">Posts by Engagement Style (24h)</span></span>
@@ -4094,6 +4112,80 @@ async function loadActivityStats() {
     const data = await res.json();
     renderActivityStats(data);
   } catch {}
+}
+
+function renderViewsPerDay(payload) {
+  const body = document.getElementById('views-per-day-body');
+  const totalEl = document.getElementById('views-per-day-total');
+  const heading = document.getElementById('views-per-day-heading');
+  if (!body) return;
+  const days = (payload && payload.days) || 30;
+  if (heading) heading.textContent = 'Total Social Views per Day (last ' + days + 'd)';
+  const rows = (payload && payload.rows) || [];
+  if (!rows.length) {
+    if (totalEl) totalEl.textContent = '0 views';
+    body.innerHTML = '<div class="views-chart-empty">No view snapshots yet. Snapshots accumulate as the Reddit and Twitter refresh jobs run; the chart fills in from today forward.</div>';
+    return;
+  }
+  const byDay = {};
+  rows.forEach(r => { byDay[r.day] = Number(r.views_gained) || 0; });
+  const end = new Date();
+  const start = new Date(); start.setDate(end.getDate() - (days - 1));
+  const series = [];
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const key = d.toISOString().slice(0, 10);
+    series.push({ day: key, views: byDay[key] || 0 });
+  }
+  const total = series.reduce((a, r) => a + r.views, 0);
+  const max = series.reduce((m, r) => Math.max(m, r.views), 0);
+  if (totalEl) totalEl.textContent = total.toLocaleString() + ' view' + (total === 1 ? '' : 's');
+  const fmtShort = n => {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + 'M';
+    if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + 'K';
+    return String(n);
+  };
+  const fmtDay = key => {
+    const d = new Date(key + 'T00:00:00');
+    return (d.getMonth() + 1) + '/' + d.getDate();
+  };
+  const bars = series.map(r => {
+    const pct = max > 0 ? (r.views / max) * 100 : 0;
+    const title = fmtDay(r.day) + ': ' + r.views.toLocaleString() + ' views';
+    const cls = r.views > 0 ? 'views-chart-bar' : 'views-chart-bar empty';
+    const h = max > 0 ? Math.max(pct, r.views > 0 ? 2 : 0) : 0;
+    return '<div class="' + cls + '" style="height:' + h + '%;" title="' + escapeHtml(title) + '"></div>';
+  }).join('');
+  const firstDay = fmtDay(series[0].day);
+  const lastDay = fmtDay(series[series.length - 1].day);
+  const midIdx = Math.floor(series.length / 2);
+  const midDay = fmtDay(series[midIdx].day);
+  body.innerHTML =
+    '<div class="views-chart">' +
+      '<div class="views-chart-bars">' + bars + '</div>' +
+      '<div class="views-chart-axis">' +
+        '<span>' + escapeHtml(firstDay) + '</span>' +
+        '<span>' + escapeHtml(midDay) + '</span>' +
+        '<span>' + escapeHtml(lastDay) + '</span>' +
+      '</div>' +
+      '<div class="views-chart-axis"><span>peak ' + escapeHtml(fmtShort(max)) + '/day</span><span></span><span>total ' + escapeHtml(fmtShort(total)) + '</span></div>' +
+    '</div>';
+}
+
+async function loadViewsPerDay() {
+  try {
+    const days = currentStatsWindow().days || 30;
+    const res = await fetch('/api/views/per-day?days=' + days);
+    if (!res.ok) {
+      const body = document.getElementById('views-per-day-body');
+      if (body) body.innerHTML = '<div class="views-chart-empty">Unable to load views (' + res.status + ').</div>';
+      return;
+    }
+    const data = await res.json();
+    renderViewsPerDay(data);
+  } catch {
+    const body = document.getElementById('views-per-day-body');
+    if (body) body.innerHTML = '<div class="views-chart-empty">Unable to load views.</div>';
+  }
 }
 
 // Shared helper: mount a sortable + per-column-filterable table into containerId.
@@ -6088,7 +6180,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     } else {
       stopActivityAutoRefresh();
     }
-    if (name === 'stats') { loadActivityStats(); loadStyleStats(); loadDmStats(); }
+    if (name === 'stats') { loadActivityStats(); loadStyleStats(); loadDmStats(); loadViewsPerDay(); }
     if (name === 'top') {
       initTopFilters();
       if (_topSubtab === 'pages') {
@@ -6127,6 +6219,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     syncStatsHeadings();
     loadActivityStats();
     loadStyleStats();
+    loadViewsPerDay();
     const funnelEl = document.getElementById('funnel-stats');
     if (funnelEl && funnelEl.open) loadFunnelStats(true);
     const dmEl = document.getElementById('dm-stats');
