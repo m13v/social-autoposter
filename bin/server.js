@@ -3836,17 +3836,12 @@ function applyJobsHistoryFilter() {
   const body = document.getElementById('jobs-history-body');
   if (!body) return;
   const pf = _jobHistoryPlatformFilter, tf = _jobHistoryTypeFilter;
-  const winHours = currentStatusWindow().hours;
-  const cutoffMs = winHours ? Date.now() - winHours * 3600 * 1000 : null;
-  const filtered = _jobHistoryRuns.filter(r => {
-    if (pf !== 'all' && r.platform_key !== pf) return false;
-    if (tf !== 'all' && r.job_type !== tf) return false;
-    if (cutoffMs != null) {
-      const t = r.started_at ? Date.parse(r.started_at) : NaN;
-      if (isNaN(t) || t < cutoffMs) return false;
-    }
-    return true;
-  });
+  // Window is applied server-side (see loadJobsHistory), so this filter only
+  // narrows on platform/type.
+  const filtered = _jobHistoryRuns.filter(r =>
+    (pf === 'all' || r.platform_key === pf) &&
+    (tf === 'all' || r.job_type === tf)
+  );
   body.innerHTML = buildJobsHistoryTable(filtered);
 }
 
@@ -3877,13 +3872,19 @@ function initJobsHistoryPills() {
 }
 
 let _jobHistoryLoadedAt = 0;
-async function loadJobsHistory() {
+let _jobHistoryLoadedForHours = null;
+async function loadJobsHistory(force) {
   // Throttle to once per 20s. Job history changes on the order of minutes,
-  // but loadStatus() polls every 5s.
-  if (Date.now() - _jobHistoryLoadedAt < 20000) return;
+  // but loadStatus() polls every 5s. Bypass the throttle when the Status
+  // tab window changes so the operator sees the new range immediately.
+  const hours = currentStatusWindow().hours;
+  const sameHours = _jobHistoryLoadedForHours === hours;
+  if (!force && sameHours && Date.now() - _jobHistoryLoadedAt < 20000) return;
   _jobHistoryLoadedAt = Date.now();
+  _jobHistoryLoadedForHours = hours;
   try {
-    const res = await fetch('/api/job-runs?limit=500');
+    const qs = hours ? ('?hours=' + hours) : '?limit=500';
+    const res = await fetch('/api/job-runs' + qs);
     const data = await res.json();
     _jobHistoryRuns = Array.isArray(data.runs) ? data.runs : [];
     initJobsHistoryPills();
@@ -7011,7 +7012,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     const costEl = document.getElementById('cost-stats');
     if (costEl && costEl.open) loadCostStats(true);
     loadProjectStatus(true);
-    applyJobsHistoryFilter();
+    loadJobsHistory(true);
   });
   syncStatusHeadings();
 })();
