@@ -106,7 +106,7 @@ CONTENT_TYPES = {
             "website/src/app/best/{slug}/page.tsx",
         ],
         "example_dirs": ["src/app/best/", "src/app/t/"],
-        "description": "a dated best-of listicle that ranks the host product alongside 6-10 sibling projects, including cross-industry picks, with every entry wired to trackCrossProductClick for attribution",
+        "description": "a dated best-of listicle for the host's niche, built from real competitor research. The host appears only when it honestly belongs in the top results, and a small sibling appendix is optional (default zero) when sibling projects genuinely fit the audience.",
     },
 }
 
@@ -635,7 +635,7 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
         "gsc": "This query is already driving impressions to the site in Google Search Console. Real users are searching for this. Capture the demand.",
         "manual": "This is an adhoc trigger. Treat the keyword as worth building.",
         "reddit": "This page is being created to drop into a high-performing Reddit thread. Match the thread audience's vocabulary and pain points; the page should genuinely help someone who landed on it from a Reddit comment.",
-        "roundup": "This is a weekly cross-product roundup: a listicle hosted on this product's own domain that ranks the host alongside 6-10 sibling projects. The SEO target is the freshness query 'best <niche> <Month Year>'. Click tracking attributes every sibling CTA to the dashboard's Cross Product column.",
+        "roundup": "This is a weekly best-of listicle for the host's niche. The SEO target is the freshness query 'best <host niche> <Month Year>'. Build it from real competitor research, not from the portfolio of products we run. Readers landing here expect a balanced, objective view of the actual category. The host product is included only when an honest reading of the chosen ranking criterion places it in the top results, and is never ranked #1 by default.",
     }.get(trigger, "")
 
     ct = CONTENT_TYPES.get(content_type, CONTENT_TYPES["guide"])
@@ -655,7 +655,7 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
         "guide": "This is a general guide/explainer page. You have the most creative freedom here — the angle, section shape, and length are all yours.",
         "alternative": f"This is an alternative/comparison page. Readers arrived by searching for a competitor product. Your job is to show them {product} is the better pick for the use case their keyword implies. Read an existing alternative page in `{repo}/src/app/alternative/` to see if a shell component exists (e.g. AlternativePageShell) — if it does, use it and emit only a typed data object. If no shell exists in this repo, compose raw sections using the trust-signal components below.",
         "use_case": f"This is a use-case page describing one concrete job {product} does. Readers want to know whether {product} can handle their specific workflow. Show them, with at least one anchor_fact drawn from real product source. If a UseCasePageShell exists in `{repo}/src/components/seo/`, prefer it; otherwise compose raw sections.",
-        "cross_roundup": f"This is a dated, cross-product roundup listicle hosted on {product}'s domain. Target query: \"best <niche> <Month Year>\". See the CROSS-ROUNDUP INPUT block below for the host niche, the sibling project list, the mandatory H1/title format, and the mandatory trackCrossProductClick wiring on every sibling entry's CTA. Skip the Step 1 'find an angle' research — for a roundup the angle IS the rank order plus the per-entry reason-it-fits paragraph.",
+        "cross_roundup": f"This is a dated best-of listicle hosted on {product}'s domain, covering {product}'s actual niche. Target query: \"best <host niche> <Month Year>\". See the CROSS-ROUNDUP INPUT block below for the niche, mandatory H1/title format, host inclusion rules, the optional sibling appendix, and the trackCrossProductClick wiring (only used if the appendix is included). DO Step 1 research as written below; the spine of this page is real competitor research from the live SERP, plus the additional Step A in the CROSS-ROUNDUP INPUT block. The page must read as a balanced, objective best-of for the niche, not as a portfolio promo.",
     }.get(content_type, "")
 
     cross_roundup_block = ""
