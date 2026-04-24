@@ -1985,6 +1985,82 @@ async function handleApi(req, res) {
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
+  // GET /api/project/status - per-project weight + target share + posts-by-platform
+  // in the last N hours, with actual share and deficit (matches pick_project.py logic).
+  // Cheap Postgres-only query so it's safe to expose without caching.
+  if (p === '/api/project/status' && req.method === 'GET') {
+    const url = new URL(req.url, 'http://localhost');
+    const hours = Math.max(1, Math.min(24 * 30, parseInt(url.searchParams.get('hours') || '24', 10) || 24));
+    let config = {};
+    try { config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch {}
+    const configuredProjects = Array.isArray(config.projects) ? config.projects : [];
+    const weighted = configuredProjects.filter(p => (p.weight || 0) > 0);
+    const totalWeight = weighted.reduce((a, p) => a + (p.weight || 0), 0) || 1;
+    const platforms = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github'];
+    const rows = await pq(
+      "SELECT COALESCE(project_name, '(none)') AS project_name, platform, COUNT(*)::int AS n " +
+      "FROM posts WHERE posted_at >= NOW() - INTERVAL '" + hours + " hours' " +
+      "GROUP BY project_name, platform"
+    ) || [];
+    const byProject = {};
+    let grandTotal = 0;
+    const platformTotals = Object.fromEntries(platforms.map(p => [p, 0]));
+    platformTotals['(other)'] = 0;
+    rows.forEach(r => {
+      const name = r.project_name || '(none)';
+      const plat = (r.platform || '').toLowerCase();
+      const n = Number(r.n) || 0;
+      grandTotal += n;
+      if (plat in platformTotals) platformTotals[plat] += n;
+      else platformTotals['(other)'] += n;
+      if (!byProject[name]) byProject[name] = { total: 0, by_platform: {} };
+      byProject[name].total += n;
+      byProject[name].by_platform[plat] = (byProject[name].by_platform[plat] || 0) + n;
+    });
+    const projects = weighted.map(p => {
+      const name = p.name;
+      const stats = byProject[name] || { total: 0, by_platform: {} };
+      const target_share = (p.weight || 0) / totalWeight;
+      const actual_share = grandTotal > 0 ? stats.total / grandTotal : 0;
+      const per_platform = {};
+      for (const plat of platforms) per_platform[plat] = stats.by_platform[plat] || 0;
+      return {
+        name,
+        weight: p.weight || 0,
+        target_share,
+        total: stats.total,
+        actual_share,
+        deficit: target_share - actual_share,
+        by_platform: per_platform,
+        website: p.website || null,
+      };
+    }).sort((a, b) => b.weight - a.weight || a.name.localeCompare(b.name));
+    // Surface any posts that didn't match a weighted project, so the matrix adds up.
+    const knownNames = new Set(weighted.map(p => p.name));
+    const unassigned = Object.entries(byProject)
+      .filter(([name]) => !knownNames.has(name))
+      .map(([name, stats]) => ({
+        name,
+        weight: 0,
+        target_share: 0,
+        total: stats.total,
+        actual_share: grandTotal > 0 ? stats.total / grandTotal : 0,
+        deficit: -(grandTotal > 0 ? stats.total / grandTotal : 0),
+        by_platform: Object.fromEntries(platforms.map(pl => [pl, stats.by_platform[pl] || 0])),
+        website: null,
+        unassigned: true,
+      }));
+    return json(res, {
+      hours,
+      generated_at_ms: Date.now(),
+      total_weight: totalWeight,
+      grand_total: grandTotal,
+      platform_totals: platformTotals,
+      projects,
+      unassigned,
+    });
+  }
+
   // GET /api/deploy/status - latest Vercel production deploy per project.
   // Written every ~5 min to skill/cache/deploy_status.json by launchd
   // com.m13v.social-deploy-status (scripts/project_deploy_status.py). If the
