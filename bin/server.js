@@ -2788,6 +2788,15 @@ const HTML = `<!DOCTYPE html>
       <div class="style-stats-empty">Loading&hellip;</div>
     </div>
   </details>
+  <details class="style-stats-section" id="project-status" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="project-status-heading">Project Status (last 24h)</span></span>
+      <span class="style-stats-total" id="project-status-total"></span>
+    </summary>
+    <div id="project-status-body">
+      <div class="style-stats-empty">Loading…</div>
+    </div>
+  </details>
   <details class="style-stats-section" id="deploy-health">
     <summary>
       <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span>Deploy Health</span>
