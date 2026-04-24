@@ -536,6 +536,8 @@ const activityStatsCache = new Map();
 const styleStatsCache = new Map();
 // Funnel stats: cached by days. Value shape: { at, value } or { at, pending: Promise }.
 const funnelStatsCache = new Map();
+// Views-per-day: cached by days. Value shape: { at, value }.
+const viewsPerDayCache = new Map();
 
 // On-disk snapshots written by scripts/precompute_dashboard_stats.py every
 // ~5 min via launchd com.m13v.social-precompute-stats. When a snapshot is
@@ -1556,6 +1558,43 @@ async function handleApi(req, res) {
       const value = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
       activityStatsCache.set(cacheKey, { at: Date.now(), value });
       return json(res, { windowHours, rows: value });
+    })().catch(e => json(res, { error: e.message }, 500));
+  }
+
+  // GET /api/views/per-day?days=N - total social media views earned per day,
+  // summed across all posts and platforms. Reads post_views_daily, which is
+  // populated by the Reddit + Twitter refresh jobs (LinkedIn and Moltbook
+  // have no views metric). Daily delta per post via LAG; GREATEST(.,0)
+  // clamps negatives (counter resets, post deletions). Rows with no prior
+  // snapshot count as views-on-their-first-recorded-day (prev treated as 0).
+  if (p === '/api/views/per-day' && req.method === 'GET') {
+    if (!req.user.admin) return json(res, { error: 'forbidden' }, 403);
+    const url = new URL(req.url, 'http://localhost');
+    const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get('days') || '30', 10) || 30));
+    const cached = viewsPerDayCache.get(days);
+    if (cached && Date.now() - cached.at < 300000) {
+      return json(res, { days, rows: cached.value, cachedAt: cached.at });
+    }
+    const q =
+      "WITH daily AS (" +
+        "SELECT pvd.post_id, pvd.day, pvd.views, " +
+          "LAG(pvd.views) OVER (PARTITION BY pvd.post_id ORDER BY pvd.day) AS prev_views " +
+        "FROM post_views_daily pvd " +
+        "JOIN posts p ON p.id = pvd.post_id " +
+        "WHERE LOWER(p.platform) NOT IN ('moltbook', 'github', 'github_issues') " +
+          "AND pvd.day >= CURRENT_DATE - INTERVAL '" + days + " days'" +
+      ") " +
+      "SELECT json_agg(row_to_json(r)) FROM (" +
+        "SELECT day::text AS day, " +
+          "SUM(GREATEST(views - COALESCE(prev_views, 0), 0))::bigint AS views_gained, " +
+          "COUNT(DISTINCT post_id)::int AS posts_observed " +
+        "FROM daily GROUP BY day ORDER BY day ASC" +
+      ") r";
+    return (async () => {
+      const rows = await pq(q);
+      const value = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
+      viewsPerDayCache.set(days, { at: Date.now(), value });
+      return json(res, { days, rows: value });
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
