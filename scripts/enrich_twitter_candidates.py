@@ -13,8 +13,8 @@ Usage:
 import json
 import re
 import sys
-import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 
 def fetch_fxtwitter(handle, tweet_id):
@@ -29,46 +29,43 @@ def fetch_fxtwitter(handle, tweet_id):
         return None
 
 
+def enrich_one(tweet):
+    url = tweet.get("tweetUrl", tweet.get("tweet_url", ""))
+    if not url:
+        return None
+
+    m = re.search(r"x\.com/([^/]+)/status/(\d+)", url)
+    if not m:
+        m = re.search(r"twitter\.com/([^/]+)/status/(\d+)", url)
+    if not m:
+        return tweet
+
+    handle = m.group(1)
+    tweet_id = m.group(2)
+
+    data = fetch_fxtwitter(handle, tweet_id)
+    if data and data.get("tweet"):
+        t = data["tweet"]
+        author = t.get("author", {})
+        tweet["author_followers"] = author.get("followers", 0)
+        tweet["views"] = t.get("views", 0)
+        tweet["likes"] = t.get("likes", tweet.get("likes", 0))
+        tweet["retweets"] = t.get("retweets", tweet.get("retweets", 0))
+        tweet["replies"] = t.get("replies", tweet.get("replies", 0))
+        tweet["bookmarks"] = t.get("bookmarks", tweet.get("bookmarks", 0))
+        tweet["handle"] = author.get("screen_name", handle)
+
+    tweet["tweet_url"] = url
+    tweet.setdefault("text", tweet.get("tweetText", tweet.get("tweet_text", "")))
+    tweet.setdefault("datetime", tweet.get("tweetPostedAt", ""))
+    tweet.setdefault("handle", handle)
+    return tweet
+
+
 def enrich(tweets):
-    enriched = []
-    for tweet in tweets:
-        url = tweet.get("tweetUrl", tweet.get("tweet_url", ""))
-        if not url:
-            continue
-
-        # Extract handle and ID from URL
-        m = re.search(r"x\.com/([^/]+)/status/(\d+)", url)
-        if not m:
-            m = re.search(r"twitter\.com/([^/]+)/status/(\d+)", url)
-        if not m:
-            enriched.append(tweet)
-            continue
-
-        handle = m.group(1)
-        tweet_id = m.group(2)
-
-        data = fetch_fxtwitter(handle, tweet_id)
-        if data and data.get("tweet"):
-            t = data["tweet"]
-            author = t.get("author", {})
-            tweet["author_followers"] = author.get("followers", 0)
-            tweet["views"] = t.get("views", 0)
-            tweet["likes"] = t.get("likes", tweet.get("likes", 0))
-            tweet["retweets"] = t.get("retweets", tweet.get("retweets", 0))
-            tweet["replies"] = t.get("replies", tweet.get("replies", 0))
-            tweet["bookmarks"] = t.get("bookmarks", tweet.get("bookmarks", 0))
-            tweet["handle"] = author.get("screen_name", handle)
-
-        # Normalize field names
-        tweet["tweet_url"] = url
-        tweet.setdefault("text", tweet.get("tweetText", tweet.get("tweet_text", "")))
-        tweet.setdefault("datetime", tweet.get("tweetPostedAt", ""))
-        tweet.setdefault("handle", handle)
-
-        enriched.append(tweet)
-        time.sleep(0.5)  # rate limit
-
-    return enriched
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        results = list(ex.map(enrich_one, tweets))
+    return [t for t in results if t is not None]
 
 
 def main():
