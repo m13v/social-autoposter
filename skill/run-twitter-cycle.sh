@@ -2,7 +2,7 @@
 # run-twitter-cycle.sh — Combined Twitter scan + post cycle.
 #
 # Phase 1 (t=0):
-#   - weighted-sample 6 projects from config.json
+#   - weighted-sample 5 projects from config.json
 #   - LLM drafts one search query per project (style from past top queries)
 #   - scrape tweets via twitter-agent, enrich via fxtwitter -> T0 snapshot
 #   - store all candidates with batch_id and search_topic
@@ -49,7 +49,7 @@ import json, os, random
 c = json.load(open(os.path.expanduser('~/social-autoposter/config.json')))
 projects = [p for p in c.get('projects', []) if p.get('weight', 0) > 0]
 weights = [(p, p.get('weight', 0)) for p in projects]
-k = 6
+k = 5
 chosen = []
 remaining = list(weights)
 for _ in range(min(k, len(remaining))):
