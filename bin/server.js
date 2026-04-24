@@ -200,6 +200,11 @@ function getDbUrl() {
   return env.DATABASE_URL || process.env.DATABASE_URL || null;
 }
 
+function getBookingsDbUrl() {
+  const env = loadEnv();
+  return env.BOOKINGS_DATABASE_URL || process.env.BOOKINGS_DATABASE_URL || null;
+}
+
 function psql(query) {
   const dbUrl = getDbUrl();
   if (!dbUrl) return null;
@@ -235,6 +240,35 @@ async function pq(query, params) {
     return r.rows;
   } catch (e) {
     console.error('[pq] query failed:', e.message);
+    return null;
+  }
+}
+
+let _bookingsPool = null;
+function getBookingsPool() {
+  if (_bookingsPool) return _bookingsPool;
+  const dbUrl = getBookingsDbUrl();
+  if (!dbUrl) return null;
+  _bookingsPool = new Pool({
+    connectionString: dbUrl,
+    max: 3,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
+  });
+  _bookingsPool.on('error', (err) => {
+    console.error('[bookings pg.Pool] idle client error:', err.message);
+  });
+  return _bookingsPool;
+}
+
+async function pqBookings(query, params) {
+  const pool = getBookingsPool();
+  if (!pool) return null;
+  try {
+    const r = await pool.query(query, params);
+    return r.rows;
+  } catch (e) {
+    console.error('[pqBookings] query failed:', e.message);
     return null;
   }
 }
@@ -1641,6 +1675,67 @@ async function handleApi(req, res) {
       viewsPerDayCache.set(cacheKey, { at: Date.now(), value });
       return json(res, { days, rows: value });
     })().catch(e => json(res, { error: e.message }, 500));
+  }
+
+  // GET /api/upvotes/per-day?days=N and /api/comments/per-day?days=N
+  // Same shape as /api/views/per-day. LAG delta per post from the upvotes /
+  // comments columns of post_views_daily (backfilled at capture time from
+  // posts.upvotes / posts.comments_count). Same cold-start exclusion: a
+  // post's first snapshot does NOT contribute (prev IS NULL), so day 1 is
+  // empty, day 2 onward is real day-over-day gain.
+  const perDayMetric = (metricCol, cache, gainedKey) => {
+    if (!req.user.admin) return json(res, { error: 'forbidden' }, 403);
+    const url = new URL(req.url, 'http://localhost');
+    const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get('days') || '30', 10) || 30));
+    const rawPlatform = (url.searchParams.get('platform') || '').trim().toLowerCase();
+    const platform = (rawPlatform === '' || rawPlatform === 'all') ? '' :
+                     (rawPlatform === 'x' ? 'twitter' : rawPlatform);
+    const platformOk = platform === '' || /^[a-z0-9_]{1,32}$/.test(platform);
+    if (!platformOk) return json(res, { error: 'invalid platform' }, 400);
+    const rawProject = (url.searchParams.get('project') || '').trim();
+    const project = (rawProject === '' || rawProject.toLowerCase() === 'all') ? '' : rawProject;
+    const projectOk = project === '' || /^[A-Za-z0-9_\-]{1,64}$/.test(project);
+    if (!projectOk) return json(res, { error: 'invalid project' }, 400);
+    const cacheKey = days + '|' + platform + '|' + project;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.at < 300000) {
+      return json(res, { days, rows: cached.value, cachedAt: cached.at });
+    }
+    const platformFilter = platform
+      ? " AND CASE WHEN LOWER(p.platform) = 'x' THEN 'twitter' ELSE LOWER(p.platform) END = '" + platform + "'"
+      : '';
+    const projectFilter = project
+      ? " AND p.project_name = '" + project.replace(/'/g, "''") + "'"
+      : '';
+    const q =
+      "WITH daily AS (" +
+        "SELECT pvd.post_id, pvd.day, pvd." + metricCol + " AS metric, " +
+          "LAG(pvd." + metricCol + ") OVER (PARTITION BY pvd.post_id ORDER BY pvd.day) AS prev_metric " +
+        "FROM post_views_daily pvd " +
+        "JOIN posts p ON p.id = pvd.post_id " +
+        "WHERE LOWER(p.platform) NOT IN ('moltbook', 'github', 'github_issues') " +
+          "AND pvd." + metricCol + " IS NOT NULL " +
+          "AND pvd.day >= CURRENT_DATE - INTERVAL '" + days + " days'" +
+          platformFilter + projectFilter +
+      ") " +
+      "SELECT json_agg(row_to_json(r)) FROM (" +
+        "SELECT day::text AS day, " +
+          "SUM(GREATEST(metric - prev_metric, 0))::bigint AS " + gainedKey + ", " +
+          "COUNT(DISTINCT post_id)::int AS posts_observed " +
+        "FROM daily WHERE prev_metric IS NOT NULL GROUP BY day ORDER BY day ASC" +
+      ") r";
+    return (async () => {
+      const rows = await pq(q);
+      const value = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
+      cache.set(cacheKey, { at: Date.now(), value });
+      return json(res, { days, rows: value });
+    })().catch(e => json(res, { error: e.message }, 500));
+  };
+  if (p === '/api/upvotes/per-day' && req.method === 'GET') {
+    return perDayMetric('upvotes', upvotesPerDayCache, 'upvotes_gained');
+  }
+  if (p === '/api/comments/per-day' && req.method === 'GET') {
+    return perDayMetric('comments', commentsPerDayCache, 'comments_gained');
   }
 
   // GET /api/cost/stats - per-activity-type count + total cost over a trailing
