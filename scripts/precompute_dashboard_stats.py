@@ -125,7 +125,7 @@ def precompute_activity(hours=24):
     q = (
         "SELECT json_agg(row_to_json(r)) FROM ("
         "SELECT type, " + norm + " AS platform, COUNT(*)::int AS count FROM ("
-        "SELECT 'posted' AS type, platform AS pl FROM posts WHERE posted_at >= NOW() - " + win + " "
+        "SELECT 'posted' AS type, platform AS pl FROM posts WHERE posted_at >= NOW() - " + win + " AND our_content <> '(mention - no original post)' "
         "UNION ALL SELECT 'replied', platform FROM replies WHERE status='replied' AND replied_at >= NOW() - " + win + " "
         "UNION ALL SELECT 'skipped', platform FROM replies WHERE status='skipped' AND COALESCE(processing_at, discovered_at) >= NOW() - " + win + " "
         "UNION ALL SELECT 'mention', platform FROM octolens_mentions WHERE COALESCE(source_timestamp, received_at) >= NOW() - " + win + " "
@@ -135,7 +135,7 @@ def precompute_activity(hours=24):
         "UNION ALL SELECT 'page_published_gsc', 'seo' FROM gsc_queries WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL "
         "UNION ALL SELECT 'page_published_reddit', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='reddit' "
         "UNION ALL SELECT 'page_published_top', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND source='top_page' "
-        "UNION ALL SELECT 'resurrected', platform FROM posts WHERE resurrected_at >= NOW() - " + win +
+        "UNION ALL SELECT 'resurrected', platform FROM posts WHERE resurrected_at >= NOW() - " + win + " AND our_content <> '(mention - no original post)' " +
         ") u GROUP BY type, platform ORDER BY type, platform) r"
     )
     cur = conn.execute(q)
@@ -172,6 +172,7 @@ def precompute_style(hours=24):
         "COALESCE(SUM(comments_count), 0)::int AS comments, "
         "COALESCE(SUM(views) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues')), 0)::int AS views "
         f"FROM posts WHERE posted_at >= NOW() - INTERVAL '{int(hours)} hours' "
+        "AND our_content <> '(mention - no original post)' "
         "GROUP BY engagement_style ORDER BY posts DESC) r"
     )
     q_platforms = (
@@ -184,7 +185,9 @@ def precompute_style(hours=24):
         "SELECT json_agg(p) FROM ("
         "SELECT DISTINCT project_name AS p FROM posts "
         f"WHERE posted_at >= NOW() - INTERVAL '{int(hours)} hours' "
-        "AND project_name IS NOT NULL ORDER BY p) s"
+        "AND project_name IS NOT NULL "
+        "AND our_content <> '(mention - no original post)' "
+        "ORDER BY p) s"
     )
     def _one(q):
         cur = conn.execute(q)
