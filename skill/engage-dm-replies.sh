@@ -606,7 +606,7 @@ If the conversation's matched project has a \`booking_link\` but \`booking_link_
 - They work in an unrelated domain with no realistic fit to our project list
 - Peer/colleague chatter with no buyer signal
 - Philosophical, political, or polemical pushback about ideas (meditation, productivity, AI, religion, etc.). Human escalation is for actionable requests (calls, business proposals, personal decisions we have to make), not a prospect disagreeing with an idea. Classify under general_discussion or declined and let Step 2 compose a Mode A rapport reply, or skip if not our prospect.
-These waste inbox attention. Set `--interest not_our_prospect`, skip the reply, and move on.
+These waste inbox attention. Set \`--interest not_our_prospect\`, skip the reply, and move on.
 
 \`\`\`bash
 cd ~/social-autoposter && python3 scripts/dm_conversation.py flag-human --dm-id DM_ID --reason "REASON"
