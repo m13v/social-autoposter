@@ -3265,17 +3265,17 @@ const HTML = `<!DOCTYPE html>
   <div class="top-header">
     <div class="top-subtabs" role="tablist" aria-label="Top tab sections">
       <span class="top-subtab active" data-subtab="threads" role="tab" aria-selected="true" title="Top original posts/threads your accounts have published">
-        <span class="top-subtab-icon" aria-hidden="true">\u{1F4E2}</span>
+        <span class="top-subtab-icon" aria-hidden="true">\ud83d\udce2</span>
         <span class="top-subtab-label">Threads</span>
         <span class="top-subtab-sub">your posts</span>
       </span>
       <span class="top-subtab" data-subtab="comments" role="tab" aria-selected="false" title="Top comments your accounts have left under other people\u2019s threads">
-        <span class="top-subtab-icon" aria-hidden="true">\u{1F4AC}</span>
+        <span class="top-subtab-icon" aria-hidden="true">\ud83d\udcac</span>
         <span class="top-subtab-label">Comments</span>
         <span class="top-subtab-sub">your replies</span>
       </span>
       <span class="top-subtab" data-subtab="pages" role="tab" aria-selected="false" title="Top landing/SEO pages on your sites by pageviews">
-        <span class="top-subtab-icon" aria-hidden="true">\u{1F4C4}</span>
+        <span class="top-subtab-icon" aria-hidden="true">\ud83d\udcc4</span>
         <span class="top-subtab-label">Pages</span>
         <span class="top-subtab-sub">SEO traffic</span>
       </span>
