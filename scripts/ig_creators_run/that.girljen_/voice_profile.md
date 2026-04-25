@@ -169,3 +169,79 @@ The two flagship narrative series (**Becoming Consistent** + **Finding My Dream 
 `#consistency #consistencyiskey #consistencywins #motivation #growth` (Consistent series)
 `#dreamjob #communicationmajor #careerjourney #collegeadvice` (Dream Job series)
 `#discipline #disciplineovermotivation #motivationalvideo #motivational` (mindset posts)
+
+---
+
+## Worked examples — Becoming Consistent, Parts 6 / 7 / 8
+
+Her flagship parasocial series. She's already published Parts 1-5, so these are the natural next episodes. Each is built to her observed structure (vulnerable hook → pop-neuro mechanism → pivot → two non-negotiables incl. 30 min Jungle → series header → CTA) and sits in her observed length range (45-65s spoken, ~150-200 words).
+
+---
+
+### Part 06 | Eating Consistently
+
+**Caption**
+
+I've spent way too many mornings skipping breakfast in the name of "productivity" 🥐 and then wondering why my 9am lecture felt like reading another language.
+
+Turns out your brain literally cannot encode information when your blood sugar is on the floor. So I'm adding "actually eat" to my non-negotiables list this week.
+
+Comment 🥐 to manifest a slower morning with me 🌷
+
+#consistency #consistencyiskey #studentlife #wellness #motivation
+
+**Transcript / on-camera script**
+
+I used to skip breakfast because I thought it was a productivity hack. Turns out I was just speedrunning burnout. Welcome to part six of becoming consistent. My journey to become 1% more consistent every day. Here's what's actually happening when you skip breakfast and head straight into a study session. Your blood sugar drops, your cortisol spikes, and your hippocampus literally cannot encode new information well in that state. So you sit at your desk for an hour, you reread the same slide three times, and you call yourself stupid. You're not stupid. You're just hungry. Today my two non-negotiables are eating something within an hour of waking up, even if it's just a banana and some yogurt, and a thirty minute Jungle flashcard review after I eat. The food gives my brain the energy. Jungle gives it the workout. Stop trying to grind on an empty tank. We've got this. Follow for part seven.
+
+---
+
+### Part 07 | The 2:47pm Doomscroll Trap
+
+**Caption**
+
+This was me yesterday. Three minutes into a study session. Already opening Instagram 🫠
+
+The scariest part is your brain didn't even ask. It just reached for the dopamine like it was breathing.
+
+The fix isn't more willpower. It's giving your brain something else that hits the same way 🌳
+
+Comment 🌳 if you're stealing this from me
+
+#consistency #consistencywins #doomscrolling #studymotivation #studyreels
+
+**Transcript / on-camera script**
+
+This is Jennifer at 2:47pm. Three minutes into her study session. Already opening Instagram. She didn't decide to. Her hand just moved. Welcome to part seven of becoming consistent. My journey to become 1% more consistent every day. Here's what's happening in her brain. Every time she scrolls, her dopamine system gets a hit every eight seconds. So when she sits down to study, her brain is hunting for that same hit, and a textbook will never compete with a feed. The fix isn't willpower. Willpower runs out by Tuesday. The fix is giving her brain a reward loop that's actually building something. So she puts the phone in another room and pulls up Jungle for thirty minutes. Every flashcard she gets right, a tree grows. Same dopamine hit as a scroll. But instead of rotting her focus, it's building it. Today's two non-negotiables. Phone in a drawer during study blocks. Thirty minutes of Jungle in the afternoon. We've got this. Follow for part eight.
+
+---
+
+### Part 08 | Showing Up Tired
+
+**Caption**
+
+I almost didn't film this video because I'm exhausted ❤️‍🩹
+
+But that's exactly the point. The version of me that shows up tired is the only version that's actually building anything.
+
+Motivation is a feeling. Discipline is an identity. And tonight I'm choosing the identity, even if I do it badly.
+
+One day or day one. You decide 🍀
+
+#consistency #disciplineovermotivation #motivation #studentlife #growth
+
+**Transcript / on-camera script**
+
+You're not unmotivated. You're just under rested. And here's the trick nobody tells you. Showing up tired is the entire game. Welcome to part eight of becoming consistent. My journey to become 1% more consistent every day. For weeks I've been waiting to feel rested before I do the work. But your prefrontal cortex doesn't care if you slept eight hours. It cares if you started. The version of you that makes progress is not the well rested, motivated, perfectly caffeinated version. It's the tired one who lowers the bar and shows up anyway. So today I'm cutting my non-negotiables in half. Not sixty minutes of studying, fifteen minutes. Not the full deck, just ten flashcards on Jungle. Because ten flashcards beats zero flashcards every single time. And if I can do this on a tired day, I can do it on a normal day. If you're tired right now, this is your sign. One day or day one. You decide. We've got this.
+
+---
+
+### Why these three were chosen
+
+| Part | Format used | Why this slot |
+|---|---|---|
+| 6 | Vulnerable confession opener, "Becoming Consistent" series header, two non-negotiables | Fresh angle (food/blood sugar) she hasn't covered in Parts 1-5; carries her wellness frame |
+| 7 | Third-person "This is Jennifer" + "tree grows" Jungle mechanic | Showcases her single most-distinctive product framing in her single most-distinctive narrative voice |
+| 8 | "You're not X, you're Y" + "discipline > motivation" + "one day or day one" closer | Hits her three highest-frequency catchphrases in one post, lands the series on her north-star idea |
+
+All three end with the consistent series-header line and a "follow for part N" or "one day or day one" close, so they read as a connected arc — not three standalone posts.
