@@ -5090,10 +5090,10 @@ function mountSortableTable(opts) {
 }
 
 let _styleStatsTableState = { sortField: 'score', sortDir: 'desc', filters: {} };
-// Per-column help text. Attached to each column via `helpText` and rendered as
-// an info icon by mountSortableTable. The tooltip uses a custom CSS popover
-// (.col-info-tip) so it appears immediately on hover without the OS-level
-// title-attribute delay.
+// Per-column help text. Attached to each column via a helpText property and
+// rendered as an info icon by mountSortableTable. The tooltip uses a custom
+// CSS popover (.col-info-tip) so it appears immediately on hover without the
+// OS-level title-attribute delay.
 const STYLE_STATS_HELP = {
   style:    'Engagement tone Claude used to draft this first-touch comment/post (slug from scripts/engagement_styles.py). The A/B testing system uses these stats to decide which tones to imitate next. Note: a row in the posts table = our FIRST-TOUCH engagement on a thread, not (usually) an original thread we authored. Reddit/Moltbook/GitHub = our top-level comment on someone else’s thread; X = our reply; LinkedIn = our comment. Subsequent back-and-forth replies live in a separate replies pipeline and are not counted here.',
   score:    'Per-post quality signal computed on engagement that landed on OUR comment/post (replies to it, upvotes on it), not on the underlying third-party thread. Formula: (comments * 3 + upvotes_discounted) / posts. upvotes_discounted subtracts the OP self-upvote on Reddit and Moltbook so those platforms compare fairly with X/LinkedIn. Views are deliberately excluded so low-volume styles compare fairly with high-volume ones. Same signal the feedback report uses.',
@@ -5210,21 +5210,21 @@ function renderStyleStats(payload) {
     state: _styleStatsTableState,
     showTotals: true,
     columns: [
-      { key: 'style',    label: 'Style',    type: 'text',    align: 'left',  formatter: v => escapeHtml(v) },
+      { key: 'style',    label: 'Style',    type: 'text',    align: 'left',  formatter: v => escapeHtml(v), helpText: STYLE_STATS_HELP.style },
       // Score isn't summable across styles: it's a per-post ratio derived
       // from upvotes_discounted (which isn't available in the normalized
       // rows), so blank the footer rather than show a misleading aggregate.
-      { key: 'score',    label: 'Score',    type: 'numeric', align: 'right', formatter: scoreFmt, footer: () => '' },
-      { key: 'posts',    label: 'Posts',    type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'score',    label: 'Score',    type: 'numeric', align: 'right', formatter: scoreFmt, footer: () => '', helpText: STYLE_STATS_HELP.score },
+      { key: 'posts',    label: 'Posts',    type: 'numeric', align: 'right', formatter: fmt, helpText: STYLE_STATS_HELP.posts },
       // makeFmtPerPost reads r.posts / r.views_posts as denominators. The
       // synthetic footer row has summed posts and views_posts, so the same
       // formatter computes sum(upvotes)/sum(posts) etc. automatically.
-      { key: 'upvotes',  label: 'Upvotes',  type: 'numeric', align: 'right', accessor: perPostAccessor('upvotes'),  formatter: makeFmtPerPost('upvotes'),  footer: (_rows, synth) => makeFmtPerPost('upvotes')(null, synth) },
-      { key: 'comments', label: 'Comments', type: 'numeric', align: 'right', accessor: perPostAccessor('comments'), formatter: makeFmtPerPost('comments'), footer: (_rows, synth) => makeFmtPerPost('comments')(null, synth) },
-      { key: 'views',    label: 'Views',    type: 'numeric', align: 'right', accessor: perPostAccessor('views'),    formatter: makeFmtPerPost('views'),    footer: (_rows, synth) => makeFmtPerPost('views')(null, synth) },
+      { key: 'upvotes',  label: 'Upvotes',  type: 'numeric', align: 'right', accessor: perPostAccessor('upvotes'),  formatter: makeFmtPerPost('upvotes'),  footer: (_rows, synth) => makeFmtPerPost('upvotes')(null, synth), helpText: STYLE_STATS_HELP.upvotes },
+      { key: 'comments', label: 'Comments', type: 'numeric', align: 'right', accessor: perPostAccessor('comments'), formatter: makeFmtPerPost('comments'), footer: (_rows, synth) => makeFmtPerPost('comments')(null, synth), helpText: STYLE_STATS_HELP.comments },
+      { key: 'views',    label: 'Views',    type: 'numeric', align: 'right', accessor: perPostAccessor('views'),    formatter: makeFmtPerPost('views'),    footer: (_rows, synth) => makeFmtPerPost('views')(null, synth), helpText: STYLE_STATS_HELP.views },
       // Intent column: count of posts in this tone that were ALSO flagged as a
       // project recommendation. Independent dimension from style.
-      { key: 'recommendations', label: 'Recs', type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'recommendations', label: 'Recs', type: 'numeric', align: 'right', formatter: fmt, helpText: STYLE_STATS_HELP.recommendations },
     ],
   });
 }
