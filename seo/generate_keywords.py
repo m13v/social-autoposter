@@ -47,6 +47,15 @@ ENV_PATH = ROOT_DIR / ".env"
 MIN_VOLUME = 20
 MAX_COMPETITION = {"LOW", "MEDIUM", None, "N/A"}
 
+
+def project_min_volume(project):
+    """Per-project override for MIN_VOLUME. Niche B2B services rarely clear the
+    default 20/mo floor; lower it via `min_keyword_volume` in config.json."""
+    try:
+        return int(project.get("min_keyword_volume") or MIN_VOLUME)
+    except (TypeError, ValueError):
+        return MIN_VOLUME
+
 # Keywords containing these terms are likely irrelevant (e.g. theater playwrights)
 NOISE_PATTERNS = {
     # Theater playwrights and theater terms
