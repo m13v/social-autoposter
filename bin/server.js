@@ -3035,10 +3035,10 @@ const HTML = `<!DOCTYPE html>
 
 <div class="content hidden sa-local-only" id="tab-status">
   <div class="stats-top-filters">
-    <div class="style-stats-pill-row" id="status-window-pills" data-selected="24h">
+    <div class="style-stats-pill-row" id="status-window-pills" data-selected="7d">
       <span class="label">Window</span>
-      <button type="button" class="style-stats-pill active" data-value="24h">Last 24h</button>
-      <button type="button" class="style-stats-pill" data-value="7d">Last 7d</button>
+      <button type="button" class="style-stats-pill" data-value="24h">Last 24h</button>
+      <button type="button" class="style-stats-pill active" data-value="7d">Last 7d</button>
       <button type="button" class="style-stats-pill" data-value="14d">Last 14d</button>
       <button type="button" class="style-stats-pill" data-value="30d">Last 30d</button>
     </div>
@@ -3153,10 +3153,10 @@ const HTML = `<!DOCTYPE html>
     </div>
   </details>
   <div class="stats-top-filters">
-    <div class="style-stats-pill-row" id="stats-window-pills" data-selected="24h">
+    <div class="style-stats-pill-row" id="stats-window-pills" data-selected="7d">
       <span class="label">Window</span>
-      <button type="button" class="style-stats-pill active" data-value="24h">Last 24h</button>
-      <button type="button" class="style-stats-pill" data-value="7d">Last 7d</button>
+      <button type="button" class="style-stats-pill" data-value="24h">Last 24h</button>
+      <button type="button" class="style-stats-pill active" data-value="7d">Last 7d</button>
       <button type="button" class="style-stats-pill" data-value="14d">Last 14d</button>
       <button type="button" class="style-stats-pill" data-value="30d">Last 30d</button>
     </div>
@@ -3263,22 +3263,39 @@ const HTML = `<!DOCTYPE html>
 
 <div class="content hidden" id="tab-top">
   <div class="top-header">
-    <div class="top-subtabs">
-      <span class="top-subtab active" data-subtab="threads">Threads</span>
-      <span class="top-subtab" data-subtab="comments">Comments</span>
-      <span class="top-subtab" data-subtab="pages">Pages</span>
-      <span class="top-subtab" data-subtab="dms">DMs</span>
+    <div class="top-subtabs" role="tablist" aria-label="Top tab sections">
+      <span class="top-subtab active" data-subtab="threads" role="tab" aria-selected="true" title="Top original posts/threads your accounts have published">
+        <span class="top-subtab-icon" aria-hidden="true">\u{1F4E2}</span>
+        <span class="top-subtab-label">Threads</span>
+        <span class="top-subtab-sub">your posts</span>
+      </span>
+      <span class="top-subtab" data-subtab="comments" role="tab" aria-selected="false" title="Top comments your accounts have left under other people\u2019s threads">
+        <span class="top-subtab-icon" aria-hidden="true">\u{1F4AC}</span>
+        <span class="top-subtab-label">Comments</span>
+        <span class="top-subtab-sub">your replies</span>
+      </span>
+      <span class="top-subtab" data-subtab="pages" role="tab" aria-selected="false" title="Top landing/SEO pages on your sites by pageviews">
+        <span class="top-subtab-icon" aria-hidden="true">\u{1F4C4}</span>
+        <span class="top-subtab-label">Pages</span>
+        <span class="top-subtab-sub">SEO traffic</span>
+      </span>
+      <span class="top-subtab" data-subtab="dms" role="tab" aria-selected="false" title="Direct message conversations with prospects">
+        <span class="top-subtab-icon" aria-hidden="true">\u2709\ufe0f</span>
+        <span class="top-subtab-label">DMs</span>
+        <span class="top-subtab-sub">prospect chats</span>
+      </span>
     </div>
     <div class="top-controls">
       <input id="top-search" class="top-search" type="search" placeholder="Search posts\u2026" />
       <span class="top-total" id="top-total"></span>
     </div>
   </div>
+  <div class="top-subtab-help" id="top-subtab-help">Top original posts/threads your accounts have published, ranked by reach and reactions.</div>
   <div class="top-filters">
-    <div class="style-stats-pill-row" id="top-window-pills" data-selected="24h">
+    <div class="style-stats-pill-row" id="top-window-pills" data-selected="7d">
       <span class="label">Window</span>
-      <button type="button" class="style-stats-pill active" data-value="24h">Last 24h</button>
-      <button type="button" class="style-stats-pill" data-value="7d">Last 7d</button>
+      <button type="button" class="style-stats-pill" data-value="24h">Last 24h</button>
+      <button type="button" class="style-stats-pill active" data-value="7d">Last 7d</button>
       <button type="button" class="style-stats-pill" data-value="14d">Last 14d</button>
       <button type="button" class="style-stats-pill" data-value="30d">Last 30d</button>
       <button type="button" class="style-stats-pill" data-value="90d">Last 90d</button>
@@ -4459,15 +4476,31 @@ const STATS_WINDOWS = {
   '14d': { hours: 336, days: 14, labelLong: 'last 14 days',  labelShort: '14d' },
   '30d': { hours: 720, days: 30, labelLong: 'last 30 days',  labelShort: '30d' },
 };
-let _statsWindow = '24h';
+// Persist the user's window selection so picking 7d on Stats also applies to
+// Status and Top on next visit (and survives reloads). Default is 7d.
+const DASHBOARD_WINDOW_KEY = 'sa_dashboard_window';
+const TOP_WINDOW_VALUES = new Set(['24h', '7d', '14d', '30d', '90d', 'all']);
+function loadSavedDashboardWindow() {
+  try {
+    const v = localStorage.getItem(DASHBOARD_WINDOW_KEY);
+    if (v) return v;
+  } catch (e) {}
+  return '7d';
+}
+function saveDashboardWindow(v) {
+  try { localStorage.setItem(DASHBOARD_WINDOW_KEY, v || '7d'); } catch (e) {}
+}
+function coerceStatsWindow(v) { return STATS_WINDOWS[v] ? v : '7d'; }
+function coerceTopWindow(v) { return TOP_WINDOW_VALUES.has(v) ? v : '7d'; }
+let _statsWindow = coerceStatsWindow(loadSavedDashboardWindow());
 function currentStatsWindow() {
-  return STATS_WINDOWS[_statsWindow] || STATS_WINDOWS['24h'];
+  return STATS_WINDOWS[_statsWindow] || STATS_WINDOWS['7d'];
 }
 // Status-tab has its own window selector, independent of Stats-tab. Drives
 // Cost per Activity, Project Status, and Job History filtering.
-let _statusWindow = '24h';
+let _statusWindow = coerceStatsWindow(loadSavedDashboardWindow());
 function currentStatusWindow() {
-  return STATS_WINDOWS[_statusWindow] || STATS_WINDOWS['24h'];
+  return STATS_WINDOWS[_statusWindow] || STATS_WINDOWS['7d'];
 }
 // Top-of-Stats-tab platform and project selection. Same contract as the window
 // filter: a change re-fetches every section on the page so the whole tab
@@ -5539,7 +5572,7 @@ let _topTableState = { sortField: 'score', sortDir: 'desc', filters: {}, globalQ
 let _topTableHandle = null;
 let _topLoaded = false;
 let _topLoading = false;
-let _topWindow = '24h';
+let _topWindow = coerceTopWindow(loadSavedDashboardWindow());
 let _topPlatform = 'all';
 let _topSubtab = 'threads';
 let _topProject = 'all';
@@ -5849,7 +5882,8 @@ function initTopFilters() {
   if (qualRow) setTopPillActive(qualRow, _topDmQual);
   if (statRow) setTopPillActive(statRow, _topDmStatus);
   wireTopPillRow('top-window-pills', (v) => {
-    _topWindow = v || '24h';
+    _topWindow = coerceTopWindow(v);
+    saveDashboardWindow(_topWindow);
     if (_topSubtab === 'pages') loadTopPages(true);
     else if (_topSubtab === 'dms') loadTopDms(true);
     else loadTopPosts(true);
@@ -7020,12 +7054,19 @@ document.querySelectorAll('.tab').forEach(tab => {
 (function wireStatsWindowPills() {
   const row = document.getElementById('stats-window-pills');
   if (!row) return;
+  // Sync the active pill from the saved/coerced _statsWindow, so the UI
+  // reflects the user's persisted preference (default 7d) on first paint.
+  row.dataset.selected = _statsWindow;
+  row.querySelectorAll('.style-stats-pill').forEach(b => {
+    b.classList.toggle('active', b.getAttribute('data-value') === _statsWindow);
+  });
   row.addEventListener('click', ev => {
     const btn = ev.target.closest('.style-stats-pill');
     if (!btn) return;
-    const v = btn.getAttribute('data-value') || '24h';
+    const v = btn.getAttribute('data-value') || '7d';
     if (!STATS_WINDOWS[v] || v === _statsWindow) return;
     _statsWindow = v;
+    saveDashboardWindow(v);
     row.dataset.selected = v;
     row.querySelectorAll('.style-stats-pill').forEach(b => {
       b.classList.toggle('active', b === btn);
@@ -7048,12 +7089,18 @@ document.querySelectorAll('.tab').forEach(tab => {
 (function wireStatusWindowPills() {
   const row = document.getElementById('status-window-pills');
   if (!row) return;
+  // Sync the active pill from the saved/coerced _statusWindow.
+  row.dataset.selected = _statusWindow;
+  row.querySelectorAll('.style-stats-pill').forEach(b => {
+    b.classList.toggle('active', b.getAttribute('data-value') === _statusWindow);
+  });
   row.addEventListener('click', ev => {
     const btn = ev.target.closest('.style-stats-pill');
     if (!btn) return;
-    const v = btn.getAttribute('data-value') || '24h';
+    const v = btn.getAttribute('data-value') || '7d';
     if (!STATS_WINDOWS[v] || v === _statusWindow) return;
     _statusWindow = v;
+    saveDashboardWindow(v);
     row.dataset.selected = v;
     row.querySelectorAll('.style-stats-pill').forEach(b => {
       b.classList.toggle('active', b === btn);
