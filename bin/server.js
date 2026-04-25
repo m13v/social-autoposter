@@ -2705,12 +2705,18 @@ const HTML = `<!DOCTYPE html>
   .activity-filters .activity-filter-menu-btn:hover { background: var(--bg-hover); }
 
   /* Top tab */
-  .top-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 12px; flex-wrap: wrap; }
+  .top-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; gap: 12px; flex-wrap: wrap; }
   .top-title { font-size: 13px; font-weight: 600; color: var(--text); text-transform: uppercase; letter-spacing: 0.05em; }
-  .top-subtabs { display: inline-flex; gap: 0; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 6px; padding: 2px; }
-  .top-subtab { padding: 4px 12px; cursor: pointer; color: var(--text-secondary); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; border-radius: 4px; transition: background 0.15s, color 0.15s; }
-  .top-subtab:hover { color: var(--text); }
+  .top-subtabs { display: inline-flex; gap: 4px; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
+  .top-subtab { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; color: var(--text-secondary); font-size: 12px; font-weight: 600; text-transform: none; letter-spacing: 0; border-radius: 6px; transition: background 0.15s, color 0.15s; user-select: none; }
+  .top-subtab:hover { color: var(--text); background: var(--bg-hover); }
   .top-subtab.active { background: var(--accent); color: var(--accent-on); }
+  .top-subtab.active:hover { background: var(--accent); }
+  .top-subtab-icon { font-size: 15px; line-height: 1; }
+  .top-subtab-label { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+  .top-subtab-sub { font-size: 10px; font-weight: 500; opacity: 0.75; text-transform: lowercase; letter-spacing: 0.02em; }
+  .top-subtab.active .top-subtab-sub { opacity: 0.9; }
+  .top-subtab-help { margin: 0 0 12px; font-size: 12px; color: var(--text-secondary); line-height: 1.45; padding: 0 2px; }
   .top-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .top-filters { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   .top-filters .style-stats-pill-row .label { min-width: 70px; }
@@ -5846,6 +5852,18 @@ function setTopPillActive(row, value) {
   });
 }
 
+const TOP_SUBTAB_HELP = {
+  threads: 'Top original posts/threads your accounts have published, ranked by reach and reactions.',
+  comments: 'Top comments your accounts have left under other people’s threads, ranked by reach and reactions.',
+  pages: 'Top landing/SEO pages on your sites this period, ranked by pageviews.',
+  dms: 'Direct message conversations with prospects, ranked by recent activity.',
+};
+function syncTopSubtabHelp() {
+  const el = document.getElementById('top-subtab-help');
+  if (!el) return;
+  el.textContent = TOP_SUBTAB_HELP[_topSubtab] || '';
+}
+
 function wireTopPillRow(rowId, onSelect) {
   const row = document.getElementById(rowId);
   if (!row || row._wired) return;
@@ -5936,13 +5954,19 @@ function initTopFilters() {
     });
     searchEl._wired = true;
   }
+  syncTopSubtabHelp();
   document.querySelectorAll('.top-subtab').forEach(el => {
     if (el._wired) return;
     el.addEventListener('click', () => {
       const sub = el.dataset.subtab || 'threads';
       if (sub === _topSubtab) return;
       _topSubtab = sub;
-      document.querySelectorAll('.top-subtab').forEach(s => s.classList.toggle('active', s.dataset.subtab === sub));
+      document.querySelectorAll('.top-subtab').forEach(s => {
+        const isActive = s.dataset.subtab === sub;
+        s.classList.toggle('active', isActive);
+        s.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+      syncTopSubtabHelp();
       const postsC = document.getElementById('top-table-container');
       const pagesC = document.getElementById('top-pages-container');
       const pagesUnknownC = document.getElementById('top-pages-unknown-container');
