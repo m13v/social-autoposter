@@ -2871,16 +2871,17 @@ const HTML = `<!DOCTYPE html>
   .stat-card-info { display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--border-strong, var(--border)); color: var(--text-muted); font-size: 9px; font-weight: 600; font-style: italic; font-family: Georgia, serif; line-height: 1; cursor: help; user-select: none; opacity: 0.7; transition: opacity 0.1s, color 0.1s, border-color 0.1s; }
   .stat-card-info:hover { opacity: 1; color: var(--text); border-color: var(--text-muted); }
   /* Per-column info icon used by mountSortableTable when a column has helpText.
-     Uses a custom CSS popover (no native title attribute) so the tooltip
-     appears immediately on hover with no OS-level ~500ms delay. */
-  .col-info { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--border-strong, var(--border)); color: var(--text-muted); font-size: 9px; font-weight: 600; font-style: italic; font-family: Georgia, serif; line-height: 1; cursor: help; user-select: none; opacity: 0.6; margin-left: 4px; vertical-align: middle; }
+     The popover itself is rendered by the global .sa-tooltip handler; this
+     class only styles the icon. */
+  .col-info { display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--border-strong, var(--border)); color: var(--text-muted); font-size: 9px; font-weight: 600; font-style: italic; font-family: Georgia, serif; line-height: 1; cursor: help; user-select: none; opacity: 0.6; margin-left: 4px; vertical-align: middle; }
   .col-info:hover { opacity: 1; color: var(--text); border-color: var(--text-muted); }
-  .col-info-tip { display: none; position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--bg-panel, #fff); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; font-weight: 400; font-style: normal; font-family: inherit; text-transform: none; letter-spacing: normal; color: var(--text); white-space: normal; width: 300px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.12); pointer-events: none; text-align: left; line-height: 1.45; }
-  .col-info:hover .col-info-tip, .col-info:focus .col-info-tip { display: block; }
-  /* Anchor the tooltip to the right edge for the last few columns so it
-     doesn't overflow the table on narrow viewports. */
-  .col-info[data-tip-side="right"] .col-info-tip { left: auto; right: 0; transform: none; }
-  .col-info[data-tip-side="left"]  .col-info-tip { left: 0; right: auto; transform: none; }
+  /* ===== Global instant-hover tooltip =====
+     Single shared element appended to <body> by the JS handler. Any element
+     with [data-tooltip] or [title] uses this; native title attributes are
+     auto-migrated so the OS-level hover delay never fires. To opt in from
+     code, set data-tooltip="..." (preferred) or title="..." on the element. */
+  .sa-tooltip { position: fixed; display: none; background: var(--bg-panel, #fff); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; font-weight: 400; font-style: normal; font-family: inherit; text-transform: none; letter-spacing: normal; color: var(--text); white-space: pre-line; max-width: 320px; z-index: 10000; box-shadow: 0 4px 12px rgba(0,0,0,0.12); pointer-events: none; text-align: left; line-height: 1.45; }
+  .sa-tooltip.visible { display: block; }
   .stat-card-count { font-size: 22px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1; }
   .stat-card.zero .stat-card-count { color: var(--text-very-faint); }
   .stat-card.ev-posted              { border-left: 3px solid #10b981; }
@@ -3455,6 +3456,93 @@ function toast(msg, isError) {
   t.className = 'toast show' + (isError ? ' error' : '');
   setTimeout(() => t.className = 'toast', 3000);
 }
+
+// ===== Global instant-hover tooltip =====
+// Single shared tooltip element used by every element with data-tooltip or
+// title. On first hover the title is migrated into data-tooltip and removed
+// so the native browser tooltip (with its OS-level delay) never fires.
+// aria-label is mirrored so screen readers still expose the text.
+//
+// Standard going forward: use data-tooltip="..." on any element that needs a
+// tooltip. Existing title="..." attributes also work; they get upgraded
+// automatically on first hover.
+(function() {
+  let tipEl = null;
+  let currentHost = null;
+  function ensureTip() {
+    if (tipEl) return tipEl;
+    tipEl = document.createElement('div');
+    tipEl.className = 'sa-tooltip';
+    tipEl.setAttribute('role', 'tooltip');
+    document.body.appendChild(tipEl);
+    return tipEl;
+  }
+  function getText(el) {
+    let t = el.getAttribute('data-tooltip');
+    if (t == null || t === '') {
+      const nt = el.getAttribute('title');
+      if (nt) {
+        t = nt;
+        el.setAttribute('data-tooltip', nt);
+        if (!el.getAttribute('aria-label')) el.setAttribute('aria-label', nt);
+        el.removeAttribute('title');
+      }
+    }
+    return t || '';
+  }
+  function position(host) {
+    if (!tipEl) return;
+    const r = host.getBoundingClientRect();
+    const tipR = tipEl.getBoundingClientRect();
+    const margin = 6;
+    let left = r.left + (r.width / 2) - (tipR.width / 2);
+    let top = r.bottom + margin;
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+    if (left + tipR.width > vw - 4) left = vw - tipR.width - 4;
+    if (left < 4) left = 4;
+    if (top + tipR.height > vh - 4) top = r.top - tipR.height - margin;
+    tipEl.style.left = left + 'px';
+    tipEl.style.top  = top + 'px';
+  }
+  function show(host) {
+    const text = getText(host);
+    if (!text) return;
+    const el = ensureTip();
+    el.textContent = text;
+    el.classList.add('visible');
+    position(host);
+    currentHost = host;
+  }
+  function hide() {
+    if (!tipEl) return;
+    tipEl.classList.remove('visible');
+    currentHost = null;
+  }
+  document.addEventListener('mouseover', function(e) {
+    const host = e.target && e.target.closest && e.target.closest('[data-tooltip], [title]');
+    if (host && host !== currentHost) show(host);
+  });
+  document.addEventListener('mouseout', function(e) {
+    const host = e.target && e.target.closest && e.target.closest('[data-tooltip], [title]');
+    if (!host) return;
+    if (e.relatedTarget && host.contains(e.relatedTarget)) return;
+    hide();
+  });
+  document.addEventListener('focusin', function(e) {
+    const host = e.target && e.target.closest && e.target.closest('[data-tooltip], [title]');
+    if (host) show(host);
+  });
+  document.addEventListener('focusout', function(e) {
+    const host = e.target && e.target.closest && e.target.closest('[data-tooltip], [title]');
+    if (host) hide();
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') hide();
+  });
+  document.addEventListener('scroll', hide, true);
+  window.addEventListener('blur', hide);
+})();
 
 function relTime(iso) {
   if (!iso) return 'Never';
@@ -4906,20 +4994,10 @@ function mountSortableTable(opts) {
     return '<input type="text" class="activity-col-filter activity-col-filter-inline" data-filter-key="' + escapeHtml(c.key) + '" placeholder="filter\u2026" />';
   }
 
-  const headerCells = cols.map((c, idx) => {
-    let helpHtml = '';
-    if (c.helpText) {
-      // Anchor the tooltip leftward for the first column and rightward for the
-      // last two so the popover stays inside the table on narrow viewports.
-      let tipSide = '';
-      if (idx === 0) tipSide = 'left';
-      else if (idx >= cols.length - 2) tipSide = 'right';
-      const sideAttr = tipSide ? ' data-tip-side="' + tipSide + '"' : '';
-      helpHtml =
-        '<span class="col-info" tabindex="0" aria-label="' + escapeHtml(c.helpText) + '"' + sideAttr + '>i' +
-        '<span class="col-info-tip">' + escapeHtml(c.helpText) + '</span>' +
-        '</span>';
-    }
+  const headerCells = cols.map(c => {
+    const helpHtml = c.helpText
+      ? ' <span class="col-info" tabindex="0" data-tooltip="' + escapeHtml(c.helpText) + '" aria-label="' + escapeHtml(c.helpText) + '">i</span>'
+      : '';
     const labelHtml =
       '<span class="activity-header-label">' + escapeHtml(c.label) + helpHtml +
       ' <span class="activity-sort-arrow" data-sort-arrow-key="' + escapeHtml(c.key) + '"></span>' +
@@ -4927,9 +5005,10 @@ function mountSortableTable(opts) {
     const innerHtml = inlineFilters
       ? '<div class="activity-th-stack">' + labelHtml + buildInlineFilterHtml(c) + '</div>'
       : labelHtml;
-    // No native title attribute when helpText is set; the custom .col-info-tip
-    // popover handles it (no OS-level hover delay).
-    const titleAttr = c.helpText ? '' : ' title="' + escapeHtml(c.label) + '"';
+    // The global tooltip handler picks up data-tooltip when helpText is set;
+    // otherwise fall back to the column label as a redundancy hint when text
+    // gets ellipsized.
+    const titleAttr = c.helpText ? '' : ' data-tooltip="' + escapeHtml(c.label) + '"';
     return '<th class="activity-sortable" data-sort-key="' + escapeHtml(c.key) + '"' + alignAttr(c) + titleAttr + '>' + innerHtml + '</th>';
   }).join('');
   const filterRowHtml = inlineFilters ? '' : (
