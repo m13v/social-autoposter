@@ -261,6 +261,72 @@ def _handle_dm_passcode(page):
 
 
 
+def _install_rate_limit_listener(page):
+    """Count 429 responses on x.com DM API endpoints.
+
+    X throttles the account (not per-tab) after too many /i/chat navigations
+    and GetInboxPageRequestQuery hits in a window. Returns a mutable counter
+    dict; caller reads counter['429'] after the page settles.
+    """
+    counter = {"429": 0, "first_429_url": None}
+
+    def on_response(resp):
+        try:
+            if resp.status != 429:
+                return
+            url = resp.url
+            if "api.x.com" not in url and "x.com/i/api" not in url:
+                return
+            counter["429"] += 1
+            if counter["first_429_url"] is None:
+                counter["first_429_url"] = url
+        except Exception:
+            pass
+
+    page.on("response", on_response)
+    return counter
+
+
+def _is_x_unreachable(page):
+    """Return (True, reason) if Chrome rendered its own error page for x.com.
+
+    Happens when x.com drops the TCP connection after sustained 429s; Chrome
+    shows `chrome-error://chromewebdata/` with "This site can't be reached".
+    Distinct from "normal" x.com errors (which still render a valid x.com DOM).
+    """
+    try:
+        url = page.url or ""
+        if url.startswith("chrome-error:"):
+            return True, f"chrome_error_url:{url}"
+        body_text = page.evaluate("() => document.body ? document.body.innerText : ''") or ""
+        if "ERR_FAILED" in body_text and "site can" in body_text.lower():
+            return True, "err_failed_body"
+    except Exception:
+        pass
+    return False, None
+
+
+def _rate_limit_response(reason, counter=None, url=None):
+    """Build the JSON payload we return when X has blocked us.
+
+    Also prints a loud stderr marker so grep finds it in launchd logs.
+    """
+    payload = {
+        "ok": False,
+        "error": "rate_limited",
+        "reason": reason,
+        "rate_limit_count": counter["429"] if counter else 0,
+        "url": url,
+        "conversations": [],
+    }
+    print(
+        f"RATE_LIMITED_TWITTER: reason={reason} "
+        f"429s={payload['rate_limit_count']} url={url}",
+        file=sys.stderr,
+    )
+    return payload
+
+
 def _collect_our_reply_links(page):
     """Collect all /OUR_HANDLE/status/ links currently in the DOM."""
     return set(page.evaluate(f"""() => {{
@@ -456,8 +522,13 @@ def unread_dms():
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
+            rl_counter = _install_rate_limit_listener(page)
             page.goto("https://x.com/i/chat", wait_until="domcontentloaded")
             page.wait_for_timeout(5000)
+
+            unreachable, reason = _is_x_unreachable(page)
+            if unreachable:
+                return _rate_limit_response(reason, rl_counter, page.url)
 
             # Handle DM passcode if needed
             _handle_dm_passcode(page)
@@ -465,6 +536,9 @@ def unread_dms():
 
             # Verify we're on the DM inbox
             if "chat" not in page.url:
+                unreachable, reason = _is_x_unreachable(page)
+                if unreachable:
+                    return _rate_limit_response(reason, rl_counter, page.url)
                 return {"ok": False, "error": "not_on_dm_page", "url": page.url}
 
             # Extract conversation list from the accessible link names
@@ -562,6 +636,14 @@ def unread_dms():
                     seen.add(c["thread_url"])
                     unique.append(c)
 
+            # If the inbox API was throttled hard AND we got nothing back,
+            # treat this as rate-limited so the caller can back off instead
+            # of reporting "0 new inbounds" (which then silently skips work).
+            if not unique and rl_counter["429"] >= 3:
+                return _rate_limit_response(
+                    "inbox_api_throttled", rl_counter, page.url
+                )
+
             return unique
 
         finally:
@@ -586,9 +668,14 @@ def read_conversation(thread_url, max_messages=20):
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
+            rl_counter = _install_rate_limit_listener(page)
             # Navigate using JS to avoid SPA navigation timeouts
             page.evaluate(f"window.location.href = '{thread_url}'")
             page.wait_for_timeout(6000)
+
+            unreachable, reason = _is_x_unreachable(page)
+            if unreachable:
+                return _rate_limit_response(reason, rl_counter, page.url)
 
             # Handle DM passcode if needed
             _handle_dm_passcode(page)
@@ -822,11 +909,16 @@ def send_dm(thread_url, message):
         browser, page, is_cdp = get_browser_and_page(p)
 
         try:
+            rl_counter = _install_rate_limit_listener(page)
             # Navigate to DM inbox first, then click into conversation.
             # Direct URL navigation to DM conversations often hangs
             # because X's SPA doesn't fire domcontentloaded for DM routes.
             page.evaluate("window.location.href = 'https://x.com/i/chat/'")
             page.wait_for_timeout(5000)
+
+            unreachable, reason = _is_x_unreachable(page)
+            if unreachable:
+                return _rate_limit_response(reason, rl_counter, page.url)
 
             # Handle DM passcode if needed
             _handle_dm_passcode(page)
