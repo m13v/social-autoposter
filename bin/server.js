@@ -3478,17 +3478,17 @@ function toast(msg, isError) {
     return tipEl;
   }
   function getText(el) {
-    let t = el.getAttribute('data-tooltip');
-    if (t == null || t === '') {
-      const nt = el.getAttribute('title');
-      if (nt) {
-        t = nt;
-        el.setAttribute('data-tooltip', nt);
-        if (!el.getAttribute('aria-label')) el.setAttribute('aria-label', nt);
-        el.removeAttribute('title');
-      }
+    // Prefer title when present: a re-render may have just written a fresh
+    // value, and our previously migrated data-tooltip could be stale. Migrate
+    // and remove the title so the OS-level native tooltip never fires.
+    const nt = el.getAttribute('title');
+    if (nt) {
+      el.setAttribute('data-tooltip', nt);
+      if (!el.getAttribute('aria-label')) el.setAttribute('aria-label', nt);
+      el.removeAttribute('title');
+      return nt;
     }
-    return t || '';
+    return el.getAttribute('data-tooltip') || '';
   }
   function position(host) {
     if (!tipEl) return;
