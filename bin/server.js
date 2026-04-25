@@ -2870,6 +2870,17 @@ const HTML = `<!DOCTYPE html>
   .stat-card-label { font-size: 11px; color: var(--text); text-transform: lowercase; letter-spacing: 0.02em; display: inline-flex; align-items: center; gap: 5px; }
   .stat-card-info { display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--border-strong, var(--border)); color: var(--text-muted); font-size: 9px; font-weight: 600; font-style: italic; font-family: Georgia, serif; line-height: 1; cursor: help; user-select: none; opacity: 0.7; transition: opacity 0.1s, color 0.1s, border-color 0.1s; }
   .stat-card-info:hover { opacity: 1; color: var(--text); border-color: var(--text-muted); }
+  /* Per-column info icon used by mountSortableTable when a column has helpText.
+     Uses a custom CSS popover (no native title attribute) so the tooltip
+     appears immediately on hover with no OS-level ~500ms delay. */
+  .col-info { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--border-strong, var(--border)); color: var(--text-muted); font-size: 9px; font-weight: 600; font-style: italic; font-family: Georgia, serif; line-height: 1; cursor: help; user-select: none; opacity: 0.6; margin-left: 4px; vertical-align: middle; }
+  .col-info:hover { opacity: 1; color: var(--text); border-color: var(--text-muted); }
+  .col-info-tip { display: none; position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--bg-panel, #fff); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; font-weight: 400; font-style: normal; font-family: inherit; text-transform: none; letter-spacing: normal; color: var(--text); white-space: normal; width: 300px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.12); pointer-events: none; text-align: left; line-height: 1.45; }
+  .col-info:hover .col-info-tip, .col-info:focus .col-info-tip { display: block; }
+  /* Anchor the tooltip to the right edge for the last few columns so it
+     doesn't overflow the table on narrow viewports. */
+  .col-info[data-tip-side="right"] .col-info-tip { left: auto; right: 0; transform: none; }
+  .col-info[data-tip-side="left"]  .col-info-tip { left: 0; right: auto; transform: none; }
   .stat-card-count { font-size: 22px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1; }
   .stat-card.zero .stat-card-count { color: var(--text-very-faint); }
   .stat-card.ev-posted              { border-left: 3px solid #10b981; }
@@ -4895,15 +4906,31 @@ function mountSortableTable(opts) {
     return '<input type="text" class="activity-col-filter activity-col-filter-inline" data-filter-key="' + escapeHtml(c.key) + '" placeholder="filter\u2026" />';
   }
 
-  const headerCells = cols.map(c => {
+  const headerCells = cols.map((c, idx) => {
+    let helpHtml = '';
+    if (c.helpText) {
+      // Anchor the tooltip leftward for the first column and rightward for the
+      // last two so the popover stays inside the table on narrow viewports.
+      let tipSide = '';
+      if (idx === 0) tipSide = 'left';
+      else if (idx >= cols.length - 2) tipSide = 'right';
+      const sideAttr = tipSide ? ' data-tip-side="' + tipSide + '"' : '';
+      helpHtml =
+        '<span class="col-info" tabindex="0" aria-label="' + escapeHtml(c.helpText) + '"' + sideAttr + '>i' +
+        '<span class="col-info-tip">' + escapeHtml(c.helpText) + '</span>' +
+        '</span>';
+    }
     const labelHtml =
-      '<span class="activity-header-label">' + escapeHtml(c.label) +
+      '<span class="activity-header-label">' + escapeHtml(c.label) + helpHtml +
       ' <span class="activity-sort-arrow" data-sort-arrow-key="' + escapeHtml(c.key) + '"></span>' +
       '</span>';
     const innerHtml = inlineFilters
       ? '<div class="activity-th-stack">' + labelHtml + buildInlineFilterHtml(c) + '</div>'
       : labelHtml;
-    return '<th class="activity-sortable" data-sort-key="' + escapeHtml(c.key) + '"' + alignAttr(c) + ' title="' + escapeHtml(c.label) + '">' + innerHtml + '</th>';
+    // No native title attribute when helpText is set; the custom .col-info-tip
+    // popover handles it (no OS-level hover delay).
+    const titleAttr = c.helpText ? '' : ' title="' + escapeHtml(c.label) + '"';
+    return '<th class="activity-sortable" data-sort-key="' + escapeHtml(c.key) + '"' + alignAttr(c) + titleAttr + '>' + innerHtml + '</th>';
   }).join('');
   const filterRowHtml = inlineFilters ? '' : (
     '<tr class="activity-filter-row">' +
@@ -5034,6 +5061,8 @@ function mountSortableTable(opts) {
   container.querySelectorAll('.activity-sortable').forEach(el => {
     el.addEventListener('click', (e) => {
       if (e.target && (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT' || e.target.tagName === 'OPTION')) return;
+      // Clicks on the per-column info icon must not trigger sort.
+      if (e.target && e.target.closest && e.target.closest('.col-info')) return;
       const key = el.getAttribute('data-sort-key');
       if (state.sortField === key) {
         state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
@@ -5061,35 +5090,19 @@ function mountSortableTable(opts) {
 }
 
 let _styleStatsTableState = { sortField: 'score', sortDir: 'desc', filters: {} };
-// Per-column help shown by the info icon next to the section heading. Edit
-// here when columns change so the tooltip stays in sync with what's rendered.
-const STYLE_STATS_FIELD_HELP = [
-  ['What is a "post" here?', 'A row in the posts table = our FIRST-TOUCH engagement on a thread, NOT (usually) an original thread we authored. Concretely: Reddit/Moltbook/GitHub = our top-level comment on someone else’s thread/issue; X = our reply to someone else’s tweet; LinkedIn = our comment on someone else’s feed post. The exception is run-reddit-threads.sh, which posts an original Reddit thread (those rows have thread_url = our_url). Subsequent back-and-forth replies live in a separate replies table/pipeline and are NOT counted here.'],
-  ['Style', 'Engagement tone Claude used to draft this first-touch comment/post (slug from scripts/engagement_styles.py). The A/B testing system uses these stats to decide which tones to imitate next.'],
-  ['Score', 'Per-post quality signal computed on engagement that landed on OUR comment/post (replies to it, upvotes on it), not on the underlying third-party thread. Formula: (comments * 3 + upvotes_discounted) / posts. upvotes_discounted subtracts the OP self-upvote on Reddit and Moltbook so those platforms compare fairly with X/LinkedIn. Views are deliberately excluded so low-volume styles compare fairly with high-volume ones. Same signal the feedback report uses.'],
-  ['Posts', 'Count of first-touch comments/posts published in this style during the selected window.'],
-  ['Upvotes', 'Sum of upvotes/likes received by OUR comment (or our thread, in the rare original-thread case). Per-post average in parentheses, raw and not discounted.'],
-  ['Comments', 'Sum of replies received by OUR comment (or comments under our thread). Per-post average in parentheses. These are tracked in the posts.comments_count column, which is independent of the separate replies pipeline that records replies WE author.'],
-  ['Views', 'Sum of impressions. Per-post average in parentheses. Moltbook and GitHub are excluded from both the total and the per-post denominator since neither platform exposes a views metric.'],
-  ['Recs', 'Number of posts in this tone that ALSO carried a project recommendation (is_recommendation = true). Independent dimension from style: it tells you how often this tone was used to deliver a product mention.'],
-];
-function ensureStyleStatsInfoIcon() {
-  if (document.getElementById('style-stats-info')) return;
-  const heading = document.getElementById('style-stats-heading');
-  if (!heading) return;
-  const NL = String.fromCharCode(10);
-  const tip = STYLE_STATS_FIELD_HELP.map(p => p[0] + ': ' + p[1]).join(NL + NL);
-  const icon = document.createElement('span');
-  icon.id = 'style-stats-info';
-  icon.className = 'stat-card-info';
-  icon.textContent = 'i';
-  icon.setAttribute('title', tip);
-  icon.setAttribute('aria-label', tip);
-  icon.style.marginLeft = '6px';
-  // Stop the click from toggling the <details> when users click the icon.
-  icon.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); });
-  heading.parentNode.insertBefore(icon, heading.nextSibling);
-}
+// Per-column help text. Attached to each column via `helpText` and rendered as
+// an info icon by mountSortableTable. The tooltip uses a custom CSS popover
+// (.col-info-tip) so it appears immediately on hover without the OS-level
+// title-attribute delay.
+const STYLE_STATS_HELP = {
+  style:    'Engagement tone Claude used to draft this first-touch comment/post (slug from scripts/engagement_styles.py). The A/B testing system uses these stats to decide which tones to imitate next. Note: a row in the posts table = our FIRST-TOUCH engagement on a thread, not (usually) an original thread we authored. Reddit/Moltbook/GitHub = our top-level comment on someone else’s thread; X = our reply; LinkedIn = our comment. Subsequent back-and-forth replies live in a separate replies pipeline and are not counted here.',
+  score:    'Per-post quality signal computed on engagement that landed on OUR comment/post (replies to it, upvotes on it), not on the underlying third-party thread. Formula: (comments * 3 + upvotes_discounted) / posts. upvotes_discounted subtracts the OP self-upvote on Reddit and Moltbook so those platforms compare fairly with X/LinkedIn. Views are deliberately excluded so low-volume styles compare fairly with high-volume ones. Same signal the feedback report uses.',
+  posts:    'Count of first-touch comments/posts published in this style during the selected window. (Reddit comments on others’ threads, X replies, LinkedIn comments, etc. The rare run-reddit-threads.sh original-thread rows are also counted.)',
+  upvotes:  'Sum of upvotes/likes received by OUR comment (or our thread, in the rare original-thread case). Per-post average in parentheses, raw and not discounted.',
+  comments: 'Sum of replies received by OUR comment (or comments under our thread). Per-post average in parentheses. Tracked in the posts.comments_count column, independent of the separate replies pipeline that records replies WE author.',
+  views:    'Sum of impressions on OUR comment/post. Per-post average in parentheses. Moltbook and GitHub are excluded from both the total and the per-post denominator since neither platform exposes a views metric.',
+  recommendations: 'Number of posts in this tone that ALSO carried a project recommendation (is_recommendation = true). Independent dimension from style: tells you how often this tone was used to deliver a product mention.',
+};
 function renderStyleStatsPills(containerId, values, selected, labelAll) {
   const row = document.getElementById(containerId);
   if (!row) return;
@@ -5121,7 +5134,6 @@ function renderStyleStats(payload) {
   const body = document.getElementById('style-stats-body');
   const totalEl = document.getElementById('style-stats-total');
   if (!body) return;
-  ensureStyleStatsInfoIcon();
   const selectedPlatform = (payload && payload.platform) || 'all';
   const selectedProject  = (payload && payload.project)  || 'all';
   renderStyleStatsPills('style-stats-platform-pills', (payload && payload.platforms) || [], selectedPlatform, 'All');
