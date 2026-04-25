@@ -136,7 +136,7 @@ def dataforseo_request(endpoint, payload):
         return None
 
 
-def fetch_keyword_suggestions(seed_keyword, limit=50):
+def fetch_keyword_suggestions(seed_keyword, limit=50, min_volume=MIN_VOLUME):
     """Get keyword suggestions from DataForSEO Labs."""
     result = dataforseo_request(
         "dataforseo_labs/google/keyword_suggestions/live",
@@ -152,7 +152,7 @@ def fetch_keyword_suggestions(seed_keyword, limit=50):
         ki = item.get("keyword_info", {})
         vol = ki.get("search_volume", 0) or 0
         comp = ki.get("competition_level")
-        if vol >= MIN_VOLUME and comp in MAX_COMPETITION:
+        if vol >= min_volume and comp in MAX_COMPETITION:
             keywords.append({
                 "keyword": item["keyword"],
                 "volume": vol,
@@ -162,7 +162,7 @@ def fetch_keyword_suggestions(seed_keyword, limit=50):
     return keywords
 
 
-def fetch_keywords_for_site(domain, limit=50):
+def fetch_keywords_for_site(domain, limit=50, min_volume=MIN_VOLUME):
     """Get keywords a competitor ranks for."""
     result = dataforseo_request(
         "dataforseo_labs/google/keywords_for_site/live",
@@ -178,7 +178,7 @@ def fetch_keywords_for_site(domain, limit=50):
         ki = item.get("keyword_info", {})
         vol = ki.get("search_volume", 0) or 0
         comp = ki.get("competition_level")
-        if vol >= MIN_VOLUME and comp in MAX_COMPETITION:
+        if vol >= min_volume and comp in MAX_COMPETITION:
             keywords.append({
                 "keyword": item["keyword"],
                 "volume": vol,
@@ -189,18 +189,24 @@ def fetch_keywords_for_site(domain, limit=50):
 
 
 def extract_competitor_domains(project):
-    """Extract competitor domains from config."""
+    """Extract competitor domains from config.
+
+    Two sources, merged and deduped:
+      1. Top-level `competitor_domains` (explicit list of domains).
+      2. `competitive_positioning` keys mapped via `domain_map`.
+    """
     domains = []
+    for d in project.get("competitor_domains") or []:
+        if d and isinstance(d, str):
+            domains.append(d.strip().lower())
+
     comp = project.get("competitive_positioning", {})
     for key, desc in comp.items():
-        # Try to find domain-like strings in the description
-        # Also use common mappings
         name = key.replace("vs_", "").replace("_", " ")
-        # Known mappings
         domain_map = {
             "qa wolf": "qawolf.com",
             "momentic": "momentic.ai",
-            "manual playwright": None,  # not a competitor site
+            "manual playwright": None,
             "verkada rhombus": "verkada.com",
             "hakimo": "hakimo.ai",
             "guard": None,
@@ -213,18 +219,26 @@ def extract_competitor_domains(project):
         domain = domain_map.get(name)
         if domain:
             domains.append(domain)
-    return domains
+
+    seen = set()
+    unique = []
+    for d in domains:
+        if d not in seen:
+            seen.add(d)
+            unique.append(d)
+    return unique
 
 
 def generate_keywords_dataforseo(project):
     """Generate keywords using DataForSEO API."""
     all_keywords = []
+    min_vol = project_min_volume(project)
 
     # 1. Keyword suggestions from topics
     # Use more specific seed phrases to avoid ambiguity (e.g. "playwright" the person)
     topics = project.get("topics", [])
     seed_suffixes = ["tool", "framework", "software", "automation"]
-    print(f"\n  Fetching suggestions for {len(topics)} topics...")
+    print(f"\n  Fetching suggestions for {len(topics)} topics (min vol >= {min_vol})...")
     for topic in topics:
         # If the topic is a single ambiguous word, make it more specific
         if len(topic.split()) == 1 and topic.lower() in {"playwright", "cypress", "selenium"}:
@@ -233,18 +247,18 @@ def generate_keywords_dataforseo(project):
             seeds = [topic]
         for seed in seeds:
             print(f"    Topic: {seed}")
-            kws = fetch_keyword_suggestions(seed, limit=30)
-            print(f"    -> {len(kws)} keywords (vol >= {MIN_VOLUME})")
+            kws = fetch_keyword_suggestions(seed, limit=30, min_volume=min_vol)
+            print(f"    -> {len(kws)} keywords (vol >= {min_vol})")
             all_keywords.extend(kws)
 
     # 2. Competitor keyword stealing
     domains = extract_competitor_domains(project)
     if domains:
-        print(f"\n  Stealing keywords from {len(domains)} competitors...")
+        print(f"\n  Stealing keywords from {len(domains)} competitors (min vol >= {min_vol})...")
         for domain in domains:
             print(f"    Competitor: {domain}")
-            kws = fetch_keywords_for_site(domain, limit=30)
-            print(f"    -> {len(kws)} keywords (vol >= {MIN_VOLUME})")
+            kws = fetch_keywords_for_site(domain, limit=30, min_volume=min_vol)
+            print(f"    -> {len(kws)} keywords (vol >= {min_vol})")
             all_keywords.extend(kws)
 
     # Deduplicate by keyword, keep highest volume, filter noise
@@ -429,7 +443,8 @@ def main():
 
     print(f"Generating keywords for: {project['name']}")
     print(f"  Topics: {len(project.get('topics', []))}")
-    print(f"  Competitors: {len(project.get('competitive_positioning', {}))}")
+    print(f"  Competitors: {len(extract_competitor_domains(project))}")
+    print(f"  Min volume: {project_min_volume(project)}")
 
     if use_fallback or not os.environ.get("DATAFORSEO_LOGIN"):
         print("  Mode: template fallback (no DataForSEO API)")
