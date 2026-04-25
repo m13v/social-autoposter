@@ -5064,12 +5064,13 @@ let _styleStatsTableState = { sortField: 'score', sortDir: 'desc', filters: {} }
 // Per-column help shown by the info icon next to the section heading. Edit
 // here when columns change so the tooltip stays in sync with what's rendered.
 const STYLE_STATS_FIELD_HELP = [
-  ['Style', 'Engagement tone Claude used to draft each post (slug from scripts/engagement_styles.py). The A/B testing system uses these stats to decide which tones to imitate next.'],
-  ['Score', 'Per-post quality signal. Formula: (comments * 3 + upvotes_discounted) / posts. upvotes_discounted subtracts the OP self-upvote on Reddit and Moltbook so those platforms compare fairly with X/LinkedIn. Views are deliberately excluded so low-volume styles compare fairly with high-volume ones. Same signal the feedback report uses.'],
-  ['Posts', 'Number of posts published in this style during the selected window.'],
-  ['Upvotes', 'Sum of upvotes across all posts in this style. Per-post average shown in parentheses (raw, not discounted).'],
-  ['Comments', 'Sum of replies/comments across all posts. Per-post average in parentheses.'],
-  ['Views', 'Sum of impressions. Per-post average in parentheses. Moltbook and GitHub rows are excluded from both the total and the per-post denominator since neither platform exposes a views metric.'],
+  ['What is a "post" here?', 'A row in the posts table = our FIRST-TOUCH engagement on a thread, NOT (usually) an original thread we authored. Concretely: Reddit/Moltbook/GitHub = our top-level comment on someone else’s thread/issue; X = our reply to someone else’s tweet; LinkedIn = our comment on someone else’s feed post. The exception is run-reddit-threads.sh, which posts an original Reddit thread (those rows have thread_url = our_url). Subsequent back-and-forth replies live in a separate replies table/pipeline and are NOT counted here.'],
+  ['Style', 'Engagement tone Claude used to draft this first-touch comment/post (slug from scripts/engagement_styles.py). The A/B testing system uses these stats to decide which tones to imitate next.'],
+  ['Score', 'Per-post quality signal computed on engagement that landed on OUR comment/post (replies to it, upvotes on it), not on the underlying third-party thread. Formula: (comments * 3 + upvotes_discounted) / posts. upvotes_discounted subtracts the OP self-upvote on Reddit and Moltbook so those platforms compare fairly with X/LinkedIn. Views are deliberately excluded so low-volume styles compare fairly with high-volume ones. Same signal the feedback report uses.'],
+  ['Posts', 'Count of first-touch comments/posts published in this style during the selected window.'],
+  ['Upvotes', 'Sum of upvotes/likes received by OUR comment (or our thread, in the rare original-thread case). Per-post average in parentheses, raw and not discounted.'],
+  ['Comments', 'Sum of replies received by OUR comment (or comments under our thread). Per-post average in parentheses. These are tracked in the posts.comments_count column, which is independent of the separate replies pipeline that records replies WE author.'],
+  ['Views', 'Sum of impressions. Per-post average in parentheses. Moltbook and GitHub are excluded from both the total and the per-post denominator since neither platform exposes a views metric.'],
   ['Recs', 'Number of posts in this tone that ALSO carried a project recommendation (is_recommendation = true). Independent dimension from style: it tells you how often this tone was used to deliver a product mention.'],
 ];
 function ensureStyleStatsInfoIcon() {
