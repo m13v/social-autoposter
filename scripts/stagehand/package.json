@@ -1,0 +1,20 @@
+{
+  "name": "social-autoposter-stagehand",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Stagehand v3 browser scripts for AI citation tracking and public-web tasks. Not for LinkedIn/Twitter/Reddit automation — those use dedicated MCP agents.",
+  "scripts": {
+    "citations": "tsx src/check_ai_citations.ts"
+  },
+  "dependencies": {
+    "@browserbasehq/stagehand": "^3.0.0",
+    "playwright": "^1.50.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}
