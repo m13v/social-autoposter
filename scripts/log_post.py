@@ -43,6 +43,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
+import linkedin_url as li_url
 
 VALID_PLATFORMS = ("reddit", "twitter", "linkedin", "github_issues", "moltbook")
 
@@ -142,6 +143,13 @@ def main():
 
     account = args.account or DEFAULT_ACCOUNTS.get(args.platform, "")
 
+    # LinkedIn: same post surfaces under multiple URL shapes (/feed/update/
+    # vs /posts/...-share-...) with different numeric URNs. Canonicalize
+    # our_url to /feed/update/urn:li:activity:<id>/ so the comment-permalink
+    # captured after posting drops its commentUrn query string.
+    if args.platform == "linkedin":
+        args.our_url = li_url.canonicalize(args.our_url)
+
     dbmod.load_env()
     conn = dbmod.get_conn()
 
@@ -161,6 +169,31 @@ def main():
             "content_preview": existing[1],
         }))
         return
+
+    # LinkedIn: ID-set dedup catches the case where the same post is logged
+    # twice under different URL shapes (activity URN vs share URN vs
+    # ugcPost URN). The exact-string check above won't fire when day-1 stored
+    # /feed/update/...activity:X/ and day-2 stores /posts/...-share-Y-..., but
+    # the activity URN captured in our_url on day 2 will collide with day-1's
+    # thread_url ID. Compare the union of IDs from incoming thread_url +
+    # our_url against the union for every existing linkedin row.
+    if args.platform == "linkedin":
+        incoming_ids = set(
+            li_url.extract_ids(args.thread_url) + li_url.extract_ids(args.our_url)
+        )
+        match = li_url.find_existing_engagement(conn, sorted(incoming_ids))
+        if match:
+            conn.close()
+            print(json.dumps({
+                "error": "DUPLICATE_LINKEDIN_POST",
+                "message": "A LinkedIn post sharing one of these activity/share/ugcPost IDs is already logged",
+                "incoming_ids": sorted(incoming_ids),
+                "existing_post_id": match[0],
+                "existing_posted_at": str(match[1]),
+                "existing_thread_url": match[2],
+                "existing_our_url": match[3],
+            }))
+            return
 
     claude_session_id = os.environ.get("CLAUDE_SESSION_ID") or None
 
