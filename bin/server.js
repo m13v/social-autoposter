@@ -759,6 +759,9 @@ function getPlistSchedule(unitPath) {
     const { intervalSecs, kind } = driver.scheduleFromUnit(text);
     if (intervalSecs == null) return null;
     const secs = intervalSecs;
+    if (secs === 604800) return 'weekly';
+    if (secs === 86400) return 'daily';
+    if (secs % 86400 === 0) return `every ${secs / 86400}d`;
     if (secs % 3600 === 0) return `every ${secs / 3600}h`;
     if (secs % 60 === 0) return `every ${secs / 60}m`;
     if (kind === 'calendar') return `every ${secs}s (cal)`;
@@ -2215,12 +2218,15 @@ async function handleApi(req, res) {
     // scripts/pick_project.py and scripts/pick_thread_target.py. Projects
     // ineligible for a platform get target_share=null (shown as "NA" in the
     // dashboard) and are excluded from that platform's target-weight denom.
+    // platforms_disabled is an explicit deny list (e.g. paperback-expert opts
+    // out of moltbook because the HN audience isn't its ICP).
+    const isDisabled = (p, plat) => Array.isArray(p.platforms_disabled) && p.platforms_disabled.includes(plat);
     const platformEligible = {
-      github:   p => Array.isArray(p.github_search_topics) && p.github_search_topics.length > 0,
-      twitter:  p => Array.isArray(p.twitter_topics) && p.twitter_topics.length > 0,
-      linkedin: p => Array.isArray(p.linkedin_topics) && p.linkedin_topics.length > 0,
-      reddit:   p => !!(p.threads && p.threads.enabled === true),
-      moltbook: () => true,
+      github:   p => !isDisabled(p, 'github')   && Array.isArray(p.github_search_topics) && p.github_search_topics.length > 0,
+      twitter:  p => !isDisabled(p, 'twitter')  && Array.isArray(p.twitter_topics)       && p.twitter_topics.length > 0,
+      linkedin: p => !isDisabled(p, 'linkedin') && Array.isArray(p.linkedin_topics)      && p.linkedin_topics.length > 0,
+      reddit:   p => !isDisabled(p, 'reddit'),
+      moltbook: p => !isDisabled(p, 'moltbook'),
     };
     const totalWeightByPlatform = {};
     for (const plat of platforms) {
@@ -2231,6 +2237,7 @@ async function handleApi(req, res) {
     const rows = await pq(
       "SELECT COALESCE(project_name, '(none)') AS project_name, platform, COUNT(*)::int AS n " +
       "FROM posts WHERE posted_at >= NOW() - INTERVAL '" + hours + " hours' " +
+      "AND our_content <> '(mention - no original post)' " +
       "GROUP BY project_name, platform"
     ) || [];
     const byProject = {};
