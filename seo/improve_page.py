@@ -57,45 +57,74 @@ from claude_wait import wait_for_claude  # noqa: E402
 CLAUDE_TIMEOUT_SECONDS = 1800  # 30 minutes; research + multiple edits + commit
 
 
-PROMPT_TEMPLATE = """You are improving a live landing page that real visitors hit right now. You have full read/write access to the website repo (cwd = repo root). Your job is to make the page convert better.
+PROMPT_TEMPLATE = """You are improving a live web page that real visitors hit right now. You have full read/write access to the website repo (cwd = repo root). Your job is to improve the page on its own terms, not to apply a generic SEO recipe.
 
 # Context
 
 {brief_block}
 
-# What counts as success
+# Step 1: Understand what this page is before changing anything
 
-The page above is the most-visited page on this site over the last 24 hours. Your goal is to increase useful conversions on it over the next 24 hours:
+Read the live page file(s) first. Most products put the home page at `src/app/page.tsx` or `src/app/(main)/page.tsx`; other paths map to `src/app/<path>/page.tsx` or similar. Use Glob/Grep liberally. Also skim sibling pages so you understand the site's existing design language.
 
-- more pageviews (via on-page SEO, internal links, or better shareable copy)
-- more email signups (stronger lead capture, better incentive, better placement)
-- more schedule-demo clicks (for products with booking)
-- more get-started / signup clicks (for products with downloads/installs)
-- more real bookings where applicable
+Then classify the page's purpose. Common types (illustrative, not exhaustive — call it whatever genuinely fits):
 
-You have one run. Pick the change you believe has the highest expected impact and ship it.
+- homepage / brand entry point — establish what this product is, route visitors to signup/booking
+- SEO landing (e.g. /<keyword>/, /<city>/, /alternatives/<x>) — rank for a specific query and convert that searcher
+- pricing — answer cost objections, drive plan selection
+- feature / use-case / solution — explain a capability deeply, push to trial or booking
+- comparison / alternatives / vs page — clarify positioning against a named competitor
+- blog post / article — rank for a topic, capture email or move readers to product
+- docs / changelog / help — serve existing users, reduce support load
+- something else entirely — name it in your own words
 
-# How to work
+State in one sentence what THIS specific page's job is. Everything below is judged against that sentence.
 
-1. Start by READING the live page file(s). Find them in the repo. Most products put the home page at `src/app/page.tsx` or `src/app/(main)/page.tsx`; other paths map to `src/app/<path>/page.tsx` or similar. Use Glob/Grep liberally.
-2. Do fresh web research. Use WebSearch for:
-   - what landing pages for this specific product category are doing well right now
-   - what headline/hero/CTA patterns are trending for this buyer
-   - any new positioning angles, objections, or proof points worth surfacing
-   - competitor pages that currently rank for this page's intent
-   Pull at least two distinct external sources, not just one. Do not copy verbatim; synthesize.
-3. Decide on ONE substantive change set. Examples (not an exhaustive list, be creative):
-   - rewrite the hero headline / subhead / primary CTA
-   - add a new section (proof, social proof, comparison, FAQ, before/after, live demo, metrics strip)
-   - re-order sections so the strongest argument lands first
-   - replace weak proof with stronger proof from project_config
-   - tighten dense paragraphs, replace walls of text with scannable structure
-   - add internal links to related pages that will boost SEO clustering
-   - improve meta title/description for organic CTR
-4. You are NOT restricted to any particular component library. The repo likely uses `@seo/components` / `@m13v/seo-components` plus local components under `src/components/`. Reuse those when they fit, build inline TSX/JSX when they don't.
-5. Edit the files. Keep changes focused and high-signal; if you find yourself changing 10 files you are probably refactoring, stop.
-6. Run the repo's typecheck / build if one exists under `package.json` scripts and it is cheap. If a quick check fails due to your edit, fix it before committing.
-7. Stage and commit ALL your changes with a single commit:
+# Step 2: Pick success metrics that match the page's job
+
+Two forces are in play, and they are not always aligned:
+
+- **search relevance** rewards depth, breadth, keyword coverage, FAQ blocks, internal links, schema markup, long-form content
+- **conversion** rewards focus, a single primary CTA, fewer exits, hero clarity, trust signals above the fold
+
+They overlap on fundamentals (clear positioning, page speed, headlines that match intent, real proof) but diverge on structure: an FAQ that helps an SEO landing rank can shove a homepage's signup CTA below the fold; a blog post that links out to four related articles is good for clustering and bad for direct conversion.
+
+Pick a **primary** metric and a **secondary** metric weighted by the page's job. Reasonable defaults (override when the page tells you otherwise):
+
+- homepage → primary: conversion clarity & CTA click-through. Secondary: brand keywords + clean meta. SEO is hygiene only here, not a content-depth target. Do NOT bolt on FAQ / comparison / related-posts blocks just because the kit has them.
+- SEO landing → primary: search relevance for the target query (depth, intent match, schema). Secondary: a soft conversion CTA that does not crowd the hero.
+- pricing / feature → primary: conversion. Secondary: light SEO on the relevant keyword.
+- blog post / article → primary: topical depth + ranking. Secondary: email capture or a contextual product link.
+- docs / changelog → primary: clarity for the existing user. SEO and conversion are both downstream.
+
+If you find an idea that helps one metric but hurts the other, name the tradeoff explicitly in your rationale and pick the side aligned with the page's primary metric.
+
+# Step 3: Do fresh research, then decide on ONE change set
+
+Use WebSearch for:
+- pages of this same type (not just "landing pages") that are doing well right now for this category
+- headline / hero / structure patterns trending for this buyer
+- positioning angles, objections, or proof points worth surfacing
+- competitor pages that currently rank for this page's intent (when relevance matters)
+
+Pull at least two distinct external sources. Synthesize, do not copy verbatim.
+
+Then pick ONE substantive change set whose expected impact on the primary metric is highest. Be creative — examples, not a checklist:
+
+- rewrite the hero headline / subhead / primary CTA for sharper positioning
+- add or remove a section so the strongest argument lands first
+- replace weak proof with stronger proof from project_config
+- tighten dense paragraphs into scannable structure (or expand thin sections where depth genuinely serves the page's job)
+- add internal links where they serve the reader, not just for SEO
+- improve meta title/description
+
+You are NOT restricted to any particular component library. The repo likely uses `@seo/components` / `@m13v/seo-components` plus local components under `src/components/`. Reuse them when they genuinely fit the page's job; build inline TSX/JSX when they don't. Reaching for a kit component just because the rest of the site uses it is the wrong reason.
+
+# Step 4: Edit, verify, commit
+
+1. Edit the files. Keep changes focused and high-signal; if you find yourself changing 10 files you are probably refactoring, stop.
+2. Run the repo's typecheck / build if one exists under `package.json` scripts and it is cheap. If a quick check fails due to your edit, fix it before committing.
+3. Stage and commit ALL your changes with a single commit:
 
    ```
    git add -A
@@ -111,16 +140,21 @@ After committing, end your final assistant message with EXACTLY one fenced JSON 
 ```json
 {{
   "status": "committed" | "no_change" | "failed",
+  "page_purpose": "homepage | seo_landing | pricing | feature | comparison | blog | docs | <your-own-label>",
+  "page_job": "one sentence: what is this specific page's job",
+  "primary_metric": "what you optimized for",
+  "secondary_metric": "what you also weighted, lower",
+  "tradeoffs_considered": "any change you rejected because it helped one metric but hurt the other; empty string if none",
   "files_modified": ["path/relative/to/repo", ...],
   "diff_summary": "one-paragraph plain-English summary of what changed and why",
-  "rationale": "the single most important reason you expect this to lift conversions",
+  "rationale": "the single most important reason you expect this change to move the primary metric",
   "web_sources_used": ["url1", "url2", ...],
   "commit_sha": "<short sha or empty>",
-  "notes_for_next_run": "anything you want the next 24h run to know (tests ran, hypotheses to validate, etc.)"
+  "notes_for_next_run": "anything you want the next run to know (tests ran, hypotheses to validate, etc.)"
 }}
 ```
 
-If you genuinely cannot improve the page (e.g. it is already excellent and any change would be noise), set status="no_change" and explain in rationale. Do not ship busywork.
+If you genuinely cannot improve the page (it already does its job well and any change would be noise), set status="no_change" and explain in rationale. Do not ship busywork.
 """
 
 
@@ -155,6 +189,21 @@ def _render_brief_block(brief: dict) -> str:
     else:
         hist = "  (none; this page has not been touched by this pipeline before)"
 
+    sel = brief.get("selection") or {}
+    sel_reason = sel.get("reason") or "highest-traffic page in last 24h"
+    skipped = sel.get("skipped_on_cooldown") or []
+    if skipped:
+        skipped_block = "\n".join(
+            f"  - {s.get('path')}  ({s.get('views_24h')} views, {s.get('reason')})"
+            for s in skipped
+        )
+        rotation_block = (
+            f"Selection: {sel_reason}\n"
+            f"Pages skipped on cooldown:\n{skipped_block}\n"
+        )
+    else:
+        rotation_block = f"Selection: {sel_reason}\n"
+
     cfg_json = json.dumps(brief.get("project_config") or {}, indent=2, ensure_ascii=False)
     return (
         f"Product: {brief.get('product')}\n"
@@ -162,6 +211,8 @@ def _render_brief_block(brief: dict) -> str:
         f"Page path: {brief.get('page_path')}\n"
         f"Live URL: {brief.get('page_url')}\n"
         f"Repo (cwd): {brief.get('repo_path')}\n"
+        f"\n"
+        f"{rotation_block}"
         f"\n"
         f"Traffic + funnel:\n"
         f"  last 24h       : {_fmt_metric(m24)}\n"
