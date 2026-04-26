@@ -16,6 +16,7 @@ scripts/phase_*.py
 scripts/batch_send_dms.py
 scripts/send_batch_dms.sh
 scripts/twitter_compose_dm.py
+scripts/Jungle AI/
 
 # Date-named error/log output files
 2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]
@@ -23,6 +24,7 @@ scripts/twitter_compose_dm.py
 # Claude agent runtime files
 .claude/
 scripts/claude_user_messages_*.md
+scripts/oldCLAUDE.md
 
 # Agents keep recreating skill/SKILL.md — ignore it so auto_commit doesn't commit stale copies
 skill/SKILL.md
@@ -48,3 +50,19 @@ emailbison/*.csv
 *_secret_temp*
 ig_secret_temp.txt
 .mcp.json
+
+# Instagram creator scrape data dumps
+scripts/ig_creators_run/
+
+# scripts/ scratch files (underscore prefix = private/local)
+scripts/_*.sh
+scripts/_*.py
+
+# Local notes and context dumps
+scripts/context/
+
+# macOS metadata
+.DS_Store
+
+# SQLite databases (broaden *.db to also cover *.sqlite)
+*.sqlite
