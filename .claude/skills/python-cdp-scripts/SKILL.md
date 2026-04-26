@@ -1,3 +1,8 @@
+---
+name: python-cdp-scripts
+description: Use when the user says "convert this browser MCP call to python", "automate this with CDP", "stop using LLM tokens for this scrape", "make this a python script", or wants to replace browser-MCP-driven automation with a Python+CDP script that reuses the running MCP browser's session. Zero LLM tokens consumed once written. Per-platform (e.g., `scripts/linkedin_browser.py`).
+---
+
 # Python CDP Browser Scripts
 
 Create Python functions that connect to running MCP browser agents via Chrome DevTools Protocol (CDP) and perform complete browser automation workflows. Replaces Claude browser MCP calls entirely — zero LLM tokens consumed.
