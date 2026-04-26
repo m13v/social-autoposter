@@ -58,7 +58,11 @@ def pick_project(config, platform=None, exclude=None):
         excluded = {n.lower() for n in exclude}
         weighted = [p for p in weighted if p.get("name", "").lower() not in excluded]
 
-    # Filter by platform compatibility — skip projects that have no topics for this platform
+    # Filter by explicit platforms_disabled deny list (config.json per-project field)
+    if platform:
+        weighted = [p for p in weighted if platform not in (p.get("platforms_disabled") or [])]
+
+    # Filter by platform compatibility, skip projects that have no topics for this platform
     platform_topic_key = {
         "twitter": "twitter_topics",
         "linkedin": "linkedin_topics",
@@ -116,6 +120,8 @@ def main():
     if args.distribution:
         projects = config.get("projects", [])
         weighted = [p for p in projects if p.get("weight", 0) > 0]
+        if args.platform:
+            weighted = [p for p in weighted if args.platform not in (p.get("platforms_disabled") or [])]
         total_weight = sum(p.get("weight", 0) for p in weighted)
         counts = get_posts_today_by_project(args.platform)
         lines = []
@@ -129,6 +135,8 @@ def main():
     if args.show_weights:
         projects = config.get("projects", [])
         weighted = [p for p in projects if p.get("weight", 0) > 0]
+        if args.platform:
+            weighted = [p for p in weighted if args.platform not in (p.get("platforms_disabled") or [])]
         total_weight = sum(p.get("weight", 0) for p in weighted)
         counts = get_posts_today_by_project(args.platform)
         total_posts = sum(counts.values()) or 1
