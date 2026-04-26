@@ -1,0 +1,321 @@
+Unknown Speaker  0:01  
+Um, I'll just put in the chat jungle AI com,
+
+David Glass  0:06  
+okay, okay, cool. Yeah, that's, that's pretty good start. And, yeah, give me a like, a context in terms of like, what they what do you like publicly, share like in your marketing materials, what words that we can replicate?
+
+David Glass  0:28  
+Yeah, so we jungle works great for, like, exam preparation, so we know things around, like, question quality. Like, we have the best question quality among all the competitors, particularly in terms of, like, you could break that down in terms of, like, how difficult the questions are. It's hard to make questions difficult, sometimes, a lot of a lot of times with AI difficult enough to, like, meet the level that the professor would have. Accuracy is, like, less false.
+
+Matthew Diakonov  1:05  
+So it comes up mind if I ask you like questions along the way, if I don't understand something like it comes up with the questions along the way. Like, when you give it like a subject, or what's the input in order for it to come up with the right questions?
+
+David Glass  1:19  
+Yeah, so you input your lecture slides or your textbook or any document, really, but those are the two most common. And it'll, it'll create, like, multiple choice questions for you. For example, nice to study with. Yeah. So best question quality is one of them, a lot of it is also on speed. So like focusing on, you know, going from spending an hour or two hours making 100 flashcards to doing that in 60 seconds, this ability to go from like passive to active. So instead of just like reading your slides now, like, it's easier than ever to have infinite questions, or you don't have to be prisoner to like, how many practice tests your professor gives you. You can have infinite
+
+Matthew Diakonov  2:15  
+in a way, is it like? Is it like trying to engage you? Like, along the way with this, like flashcards and questions. Or, like, once I upload it, like a PDF materials to it's like in Slides, it starts to just asking me questions. Or is it like creating, like a learning journey for me?
+
+Matthew Diakonov  2:33  
+Like, yeah. I mean, can you see my screen? Yeah, probably easiest.
+
+David Glass  2:48  
+So we'll study, and then he gives us questions, and as we answer the questions, we have a tree that grows and I and get stuff wrong, we can click explain my mistake, and it's going to go and reference our document, explain like, why our thing was wrong. It also just follow up questions, and you could basically just have a AI chat with it here. And you could also view source to see where this question came from. Clip that it broke here, but it would put it up in like, a PDF viewer kind of thing, yeah, and we have like streaks, and it's all gamified and stuff,
+
+Matthew Diakonov  3:35  
+and there's you get, like, some points, right? You chose progress. Yeah. And so like, every time you kind of, like, update new lecture and you want to, like, helps you to like better memorize and like, prepare for the questions that the teacher might ask, like during the exam. Or is it like, is the user supposed to use it like every day or just to prepare for the exams. Or like, either way, there's
+
+David Glass  4:07  
+maybe like, two general types of students here. There's the students that already study most every day, or like, have consistent studying habits. We call these like academic Cardos and people who academic weapon things like that. And for these people, they're using it every day to be like every night after class, they go and upload their lecture slides from the night and do some questions there, or they just have a regular routine of spending 20 minutes a day on it. And that's most effective. Most people aren't like that, though. Obviously, most people are procrastinators terms of their studying, or Crammers, as you could call it. And for them, is presents, like a really world class, like cramming tool of like, all right, it's the day before the exam, or two days before the exam, you can take the 40 documents that your professor gave you and put them in, and now you have like, hundreds of practices able to go through stuff instead of just rereading those slides and stuff. So either way, it's like, either it's making it more convenient to have, like, good, consistent habits, or it's kind of like an elite cramming tool in a way, and we it's primarily so college or higher ed students. It works best for information based stuff. So think science, health, history, literature, basically non computational things. But if it's doing math things, it can still be helpful for like math concepts and stuff. The biggest power users have been health students, so medical students, dental students, nursing students, pharmacy students, PA students, veterinary students, those kind of things, pre med biology.
+
+David Glass  6:00  
+A lot of things to memorize, I guess. Yeah, interesting.
+
+Matthew Diakonov  6:07  
+And does it give you like, like, lifetime progress or like gamification? Or is the gamification tied into like, the specific like class?
+
+David Glass  6:21  
+Yeah, so the gamification for that class is through the tree, and the gamification beyond that is you traverse along this river. When you make it to the end, you unlock, like a different tree that you that you'll use for future sessions. Then on top of that, we have, like, weekly leaderboard leagues. If you use Duolingo, it's similar to that, where you get put in a league 30 people, and if you end up in like the top, like 15 or so, then you'll move up a league from like sprout league to Fern league to like banana League, through all the types of leaves.
+
+David Glass  6:59  
+Wow, do people engage with it? Like, do you see metric, is there like a social component to that? Like, can can users talk to each other? No, no, I know. Cool. Can you tell me about like, how you differentiate against like, competitors,
+
+David Glass  7:23  
+yeah, so it's the most visual platform we have those trees. As you saw, no other platform has some, like, giant visual showing the gamification. Maybe they just have, like, a point ring or something. So it's that, and then the thing river on the homepage got the gamified leaderboard. Leagues also compete on the best stats on question quality. We've done some cool evals to prove this.
+
+David Glass  7:58  
+Did you come up? Sorry, did you come up with this evolves? Or, how does it work like? How do you know it's like the best?
+
+Matthew Diakonov  8:08  
+Yeah, let me see if I can find this slide showing this
+
+David Glass  8:34  
+do cool. Do you see this? Yes, we made this. As you can see, we have factual correctness, how well it sticks to the source,
+
+David Glass  8:59  
+the clarity around how confusing the question or answers might be, how good the incorrect answers are, answer choices in terms of how are they things that are potentially usable or that is obviously wrong, or is there good mix of difficult and easy questions, and how many different types of Questions are there? And yeah, we have our AI engineer, darshal, works on the question quality, put together these these tests in the eval system that does this,
+
+David Glass  9:32  
+is it like all evaluated by AI or
+
+David Glass  9:35  
+by human? Is by AI? It basically took a set of three documents, and each and for each competitor, we like generated questions from that same document, and then it scored it on the different things. I didn't, I didn't like create this, so I honestly can't speak super ton to like how the test worked. But yeah,
+
+David Glass  9:59  
+do you share this? Is this like PowerPoint shareable? Like public is not
+
+David Glass  10:06  
+shareable, but the slide is and, like, we actually have a we made that was like a site thing we made for that question, quality thing. Oh, here it is. Actually,
+
+David Glass  10:26  
+yeah so we made an internal like in our admin view we have this question, quality thing and this already took that from, but we haven't. I know we could, we did this pretty recently, but I think it'd be cool to add into the landing page or have a have a blog or something for this. PS, you can compare with certain one or something. You could even look at the exact question that it compared it on and see
+
+David Glass  10:59  
+how it scored each question
+
+David Glass  11:01  
+between competitors and stuff. Does it work all the time? Or, like, Was it like a one off? No, no. I mean, this is like a hard coded thing on, like, not hard coded, but it was on, like, a set of three documents here, it
+
+David Glass  11:15  
+isn't like, it's not going to compare it for every document, or for any document you put, I see, okay, cool, and, yeah, and I remember you said, like you engaged with a lot of like
+
+Matthew Diakonov  11:35  
+marketing channels, like, what,
+
+Matthew Diakonov  11:37  
+how do You What do you post? What do you advertise? Yeah, so, well actually, why do I keep on sharing
+
+David Glass  11:55  
+two things, Google ads and social media. So across social media, we have content creators. You can see right now we have 13 content creators or and you can see like, how many views they got each week, in a sense, and yeah, so can look at all of their content as well, scrape that to see, like, what, what they're talking about and stuff potentially.
+
+David Glass  12:34  
+Yeah, I don't know what your question is, but yeah, essentially, TikTok, Instagram and Google ads are the channels. I guess it's like very creative content they're trying to like, fit jungle into their like story, right?
+
+Matthew Diakonov  12:52  
+Or or do you create them like a brief like instruction? What should you 10 videos a week, or jungle, so they and it's ideas, and they give us, and they
+
+David Glass  13:11  
+put their draft in a Slack channel. We give them feedback on the video, and they post a video
+
+David Glass  13:16  
+cool and about the draft, like, so, and I get those drafts.
+
+Matthew Diakonov  13:24  
+I mean, I don't know why you need the draft, because they're all just, like, you can just have the real things. They're just posted
+
+Matthew Diakonov  13:31  
+here, yeah. I mean, like, I need to
+
+David Glass  13:32  
+transcribe it. I need to,
+
+David Glass  13:35  
+like, scrape it, yeah. I mean,
+
+Matthew Diakonov  13:41  
+the drafts like aren't the actual video, though, or
+
+David Glass  13:46  
+because I mostly care about the text, all right, I guess.
+
+Matthew Diakonov  13:53  
+How does that help you, though? Or how is it better to have the drafts than the real ones? I mean, the real ones are good, but just I need to part scrape them and transcribe them, yeah. And I mean, also it's fine as well, like, if it's, if it's seems like it's easier, then I'll do that.
+
+Matthew Diakonov  14:16  
+And can you show me the list of their profiles again, yeah. I mean, we also have a like Slack
+
+Matthew Diakonov  14:27  
+thing here where, like for each creator, they'll go and put the videos in. I don't know if this
+
+David Glass  14:32  
+is what you're more so listen, oh, that that would be easier to these are the final versions
+
+Matthew Diakonov  14:40  
+of the videos, but, but if it's easier, probably maybe it's good enough.
+
+David Glass  14:47  
+So they have the text, what they're going to talk about
+
+Matthew Diakonov  14:51  
+inside, not only the videos themselves, but they also, no, they don't, they don't send the script. It's just the video. Oh, I see. Okay. And on their profiles, do they advertise other products, or on the jungle this creator?
+
+Matthew Diakonov  15:09  
+So it's like exclusive creator, so I can just
+
+Matthew Diakonov  15:11  
+take all of their content, yeah? I mean, yeah.
+
+David Glass  15:16  
+Mostly, can you then go back to the list so I can have their handles. I didn't I'll take a picture just real quick.
+
+David Glass  15:38  
+Okay, uh huh, yeah, perfect, done.
+
+David Glass  15:47  
+And there's another, these are all archived creators, but these used to be creators for us too. Okay, yeah, cool, done. So TIKTOK and Instagram, nice and so did you try other channels, or you just, like, focused,
+
+Matthew Diakonov  16:09  
+just focus, like, on Instagram and Tik Tok, and that proved to work really well. Doing it's best. It's like,
+
+David Glass  16:19  
+we've done other channels, I mean, other strategies on socials as well, where we used to do influencer videos, but this what we've moved to the past, like year and a half. And, yeah, Google Ads too. So the combination of those two things, plus word of mouth, plg, kind of things, yeah, those have worked. So it's been doing that. We've experienced it with some other things. We've done stuff on YouTube, we've done Instagram ads, we've done TIKTOK ads, we've done a campus ambassador program.
+
+David Glass  16:57  
+Yeah, none of those things have worked. The thing that worked is UTS
+
+Matthew Diakonov  17:08  
+content and, and Google ads, right? Yeah, and, and making a good product that is shareable,
+
+Matthew Diakonov  17:25  
+so that if you see me studying with it next to you, or like, what's what do you start? Yeah, yeah, but it's best in class referrals, like from your friends and and what about like this Google ads? Is there, like, some context that worth sharing with me? Like to like, Well, I would be interested, like, in
+
+Matthew Diakonov  17:52  
+keywords, and I would be interested in your campaigns, like content of the campaigns. Yeah, so we used to do a lot of stuff on Google ads that was working well, it kind of degraded over time, and then I've been trying
+
+David Glass  18:08  
+to revive it recently, so I can show you, as I think I mentioned this yesterday. I
+
+David Glass  18:30  
+you can see, I mean, this one term was doing well, so I just changed a bunch of these to do to kind of based off of based off of that yesterday. It's a question bank generator, practice question generator, Best I Ever med school studying practices generator, as we
+
+David Glass  18:47  
+saw, this is working, and I kind of just changed all these, like, Yes Two days ago.
+
+David Glass  18:56  
+Yeah. And the content, I'm not sure the I would need to find a way of just like, what are all of the keywords across all campaigns we've used over time that have worked? I feel like that'd be a cool thing to share. I'm not sure I can like efficiently. Just click through like campaigns here to show you, if you know a way to like, export just keywords across,
+
+David Glass  19:21  
+like Active and Inactive campaigns we've done, maybe that would be, I think that could be pretty cool. I don't know, off top of my head. And so you lead those campaigns to your
+
+Matthew Diakonov  19:38  
+homepage you only have homepage on your website, right? Do you have other pages? We lose that landing page I sent you. We have, yeah, we have that.
+
+David Glass  19:53  
+We have, like, different language versions. We have Seb a few blogs
+
+Matthew Diakonov  20:03  
+like, is there a site map? I tried to go to site map, but it doesn't seem to render much. I see, like a footer with use cases, company blog, okay, I see blog, yeah, okay.
+
+Matthew Diakonov  20:18  
+See if you pages here. Okay, yeah, sounds good. Sounds good.
+
+David Glass  20:30  
+Hey, let me pull up another thing that might be useful. I why? Just
+
+David Glass  20:59  
+so this is just a deck we have for onboarding new creators. But what is useful here, I think, is we have some stuff on teaching them about the product and about making content for us. So one thing is, like, we might label every student, kind of as an optimizer, PROCRASTINATOR, kind of what I told you before, like this, is studying harder, who's already studying every day and jungles fitting into that? Or is it someone who's procrastinating and cramming? We talk about here, I just list just some pain points and values, for example,
+
+David Glass  21:33  
+scoring or
+
+David Glass  21:35  
+falling asleep. Why is this time, like I said, what the professor gives you pattern matching instead of understanding, for example, this is you asked me what stands out from competitors. This is a thing as well, that every time you revisit a question again, like if you go and study the whole deck once, then you come back again and say it tomorrow, we automatically reword the questions for you so that they're slightly different, even if it's so that you can't just recognize like, oh, it started with this word like. So that's the right answer,
+
+David Glass  22:09  
+procrastination, uncertainty, yeah, perfect. So is it like more or less public material that I can like directly? Cool, yeah, please as well. Let me send it in Slack, I
+
+David Glass  22:39  
+guess. Yeah, yeah. I mean, I think it's just those like three slides from there that are probably useful, just cherry picking. And then I could probably add you to the final way to add you to the admin view for the question, quality thing, if that's useful? Yeah, I'm sorry. I'm just trying to, like, spill
+
+David Glass  23:24  
+whatever random info is helpful. So feel free to ask other questions if there's more, I guess, like, among this, like, if you consider that three main channels, like referrals,
+
+Matthew Diakonov  23:39  
+influencers and Google ads. How much percentage is which one?
+
+Matthew Diakonov  23:50  
+Well, I can give you a real time answer here. Let's see right now. I
+
+Matthew Diakonov  24:07  
+So third of people from TIKTOK, 24% from word of mouth, 20% from Google,
+
+David Glass  24:15  
+another 11% from Instagram, then from teacher or YouTube,
+
+David Glass  24:20  
+Teacher app store.
+
+David Glass  24:27  
+It's a desktop app and iPhone
+
+David Glass  24:30  
+app, right?
+
+Matthew Diakonov  24:32  
+Yeah, I mean, it's a website, desktop app and mobile app.
+
+David Glass  24:40  
+And Google Play and iOS.
+
+David Glass  24:57  
+And how do you track attribution to
+
+Matthew Diakonov  25:02  
+influencer, you don't track it. You just pay them per content, right? Yeah, we pay them per content, and we have a like, that's what we do. Such a tight process on the feedback so that we can control the quality,
+
+David Glass  25:17  
+and we find out how many are coming just from the onboarding, we ask people where they came from. Just ask,
+
+David Glass  25:27  
+well, the influencer name, right? No, no, we don't. We just ask, like, where do you find your people aren't going to know which Have you had experience. So we look at that, then we see, like, if our numbers from Socials are going up or down each week, and sign ups from Socials, and then change or influence your strategy from that, how many signups do you have at the moment, like a weekly,
+
+Matthew Diakonov  25:58  
+I mean, from Socials, this was like 1133 last week. But overall, I
+
+Matthew Diakonov  26:24  
+Yeah, so, like, 7000 signups a week. Nice, okay, but it's freemium, right? And so the conversion
+
+Matthew Diakonov  26:38  
+to like paid is like, like,
+
+Matthew Diakonov  26:42  
+1% I don't know, like, yeah. So, I mean, if you look at 7000 if we go to,
+
+David Glass  26:56  
+yeah. So, like two and a half percent cool and
+
+Matthew Diakonov  27:14  
+and Have you had experience tracking attribution by UTM tax for
+
+Matthew Diakonov  27:21  
+the source of traffic, for source of synapse, yeah, we had, especially when we did, we did like, five months of
+
+David Glass  27:32  
+YouTube stuff, and we like, that was all UTM tracking. Yeah.
+
+Matthew Diakonov  27:48  
+Yeah, yeah. So can you show me and maybe, yeah, an example, if you Yeah, I'm trying to look for it because I'm like thinking, because we haven't done this in a while with UTM stuff,
+
+David Glass  28:05  
+Maybe, maybe one of these charts, they'll use it. I Yeah, I haven't used this chart since. I
+
+Matthew Diakonov  28:59  
+that? Yeah, I my Computer also at 3% hours
+
+Matthew Diakonov  29:43  
+Yeah, if we get rid of none here,
+
+David Glass  29:47  
+then yeah, I mean, I guess you can see the UTM source. If
+
+Matthew Diakonov  30:01  
+uh, you're looking for it, but yeah, yeah, good, okay. And so roughly, in your experience, you paid like a $1 per sign up, like on average, right across your channels. Or this
+
+Matthew Diakonov  30:18  
+is, like, cool, yeah. Like, okay, yeah, okay, cool, yeah. So let's, let's take it from there.
+
+Matthew Diakonov  30:34  
+Yeah, send me. Send me the thing that you wanted to send,
+
+David Glass  30:41  
+some admin access to some questions or something like that. Yeah, and yeah, I'll send and I can look to see if there's any briefs we've used before that could have this other info that's useful, and you can let me know how it goes from there. And if you need other stuff, just let me know.
+
+David Glass  31:05  
+Okay, okay, cool, yeah, let's see.
+
+David Glass  31:12  
+Yeah, have a have a good weekend. You too.
+
+Unknown Speaker  31:16  
+All right, you i.
+
