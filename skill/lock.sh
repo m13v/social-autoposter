@@ -31,9 +31,13 @@ acquire_lock() {
   local lock_dir="/tmp/social-autoposter-${name}.lock"
   local waited=0
 
-  # Platform-browser locks get more aggressive handling: 10-min hold ceiling
-  # (kill holder + sweep orphan Chrome on the profile). Prevents stuck
-  # pipelines and leftover Chromes from blocking the platform indefinitely.
+  # Platform-browser locks still get the orphan-Chrome sweep on acquire (after
+  # the lock is taken). Peers do NOT force-kill each other: a long-running
+  # holder is the watchdog's responsibility (per-script caps in
+  # scripts/watchdog_hung_runs.py), not a peer pipeline's. Prior versions
+  # killed the holder's whole process group at lock_age > 600s and clobbered
+  # unrelated steps (e.g. stats.sh Step 2 was SIGTERMed mid-API-call by a
+  # waiting dm-replies-reddit on 2026-04-25).
   local is_browser_lock=false
   case "$name" in
     reddit-browser|linkedin-browser|twitter-browser) is_browser_lock=true ;;
@@ -53,39 +57,15 @@ acquire_lock() {
       fi
     fi
 
-    # Safety net: remove any lock older than 3 hours regardless
+    # Safety net: remove any lock older than 3 hours regardless. Watchdog's
+    # per-script caps (45m default, 120m for stats_reddit/github-engage) will
+    # SIGTERM a hung holder long before this fires; the bash trap then frees
+    # the lock. This 3h ceiling only kicks in if a holder dies uncleanly
+    # without the trap running and somehow keeps a live pid (rare).
     if [ -d "$lock_dir" ]; then
       local lock_age
       lock_age=$(( $(date +%s) - $(stat_mtime "$lock_dir") ))
       if [ "$lock_age" -gt 10800 ]; then
-        should_remove=true
-      fi
-      # Platform-browser locks: force-kill holder after 10 min regardless of
-      # liveness. A run that hasn't released the lock in 10 minutes is either
-      # stuck on a hung MCP call or has orphaned its Chrome; either way the
-      # right move is to kick it out so the next pipeline can proceed.
-      if $is_browser_lock && [ "$lock_age" -gt 600 ] && ! $should_remove; then
-        if [ -f "$lock_dir/pid" ]; then
-          local stuck_pid
-          stuck_pid=$(cat "$lock_dir/pid" 2>/dev/null || echo "")
-          if [ -n "$stuck_pid" ] && kill -0 "$stuck_pid" 2>/dev/null; then
-            echo "Force-killing $name holder (PID $stuck_pid, held $((lock_age/60))min)"
-            # Kill the whole process tree: shell + claude + npx MCP + Chrome.
-            # Bare `kill -TERM $pid` only kills the shell; its Claude/MCP
-            # children get reparented to init and keep holding the MCP-hook
-            # lock for minutes, blocking the next pipeline. Target the
-            # process group (-pgid) plus any direct children via pkill -P.
-            local stuck_pgid
-            stuck_pgid=$(ps -o pgid= -p "$stuck_pid" 2>/dev/null | tr -d ' ')
-            [ -n "$stuck_pgid" ] && kill -TERM "-$stuck_pgid" 2>/dev/null
-            pkill -TERM -P "$stuck_pid" 2>/dev/null
-            kill -TERM "$stuck_pid" 2>/dev/null
-            sleep 2
-            [ -n "$stuck_pgid" ] && kill -KILL "-$stuck_pgid" 2>/dev/null
-            pkill -KILL -P "$stuck_pid" 2>/dev/null
-            kill -KILL "$stuck_pid" 2>/dev/null
-          fi
-        fi
         should_remove=true
       fi
     fi
