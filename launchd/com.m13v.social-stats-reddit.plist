@@ -28,25 +28,25 @@
 			<key>Hour</key>
 			<integer>0</integer>
 			<key>Minute</key>
-			<integer>13</integer>
+			<integer>33</integer>
 		</dict>
 		<dict>
 			<key>Hour</key>
 			<integer>6</integer>
 			<key>Minute</key>
-			<integer>13</integer>
+			<integer>33</integer>
 		</dict>
 		<dict>
 			<key>Hour</key>
 			<integer>12</integer>
 			<key>Minute</key>
-			<integer>13</integer>
+			<integer>33</integer>
 		</dict>
 		<dict>
 			<key>Hour</key>
 			<integer>18</integer>
 			<key>Minute</key>
-			<integer>13</integer>
+			<integer>33</integer>
 		</dict>
 	</array>
 </dict>
