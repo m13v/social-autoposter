@@ -12,7 +12,7 @@ set -uo pipefail
 
 source "$(dirname "$0")/lock.sh"
 acquire_lock "twitter-browser" 3600
-acquire_lock "link-edit-twitter" 2700
+acquire_lock "link-edit-twitter" 5400
 
 # shellcheck source=/dev/null
 [ -f "$HOME/social-autoposter/.env" ] && source "$HOME/social-autoposter/.env"
@@ -164,7 +164,7 @@ COMMITMENT GUARDRAILS (never violate):
 - NEVER make time-bound promises.
 PROMPT_EOF
 
-gtimeout 2700 "$REPO_DIR/scripts/run_claude.sh" "link-edit-twitter" \
+gtimeout 5400 "$REPO_DIR/scripts/run_claude.sh" "link-edit-twitter" \
     --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" \
     -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" \
     || log "WARNING: Twitter link-edit claude exited with code $?"
