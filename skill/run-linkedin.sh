@@ -12,6 +12,7 @@ SKILL_FILE="$REPO_DIR/SKILL.md"
 LOG_DIR="$REPO_DIR/skill/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/run-linkedin-$(date +%Y-%m-%d_%H%M%S).log"
+RUN_START_EPOCH=$(date +%s)
 
 echo "=== LinkedIn Post Run: $(date) ===" | tee "$LOG_FILE"
 
@@ -39,6 +40,7 @@ TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform linkedin 2
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block linkedin posting)
 
+set +e
 "$REPO_DIR/scripts/run_claude.sh" "run-linkedin" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "You are the Social Autoposter.
 
 Read $SKILL_FILE for the full workflow, content rules, and platform details.
@@ -107,6 +109,19 @@ CRITICAL: Reply in the SAME LANGUAGE as the post. Match the language exactly.
 CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
 CRITICAL: Use ONLY mcp__linkedin-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
 CRITICAL: If a browser tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). If still blocked, skip and stop." 2>&1 | tee -a "$LOG_FILE"
+RC=${PIPESTATUS[0]}
+set -e
+
+# --- Persist to run_monitor.log so Job History picks up LinkedIn Post rows ---
+# Count posts inserted during this run via NOW() arithmetic to stay timezone-safe
+# regardless of the psql client session tz.
+ELAPSED=$(( $(date +%s) - RUN_START_EPOCH ))
+WINDOW_SEC=$(( ELAPSED + 60 ))
+POSTED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE platform='linkedin' AND posted_at >= NOW() - interval '$WINDOW_SEC seconds'" 2>/dev/null | tr -d '[:space:]' || true)
+[ -z "$POSTED" ] && POSTED=0
+FAILED=0
+if [ "$RC" -ne 0 ] && [ "$POSTED" = "0" ]; then FAILED=1; fi
+python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted "$POSTED" --skipped 0 --failed "$FAILED" --cost 0 --elapsed "$ELAPSED" || true
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 find "$LOG_DIR" -name "run-linkedin-*.log" -mtime +7 -delete 2>/dev/null || true
