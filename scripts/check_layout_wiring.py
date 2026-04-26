@@ -48,6 +48,29 @@ STICKY_ASIDE_TAGS = {
     "GuideChat",
 }
 
+# React context providers that wrap their children in a Context.Provider but
+# render no DOM element. From the browser's POV the children are direct
+# siblings of whatever wraps the provider in JSX. Treat these as DOM-transparent
+# when walking <body>: entering / exiting them must NOT change the depth used
+# to detect "direct child of body". Add new entries here if a real-world layout
+# trips the check by nesting a sticky aside inside one of them.
+#
+# Why this list is conservative: misclassifying a tag that DOES emit DOM
+# (e.g. a <Header> component that wraps in <header>) as transparent would
+# cause false negatives (missed bugs). Misclassifying a true context provider
+# as opaque only causes false positives we already get today, so the bar to
+# add a tag is "this provider renders no DOM element of its own".
+DOM_TRANSPARENT_TAGS = {
+    "PostHogProvider",
+    "PHProvider",
+    "ThemeProvider",
+    "SeoAnalyticsProvider",
+    "FullSiteAnalytics",
+    "AssistantRuntimeProvider",
+    "QueryClientProvider",
+    "SessionProvider",
+}
+
 LAYOUT_CANDIDATES = (
     "src/app/layout.tsx",
     "src/app/layout.jsx",
@@ -124,6 +147,7 @@ def walk_body(src: str) -> tuple[list[str], str | None]:
             return (stranded, None)
 
         is_void = self_close or tag.lower() in VOID_HTML_TAGS
+        is_transparent = tag in DOM_TRANSPARENT_TAGS
 
         if (
             not closing
@@ -132,9 +156,9 @@ def walk_body(src: str) -> tuple[list[str], str | None]:
         ):
             stranded.append(tag)
 
-        if not closing and not is_void:
+        if not closing and not is_void and not is_transparent:
             depth += 1
-        elif closing:
+        elif closing and not is_transparent:
             depth = max(0, depth - 1)
 
         i = m.end()
