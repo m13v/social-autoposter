@@ -210,12 +210,30 @@ function scheduleFromUnit(xml) {
     }
     if (!entries || !entries.length) return { intervalSecs: null, kind: null };
     const dayMins = [];
+    const weeklyMins = [];
     let minuteOnlyCount = 0;
     for (const body of entries) {
       const h = body.match(/<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/);
       const m = body.match(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/);
-      if (h) dayMins.push(parseInt(h[1], 10) * 60 + (m ? parseInt(m[1], 10) : 0));
-      else if (m) minuteOnlyCount++;
+      const w = body.match(/<key>Weekday<\/key>\s*<integer>(\d+)<\/integer>/);
+      if (h && w) {
+        const wd = parseInt(w[1], 10) % 7;
+        weeklyMins.push(wd * 1440 + parseInt(h[1], 10) * 60 + (m ? parseInt(m[1], 10) : 0));
+      } else if (h) {
+        dayMins.push(parseInt(h[1], 10) * 60 + (m ? parseInt(m[1], 10) : 0));
+      } else if (m) {
+        minuteOnlyCount++;
+      }
+    }
+    if (weeklyMins.length === 1) return { intervalSecs: 604800, kind: 'calendar' };
+    if (weeklyMins.length > 1) {
+      weeklyMins.sort((a, b) => a - b);
+      let minGap = Infinity;
+      for (let i = 1; i < weeklyMins.length; i++) {
+        minGap = Math.min(minGap, weeklyMins[i] - weeklyMins[i - 1]);
+      }
+      minGap = Math.min(minGap, 10080 - weeklyMins[weeklyMins.length - 1] + weeklyMins[0]);
+      return { intervalSecs: minGap * 60, kind: 'calendar' };
     }
     if (minuteOnlyCount > 0 && dayMins.length === 0) {
       return { intervalSecs: Math.round(3600 / minuteOnlyCount), kind: 'calendar' };
@@ -263,15 +281,26 @@ function nextRunFromUnit(xml) {
     for (const body of entries) {
       const h = body.match(/<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/);
       const m = body.match(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/);
-      if (h) hhmms.push({ hour: parseInt(h[1], 10), minute: m ? parseInt(m[1], 10) : 0 });
+      const w = body.match(/<key>Weekday<\/key>\s*<integer>(\d+)<\/integer>/);
+      if (h) hhmms.push({
+        hour: parseInt(h[1], 10),
+        minute: m ? parseInt(m[1], 10) : 0,
+        weekday: w ? (parseInt(w[1], 10) % 7) : null,
+      });
     }
     if (!hhmms.length) return null;
     const now = new Date();
     let best = null;
-    for (const { hour, minute } of hhmms) {
-      const today = new Date(now);
-      today.setHours(hour, minute, 0, 0);
-      const cand = today > now ? today : new Date(today.getTime() + 86400000);
+    for (const { hour, minute, weekday } of hhmms) {
+      const cand = new Date(now);
+      cand.setHours(hour, minute, 0, 0);
+      if (weekday != null) {
+        let dayDelta = (weekday - cand.getDay() + 7) % 7;
+        if (dayDelta === 0 && cand <= now) dayDelta = 7;
+        cand.setDate(cand.getDate() + dayDelta);
+      } else if (cand <= now) {
+        cand.setDate(cand.getDate() + 1);
+      }
       if (!best || cand < best) best = cand;
     }
     return best;
