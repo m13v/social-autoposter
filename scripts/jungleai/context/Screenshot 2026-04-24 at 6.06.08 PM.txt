@@ -1,0 +1,65 @@
+Source: Screenshot 2026-04-24 at 6.06.08 PM.png
+URL bar: app.jungleai.com  (Jungle admin dashboard, "Quality Comparison" view, "Question Comparison" subtab)
+
+Top header (right side):
+- Share Jungle with a friend
+- David (user menu)
+
+Left sidebar (admin nav, same as previous screenshot):
+- Admin
+  - Dark mode
+  - Users
+  - Apple Subscription
+  - Google Subscription
+- CREATOR PROGRAM
+  - creators
+  - leaderboard
+  - schools
+- TOOLS
+  - cancellations
+  - Judge Alignment
+  - Holdouts
+  - Rapid experiments
+- (selected) Quality Comparison
+
+Main panel:
+
+Heading: Question Quality Comparison
+Subheading: Compare Jungle and competitors at the question level. A full set analysis across all documents, plus document-by-document quantitative quality detail.
+
+Tabs across top of panel:
+- Overall Analysis
+- Score Breakdown
+- Question Comparison  (active)
+
+Document selector (with two dropdowns):
+  CHOOSE A DOCUMENT
+  Buoyancy (Khan Academy YT video)         (left dropdown)
+  COMPARE WITH
+  Quizlet                                  (right dropdown)
+
+Note line: "Browse questions side by side. Use the AI to see the complete rationale Jungle uses to change the right answer. Correct answers are bolded."
+
+Two side-by-side question cards:
+
+LEFT card (header colored: JUNGLE  91.7  /  Quizlet  ~75)
+  Question: "What is the magnitude of the normal/buoyant force acting on a submerged object?"
+  Multiple-choice options (radio list):
+    - The weight of the displaced fluid
+    - The pressure on the object from the surrounding fluid
+    - The total weight of the submerged object
+    - The total weight of the surrounding fluid
+  Rationale / metric row at bottom:
+    100  /  100  /  100  /  100  (per-criterion scores, exact labels not legible)
+
+RIGHT card (header colored similarly: JUNGLE  /  Quizlet 75)
+  Question: "What must be true for a floating object to remain stable in a fluid?"
+  Multiple-choice options (radio list, 4 options, exact wording partially legible):
+    - The weight of the object equals the weight of the displaced fluid
+    - The buoyant force equals the weight of the object
+    - (third option ...)
+    - (fourth option ...)
+  Rationale / metric row at bottom:
+    100  /  67  /  100  /  100  (per-criterion scores)
+
+Pagination at bottom of question comparison area: "1 / 10" with prev/next arrows.
