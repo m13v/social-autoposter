@@ -129,7 +129,8 @@ def _hogql(api_key, project_id, query, timeout=60):
     raise RuntimeError(f"HogQL failed: {last_err}")
 
 
-def _pick_top_path(api_key, project_id, domain):
+def _pick_top_paths(api_key, project_id, domain, limit=10):
+    """Return ranked [(path, views), ...] highest-traffic paths over last 24h."""
     q = (
         "SELECT properties.$pathname AS path, count() AS n "
         "FROM events "
@@ -137,14 +138,42 @@ def _pick_top_path(api_key, project_id, domain):
         f"AND properties.$host = '{domain}' "
         "AND timestamp >= now() - interval 24 hour "
         "AND properties.$pathname IS NOT NULL "
-        "GROUP BY path ORDER BY n DESC LIMIT 1"
+        f"GROUP BY path ORDER BY n DESC LIMIT {int(limit)}"
     )
     rows = _hogql(api_key, project_id, q)
-    if not rows:
-        return None, 0
-    path = rows[0][0] or "/"
-    views = int(rows[0][1] or 0)
-    return path, views
+    out = []
+    for r in rows or []:
+        p = r[0] or "/"
+        n = int(r[1] or 0)
+        out.append((p, n))
+    return out
+
+
+def _recent_improved_paths(product, cooldown_days=3):
+    """Paths attempted (any status) for this product within the cooldown window.
+
+    We dedupe based on the same `seo_page_improvements` table that
+    `improve_page.py` writes to, so the cooldown updates automatically after
+    every run with no extra bookkeeping. We count every attempt (including
+    `no_change`) so a page that flat-lined yesterday still yields the floor
+    to a different page today.
+    """
+    try:
+        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT DISTINCT page_path FROM seo_page_improvements "
+            "WHERE product = %s "
+            f"AND created_at >= NOW() - INTERVAL '{int(cooldown_days)} days'",
+            (product,),
+        )
+        paths = {r[0] for r in cur.fetchall() if r and r[0]}
+        cur.close()
+        conn.close()
+        return paths
+    except Exception as e:
+        print(f"  cooldown lookup failed (continuing without rotation): {e}", file=sys.stderr)
+        return set()
 
 
 def _metric_counts_for_path(api_key, project_id, domain, path, days):
@@ -246,7 +275,7 @@ def _build_metrics(api_key, project_id, domain, path, client_slug):
     return metrics
 
 
-def build_brief(product):
+def build_brief(product, cooldown_days=3, candidate_limit=10):
     cfg = _load_config()
     proj = _find_project(cfg, product)
     if not proj:
@@ -272,9 +301,41 @@ def build_brief(product):
     if not api_key:
         raise SystemExit("ERROR: PostHog API key not available (set POSTHOG_PERSONAL_API_KEY or keychain)")
 
-    path, views_24h = _pick_top_path(api_key, project_id, domain)
-    if not path or views_24h <= 0:
+    candidates = _pick_top_paths(api_key, project_id, domain, limit=candidate_limit)
+    if not candidates:
         print(f"SKIP: no pageviews in last 24h for {domain}", file=sys.stderr)
+        sys.exit(2)
+
+    # Rotation: skip pages we've already touched in the cooldown window.
+    # Fall through to the next candidate. If everything is on cooldown,
+    # take the top page anyway so the pipeline never goes dark.
+    on_cooldown = _recent_improved_paths(product, cooldown_days=cooldown_days)
+    skipped = []
+    chosen = None
+    for p, n in candidates:
+        if p in on_cooldown:
+            skipped.append({"path": p, "views_24h": n, "reason": f"improved within last {cooldown_days}d"})
+            continue
+        chosen = (p, n)
+        break
+
+    if chosen is None:
+        chosen = candidates[0]
+        selection_reason = (
+            f"all top {len(candidates)} pages on {cooldown_days}d cooldown; "
+            f"falling back to highest-traffic page"
+        )
+    elif skipped:
+        selection_reason = (
+            f"rotation: skipped {len(skipped)} page(s) on {cooldown_days}d cooldown, "
+            f"picked next-highest-traffic page"
+        )
+    else:
+        selection_reason = "highest-traffic page in last 24h"
+
+    path, views_24h = chosen
+    if views_24h <= 0:
+        print(f"SKIP: chosen page {path} has 0 views in last 24h for {domain}", file=sys.stderr)
         sys.exit(2)
 
     client_slug = _client_slug(product)
@@ -297,6 +358,12 @@ def build_brief(product):
         "metrics": metrics,
         "history": history,
         "project_config": proj,
+        "selection": {
+            "reason": selection_reason,
+            "cooldown_days": cooldown_days,
+            "candidate_count": len(candidates),
+            "skipped_on_cooldown": skipped,
+        },
     }
 
 
@@ -304,9 +371,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--product", required=True)
     ap.add_argument("--out", help="Write brief to this path instead of stdout")
+    ap.add_argument("--cooldown-days", type=int, default=3,
+                    help="Skip pages improved within this many days (default 3)")
+    ap.add_argument("--candidate-limit", type=int, default=10,
+                    help="Pull this many top-traffic candidates before applying cooldown (default 10)")
     args = ap.parse_args()
 
-    brief = build_brief(args.product)
+    brief = build_brief(
+        args.product,
+        cooldown_days=args.cooldown_days,
+        candidate_limit=args.candidate_limit,
+    )
     blob = json.dumps(brief, indent=2, ensure_ascii=False, default=str)
     if args.out:
         Path(args.out).write_text(blob)
