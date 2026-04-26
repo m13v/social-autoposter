@@ -94,23 +94,47 @@ PAGE_SCRIPT = r"""
     const [a, b] = l1 > l2 ? [l1, l2] : [l2, l1];
     return (a + 0.05) / (b + 0.05);
   }
+  function compositeOver(top, bot) {
+    // Source-over compositing: top's alpha controls the mix.
+    const a = top.a + bot.a * (1 - top.a);
+    if (a < 0.001) return { r: 0, g: 0, b: 0, a: 0 };
+    const blend = (ct, cb) => (ct * top.a + cb * bot.a * (1 - top.a)) / a;
+    return { r: blend(top.r, bot.r), g: blend(top.g, bot.g), b: blend(top.b, bot.b), a };
+  }
   function effectiveBg(el) {
-    // Returns { bg, src, painted } where painted=true means we found a
-    // concrete background paint (solid color OR image/gradient). If the
-    // first painted ancestor is an image/gradient we can't meaningfully
-    // compute a contrast ratio, so callers should skip the check.
+    // Returns { bg, src, image } where image=true means a gradient/image
+    // is in the paint stack (skip contrast). Walks up compositing every
+    // semi-transparent layer over the next painted ancestor, so a 10%
+    // teal tint over a dark body resolves to the actual visible color
+    // (mostly dark), not the 10% layer's RGB stripped of alpha.
     let cur = el;
+    let acc = { r: 0, g: 0, b: 0, a: 0 };
+    let topSrc = null;
     while (cur) {
       const cs = getComputedStyle(cur);
-      const bg = parseRgb(cs.backgroundColor);
       const img = cs.backgroundImage || 'none';
-      if (bg && bg.a > 0.05) return { bg, src: cur, painted: true, image: false };
-      if (img !== 'none' && img !== 'initial') {
-        return { bg: null, src: cur, painted: true, image: true };
+      if (img !== 'none' && img !== 'initial') return { bg: null, src: cur, image: true };
+      const bg = parseRgb(cs.backgroundColor);
+      if (bg && bg.a > 0.001) {
+        if (!topSrc) topSrc = cur;
+        acc = compositeOver(acc, bg);
+        if (acc.a > 0.95) return { bg: acc, src: topSrc, image: false };
       }
       cur = cur.parentElement;
     }
-    return { bg: { r: 255, g: 255, b: 255, a: 1 }, src: null, painted: false, image: false };
+    // Reached <html> without an opaque paint; composite remaining stack
+    // over the canvas default (white). That is the browser's actual
+    // backdrop in the absence of any declared bg.
+    const final = compositeOver(acc, { r: 255, g: 255, b: 255, a: 1 });
+    return { bg: final, src: topSrc, image: false };
+  }
+  function isInsideSvg(el) {
+    let cur = el;
+    while (cur) {
+      if (cur.tagName === 'svg' || cur.tagName === 'SVG') return true;
+      cur = cur.parentElement;
+    }
+    return false;
   }
   function isVisible(el) {
     const r = el.getBoundingClientRect();
@@ -134,6 +158,11 @@ PAGE_SCRIPT = r"""
   const all = document.querySelectorAll('a, button, h1, h2, h3, h4, p, span, li, strong, em, div');
   for (const el of all) {
     if (!isVisible(el)) continue;
+    // Text inside an <svg> is painted by SVG <fill>, not CSS background.
+    // We can't reliably compute contrast without sampling pixels, and
+    // foreignObject HTML inside SVG diagrams produces near-100% false
+    // positives. Skip the whole SVG subtree.
+    if (isInsideSvg(el)) continue;
     // Only leaf-ish text nodes. If the element has a visible element child
     // that contains the same text, the child will be audited instead.
     const text = el.innerText || '';
