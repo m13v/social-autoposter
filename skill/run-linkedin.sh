@@ -85,19 +85,44 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
    Browse the search URL via mcp__linkedin-agent__browser_navigate to find actual posts.
    If nothing good for the first project, try another.
 2. Pick the best LinkedIn post and the project that fits it best.
-2b. **SELF-AUTHOR GUARD (MANDATORY).** Our LinkedIn account is
-    Matthew Diakonov, profile at https://www.linkedin.com/in/m13v/.
-    Search results frequently include posts authored by us (Matthew
-    posts often about MCP, AI agents, desktop automation, the same
-    topics our search runs use). Commenting on our own post is wasteful
-    and looks like astroturfing.
-    Before proceeding to step 3, check the candidate post's author:
-      - If the author profile URL contains '/in/m13v/' OR the author
-        name is 'Matthew Diakonov' OR the post header shows the
-        '· You' or 'Author' tag next to the author name, SKIP this
-        post and pick another.
-      - Apply this same check to every candidate; never log or post
-        on a self-authored thread.
+2b. **SELF-AUTHOR GUARD (MANDATORY, programmatic).** Our LinkedIn
+    account is Matthew Diakonov, profile at
+    https://www.linkedin.com/in/m13v/. Search results frequently
+    surface posts we authored (Matthew posts on MCP, AI agents,
+    desktop automation, the same topics our search runs use).
+    Commenting on our own post is wasteful and looks like astroturfing.
+
+    2b.1. Extract the candidate post's author profile URL from the
+        rendered DOM via mcp__linkedin-agent__browser_run_code. The
+        author link is the anchor wrapping the author name in the
+        post header. Sample JS:
+   \`\`\`javascript
+   async (page) => {
+     return await page.evaluate(() => {
+       // First post in the rendered list / detail page
+       const post = document.querySelector('[data-urn*=\"activity\"], div.feed-shared-update-v2');
+       if (!post) return null;
+       const anchor = post.querySelector('a[href*=\"/in/\"]');
+       return anchor ? anchor.href : null;
+     });
+   }
+   \`\`\`
+        If multiple candidate posts are visible, capture each post's
+        author URL and check them all individually.
+
+    2b.2. For each captured author URL, run:
+        python3 $REPO_DIR/scripts/linkedin_url.py --check-self-author "<author_url>"
+        Exit code 0 = self-authored, SKIP this post and pick another.
+        Exit code 1 = not self, proceed to step 3 with this candidate.
+        The script accepts full URLs, /in/<slug>/ paths, or bare slugs;
+        it canonicalizes case and strips trailing slashes, so you can
+        pass whatever you captured from the DOM.
+
+    2b.3. Visual fallback. If for some reason the DOM walk returns
+        null and you cannot get an author URL, look for a '· You' or
+        'Author' tag next to the author name in the snapshot. Either
+        means it's our post; skip it. Do NOT proceed without a
+        successful author check.
 3. **Engagement pre-check (MANDATORY, must run before drafting)**.
    The URL bar alone is not a reliable identity for a LinkedIn post,
    because /posts/<slug>-share-<X>-<sfx> and /feed/update/activity:<Y>/
