@@ -298,6 +298,30 @@ def load_product_config(product: str) -> dict:
     raise SystemExit(f"Product '{product}' not found in config.json")
 
 
+def resolve_seo_author(product_cfg: dict) -> dict:
+    """Author/byline that every generated SEO page MUST use.
+
+    Resolution order: project's `seo_author` -> defaults.seo_author from
+    config.json -> hardcoded fallback. Never invent or copy from a seed page.
+    """
+    project_author = product_cfg.get("seo_author")
+    if isinstance(project_author, dict) and project_author.get("name"):
+        return project_author
+    try:
+        with open(CONFIG_PATH) as f:
+            cfg = json.load(f)
+        default_author = cfg.get("defaults", {}).get("seo_author")
+        if isinstance(default_author, dict) and default_author.get("name"):
+            return default_author
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        pass
+    return {
+        "name": "Matthew Diakonov",
+        "role": "Written with AI",
+        "url": "https://m13v.com",
+    }
+
+
 def resolve_source_paths(product_cfg: dict) -> list[dict]:
     """Return list of {path, description} with paths expanded and existence-checked."""
     sources = product_cfg.get("landing_pages", {}).get("product_source", [])
@@ -701,6 +725,11 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
         "cyan" if accent_name == "teal" else accent_name,
     )
 
+    seo_author = resolve_seo_author(product_cfg)
+    author_name = seo_author.get("name", "Matthew Diakonov")
+    author_role = seo_author.get("role", "Written with AI")
+    author_url = seo_author.get("url", "https://m13v.com")
+
     trigger_context = {
         "serp": "This topic came from discovery. Top-ranking pages leave a real gap, and the product fits the commercial intent behind this search.",
         "gsc": "This query is already driving impressions to the site in Google Search Console. Real users are searching for this. Capture the demand.",
@@ -986,6 +1015,36 @@ Every page MUST include all of the following, but their PLACEMENT is flexible (n
 3. **`ProofBand`** — anywhere in the top third of the page.
 4. **`FaqSection`** — anywhere in the bottom third (does not have to be the last section). At least 5 concrete, specific FAQs drawn from your research. Generic FAQs are worse than no FAQs.
 5. **JSON-LD structured data** — `<script type="application/ld+json">` tag. Import `articleSchema`, `breadcrumbListSchema`, and `faqPageSchema` from `@seo/components`.
+
+### AUTHOR ATTRIBUTION (mandatory, non-negotiable, do not invent)
+
+This page's author is set by config, not by you. Use these exact values verbatim, in BOTH the `<ArticleMeta>` byline and the JSON-LD `articleSchema` block. Do not substitute the brand name, do not invent a persona, do not copy whatever you saw in a seed page.
+
+- author name: `{author_name}`
+- author role/subtitle: `{author_role}`
+- author url: `{author_url}`
+
+Required wiring:
+
+```tsx
+<ArticleMeta
+  author="{author_name}"
+  authorRole="{author_role}"
+  datePublished={{DATE_PUBLISHED}}
+  readingTime="..."
+/>
+```
+
+```ts
+articleSchema({{
+  ...,
+  author: "{author_name}",
+  authorUrl: "{author_url}",
+  ...
+}})
+```
+
+If the role line `{author_role}` reads as an AI disclosure (e.g. "Written with AI"), keep it visible: it is the public AI-content disclosure for this page and must render in the byline. Do not move it into a hidden comment, an alt attribute, a tooltip, or a footer note.
 
 {book_call_block}
 ## Step 5 — Typecheck, commit, deploy, and verify the Vercel build
