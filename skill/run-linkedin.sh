@@ -111,12 +111,13 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
         author URL and check them all individually.
 
     2b.2. For each captured author URL, run:
-        python3 $REPO_DIR/scripts/linkedin_url.py --check-self-author "<author_url>"
-        Exit code 0 = self-authored, SKIP this post and pick another.
-        Exit code 1 = not self, proceed to step 3 with this candidate.
-        The script accepts full URLs, /in/<slug>/ paths, or bare slugs;
-        it canonicalizes case and strips trailing slashes, so you can
-        pass whatever you captured from the DOM.
+        python3 $REPO_DIR/scripts/linkedin_url.py --check-self-author 'AUTHOR_URL_HERE'
+        Substitute AUTHOR_URL_HERE with the actual URL string (single
+        quotes keep shell metachars safe). Exit code 0 = self-authored,
+        SKIP this post and pick another. Exit code 1 = not self,
+        proceed to step 3 with this candidate. The script accepts
+        full URLs, /in/SLUG/ paths, or bare slugs; it canonicalizes
+        case and strips trailing slashes, so pass whatever you got.
 
     2b.3. Visual fallback. If for some reason the DOM walk returns
         null and you cannot get an author URL, look for a '· You' or
