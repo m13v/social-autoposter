@@ -36,6 +36,15 @@ PROJECT_DIST=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform linkedin -
 # Generate top performers feedback report (platform-wide)
 TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform linkedin 2>/dev/null || echo "(top performers report unavailable)")
 
+# Engaged LinkedIn URN IDs — every 16-19 digit ID we've ever stored in
+# thread_url or our_url for platform='linkedin'. Same post can surface as
+# /feed/update/urn:li:activity:X, /posts/...-share-Y-..., or
+# /posts/...-ugcPost-Z-... with different numeric URNs, so we ship the
+# whole set and have the LLM check ANY ID in a candidate URL against it.
+# Capped at 4000 IDs to keep prompt size sane (one ID is ~20 bytes; even
+# at the cap that's <100KB).
+ENGAGED_IDS=$(python3 "$REPO_DIR/scripts/linkedin_url.py" --list-engaged-ids 2>/dev/null | head -4000 | tr '\n' ' ' || echo "")
+
 # Generate engagement style and content rules from shared module
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block linkedin posting)
@@ -61,6 +70,27 @@ Choose the project that has the best natural fit with the post you find.
 ## FEEDBACK FROM PAST PERFORMANCE (use this to write better comments):
 $TOP_REPORT
 
+## ENGAGED LINKEDIN POST IDS (DO NOT comment on any post whose URL contains any of these IDs)
+The same LinkedIn post surfaces under several URL shapes with different
+numeric URNs. The full set of URNs we've ever engaged with is:
+$ENGAGED_IDS
+
+BEFORE you submit a comment on any candidate post, do this check:
+  1. Read the post's permalink in the page (the share dialog or URL bar).
+     It will look like ONE of these shapes:
+       https://www.linkedin.com/feed/update/urn:li:activity:<19-digit-id>/
+       https://www.linkedin.com/posts/<slug>-activity-<19-digit-id>-<sfx>
+       https://www.linkedin.com/posts/<slug>-share-<19-digit-id>-<sfx>
+       https://www.linkedin.com/posts/<slug>-ugcPost-<19-digit-id>-<sfx>
+  2. Extract every 16-19 digit number from that URL.
+  3. If ANY extracted number appears in the ENGAGED LINKEDIN POST IDS
+     list above, SKIP this post and find another. We already commented on it.
+  4. You can also pre-check programmatically (faster than scanning the list):
+       python3 $REPO_DIR/scripts/linkedin_url.py --check-engaged "<post-url>"
+     Exit code 0 = engaged (skip). Exit code 1 = not engaged (proceed).
+This is non-negotiable. Posting a second comment on a post we already
+commented on costs us reputation and looks spammy.
+
 $STYLES_BLOCK
 
 Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
@@ -70,9 +100,13 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
    Browse the search URL via mcp__linkedin-agent__browser_navigate to find actual posts.
    If nothing good for the first project, try another.
 2. Pick the best LinkedIn post and the project that fits it best
-3. Draft the comment using the engagement style that best fits the post. Professional but casual tone, NEVER use em dashes.
-4. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools)
-5. **CAPTURE THE POST URL** — BEFORE closing the tab, extract the actual post URL.
+3. **Engagement pre-check (MANDATORY)**: extract the post's permalink, then
+   run \`python3 $REPO_DIR/scripts/linkedin_url.py --check-engaged \"<permalink>\"\`.
+   If exit code is 0 (already engaged), discard this post and pick another.
+   Only proceed to draft when exit code is 1.
+4. Draft the comment using the engagement style that best fits the post. Professional but casual tone, NEVER use em dashes.
+5. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools)
+6. **CAPTURE THE POST URL** — BEFORE closing the tab, extract the actual post URL.
    After posting the comment, run this JS via mcp__linkedin-agent__browser_run_code:
    \`\`\`javascript
    async (page) => {
@@ -98,9 +132,13 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
    \`\`\`
    Use this URL as \`our_url\` in the database INSERT. It MUST be a linkedin.com/feed/update/ URL.
    If you cannot get a feed/update URL, use the current page URL as fallback.
-6. Log to database (MANDATORY tool call, do NOT use raw INSERT SQL):
+7. Log to database (MANDATORY tool call, do NOT use raw INSERT SQL):
      python3 $REPO_DIR/scripts/log_post.py --platform linkedin --thread-url THREAD_URL --our-url CAPTURED_FEED_UPDATE_URL --our-content 'YOUR_COMMENT_TEXT' --project PROJECT_YOU_CHOSE --thread-author AUTHOR --thread-title 'POST_TITLE' --engagement-style STYLE_YOU_CHOSE --language DETECTED_LANGUAGE
-   This validates the URL and enforces status='active'. If you could not capture a valid feed/update URL, do NOT log the post.
+   This validates the URL, canonicalizes it, enforces status='active', AND
+   refuses with DUPLICATE_LINKEDIN_POST if any URN ID overlaps with an
+   existing row. If log_post returns DUPLICATE_LINKEDIN_POST, DO NOT
+   delete the comment from LinkedIn (it's already up), but treat this
+   post as no-longer-available for future runs and move on.
 
 Up to 30 posts per run. If nothing fits, say '## No good post found' and stop.
 
