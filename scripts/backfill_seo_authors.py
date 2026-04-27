@@ -173,7 +173,11 @@ def process_repo(project: dict, defaults: dict, apply: bool, commit: bool, dry_d
 
     if apply and commit and changed_files:
         try:
-            subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+            rel_paths = [str(p.relative_to(repo)) for p in changed_files]
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "--", *rel_paths],
+                check=True,
+            )
             msg = (
                 f"Standardize SEO byline to {target['name']}"
                 f" ({target.get('role', '')})"
