@@ -1990,6 +1990,12 @@ async function handleApi(req, res) {
           "(SELECT content   FROM dm_messages WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1) AS last_msg, " +
           "(SELECT direction FROM dm_messages WHERE dm_id = d.id ORDER BY message_at DESC LIMIT 1) AS last_dir, " +
           "(SELECT COALESCE(json_agg(json_build_object('id', m.id, 'direction', m.direction, 'author', m.author, 'content', m.content, 'message_at', m.message_at) ORDER BY m.message_at ASC), '[]'::json) FROM dm_messages m WHERE m.dm_id = d.id) AS messages, " +
+          // Human-authored instructions queued or sent for this DM. Sourced
+          // from either Gmail replies to escalation emails (resend_email_id
+          // NOT NULL) or the dashboard /api/dm/:id/instructions endpoint
+          // (resend_email_id IS NULL). Phase 0 of engage-dm-replies.sh
+          // consumes status='pending' rows and crafts DMs from them.
+          "(SELECT COALESCE(json_agg(json_build_object('id', hr.id, 'status', hr.status, 'instructions', hr.instructions, 'created_at', hr.created_at, 'sent_at', hr.sent_at, 'attempts', hr.attempts, 'last_error', hr.last_error, 'source', CASE WHEN hr.resend_email_id IS NOT NULL THEN 'gmail' ELSE 'dashboard' END) ORDER BY hr.created_at ASC), '[]'::json) FROM human_dm_replies hr WHERE hr.dm_id = d.id) AS human_instructions, " +
           "CASE WHEN d.conversation_status = 'needs_human' THEN 0 " +
                "WHEN d.conversation_status IN ('converted','closed') THEN 90 " +
                "WHEN d.interest_level = 'hot' THEN 10 " +
