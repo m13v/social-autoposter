@@ -293,12 +293,17 @@ def post_comment(thread_url, text):
                 return {"ok": False, "error": "not_logged_in"}
 
             # Check if the top-level comment form exists at all.
-            # On restricted subs, old reddit silently omits the form (no error message).
+            # When the sub gates top-level commenting on this account (CrowdControl,
+            # AutoMod karma/age threshold, mod-approved-only, shadowban), old reddit
+            # silently omits the form for us while still rendering the rest of the
+            # page. The sub itself may be public; the gate is account-level. There
+            # is no error banner and no API field that exposes this, so the only
+            # signal is the missing form on a logged-in page load.
             has_comment_form = page.locator(
                 ".commentarea .usertext.cloneable, .commentarea > form.usertext"
             ).count() > 0
             if not has_comment_form:
-                return {"ok": False, "error": "subreddit_restricted"}
+                return {"ok": False, "error": "account_blocked_in_sub"}
 
             # Find the top-level comment form textarea.
             comment_form = page.locator(
