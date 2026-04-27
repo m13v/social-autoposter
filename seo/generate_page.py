@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -128,6 +129,20 @@ def classify_content_type(keyword: str) -> str:
     if _ALTERNATIVE_RE.search(kw):
         return "alternative"
     return "guide"
+
+
+def pick_neutral_family(slug: str) -> str:
+    """Deterministic per-slug pick from Tailwind's perceptually-similar
+    neutral families. Same slug always returns the same family (so re-runs
+    and /improve passes do not flip the palette under the model). Different
+    slugs on the same site cycle through the four families, breaking the
+    visual sameness where every page is text-zinc-* on bg-zinc-*.
+    """
+    families = ("zinc", "slate", "neutral", "stone")
+    if not slug:
+        return "zinc"
+    h = hashlib.md5(slug.encode("utf-8")).digest()
+    return families[h[0] % len(families)]
 
 
 def detect_consumer_theme(repo_path: str) -> str:
@@ -588,25 +603,144 @@ def render_quotas(registry: dict) -> str:
     magic_names = ", ".join(f"`{n}`" for n in _quota_names(registry, "magic-mandatory"))
     visual_rich_names = ", ".join(_quota_names(registry, "visual-rich-mandatory"))
 
-    return f"""### Mandatory component diversity (non-negotiable)
+    return f"""### Component diversity (soft floor, taste over quotas)
 
-A page that only uses code blocks, diagrams, and tables is not rich enough. Every page MUST satisfy ALL of the following quotas, distinct components only:
+A page that is wall-to-wall prose is thin. A page that uses every component in the library is generic. Aim for a small palette chosen for the angle.
 
-1. **At least ONE "video-style" component**, from this group: {video_names}.
-   - Prefer `RemotionClip` for the hero / concept intro (it literally renders a Remotion composition live). Use `MotionSequence` if you want a longer narrative with visual frames. If you cannot think of what to put in it, use `RemotionClip` with the product name as the title, a one-line subtitle, and 4-5 captions that capture the angle.
+1. **Video-style components are optional**, not required. The available ones are: {video_names}. Use `RemotionClip` ONLY when the angle genuinely benefits from a 4-6 caption motion intro (a behavior unfolding, a sequence the reader cannot picture from words alone). `MotionSequence` is for longer visual narratives. If neither fits the angle, do not use one. Do not insert a video component just because the page would otherwise feel too plain.
 
-2. **At least TWO Magic UI style components**, from this group: {magic_names}.
-   - `ShimmerButton` counts toward this quota only if it is the primary CTA, not decoration.
-   - `GradientText` counts only if it wraps a meaningful word or phrase in a heading, not an entire paragraph.
-   - `Marquee` is an excellent fit for "works with" or "trusted by" strips, integration logos, or feature chip rows.
-   - `AnimatedBeam` fits any "inputs → system → outputs" story. If your angle involves the product receiving, processing, and returning something, this is almost always a win.
-   - `OrbitingCircles` fits ecosystem / integrations stories.
-   - `NumberTicker` should appear inside any metric section that uses concrete numbers.
-   - `BackgroundGrid` should wrap the hero section or a high-signal callout.
+2. **Magic UI components are optional**, not required. The available ones are: {magic_names}. Use 0 to 3, and only when each one earns its place against the angle:
+   - `ShimmerButton` only as a primary CTA, never as decoration.
+   - `GradientText` only on a meaningful word or phrase in a heading.
+   - `Marquee` only for genuine "works with" or "trusted by" strips with real items.
+   - `AnimatedBeam` only for a real "inputs, system, outputs" story.
+   - `OrbitingCircles` only for ecosystem or integrations stories.
+   - `NumberTicker` only inside a metric section with concrete numbers.
+   - `BackgroundGrid` only when the hero or a callout actually needs a textured surface.
+   Never reach for a Magic UI component to satisfy a quota; if none of the above match the angle, use zero.
 
-3. **At least THREE components total** from the "Visual content" and "Rich layout and animation" groups ({visual_rich_names}).
+3. **At least TWO components total** from the "Visual content" and "Rich layout and animation" groups ({visual_rich_names}). Two is the floor, not the target. Pick components that match the angle's natural shape (a tutorial wants step components, an argument wants comparison or before/after, a reference wants tables or diagrams). Do not stack five visual components when two carry the page.
 
-A page that satisfies (3) but not (1) and (2) is incomplete. If your angle genuinely does not want a video component, you still need one — use `RemotionClip` for the hero intro or `MotionSequence` to open the page. This is a hard requirement, not a suggestion.
+The cheapest way to satisfy any of these rules is to drop in BackgroundGrid + GradientText + RemotionClip + a generic Bento. Do not do that. The page should look unlike the other pages on the same site. Distinctiveness beats coverage.
+"""
+
+
+_SEO_IMPORT_RE = re.compile(
+    r"import\s*\{([^}]+)\}\s*from\s*['\"]@seo/components['\"]",
+    re.MULTILINE | re.DOTALL,
+)
+_SCHEMA_NAMES = {
+    "articleSchema",
+    "breadcrumbListSchema",
+    "faqPageSchema",
+    "videoObjectSchema",
+    "howToSchema",
+    "withBookingAttribution",
+}
+# Trust signals are required (or recommended) so do not penalize them in the
+# overuse anti-quota; otherwise every page would trip the warning on Breadcrumbs.
+_ALWAYS_ALLOWED = {
+    "Breadcrumbs",
+    "ArticleMeta",
+    "FaqSection",
+    "ProofBand",
+    "ProofBanner",
+    "BookCallCTA",
+    "InlineCta",
+    "InlineCTA",
+    "StickyBottomCta",
+    "StickyBottomCTA",
+    "GetStartedCTA",
+    "RelatedPostsGrid",
+    "AnimatedSection",
+}
+
+
+def _scan_recent_components(repo: str, example_dirs: list[str], limit: int = 25) -> list[tuple[str, int]]:
+    """Scan up to `limit` most-recently-modified page.tsx files under the
+    given example_dirs of the consumer repo and return component-name usage
+    counts, sorted descending. Counts each component once per page (presence,
+    not raw mention count) so a page that uses NumberTicker 8 times still
+    contributes 1 to the NumberTicker score.
+    """
+    if not repo:
+        return []
+    repo_root = Path(repo).expanduser()
+    candidates: list[Path] = []
+    for d in example_dirs:
+        base = repo_root / d
+        if not base.exists():
+            continue
+        try:
+            candidates.extend(p for p in base.rglob("page.tsx"))
+        except (OSError, PermissionError):
+            continue
+    if not candidates:
+        return []
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    candidates = candidates[:limit]
+
+    counts: dict[str, int] = {}
+    for p in candidates:
+        try:
+            text = p.read_text(errors="ignore")
+        except (OSError, PermissionError):
+            continue
+        seen: set[str] = set()
+        for m in _SEO_IMPORT_RE.finditer(text):
+            for raw in m.group(1).split(","):
+                name = raw.strip().split(" as ")[0].strip()
+                if not name:
+                    continue
+                if name in _SCHEMA_NAMES or name in _ALWAYS_ALLOWED:
+                    continue
+                if not name[:1].isupper():
+                    continue
+                seen.add(name)
+        for name in seen:
+            counts[name] = counts.get(name, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def render_anti_quota(repo: str, example_dirs: list[str]) -> str:
+    """Render the 'forbidden / discouraged components on this site' block.
+
+    Scans the consumer site's recent generated pages, ranks visual/Magic UI
+    components by usage frequency, and tells the model not to reuse the most
+    over-used ones. This is the main lever against the SEO pages all looking
+    alike: even if every other rule is satisfied, the same five components
+    cannot show up on the next page.
+    """
+    counts = _scan_recent_components(repo, example_dirs)
+    if not counts:
+        return ""
+    pages_scanned = 0
+    repo_root = Path(repo).expanduser() if repo else None
+    if repo_root and repo_root.exists():
+        for d in example_dirs:
+            base = repo_root / d
+            if base.exists():
+                try:
+                    pages_scanned += sum(1 for _ in base.rglob("page.tsx"))
+                except (OSError, PermissionError):
+                    pass
+        pages_scanned = min(pages_scanned, 25)
+
+    forbidden = [name for name, _ in counts[:5]]
+    discouraged = [name for name, _ in counts[5:10]]
+    forbidden_str = ", ".join(f"`{n}`" for n in forbidden) if forbidden else "(none)"
+    discouraged_str = ", ".join(f"`{n}`" for n in discouraged) if discouraged else "(none)"
+
+    return f"""### Anti-quota: do NOT reuse the most over-used components on this site
+
+Recent pages on this consumer site lean heavily on the same components, which is why every page looks like every other page. Based on the last {pages_scanned} generated pages:
+
+- **DO NOT use** any of: {forbidden_str}. These are the five components this site has leaned on most. Pick a different way to express the same idea (a different component, a prose section, a code block, a custom local component, or no visual at all).
+- **Use sparingly** (at most one of these, and only if it is the obviously right shape for your angle): {discouraged_str}.
+
+Trust signals (Breadcrumbs, ArticleMeta, FaqSection, ProofBand, BookCallCTA, related-posts grid, inline CTAs) are exempt from this rule, use them as the trust-signal section directs.
+
+If your angle genuinely cannot be expressed without a forbidden component, prefer to (a) use a local component already in `src/components/` of this repo, or (b) write a custom one-off component for this page rather than reaching for the shared library default. Diversity at the visual layer is the goal.
 """
 
 
@@ -747,9 +881,11 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
     registry = load_component_registry(repo)
     palette_block = render_palette(registry)
     quotas_block = render_quotas(registry)
+    anti_quota_block = render_anti_quota(repo, ct["example_dirs"])
     book_call_block = render_book_call_block(product_cfg, registry)
     guardrails_block = render_content_guardrails(product_cfg)
     consumer_theme = detect_consumer_theme(repo)
+    neutral = pick_neutral_family(slug)
 
     type_context = {
         "guide": "This is a general guide/explainer page. You have the most creative freedom here — the angle, section shape, and length are all yours.",
@@ -911,16 +1047,20 @@ You are working in an existing website repo with a shared SEO component library 
 
 **Do NOT clone the structure of existing pages.** Read one existing page in {example_dirs_str} ONLY to understand the import syntax and color conventions. Do NOT copy its section ordering, component selection, or layout pattern.
 
-Each page must feel editorially distinct. Pick visual components that match YOUR angle:
-- A "how it works" angle might use FlowDiagram + StepTimeline + AnimatedDemo
-- A "vs. competitors" angle might use BeforeAfter + ComparisonTable + MetricsRow + GlowCard
-- A "deep dive" angle might use SequenceDiagram + AnimatedCodeBlock + BentoGrid
-- A "getting started" angle might use AnimatedDemo + StepTimeline + TerminalOutput
-- A "feature showcase" angle might use BentoGrid + GlowCard + ParallaxSection + MetricsRow
+Each page must feel editorially distinct. Think about the SHAPE the angle wants, not which named components to drop in. The shape is what the reader's eye traces down the page.
 
-You must use at least 3 visual content components (not counting trust signals). Using only prose sections with no visual components is a failure.
+- A "how it works" angle wants the reader to walk through one execution: think a sequence the eye follows top to bottom, with the moments where state changes called out visually. Pick whichever components actually express that walk.
+- A "vs. competitors" angle wants two things compared side by side, with one clear differentiator that the reader can verify. Pick whichever components make the comparison legible without flattening it into a generic feature matrix.
+- A "deep dive" angle wants to slow the reader down on one specific mechanism. Long-form prose with one or two visuals at the right moment beats a bento grid of shallow points.
+- A "getting started" angle wants a sequence of concrete actions with verifiable output after each step. The shape is steps and outputs, not a feature tour.
+- A "feature showcase" angle wants the reader to leave knowing what one specific thing this product does that nothing else does. If a bento grid is the answer, fine, but only if every cell carries weight.
+- A "reference" or "data" angle wants dense lookup material (tables, lists, code) with minimal narration.
+- An "argument" or "essay" angle wants prose. A 2000 word piece with a single supporting diagram can be the right answer.
+
+DO NOT pick named components first and reverse-engineer a page around them. Pick the shape, then pick the components that express the shape. Two pages built from the same shape on the same site should still look different because the angle pulls them in different directions.
 
 {quotas_block}
+{anti_quota_block}
 ### Lottie
 
 If you reference a Lottie animation via `LottiePlayer`, you MUST also create the JSON file at a real path in `public/` (e.g. `public/lottie/<slug>-hero.json`). Do not reference a Lottie path that does not exist. If you cannot produce a real Lottie JSON, skip it.
@@ -1004,17 +1144,37 @@ Also check that the repo has `transpilePackages: ["@seo/components"]` in its `ne
 - Style: no em dashes, no en dashes, anywhere. Plain direct prose. First person fine where natural.
 - At least one section must surface the anchor_fact from your concept, with enough specificity that a reader could verify it (file name, command, number, behavior description). This is the uncopyable part of the page.
 - Do not invent statistics. Do not fabricate quotes. If you use numbers, they come from something you read or ran.
-- **Visual rhythm:** Alternate between prose sections and visual components. Never stack more than two consecutive prose-only sections without a visual break (diagram, code block, metrics row, comparison table, checklist, or terminal output).
 
-### Required trust signals
+### Pick a page skeleton (or invent your own)
 
-Every page MUST include all of the following, but their PLACEMENT is flexible (not locked to a fixed position):
+The default "Hero, ProofBand, six alternating prose-and-visual sections, FAQ at the bottom" template is what every other SEO page on the internet looks like. Do not default to it. Pick one of the skeletons below that matches your angle, OR invent a different shape entirely. Whichever you pick, do not reuse the same skeleton as the most recent few pages on this site.
 
-1. **`Breadcrumbs`** — near the top of the page.
-2. **`ArticleMeta`** — near the top, after or alongside the title.
-3. **`ProofBand`** — anywhere in the top third of the page.
-4. **`FaqSection`** — anywhere in the bottom third (does not have to be the last section). At least 5 concrete, specific FAQs drawn from your research. Generic FAQs are worse than no FAQs.
-5. **JSON-LD structured data** — `<script type="application/ld+json">` tag. Import `articleSchema`, `breadcrumbListSchema`, and `faqPageSchema` from `@seo/components`.
+- **Walkthrough skeleton.** Numbered or named steps as the spine. Each step is a short prose lede plus one piece of evidence (a code block, a terminal output, a small diagram). No giant hero. No bento. The page reads like documentation a peer would write.
+- **Q-and-A skeleton.** The whole page is 8 to 12 sub-questions, each answered in 2-4 paragraphs. The FAQ trust signal is structural, not a footer. No bento, no metrics row.
+- **Argument skeleton.** Thesis up top, three or four supporting prose sections, one counterargument section, one resolution. Visual breaks are optional and rare. A 1800-2500 word essay shape.
+- **Comparison skeleton.** A clear side-by-side. Comparison table or before/after early, then 3-4 prose sections digging into the dimensions where the comparison actually matters, then a recommendation that admits the cases where the other option wins.
+- **Reference skeleton.** Dense lookup material. Tables, lists, short definitions. Minimal narration. The reader scans, does not read. Almost no Magic UI, no decorative motion.
+- **Story skeleton.** One specific narrative (a debugging session, a customer scenario, a measurement we ran), told in chronological order with concrete details. One supporting visual at most.
+- **Invent your own.** If none of the above fit, design a shape and name it in your CONCEPT block. Anything goes as long as it serves the angle.
+
+State the chosen skeleton (or your invented name) explicitly at the top of your CONCEPT block from Step 2. Add a `skeleton:` line.
+
+- **Visual rhythm:** Match the rhythm to the skeleton. Walkthrough, Comparison, and Story skeletons want a visual every 1-2 sections. Argument, Q-and-A, and Reference skeletons can run 4-5 prose sections in a row with no visual at all. Do NOT force a visual in just to break up prose if the skeleton does not want one. Content type for this page is `{content_type}`; let that guide whether visual breaks are doing real work or are filler.
+
+### Trust signals (required core, optional extras)
+
+Required on every page, placement entirely up to you (not locked to top, bottom, or any particular section):
+
+1. **`Breadcrumbs`** somewhere in the page chrome (top, side, or under the hero, your call).
+2. **`FaqSection`** somewhere in the page (does not have to be near the bottom; an inline FAQ between body sections is fine, a Q-and-A skeleton can be all FAQ). At least 5 concrete, specific FAQs drawn from your research. Generic FAQs are worse than no FAQs.
+3. **JSON-LD structured data** as a `<script type="application/ld+json">` tag. Import `articleSchema`, `breadcrumbListSchema`, and `faqPageSchema` from `@seo/components`.
+
+Optional, use only when the content type and angle actually call for them:
+
+4. **`ArticleMeta`** is appropriate for guide, use_case, and cross_roundup pages where a byline and reading time help orient the reader. Skip it on alternative/comparison pages and on reference-style pages where a byline reads as filler. If you skip it, still emit the author info inside `articleSchema` (the JSON-LD must always carry the byline). The current content type is `{content_type}`; let it inform the choice.
+5. **`ProofBand`** is appropriate when the page sits near a buying decision (alternative, use_case) and you have honest social proof or numbers to put there. Skip it on guide/explainer pages where a proof strip would feel grafted on. If you do include it, put it wherever it lands naturally in the flow (top, mid, footer), not in a fixed slot.
+
+Whatever you include, vary placement across pages on the same site. If the last few pages all opened with Breadcrumbs + ArticleMeta + ProofBand in that exact order under the H1, do something else this time.
 
 ### AUTHOR ATTRIBUTION (mandatory, non-negotiable, do not invent)
 
