@@ -209,17 +209,21 @@ CREATE TABLE IF NOT EXISTS dm_messages (
 CREATE INDEX IF NOT EXISTS idx_dm_messages_dm_id ON dm_messages(dm_id);
 CREATE INDEX IF NOT EXISTS idx_dm_messages_direction ON dm_messages(direction);
 
--- human_dm_replies: stores human-authored replies to escalated DMs. The escalation
--- pipeline ingests these from Gmail (matching [DM #N] in the subject) and Phase 0
--- of engage-dm-replies.sh sends them as DMs on the target platform.
--- Column 'resend_email_id' is historical; we now store the Gmail message id here.
+-- human_dm_replies: stores human-authored INSTRUCTIONS for the DM-reply agent on
+-- escalated DMs. Two ingest paths feed this table: (1) Gmail replies to escalation
+-- emails (matching [DM #N] in the subject) ingested by ingest_human_dm_replies.py,
+-- and (2) the dashboard /api/dm/:id/instructions endpoint. Phase 0 of
+-- engage-dm-replies.sh treats `instructions` as direction (not literal text) and
+-- has the LLM craft a natural DM from it.
+-- Column 'resend_email_id' is historical; we now store the Gmail message id here
+-- when the source is Gmail (NULL for dashboard inserts).
 CREATE TABLE IF NOT EXISTS human_dm_replies (
     id SERIAL PRIMARY KEY,
     dm_id INTEGER NOT NULL REFERENCES dms(id),
     platform TEXT NOT NULL,
     their_author TEXT NOT NULL,
     project_name TEXT,
-    reply_content TEXT NOT NULL,
+    instructions TEXT NOT NULL,
     email_subject TEXT,
     resend_email_id TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
