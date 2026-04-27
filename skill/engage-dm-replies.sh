@@ -572,8 +572,13 @@ Booking links are stored in \`config.json\` per project and injected into the \$
 The DM row carries \`target_project\` (set at outreach time, from post or topic match) and a \`qualification_status\` (pending / asked / answered / qualified / disqualified). Use \`target_project\` first; if it's NULL, fall back to \`project_name\`. Never substitute another project's booking link.
 
 If the matched project has \`booking_link_auto_share: true\` AND they just asked outright for a call/meeting/demo/scheduled time AND \`qualification_status\` is already \`qualified\` (or the prospect's own message plus the conversation+prospect profile clearly satisfy the project's \`must_have\` list and don't trigger any \`disqualify\` item):
-- Do NOT flag for human. Share the matching project's \`booking_link\` verbatim from \$PROJECTS. Copy the URL character-for-character, never make one up.
-- Example shape: "yeah for sure, here's a link to grab a time: <booking_link_from_config>"
+- Do NOT flag for human.
+- **Mint a per-DM short link FIRST**, before composing the message:
+  \`\`\`bash
+  python3 scripts/dm_short_links.py mint --dm-id DM_ID
+  \`\`\`
+  This prints a URL like \`https://aiphoneordering.com/r/76wfdgt9\` that 302s to the project's Cal.com URL with \`metadata[utm_content]=dm_DM_ID\` baked in. Use the printed URL verbatim in your reply. **Do NOT paste the raw \`booking_link\` from \$PROJECTS** — the short link is what enables click + booking attribution per DM, and the raw cal.com URL bypasses it. Mint is idempotent: if a code already exists for this DM it returns the same one, so you can re-run safely.
+- Example shape: "yeah for sure, here's a link to grab a time: <short_url_from_mint>"
 - After sending, lock the project, raise tier, mark booking sent, and finalize qualification if it wasn't already:
   \`\`\`bash
   python3 scripts/dm_conversation.py set-project --dm-id DM_ID --project "EXACT_PROJECT_NAME_FROM_CONFIG"
@@ -734,14 +739,20 @@ python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier 2
 
 ### Step 2.8: Append the booking link (Mode B only, when eligible)
 
-If all of the following are true, append the matched project's \`booking_link\` to the Mode B reply you're about to send:
+If all of the following are true, append a per-DM **short link** to the Mode B reply you're about to send:
 - \`qualification_status = qualified\` for this DM (set in Step 2.5 or earlier)
 - The matched project has \`booking_link\` AND \`booking_link_auto_share: true\` in config
 - \`booking_link_sent_at\` is NULL (we haven't already sent it)
 - The conversation is at a natural place to propose a call (they've surfaced pain or asked for more; not just "cool"). You do NOT need them to have explicitly asked for a call; see the updated COMMITMENT GUARDRAILS in Step 2.
 
+**Mint the short link FIRST**:
+\`\`\`bash
+python3 scripts/dm_short_links.py mint --dm-id DM_ID
+\`\`\`
+This prints \`https://<website>/r/<code>\` that redirects to Cal.com with \`metadata[utm_content]=dm_DM_ID\` baked in for click + booking attribution. Use the printed URL verbatim. **Do NOT paste the raw \`booking_link\` from \$PROJECTS** — that bypasses attribution and the dashboard funnel will be blind to which DM produced the booking. Mint is idempotent.
+
 Phrase it naturally, one sentence, link embedded:
-"makes sense, if you want to see how it'd work on your setup, grab a time here: <booking_link>"
+"makes sense, if you want to see how it'd work on your setup, grab a time here: <short_url_from_mint>"
 
 After sending, stamp project + tier 3 + mark booking sent (runs in addition to the Step 2.7 set-project/set-tier; set-tier 3 supersedes tier 2):
 \`\`\`bash
@@ -901,9 +912,9 @@ After sending, mark status as \`answered\` with a one-line rationale (see Step 2
 
 ### Type 5: They asked for a call, demo, or meeting
 
-BOOKING LINK LOGIC: only share the link if (a) matched project has booking_link_auto_share: true in config.json, (b) qualification_status is already qualified, (c) booking_link_sent_at is NULL. Otherwise either qualify first (Step 2.5) or flag for human.
+BOOKING LINK LOGIC: only share a link if (a) matched project has booking_link_auto_share: true in config.json, (b) qualification_status is already qualified, (c) booking_link_sent_at is NULL. Otherwise either qualify first (Step 2.5) or flag for human. ALWAYS mint via \`python3 scripts/dm_short_links.py mint --dm-id DM_ID\` and paste the printed short URL — never the raw cal.com URL from \$PROJECTS.
 
-GOOD (qualified, config allows auto-share): "yeah for sure, grab a time here: <booking_link verbatim from config>"
+GOOD (qualified, config allows auto-share): "yeah for sure, grab a time here: <minted short URL from dm_short_links.py>"
 GOOD (not yet qualified, folding in qualifying_question naturally): "happy to dig in, what's the team size you're running this across?"
 GOOD (project has no auto-share, or they fail disqualify list): flag for human, do NOT reply in this run.
 BAD: "Absolutely! Here's my calendar: calendly.com/my-made-up-link" (fabricated link, never invent one)
