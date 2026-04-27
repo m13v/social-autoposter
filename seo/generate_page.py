@@ -1073,20 +1073,22 @@ The site's intermediate layout (`src/app/t/layout.tsx` or `src/app/(main)/layout
 
 CONSUMER THEME DETECTED: {consumer_theme}. The consumer site's root layout uses a {consumer_theme}-mode global, so your page MUST match. Using the wrong theme renders the article body as a contrasting slab between the navbar and footer.
 
-{f'''DARK theme palette (use these exact classes, do NOT use the light palette below). BRAND ACCENT FAMILY: `{accent_name}` (do NOT substitute teal or any other color — this is the consumer's brand color):
+{f'''DARK theme palette (use these exact classes, do NOT use the light palette below). BRAND ACCENT FAMILY: `{accent_name}` (do NOT substitute teal or any other color — this is the consumer's brand color). NEUTRAL FAMILY for THIS page: `{neutral}` (chosen deterministically from the slug so this page does not look identical to the previous five pages on this site; do NOT switch to a different neutral mid-page):
 
 - Article wrapper: `<article className="min-h-screen">` (no explicit bg; let the site-wide dark root show through). Never `bg-white`.
-- Headings: `text-zinc-100` (NOT text-zinc-900).
-- Body text: `text-zinc-400`. Muted/lede: `text-zinc-500`.
-- Primary pill: `bg-{accent_name}-900/30 text-{accent_name}-300`. Secondary pill: `bg-zinc-800/60 text-zinc-300`. Outline pill: `bg-transparent border border-zinc-800 text-zinc-300`.
-- Section bands: `bg-zinc-950/40 border-y border-zinc-800/60`.
+- Headings: `text-{neutral}-100` (NOT text-{neutral}-900). Vary heading weight and size by section: a hero h1 can be `text-5xl font-semibold tracking-tight` or `text-6xl font-bold` or `text-4xl font-medium`; do not default to the same weight for every page.
+- Body text: `text-{neutral}-400`. Muted/lede: `text-{neutral}-500`.
+- Primary pill: `bg-{accent_name}-900/30 text-{accent_name}-300`. Secondary pill: `bg-{neutral}-800/60 text-{neutral}-300`. Outline pill: `bg-transparent border border-{neutral}-800 text-{neutral}-300`.
+- Section bands: `bg-{neutral}-950/40 border-y border-{neutral}-800/60`.
 - Tinted boxes: `bg-{accent_name}-500/10 border border-{accent_name}-500/30`.
-- Inline code: `bg-zinc-900 border border-zinc-800 text-{accent_name}-300 font-mono`.
-- Dividers/borders: `border-zinc-800/60` (NOT border-zinc-200).
+- Inline code: `bg-{neutral}-900 border border-{neutral}-800 text-{accent_name}-300 font-mono`.
+- Dividers/borders: `border-{neutral}-800/60` (NOT border-{neutral}-200).
 - Links: `text-{accent_name}-300` (NOT text-{accent_name}-600). Accent gradients for CTAs: `from-{accent_gradient_from}-500 to-{accent_name}-500` still works.
-- CTA button: `bg-{accent_name}-500 text-zinc-950 hover:bg-{accent_name}-400 font-semibold`.
+- CTA button: `bg-{accent_name}-500 text-{neutral}-950 hover:bg-{accent_name}-400 font-semibold`.
 
-NEVER emit on a dark consumer: bg-white (solid), bg-zinc-50, bg-zinc-100, text-zinc-900, text-zinc-700, text-zinc-600, text-{accent_name}-700, text-{accent_name}-600, border-zinc-200, bg-{accent_name}-50. Translucent overlays like `bg-white/5` and `bg-black/30` are fine.
+Stay inside the `{neutral}` family for all neutral classes on this page. Do NOT mix `text-zinc-400` with `border-slate-800` etc; pick one family and use it consistently. The accent classes (above) are NOT neutrals and stay as-is.
+
+NEVER emit on a dark consumer: bg-white (solid), bg-{neutral}-50, bg-{neutral}-100, text-{neutral}-900, text-{neutral}-700, text-{neutral}-600, text-{accent_name}-700, text-{accent_name}-600, border-{neutral}-200, bg-{accent_name}-50. Translucent overlays like `bg-white/5` and `bg-black/30` are fine.
 
 NEVER use violet, indigo, or purple anywhere. NEVER use teal unless the brand accent family IS teal.''' if consumer_theme == 'dark' else f'''LIGHT theme palette. BRAND ACCENT FAMILY: `{accent_name}` (do NOT substitute teal or any other color — this is the consumer's brand color):
 
