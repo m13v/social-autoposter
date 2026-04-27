@@ -491,7 +491,7 @@ def post_via_cdp(thread_url, reply_to_url, text):
                 return result
             err = result.get("error", "unknown")
             print(f"[post_reddit] CDP attempt {attempt + 1}: {err}")
-            if err in ("thread_not_found", "thread_locked", "thread_archived", "already_replied", "not_logged_in", "subreddit_restricted"):
+            if err in ("thread_not_found", "thread_locked", "thread_archived", "already_replied", "not_logged_in", "account_blocked_in_sub"):
                 return result  # Don't retry these
             # Lock contention: another reddit-agent session is actively working.
             # Back off in increasing intervals to catch a natural gap between
@@ -668,7 +668,7 @@ def run_one_iteration(args, config, reddit_username, already_picked):
             err = result.get("error", "unknown")
             failed += 1
             print(f"[post_reddit] CDP FAILED: {err}")
-            if err == "subreddit_restricted":
+            if err == "account_blocked_in_sub":
                 mark_comment_blocked(thread_url)
 
         if i < len(decisions) - 1:
