@@ -605,6 +605,12 @@ def run_one_iteration(args, config, reddit_username, already_picked):
         for line in output.strip().split("\n")[-10:]:
             print(f"  {line}")
 
+    active_campaigns = load_active_reddit_campaigns()
+    if active_campaigns:
+        for c in active_campaigns:
+            print(f"[post_reddit] active campaign id={c['id']} "
+                  f"sample_rate={c['sample_rate']:.3f} suffix={c['suffix']!r}")
+
     posted = 0
     failed = 0
 
@@ -620,6 +626,14 @@ def run_one_iteration(args, config, reddit_username, already_picked):
             engagement_style = None
         search_topic = decision.get("search_topic") or None
 
+        applied_campaign_ids = []
+        for camp in active_campaigns:
+            if random.random() < camp["sample_rate"]:
+                text = text + camp["suffix"]
+                applied_campaign_ids.append(camp["id"])
+        if applied_campaign_ids:
+            print(f"[post_reddit] applied campaigns {applied_campaign_ids} (suffix appended)")
+
         print(f"[post_reddit] Posting {i + 1}/{len(decisions)}: {thread_title[:50]}...")
         result = post_via_cdp(thread_url, reply_to_url, text)
 
@@ -632,10 +646,11 @@ def run_one_iteration(args, config, reddit_username, already_picked):
                 print(f"[post_reddit] SKIPPED LOG: no valid permalink captured (got: {permalink!r})")
                 failed += 1
                 continue
-            log_post(thread_url, permalink, text, project_name,
+            new_post_id = log_post(thread_url, permalink, text, project_name,
                      thread_author, thread_title, reddit_username,
                      engagement_style=engagement_style,
                      search_topic=search_topic)
+            bump_campaigns(new_post_id, applied_campaign_ids)
             posted += 1
             print(f"[post_reddit] POSTED: {permalink}")
         else:
