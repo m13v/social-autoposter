@@ -765,30 +765,25 @@ def _scan_recent_components(repo: str, example_dirs: list[str] | None = None,
     return ranked, len(enriched)
 
 
-def render_anti_quota(repo: str, example_dirs: list[str]) -> str:
+def render_anti_quota(repo: str, example_dirs: list[str] | None = None) -> str:
     """Render the 'forbidden / discouraged components on this site' block.
 
-    Scans the consumer site's recent generated pages, ranks visual/Magic UI
-    components by usage frequency, and tells the model not to reuse the most
-    over-used ones. This is the main lever against the SEO pages all looking
-    alike: even if every other rule is satisfied, the same five components
-    cannot show up on the next page.
+    Scans the consumer site's recent generated SEO pages across ALL content
+    types (guide, alternative, use_case, cross_roundup), ranks
+    visual/Magic UI components by frequency of appearance, and tells the
+    model not to reuse the most over-used ones. This is the main lever
+    against pages on the same site all looking alike: even if every other
+    rule is satisfied, the top five components from recent history cannot
+    show up on the next page.
+
+    `example_dirs` is accepted for back-compat but ignored by default; the
+    scan now unions every CONTENT_TYPES example_dir so the anti-quota
+    reflects the full SEO surface of the site, not just the current
+    content type's lane.
     """
-    counts = _scan_recent_components(repo, example_dirs)
+    counts, pages_scanned = _scan_recent_components(repo)
     if not counts:
         return ""
-    pages_scanned = 0
-    repo_root = Path(repo).expanduser() if repo else None
-    if repo_root and repo_root.exists():
-        for d in example_dirs:
-            base = repo_root / d
-            if base.exists():
-                try:
-                    pages_scanned += sum(1 for _ in base.rglob("page.tsx"))
-                except (OSError, PermissionError):
-                    pass
-        pages_scanned = min(pages_scanned, 25)
-
     forbidden = [name for name, _ in counts[:5]]
     discouraged = [name for name, _ in counts[5:10]]
     forbidden_str = ", ".join(f"`{n}`" for n in forbidden) if forbidden else "(none)"
@@ -796,12 +791,12 @@ def render_anti_quota(repo: str, example_dirs: list[str]) -> str:
 
     return f"""### Anti-quota: do NOT reuse the most over-used components on this site
 
-Recent pages on this consumer site lean heavily on the same components, which is why every page looks like every other page. Based on the last {pages_scanned} generated pages:
+Recent pages on this consumer site lean heavily on the same components, which is why every page looks like every other page. The last {pages_scanned} generated SEO pages on this site (ranked by `const PUBLISHED` date, falling back to file mtime when PUBLISHED is missing) show the following imbalance:
 
-- **DO NOT use** any of: {forbidden_str}. These are the five components this site has leaned on most. Pick a different way to express the same idea (a different component, a prose section, a code block, a custom local component, or no visual at all).
+- **DO NOT use** any of: {forbidden_str}. These are the five components this site has leaned on most. Pick a different way to express the same idea (a different component from the palette, a prose section, a code block, a custom local component, or no visual at all).
 - **Use sparingly** (at most one of these, and only if it is the obviously right shape for your angle): {discouraged_str}.
 
-Trust signals (Breadcrumbs, ArticleMeta, FaqSection, ProofBand, BookCallCTA, related-posts grid, inline CTAs) are exempt from this rule, use them as the trust-signal section directs.
+Trust signals (Breadcrumbs, ArticleMeta, FaqSection, ProofBand, BookCallCTA, related-posts grid, inline CTAs) are exempt from this rule; use them as the trust-signal section directs.
 
 If your angle genuinely cannot be expressed without a forbidden component, prefer to (a) use a local component already in `src/components/` of this repo, or (b) write a custom one-off component for this page rather than reaching for the shared library default. Diversity at the visual layer is the goal.
 """
@@ -944,7 +939,7 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
     registry = load_component_registry(repo)
     palette_block = render_palette(registry)
     quotas_block = render_quotas(registry)
-    anti_quota_block = render_anti_quota(repo, ct["example_dirs"])
+    anti_quota_block = render_anti_quota(repo)
     book_call_block = render_book_call_block(product_cfg, registry)
     guardrails_block = render_content_guardrails(product_cfg)
     consumer_theme = detect_consumer_theme(repo)
