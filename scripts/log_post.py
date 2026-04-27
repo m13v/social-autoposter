@@ -2,8 +2,8 @@
 """Log a posted comment/reply to the database.
 
 Single tool for all platforms. Enforces:
-  - status='active' (always)
-  - our_url must start with http (validated)
+  - status='active' for successful posts
+  - our_url must start with http for successful posts (validated)
   - dedup on thread_url per platform
 
 Usage (INSERT — default mode):
@@ -19,6 +19,19 @@ Usage (INSERT — default mode):
         [--engagement-style STYLE] \\
         [--language LANG]
 
+Usage (REJECTED — record a server-rejected attempt):
+    python3 scripts/log_post.py --rejected \\
+        --platform linkedin \\
+        --thread-url URL \\
+        --our-content TEXT \\
+        --project PROJECT \\
+        [--rejection-reason TEXT] \\
+        [--network-response TEXT]
+
+    Inserts with status='rejected_by_platform'. Skips our_url validation
+    (no permalink exists). Counts toward dedup so we don't retry the same
+    thread. rejection-reason and network-response go into source_summary.
+
 Usage (UPDATE — record a self-reply / link follow-up on an existing post):
     python3 scripts/log_post.py --mark-self-reply \\
         --post-id 12345 \\
@@ -30,6 +43,7 @@ Usage (UPDATE — record a self-reply / link follow-up on an existing post):
 
 Output (JSON):
     {"logged": true, "post_id": 12345}
+    {"rejected": true, "post_id": 12345}
     {"marked": true, "post_id": 12345}
     {"error": "DUPLICATE_THREAD", ...}
     {"error": "INVALID_URL", ...}
