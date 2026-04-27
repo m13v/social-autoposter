@@ -1900,7 +1900,11 @@ async function handleApi(req, res) {
   // interesting" gets sunk.
   if (p === '/api/top/dms' && req.method === 'GET') {
     const url = new URL(req.url, 'http://localhost');
-    const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get('limit') || '200', 10) || 200));
+    // 2000-row hard cap (was 500). Even with full-history queries, the JSON
+    // payload stays under a few MB and the SQL plan still uses the sort_bucket
+    // index. Frontend default stays at 200; "Load more" pages by offset.
+    const limit = Math.max(1, Math.min(2000, parseInt(url.searchParams.get('limit') || '200', 10) || 200));
+    const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
     const WINDOW_HOURS = { '24h': 24, '7d': 24*7, '14d': 24*14, '30d': 24*30, '90d': 24*90, 'all': null };
     const rawWindow = String(url.searchParams.get('window') || '7d').toLowerCase();
     const windowKey = Object.prototype.hasOwnProperty.call(WINDOW_HOURS, rawWindow) ? rawWindow : '7d';
@@ -1908,17 +1912,38 @@ async function handleApi(req, res) {
     const rawPlatform = String(url.searchParams.get('platform') || '').toLowerCase().trim();
     const ALLOWED_PLATFORMS = new Set(['reddit', 'twitter', 'x', 'linkedin', 'moltbook', 'email']);
     const platformFilter = ALLOWED_PLATFORMS.has(rawPlatform) ? rawPlatform : '';
+    // Free-text search (their_author or last message) and id lookup. When
+    // either is present we drop the time-window filter so callers can find
+    // arbitrarily old threads without iterating windows.
+    const rawSearch = String(url.searchParams.get('q') || '').trim();
+    const searchTerm = rawSearch.slice(0, 100);
+    const idLookupRaw = String(url.searchParams.get('id') || '').trim();
+    const idLookup = /^\d+$/.test(idLookupRaw) ? parseInt(idLookupRaw, 10) : null;
+    const isLookup = !!searchTerm || idLookup != null;
     const whereParts = [];
-    if (windowHours != null) {
+    if (windowHours != null && !isLookup) {
       whereParts.push("COALESCE(tlm.last_at, d.last_message_at, d.discovered_at) >= NOW() - INTERVAL '" + windowHours + " hours'");
     }
     if (platformFilter) {
       whereParts.push("LOWER(d.platform) = '" + platformFilter + "'");
     }
+    if (idLookup != null) {
+      whereParts.push("d.id = " + idLookup);
+    }
+    if (searchTerm) {
+      // Escape single quotes for the LIKE literal (no params used elsewhere
+      // in this endpoint; matches existing pattern). The 100-char cap above
+      // bounds payload size.
+      const safe = searchTerm.replace(/'/g, "''");
+      whereParts.push(
+        "(d.their_author ILIKE '%" + safe + "%' " +
+        "OR EXISTS (SELECT 1 FROM dm_messages mm WHERE mm.dm_id = d.id AND mm.content ILIKE '%" + safe + "%'))"
+      );
+    }
     // Scope DMs to the user's project claim. DM project can come from three sources
     // (direct post join, via reply post, or explicit d.target_project); include all.
     const dmPc = auth.projectClause(req.user, 'COALESCE(p_direct.project_name, p_via_reply.project_name, d.target_project)', url.searchParams.get('project'));
-    if (!dmPc.ok) return json(res, { dms: [], window: windowKey, platform: platformFilter || 'all' });
+    if (!dmPc.ok) return json(res, { dms: [], total: 0, offset, limit, window: windowKey, platform: platformFilter || 'all' });
     if (dmPc.clause) whereParts.push(dmPc.clause.replace(/^\s*AND\s+/, ''));
     const whereSql = whereParts.length ? ('WHERE ' + whereParts.join(' AND ')) : '';
     const q =
@@ -2003,12 +2028,31 @@ async function handleApi(req, res) {
           "CASE WHEN d.conversation_status = 'needs_human' THEN d.flagged_at END DESC NULLS LAST, " +
           "COALESCE(tlm.last_at, d.last_message_at) DESC NULLS LAST, " +
           "d.id DESC " +
-        "LIMIT " + limit +
+        "LIMIT " + limit + " OFFSET " + offset +
       ") r";
+    // Cheap COUNT(*) over the same WHERE so the UI can show "X of Y" and
+    // know when "Load more" should disappear. Re-uses the LATERAL joins so
+    // expressions in whereSql (tlm.last_at, p_direct.*, etc.) resolve.
+    const countQ =
+      "SELECT COUNT(*)::bigint AS n FROM dms d " +
+      "LEFT JOIN posts p_direct ON p_direct.id = d.post_id " +
+      "LEFT JOIN replies r_link ON r_link.id = d.reply_id " +
+      "LEFT JOIN posts p_via_reply ON p_via_reply.id = r_link.post_id " +
+      "LEFT JOIN LATERAL (SELECT MAX(message_at) AS last_at FROM dm_messages WHERE dm_id = d.id) tlm ON TRUE " +
+      whereSql;
     return (async () => {
-      const rows = await pq(q);
+      const [rows, countRows] = await Promise.all([pq(q), pq(countQ)]);
       const dms = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
-      return json(res, { dms, window: windowKey, platform: platformFilter || 'all' });
+      const total = (countRows && countRows.length) ? Number(countRows[0].n) || 0 : 0;
+      return json(res, {
+        dms,
+        total,
+        offset,
+        limit,
+        window: windowKey,
+        platform: platformFilter || 'all',
+        lookup: isLookup,
+      });
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
