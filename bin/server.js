@@ -2865,6 +2865,8 @@ const HTML = `<!DOCTYPE html>
   #top-dms-container tr[data-row-id] { cursor: pointer; }
   #top-dms-container tr[data-row-id]:hover td { background: var(--bg-hover); }
   #top-dms-container tr.dm-row-expanded td { background: var(--bg-subtle); border-bottom-color: transparent; }
+  .dm-load-more { display: flex; justify-content: center; padding: 14px 0 8px; }
+  .dm-load-more .btn { font-size: 12px; }
   #top-dms-container tr.dm-exp-row { cursor: default; }
   #top-dms-container tr.dm-exp-row > td.dm-exp-cell { padding: 0; background: transparent; border-top: none; white-space: normal; overflow: visible; text-overflow: clip; }
   #top-dms-container tr.dm-exp-row:hover > td.dm-exp-cell { background: transparent; }
@@ -5739,6 +5741,18 @@ let _topDmMode = 'all';
 let _topDmTier = 'all';
 let _topDmQual = 'all';
 let _topDmStatus = 'all';
+// Server-side filtering for DMs sub-tab. When _topDmSearch is non-empty the
+// API drops its time-window filter so old threads can be located by author or
+// message text. _topDmOffset drives the "Load more" button.
+let _topDmSearch = '';
+let _topDmOffset = 0;
+let _topDmSearchTimer = null;
+const TOP_DM_PAGE_SIZE = 200;
+// Wider page size when window=all/90d so deprioritized threads (sort_bucket
+// 80-90: declined / not_our_prospect) are reachable in one fetch.
+function topDmPageSize() {
+  return (_topWindow === 'all' || _topWindow === '90d') ? 1000 : TOP_DM_PAGE_SIZE;
+}
 let _topPostsPayload = null;
 const _topProjectNames = new Set();
 
@@ -6046,12 +6060,12 @@ function initTopFilters() {
     _topWindow = coerceTopWindow(v);
     saveDashboardWindow(_topWindow);
     if (_topSubtab === 'pages') loadTopPages(true);
-    else if (_topSubtab === 'dms') loadTopDms(true);
+    else if (_topSubtab === 'dms') { _topDmOffset = 0; loadTopDms(true); }
     else loadTopPosts(true);
   });
   wireTopPillRow('top-platform-pills', (v) => {
     _topPlatform = v || 'all';
-    if (_topSubtab === 'dms') loadTopDms(true);
+    if (_topSubtab === 'dms') { _topDmOffset = 0; loadTopDms(true); }
     else loadTopPosts(true);
   });
   wireTopPillRow('top-project-pills', (v) => {
@@ -6090,10 +6104,19 @@ function initTopFilters() {
   });
   const searchEl = document.getElementById('top-search');
   if (searchEl && !searchEl._wired) {
-    searchEl.value = _topTableState.globalQuery || '';
+    searchEl.value = _topSubtab === 'dms' ? _topDmSearch : (_topTableState.globalQuery || '');
     searchEl.addEventListener('input', () => {
-      _topTableState.globalQuery = searchEl.value;
-      if (_topTableHandle && _topTableHandle.apply) _topTableHandle.apply();
+      if (_topSubtab === 'dms') {
+        // Server-side search across all DMs (drops the time-window filter on
+        // the API). Debounce so we don't fire a query on every keystroke.
+        _topDmSearch = searchEl.value || '';
+        _topDmOffset = 0;
+        if (_topDmSearchTimer) clearTimeout(_topDmSearchTimer);
+        _topDmSearchTimer = setTimeout(() => loadTopDms(true), 300);
+      } else {
+        _topTableState.globalQuery = searchEl.value;
+        if (_topTableHandle && _topTableHandle.apply) _topTableHandle.apply();
+      }
     });
     searchEl._wired = true;
   }
@@ -6146,6 +6169,11 @@ function initTopFilters() {
         if (srcRowEl) srcRowEl.classList.add('hidden');
         setDmRowsHidden(false);
         if (totalEl) totalEl.textContent = '';
+        const searchElDm = document.getElementById('top-search');
+        if (searchElDm) {
+          searchElDm.placeholder = 'Search DMs by author or message…';
+          searchElDm.value = _topDmSearch || '';
+        }
         loadTopDms(true);
       } else {
         pagesC.classList.add('hidden');
@@ -6156,6 +6184,11 @@ function initTopFilters() {
         if (srcRowEl) srcRowEl.classList.add('hidden');
         setDmRowsHidden(true);
         if (totalEl) totalEl.textContent = '';
+        const searchElPosts = document.getElementById('top-search');
+        if (searchElPosts) {
+          searchElPosts.placeholder = 'Search posts…';
+          searchElPosts.value = _topTableState.globalQuery || '';
+        }
         loadTopPosts(true);
       }
     });
@@ -6502,9 +6535,19 @@ function renderTopDms(payload) {
     if (_topDmStatus !== 'all' && (d.conversation_status || '') !== _topDmStatus) return false;
     return true;
   });
+  const serverTotal = (payload && Number.isFinite(Number(payload.total))) ? Number(payload.total) : null;
+  const isLookup = !!(payload && payload.lookup);
+  const loadedCount = allDms.length;
   if (totalEl) {
     const suffix = _topDmDir === 'in' ? ' (IN)' : (_topDmDir === 'out' ? ' (OUT)' : '');
-    totalEl.textContent = dms.length + ' thread' + (dms.length === 1 ? '' : 's') + suffix;
+    const filteredNote = (dms.length !== loadedCount)
+      ? (' / ' + dms.length + ' shown')
+      : '';
+    if (serverTotal != null && serverTotal > loadedCount) {
+      totalEl.textContent = loadedCount + ' of ' + serverTotal + ' threads loaded' + filteredNote + suffix;
+    } else {
+      totalEl.textContent = loadedCount + ' thread' + (loadedCount === 1 ? '' : 's') + filteredNote + suffix;
+    }
   }
   if (!dms.length) {
     const emptyMsg = _topDmDir === 'in'
@@ -6617,6 +6660,34 @@ function renderTopDms(payload) {
       if (!idNum) return;
       toggleDmExpansion(tr, idNum, colCount);
     });
+  }
+  // "Load more" footer: visible whenever the server reports more rows than
+  // we've fetched. With sort_bucket=85 threads (not_our_prospect / declined)
+  // sitting past row 200, this is the only way to surface them when no
+  // search query narrows the set.
+  if (container) {
+    const old = container.querySelector('.dm-load-more');
+    if (old) old.remove();
+    if (serverTotal != null && loadedCount < serverTotal && !isLookup) {
+      const remaining = serverTotal - loadedCount;
+      const btn = document.createElement('div');
+      btn.className = 'dm-load-more';
+      btn.innerHTML =
+        '<button type="button" class="btn btn-secondary" id="dm-load-more-btn">' +
+          'Load ' + Math.min(remaining, topDmPageSize()) + ' more (of ' + remaining + ' remaining)' +
+        '</button>';
+      container.appendChild(btn);
+      const moreBtn = btn.querySelector('#dm-load-more-btn');
+      if (moreBtn) {
+        moreBtn.addEventListener('click', () => {
+          if (_topDmsLoading) return;
+          _topDmOffset = loadedCount;
+          moreBtn.textContent = 'Loading…';
+          moreBtn.disabled = true;
+          loadTopDms(true, { append: true });
+        });
+      }
+    }
   }
 }
 
@@ -6777,17 +6848,27 @@ function toggleDmExpansion(tr, dmId, colCount) {
   window.__dmExpandedIds[dmId] = true;
 }
 
-async function loadTopDms(force) {
+async function loadTopDms(force, opts) {
   if (_topDmsLoading) return;
-  if (_topDmsLoaded && !force) return;
+  const append = !!(opts && opts.append);
+  if (!append && _topDmsLoaded && !force) return;
   _topDmsLoading = true;
   try {
-    const params = new URLSearchParams({ limit: '200', window: _topWindow });
+    if (!append) _topDmOffset = 0;
+    const params = new URLSearchParams({
+      limit: String(topDmPageSize()),
+      window: _topWindow,
+      offset: String(_topDmOffset),
+    });
     if (_topPlatform && _topPlatform !== 'all') params.set('platform', _topPlatform);
+    if (_topDmSearch) params.set('q', _topDmSearch);
     const container = document.getElementById('top-dms-container');
-    if (container && force) container.innerHTML = '<div class="style-stats-empty">Loading\u2026</div>';
+    if (container && force && !append) container.innerHTML = '<div class="style-stats-empty">Loading\u2026</div>';
     const res = await fetch('/api/top/dms?' + params.toString());
     const data = await res.json();
+    if (append && _topDmsPayload && Array.isArray(_topDmsPayload.dms) && Array.isArray(data.dms)) {
+      data.dms = _topDmsPayload.dms.concat(data.dms);
+    }
     _topDmsPayload = data;
     renderTopDms(data);
     _topDmsLoaded = true;
