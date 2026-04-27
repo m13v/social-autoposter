@@ -2062,6 +2062,58 @@ async function handleApi(req, res) {
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
+  // POST /api/dm/:id/instructions - queue a human-authored instruction for the
+  // DM-reply agent. Mirrors what scripts/ingest_human_dm_replies.py does for
+  // Gmail-sourced replies, but inserts directly from the dashboard.
+  // Phase 0 of skill/engage-dm-replies.sh consumes status='pending' rows on
+  // the next platform-specific launchd tick (reddit :13/:43, linkedin :09/:39,
+  // twitter :14) and the LLM there crafts the actual DM from the instructions.
+  const instructionsMatch = p.match(/^\/api\/dm\/(\d+)\/instructions$/);
+  if (instructionsMatch && req.method === 'POST') {
+    const dmId = parseInt(instructionsMatch[1], 10);
+    return readBody(req).then(async (body) => {
+      let payload;
+      try { payload = JSON.parse(body || '{}'); } catch { return json(res, { error: 'invalid_json' }, 400); }
+      const instructions = String(payload && payload.instructions || '').trim();
+      if (instructions.length < 5) return json(res, { error: 'instructions_too_short' }, 400);
+      if (instructions.length > 4000) return json(res, { error: 'instructions_too_long' }, 400);
+      const dmRows = await pq(
+        "SELECT d.id, d.platform, d.their_author, " +
+          "COALESCE(p_direct.project_name, p_via_reply.project_name, d.target_project) AS project_name " +
+        "FROM dms d " +
+        "LEFT JOIN posts   p_direct    ON p_direct.id    = d.post_id " +
+        "LEFT JOIN replies r_link      ON r_link.id      = d.reply_id " +
+        "LEFT JOIN posts   p_via_reply ON p_via_reply.id = r_link.post_id " +
+        "WHERE d.id = $1",
+        [dmId]
+      );
+      if (!dmRows || !dmRows.length) return json(res, { error: 'dm_not_found' }, 404);
+      const dm = dmRows[0];
+      const dmPc = auth.projectClause(req.user, "COALESCE(p_direct.project_name, p_via_reply.project_name, d.target_project)", dm.project_name);
+      if (!dmPc.ok) return json(res, { error: 'forbidden' }, 403);
+      const ins = await pq(
+        "INSERT INTO human_dm_replies (dm_id, platform, their_author, project_name, " +
+          "instructions, email_subject, resend_email_id, status) " +
+        "VALUES ($1, $2, $3, $4, $5, $6, NULL, 'pending') " +
+        "RETURNING id, dm_id, status, instructions, created_at, attempts",
+        [dmId, dm.platform, dm.their_author, dm.project_name, instructions, '[DM #' + dmId + '] (dashboard)']
+      );
+      if (!ins || !ins.length) return json(res, { error: 'insert_failed' }, 500);
+      const row = ins[0];
+      return json(res, {
+        ok: true,
+        instruction: {
+          id: row.id,
+          status: row.status,
+          instructions: row.instructions,
+          created_at: row.created_at,
+          attempts: row.attempts,
+          source: 'dashboard',
+        },
+      }, 201);
+    }).catch(e => json(res, { error: e.message }, 500));
+  }
+
   // GET /api/top - top-performing posts by engagement
   // Mirrors scripts/top_performers.py: active posts, non-trivial content,
   // excludes platforms we don't score. Default ranking is upvotes DESC (that's
@@ -2902,6 +2954,33 @@ const HTML = `<!DOCTYPE html>
   .dm-exp-ctx-body   { white-space: pre-wrap; word-break: break-word; color: var(--text); }
   .dm-exp-ctx-title  { font-weight: 600; color: var(--text); margin-bottom: 3px; }
   .dm-exp-ctx-fallback { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; background: #fef3c7; color: #92400e; border: 1px solid #fde68a; margin-left: 4px; cursor: help; }
+
+  /* Escalation card — surfaces the human-handoff request and the queue of
+     instructions written for the DM-reply agent. Sits above the context block. */
+  .dm-esc-card { background: var(--bg-card); border: 1px solid #fbbf24; border-left: 3px solid #f59e0b; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 12px; line-height: 1.45; display: flex; flex-direction: column; gap: 10px; }
+  .dm-esc-head { display: flex; align-items: baseline; gap: 8px; }
+  .dm-esc-tag  { display: inline-block; padding: 2px 7px; border-radius: 3px; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+  .dm-esc-reason { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+  .dm-esc-list { display: flex; flex-direction: column; gap: 6px; }
+  .dm-esc-item { background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 6px 8px; }
+  .dm-esc-item-meta { display: flex; align-items: center; gap: 6px; font-size: 10px; text-transform: lowercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 4px; font-weight: 600; }
+  .dm-esc-item-body { white-space: pre-wrap; word-break: break-word; color: var(--text); font-size: 12px; }
+  .dm-esc-status { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 9px; font-weight: 700; }
+  .dm-esc-status-pending { background: #fef3c7; color: #92400e; }
+  .dm-esc-status-sent    { background: #d1fae5; color: #065f46; }
+  .dm-esc-status-failed  { background: #fee2e2; color: #991b1b; }
+  .dm-esc-source { padding: 1px 5px; border: 1px solid var(--border); border-radius: 3px; }
+  .dm-esc-compose { display: flex; flex-direction: column; gap: 6px; }
+  .dm-esc-textarea { width: 100%; box-sizing: border-box; min-height: 64px; padding: 8px 10px; font-family: inherit; font-size: 12px; line-height: 1.5; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 5px; resize: vertical; }
+  .dm-esc-textarea:focus { outline: none; border-color: var(--link); }
+  .dm-esc-bar { display: flex; align-items: center; gap: 8px; }
+  .dm-esc-hint { font-size: 10px; color: var(--text-muted); margin-right: auto; }
+  .dm-esc-submit { padding: 5px 12px; font-size: 11px; font-weight: 600; color: #fff; background: #f59e0b; border: 1px solid #d97706; border-radius: 4px; cursor: pointer; }
+  .dm-esc-submit:hover { background: #d97706; }
+  .dm-esc-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+  .dm-esc-feedback { font-size: 11px; padding: 4px 0; }
+  .dm-esc-feedback-ok  { color: #047857; }
+  .dm-esc-feedback-err { color: #b91c1c; }
 
   .prospect-modal-overlay { position: fixed; inset: 0; background: var(--shadow-modal); display: flex; align-items: flex-start; justify-content: center; z-index: 9999; padding: 60px 20px 20px; overflow-y: auto; }
   .prospect-modal { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; max-width: 640px; width: 100%; padding: 24px 28px; color: var(--text); font-size: 13px; line-height: 1.5; }
