@@ -433,21 +433,25 @@ def build_cross_roundup_block(host_cfg: dict) -> str:
         "   competitors against that single criterion using their actual\n"
         "   public information, not vibes.\n\n"
         "## Host inclusion rules\n\n"
-        f"- {host_name} MAY appear in the ranked list, but only if a neutral\n"
-        "  reader applying the stated criterion would honestly place it in\n"
-        "  the top results. Otherwise omit it from the ranked list and\n"
-        "  identify it once at the end as the publisher of the page (a\n"
-        "  short About-the-host card is fine).\n"
-        f"- {host_name} MUST NOT be ranked #1 by default. Place it where\n"
-        "  the criterion places it. If a competitor genuinely beats the\n"
-        "  host on the stated criterion, rank that competitor higher and\n"
-        "  say so plainly.\n"
-        "- Do NOT defensively justify the host's rank with an FAQ entry\n"
-        "  like 'why is the host #1 on its own site'. If you feel the urge\n"
-        "  to write that FAQ, the rank is wrong.\n"
-        "- The page is allowed to credibly recommend a competitor over the\n"
-        "  host for a specific buyer profile. That tradeoff is what makes\n"
-        "  the page useful and ranks better long-term than self-promo.\n\n"
+        f"- {host_name} is featured first by default. This is the host's\n"
+        "  own domain; readers expect the publisher's product up top, the\n"
+        "  same way every first-party 'best of' page on the web works.\n"
+        f"  Open the ranked list with {host_name} as entry #1.\n"
+        f"- The {host_name} entry must be honest, not hype. Give a real\n"
+        "  description of what it does, who it serves best, the criterion\n"
+        "  it leads on, and at least one verifiable fact (year founded,\n"
+        "  scope, public clients, pricing tier, capability). One short\n"
+        "  honest line acknowledging tradeoffs (who it is NOT for) is\n"
+        "  encouraged; it builds trust and helps the page rank.\n"
+        "- Competitors follow ranked by the stated criterion using their\n"
+        "  actual public information. If a competitor genuinely beats the\n"
+        "  host on a specific buyer profile or sub-criterion, say so\n"
+        "  plainly inside that competitor's entry. Honest tradeoffs make\n"
+        "  the page more useful and rank better long-term than pure\n"
+        "  promo.\n"
+        "- Do not invent superlatives for the host (no 'the #1 X', 'the\n"
+        "  best X in the world'). The host leads the list because it is\n"
+        "  the publisher; let the reader judge from concrete facts.\n\n"
         "## Optional sibling appendix (escape hatch)\n\n"
         "Below is the list of OTHER projects we run. They are NOT in this\n"
         "niche. You MAY add a small appendix at the bottom of the page\n"
@@ -1255,12 +1259,12 @@ Required on every page, placement entirely up to you (not locked to top, bottom,
 2. **`FaqSection`** somewhere in the page (does not have to be near the bottom; an inline FAQ between body sections is fine, a Q-and-A skeleton can be all FAQ). At least 5 concrete, specific FAQs drawn from your research. Generic FAQs are worse than no FAQs.
 3. **JSON-LD structured data** as a `<script type="application/ld+json">` tag. Import `articleSchema`, `breadcrumbListSchema`, and `faqPageSchema` from `@seo/components`.
 
-Optional, use only when the content type and angle actually call for them:
+Required on cross_roundup pages, optional elsewhere:
 
-4. **`ArticleMeta`** is appropriate for guide, use_case, and cross_roundup pages where a byline and reading time help orient the reader. Skip it on alternative/comparison pages and on reference-style pages where a byline reads as filler. If you skip it, still emit the author info inside `articleSchema` (the JSON-LD must always carry the byline). The current content type is `{content_type}`; let it inform the choice.
+4. **`ArticleMeta` (REQUIRED on cross_roundup, optional otherwise).** On cross_roundup pages the byline MUST render directly under the H1 as the first element of the article body, before any prose, hero card, or proof band. This is locked: do not move it to the footer, into a sidebar, or below the intro. On guide and use_case pages it is appropriate but placement is your call. Skip it on alternative/comparison pages and on reference-style pages where a byline reads as filler. If you skip it, still emit the author info inside `articleSchema` (the JSON-LD must always carry the byline). The current content type is `{content_type}`; let it inform the choice.
 5. **`ProofBand`** is appropriate when the page sits near a buying decision (alternative, use_case) and you have honest social proof or numbers to put there. Skip it on guide/explainer pages where a proof strip would feel grafted on. If you do include it, put it wherever it lands naturally in the flow (top, mid, footer), not in a fixed slot.
 
-Whatever you include, vary placement across pages on the same site. If the last few pages all opened with Breadcrumbs + ArticleMeta + ProofBand in that exact order under the H1, do something else this time.
+Vary placement of optional chrome (Breadcrumbs, ProofBand) across pages on the same site. ArticleMeta on cross_roundup is the one fixed slot: directly under the H1.
 
 ### AUTHOR ATTRIBUTION (mandatory, non-negotiable, do not invent)
 
