@@ -165,7 +165,7 @@ def cmd_resolve(args):
         dm = cur.fetchone()
         if not dm:
             print(json.dumps({'error': 'not_found', 'code': args.code}))
-            sys.exit(1)
+            return
         dm = dict(dm)
         platform = (dm.get('platform') or 'reddit').lower()
         if platform == 'x':
@@ -174,7 +174,7 @@ def cmd_resolve(args):
         proj = projects.get(project_name) if project_name else None
         if not proj or not proj.get('booking_link'):
             print(json.dumps({'error': 'no_project', 'dm_id': dm['id']}))
-            sys.exit(1)
+            return
         target = _build_target_url(
             proj['booking_link'],
             dm_id=dm['id'],
