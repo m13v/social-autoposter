@@ -149,6 +149,16 @@ def pick_github_project(config, recent_counts):
     return random.choices(pool, weights=weights, k=1)[0]
 
 
+def _angle_str(v):
+    if isinstance(v, str):
+        return v.strip()
+    if isinstance(v, dict):
+        return "; ".join(f"{k}: {_angle_str(x)}" for k, x in v.items() if x)
+    if isinstance(v, (list, tuple)):
+        return ", ".join(_angle_str(x) for x in v if x)
+    return str(v) if v else ""
+
+
 def build_content_angle(project, config):
     """Rich angle: prefer content_angle override, otherwise compose from
     description / differentiator / icp / setup / messaging / voice."""
@@ -156,14 +166,14 @@ def build_content_angle(project, config):
         return project["content_angle"]
     parts = []
     for key in ("description", "differentiator", "icp", "setup"):
-        value = project.get(key)
-        if value:
-            parts.append(value)
+        s = _angle_str(project.get(key))
+        if s:
+            parts.append(s)
     messaging = project.get("messaging", {}) or {}
     for key in ("lead_with_pain", "solution", "proof"):
-        value = messaging.get(key)
-        if value:
-            parts.append(value)
+        s = _angle_str(messaging.get(key))
+        if s:
+            parts.append(s)
     voice = project.get("voice", {}) or {}
     if voice.get("tone"):
         parts.append(f"Voice: {voice['tone']}")
