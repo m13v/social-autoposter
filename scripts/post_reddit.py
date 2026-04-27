@@ -228,6 +228,16 @@ def load_active_reddit_campaigns():
         conn.close()
 
 
+def _angle_str(v):
+    if isinstance(v, str):
+        return v.strip()
+    if isinstance(v, dict):
+        return "; ".join(f"{k}: {_angle_str(x)}" for k, x in v.items() if x)
+    if isinstance(v, (list, tuple)):
+        return ", ".join(_angle_str(x) for x in v if x)
+    return str(v) if v else ""
+
+
 def build_content_angle(project, config):
     """Prefer project-specific positioning over the global config angle."""
     if project.get("content_angle"):
@@ -235,17 +245,17 @@ def build_content_angle(project, config):
 
     parts = []
     for key in ("description", "differentiator", "icp", "setup"):
-        value = project.get(key)
-        if value:
-            parts.append(value)
+        s = _angle_str(project.get(key))
+        if s:
+            parts.append(s)
 
-    messaging = project.get("messaging", {})
+    messaging = project.get("messaging", {}) or {}
     for key in ("lead_with_pain", "solution", "proof"):
-        value = messaging.get(key)
-        if value:
-            parts.append(value)
+        s = _angle_str(messaging.get(key))
+        if s:
+            parts.append(s)
 
-    voice = project.get("voice", {})
+    voice = project.get("voice", {}) or {}
     if voice.get("tone"):
         parts.append(f"Voice: {voice['tone']}")
 
@@ -524,19 +534,20 @@ def log_post(thread_url, permalink, text, project_name, thread_author, thread_ti
         return None
 
 
-def bump_campaigns(post_id, campaign_ids):
-    """Attach a post to its applied campaigns and increment their counters."""
-    if not post_id or not campaign_ids:
+def bump_campaigns(table, row_id, campaign_ids):
+    """Attach a row in {posts,replies,dm_messages} to its applied campaigns."""
+    if not row_id or not campaign_ids:
         return
-    try:
-        subprocess.run(
-            ["python3", os.path.join(REPO_DIR, "scripts", "campaign_bump.py"),
-             "--post-id", str(post_id),
-             "--campaign-ids", ",".join(str(i) for i in campaign_ids)],
-            capture_output=True, text=True, timeout=15,
-        )
-    except Exception as e:
-        print(f"[post_reddit] WARNING: campaign_bump failed: {e}")
+    bump = os.path.join(REPO_DIR, "scripts", "campaign_bump.py")
+    for cid in campaign_ids:
+        try:
+            subprocess.run(
+                ["python3", bump,
+                 "--table", table, "--id", str(row_id), "--campaign-id", str(cid)],
+                capture_output=True, text=True, timeout=15,
+            )
+        except Exception as e:
+            print(f"[post_reddit] WARNING: campaign_bump failed (id={row_id} c={cid}): {e}")
 
 
 def parse_post_decisions(output):
@@ -650,7 +661,7 @@ def run_one_iteration(args, config, reddit_username, already_picked):
                      thread_author, thread_title, reddit_username,
                      engagement_style=engagement_style,
                      search_topic=search_topic)
-            bump_campaigns(new_post_id, applied_campaign_ids)
+            bump_campaigns("posts", new_post_id, applied_campaign_ids)
             posted += 1
             print(f"[post_reddit] POSTED: {permalink}")
         else:
