@@ -101,11 +101,96 @@ def mark_self_reply(args):
     print(json.dumps({"marked": True, "post_id": args.post_id}))
 
 
+def log_rejected(args):
+    """Record a comment attempt that the platform rejected server-side.
+
+    Writes status='rejected_by_platform' so dedup blocks retries on the same
+    thread, and stashes the rejection reason + network response in
+    source_summary for diagnostics.
+    """
+    missing = [f for f in ("platform", "thread_url", "our_content", "project")
+               if getattr(args, f) is None]
+    if missing:
+        print(json.dumps({
+            "error": "MISSING_ARGS",
+            "message": f"--rejected requires: {', '.join('--' + m.replace('_', '-') for m in missing)}",
+        }))
+        sys.exit(1)
+
+    account = args.account or DEFAULT_ACCOUNTS.get(args.platform, "")
+
+    summary_parts = []
+    if args.rejection_reason:
+        summary_parts.append(f"REASON: {args.rejection_reason}")
+    if args.network_response:
+        # Cap to keep row size sane — we only need the response shape.
+        summary_parts.append(f"NETWORK: {args.network_response[:4000]}")
+    summary = "\n".join(summary_parts) if summary_parts else "rejected_by_platform"
+
+    dbmod.load_env()
+    conn = dbmod.get_conn()
+
+    cur = conn.execute(
+        "SELECT id, status FROM posts "
+        "WHERE platform = %s AND thread_url = %s LIMIT 1",
+        [args.platform, args.thread_url],
+    )
+    existing = cur.fetchone()
+    if existing:
+        conn.close()
+        print(json.dumps({
+            "error": "DUPLICATE_THREAD",
+            "message": "Already have a row for this thread",
+            "existing_post_id": existing[0],
+            "existing_status": existing[1],
+        }))
+        return
+
+    claude_session_id = os.environ.get("CLAUDE_SESSION_ID") or None
+
+    cur = conn.execute(
+        """INSERT INTO posts (
+            platform, thread_url, thread_author, thread_author_handle,
+            thread_title, thread_content, our_url, our_content, our_account,
+            source_summary, project_name, status, posted_at,
+            feedback_report_used, engagement_style, is_recommendation,
+            language, claude_session_id
+        ) VALUES (
+            %s, %s, %s, %s,
+            %s, '', '', %s, %s,
+            %s, %s, 'rejected_by_platform', NOW(),
+            FALSE, %s, FALSE,
+            %s, %s
+        ) RETURNING id""",
+        [
+            args.platform, args.thread_url, args.thread_author, args.thread_author,
+            args.thread_title, args.our_content, account,
+            summary, args.project, args.engagement_style,
+            args.language, claude_session_id,
+        ],
+    )
+    row = cur.fetchone()
+    post_id = row[0] if row else None
+    conn.commit()
+    conn.close()
+    print(json.dumps({"rejected": True, "post_id": post_id}))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Log a posted comment to the database")
     parser.add_argument("--mark-self-reply", action="store_true",
                         help="UPDATE mode: mark link_edited_at on an existing post. "
                              "Requires --post-id, --self-reply-url, --self-reply-content.")
+    parser.add_argument("--rejected", action="store_true",
+                        help="REJECTED mode: record a server-rejected attempt with "
+                             "status='rejected_by_platform'. Skips our_url validation. "
+                             "Use when the platform silently swallowed the comment.")
+    parser.add_argument("--rejection-reason", default=None,
+                        help="Brief reason text (e.g. 'TOAST: comment could not be created'). "
+                             "Goes into source_summary.")
+    parser.add_argument("--network-response", default=None,
+                        help="Captured XHR response from the comment-create endpoint. "
+                             "Goes into source_summary (truncated to 4000 chars).")
     parser.add_argument("--post-id", type=int, default=None,
                         help="posts.id to update (only with --mark-self-reply)")
     parser.add_argument("--self-reply-url", default=None,
@@ -135,6 +220,10 @@ def main():
 
     if args.mark_self_reply:
         mark_self_reply(args)
+        return
+
+    if args.rejected:
+        log_rejected(args)
         return
 
     # INSERT mode — enforce required fields that argparse can't conditionally require.
