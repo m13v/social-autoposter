@@ -14,6 +14,7 @@ Usage:
 import argparse
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -27,6 +28,7 @@ import db as dbmod
 REPO_DIR = os.path.expanduser("~/social-autoposter")
 CONFIG_PATH = os.path.join(REPO_DIR, "config.json")
 REPLY_DB = os.path.join(REPO_DIR, "scripts", "reply_db.py")
+CAMPAIGN_BUMP = os.path.join(REPO_DIR, "scripts", "campaign_bump.py")
 REDDIT_MCP_CONFIG = os.path.expanduser("~/.claude/browser-agent-configs/reddit-agent-mcp.json")
 
 from engagement_styles import REPLY_STYLES as VALID_STYLES, get_styles_prompt, get_content_rules, get_anti_patterns
@@ -35,6 +37,49 @@ from engagement_styles import REPLY_STYLES as VALID_STYLES, get_styles_prompt, g
 def load_config():
     with open(CONFIG_PATH) as f:
         return json.load(f)
+
+
+def load_active_reddit_campaigns():
+    """Active Reddit campaigns with a literal suffix and budget remaining.
+
+    Tool-level enforcement: the LLM never sees these. We append suffix to the
+    drafted text in Python before the browser submits, so the literal text is
+    guaranteed on Reddit. sample_rate gates the per-reply coin flip for A/B.
+    """
+    dbmod.load_env()
+    conn = dbmod.get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT id, suffix, COALESCE(sample_rate, 1.000)
+               FROM campaigns
+               WHERE status = 'active'
+                 AND (',' || platforms || ',') LIKE '%,reddit,%'
+                 AND max_posts_total IS NOT NULL
+                 AND posts_made < max_posts_total
+                 AND suffix IS NOT NULL AND suffix <> ''
+               ORDER BY id"""
+        )
+        return [
+            {"id": r[0], "suffix": r[1], "sample_rate": float(r[2])}
+            for r in cur.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def bump_campaigns(table, row_id, campaign_ids):
+    """Attach a row in {posts,replies,dm_messages} to its applied campaigns."""
+    if not row_id or not campaign_ids:
+        return
+    for cid in campaign_ids:
+        try:
+            subprocess.run(
+                ["python3", CAMPAIGN_BUMP,
+                 "--table", table, "--id", str(row_id), "--campaign-id", str(cid)],
+                capture_output=True, text=True, timeout=15,
+            )
+        except Exception as e:
+            print(f"[engage_reddit] WARNING: campaign_bump failed (id={row_id} c={cid}): {e}")
 
 
 def reset_stuck_processing(conn, platform):
@@ -400,6 +445,19 @@ def main():
                     # Mark as processing
                     subprocess.run(["python3", REPLY_DB, "processing", str(reply["id"])])
 
+                    # Tool-level campaign suffix injection (Reddit only).
+                    # The LLM never sees the campaign; we append the literal
+                    # suffix here so the actual posted text carries the tag.
+                    applied_campaign_ids = []
+                    if reply["platform"] == "reddit":
+                        for camp in load_active_reddit_campaigns():
+                            if random.random() < camp["sample_rate"]:
+                                reply_text = reply_text + camp["suffix"]
+                                applied_campaign_ids.append(camp["id"])
+                        if applied_campaign_ids:
+                            print(f"[engage_reddit] #{reply['id']} applied campaigns "
+                                  f"{applied_campaign_ids} (suffix appended)")
+
                     # Post via CDP (reddit) or Moltbook API (moltbook)
                     post_result = None
                     if reply["platform"] == "moltbook":
@@ -473,6 +531,8 @@ def main():
                         if engagement_style:
                             cmd_args.append(engagement_style)
                         subprocess.run(cmd_args)
+                        # Attribute reply to any campaigns that applied a suffix
+                        bump_campaigns("replies", reply["id"], applied_campaign_ids)
                         # Update project if recommended
                         if project:
                             dbmod.load_env()
