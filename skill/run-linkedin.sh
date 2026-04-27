@@ -36,15 +36,6 @@ PROJECT_DIST=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform linkedin -
 # Generate top performers feedback report (platform-wide)
 TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform linkedin 2>/dev/null || echo "(top performers report unavailable)")
 
-# Engaged LinkedIn URN IDs — every 16-19 digit ID we've ever stored in
-# thread_url or our_url for platform='linkedin'. Same post can surface as
-# /feed/update/urn:li:activity:X, /posts/...-share-Y-..., or
-# /posts/...-ugcPost-Z-... with different numeric URNs, so we ship the
-# whole set and have the LLM check ANY ID in a candidate URL against it.
-# Capped at 4000 IDs to keep prompt size sane (one ID is ~20 bytes; even
-# at the cap that's <100KB).
-ENGAGED_IDS=$(python3 "$REPO_DIR/scripts/linkedin_url.py" --list-engaged-ids 2>/dev/null | head -4000 | tr '\n' ' ' || echo "")
-
 # Generate engagement style and content rules from shared module
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block linkedin posting)
@@ -70,24 +61,18 @@ Choose the project that has the best natural fit with the post you find.
 ## FEEDBACK FROM PAST PERFORMANCE (use this to write better comments):
 $TOP_REPORT
 
-## ENGAGED LINKEDIN POST IDS (DO NOT comment on any post whose URL contains any of these IDs)
+## ENGAGED LINKEDIN POST DEDUP (DO NOT comment on a post we already commented on)
 The same LinkedIn post surfaces under several URL shapes with different
-numeric URNs. The full set of URNs we've ever engaged with is:
-$ENGAGED_IDS
+numeric URNs (activity URN, share URN, ugcPost URN). For example
+'/feed/update/urn:li:activity:7443531396306100224/' and
+'/posts/<slug>-share-7443531393558638592-<sfx>' are the SAME post but
+contain different numbers. The URL bar alone is not a reliable identity.
 
-BEFORE you submit a comment on any candidate post, do this check:
-  1. Read the post's permalink in the page (the share dialog or URL bar).
-     It will look like ONE of these shapes:
-       https://www.linkedin.com/feed/update/urn:li:activity:<19-digit-id>/
-       https://www.linkedin.com/posts/<slug>-activity-<19-digit-id>-<sfx>
-       https://www.linkedin.com/posts/<slug>-share-<19-digit-id>-<sfx>
-       https://www.linkedin.com/posts/<slug>-ugcPost-<19-digit-id>-<sfx>
-  2. Extract every 16-19 digit number from that URL.
-  3. If ANY extracted number appears in the ENGAGED LINKEDIN POST IDS
-     list above, SKIP this post and find another. We already commented on it.
-  4. You can also pre-check programmatically (faster than scanning the list):
-       python3 $REPO_DIR/scripts/linkedin_url.py --check-engaged "<post-url>"
-     Exit code 0 = engaged (skip). Exit code 1 = not engaged (proceed).
+The mandatory pre-comment check is in step 3 of the workflow below: walk
+the rendered DOM for every URN it contains, then pipe ALL of them to
+linkedin_url.py --check-engaged-ids. If any one collides with our DB,
+skip the post.
+
 This is non-negotiable. Posting a second comment on a post we already
 commented on costs us reputation and looks spammy.
 
