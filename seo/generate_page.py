@@ -629,6 +629,14 @@ _SEO_IMPORT_RE = re.compile(
     r"import\s*\{([^}]+)\}\s*from\s*['\"]@seo/components['\"]",
     re.MULTILINE | re.DOTALL,
 )
+# Each generated SEO page declares `const PUBLISHED = "YYYY-MM-DD"` near the
+# top. That string is set at generation time and survives /improve passes,
+# so it is a far more reliable "when was this page born" signal than the
+# file mtime (which gets clobbered by git pulls, bulk component bumps, and
+# improve_page.py rewrites).
+_PUBLISHED_RE = re.compile(
+    r"""const\s+PUBLISHED\s*=\s*['"](\d{4}-\d{2}-\d{2})['"]""",
+)
 _SCHEMA_NAMES = {
     "articleSchema",
     "breadcrumbListSchema",
@@ -656,50 +664,105 @@ _ALWAYS_ALLOWED = {
 }
 
 
-def _scan_recent_components(repo: str, example_dirs: list[str], limit: int = 25) -> list[tuple[str, int]]:
-    """Scan up to `limit` most-recently-modified page.tsx files under the
-    given example_dirs of the consumer repo and return component-name usage
-    counts, sorted descending. Counts each component once per page (presence,
-    not raw mention count) so a page that uses NumberTicker 8 times still
-    contributes 1 to the NumberTicker score.
+def _all_seo_content_dirs() -> list[str]:
+    """Union of every example_dir across all CONTENT_TYPES, deduped while
+    preserving order. The anti-quota scans the entire SEO surface of the
+    consumer site so a `guide` page sees the components used by the
+    `alternative` and `use_case` pages too (those are written by the same
+    pipeline and the visual sameness is shared across content types).
+    """
+    seen: list[str] = []
+    for ct in CONTENT_TYPES.values():
+        for d in ct.get("example_dirs", []):
+            if d not in seen:
+                seen.append(d)
+    return seen
+
+
+def _scan_recent_components(repo: str, example_dirs: list[str] | None = None,
+                            limit: int = 25) -> tuple[list[tuple[str, int]], int]:
+    """Scan the consumer site's SEO pages and return (component_counts, n_scanned).
+
+    Selection rule: walk all SEO content dirs (across all content types,
+    not just the current one), keep only pages that actually import from
+    `@seo/components` (so non-SEO routes that happen to live under the same
+    tree do not contaminate the sample), and rank by recency. Recency is
+    the `const PUBLISHED = "YYYY-MM-DD"` constant the generator stamps
+    into every page; mtime is used only as a fallback when PUBLISHED is
+    missing. mtime alone is unreliable because git pulls and bulk
+    `@m13v/seo-components` bumps reset every page's mtime in unison.
+
+    Counts each component once per page (presence, not raw mention count)
+    so a page that uses NumberTicker eight times still contributes 1 to
+    the NumberTicker score.
     """
     if not repo:
-        return []
+        return [], 0
     repo_root = Path(repo).expanduser()
+    dirs = list(example_dirs) if example_dirs else _all_seo_content_dirs()
+    seen_paths: set[Path] = set()
     candidates: list[Path] = []
-    for d in example_dirs:
+    for d in dirs:
         base = repo_root / d
         if not base.exists():
             continue
         try:
-            candidates.extend(p for p in base.rglob("page.tsx"))
+            for p in base.rglob("page.tsx"):
+                if p not in seen_paths:
+                    seen_paths.add(p)
+                    candidates.append(p)
         except (OSError, PermissionError):
             continue
     if not candidates:
-        return []
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    candidates = candidates[:limit]
+        return [], 0
 
-    counts: dict[str, int] = {}
+    # Pull the PUBLISHED date and the @seo/components import block in a
+    # single read pass per file. Drop pages with no SEO import block at
+    # all (they are not pages this anti-quota cares about).
+    enriched: list[tuple[Path, str | None, float, set[str]]] = []
     for p in candidates:
         try:
             text = p.read_text(errors="ignore")
         except (OSError, PermissionError):
             continue
-        seen: set[str] = set()
+        names: set[str] = set()
         for m in _SEO_IMPORT_RE.finditer(text):
             for raw in m.group(1).split(","):
                 name = raw.strip().split(" as ")[0].strip()
-                if not name:
-                    continue
-                if name in _SCHEMA_NAMES or name in _ALWAYS_ALLOWED:
+                if not name or name in _SCHEMA_NAMES or name in _ALWAYS_ALLOWED:
                     continue
                 if not name[:1].isupper():
                     continue
-                seen.add(name)
-        for name in seen:
+                names.add(name)
+        if not names and "@seo/components" not in text:
+            # Not an SEO page at all (e.g. a layout, a non-SEO route under
+            # the same tree). Skip it so it does not waste a slot.
+            continue
+        pub_match = _PUBLISHED_RE.search(text)
+        published = pub_match.group(1) if pub_match else None
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        enriched.append((p, published, mtime, names))
+
+    if not enriched:
+        return [], 0
+
+    # Primary sort: PUBLISHED date desc (pages without one rank below
+    # pages with one). Secondary: mtime desc as a tiebreaker / fallback.
+    enriched.sort(
+        key=lambda e: (e[1] or "0000-00-00", e[2]),
+        reverse=True,
+    )
+    enriched = enriched[:limit]
+
+    counts: dict[str, int] = {}
+    for _, _, _, names in enriched:
+        for name in names:
             counts[name] = counts.get(name, 0) + 1
-    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return ranked, len(enriched)
 
 
 def render_anti_quota(repo: str, example_dirs: list[str]) -> str:
