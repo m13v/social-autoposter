@@ -157,6 +157,16 @@ CREATE INDEX IF NOT EXISTS idx_dms_icp_matches ON dms USING gin (icp_matches);
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS prospect_id INTEGER;              -- FK added below after prospects table defined
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS model TEXT;                       -- dominant Claude model for the outreach session
 
+-- Per-DM short link for booking attribution. The link is hosted on the matched
+-- project's marketing site (e.g. https://aiphoneordering.com/r/<code>) and
+-- 302s to Cal.com with metadata[utm_content]=dm_<id> so cal_bookings closes
+-- the loop. Click count + first/last click are stamped by the resolver on hit.
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS short_link_code TEXT;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS short_link_clicks INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS short_link_first_click_at TIMESTAMP;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS short_link_last_click_at TIMESTAMP;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dms_short_link_code ON dms(short_link_code) WHERE short_link_code IS NOT NULL;
+
 -- prospects: persistent per-(platform, author) record. One person can have multiple DMs over time.
 CREATE TABLE IF NOT EXISTS prospects (
     id SERIAL PRIMARY KEY,
