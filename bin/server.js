@@ -844,6 +844,29 @@ async function handleApi(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
 
+  // PUBLIC: short-link resolver. Called from each client website's /r/[code]
+  // route to map a DM short code to a Cal.com URL with full UTM. No auth, no
+  // admin gate — the blast radius is a noisy click counter, and the response
+  // does not leak DM contents (only target_url + dm_id + project + platform).
+  if (p.startsWith('/api/short-links/') && req.method === 'GET') {
+    const code = decodeURIComponent(p.slice('/api/short-links/'.length).split('/')[0] || '').trim();
+    if (!/^[a-z0-9]{4,32}$/i.test(code)) {
+      return json(res, { error: 'bad_code' }, 400);
+    }
+    try {
+      const out = execSync(
+        `python3 ${path.join(DEST, 'scripts', 'dm_short_links.py')} resolve --code ${code}`,
+        { stdio: 'pipe', timeout: 5000, env: { ...process.env, ...loadEnv() } }
+      ).toString().trim();
+      const parsed = JSON.parse(out);
+      if (parsed.error) return json(res, parsed, 404);
+      return json(res, parsed);
+    } catch (e) {
+      const stderr = (e.stderr && e.stderr.toString()) || e.message;
+      return json(res, { error: 'resolver_failed', detail: stderr.slice(0, 500) }, 500);
+    }
+  }
+
   // Auth: no-op when CLIENT_MODE is unset (local operator use).
   // When CLIENT_MODE=1, require a Firebase Bearer token and enforce admin/project claims.
   const av = await auth.verifyAuth(req, p);
