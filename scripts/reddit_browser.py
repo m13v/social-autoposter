@@ -29,6 +29,7 @@ to reuse the existing logged-in session.
 import atexit
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -997,15 +998,89 @@ def read_conversation(chat_url, max_messages=20):
                 browser.close()
 
 
+def _load_active_reddit_campaigns_for_dm():
+    """Best-effort: returns [(id, suffix, sample_rate), ...] for active reddit
+    campaigns. On any failure (no DB, missing module, etc.) returns []. This
+    keeps reddit_browser.py usable in non-DB contexts."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import db as _db
+        _db.load_env()
+        conn = _db.get_conn()
+        try:
+            cur = conn.execute(
+                """SELECT id, suffix, COALESCE(sample_rate, 1.000)
+                   FROM campaigns
+                   WHERE status='active'
+                     AND (',' || platforms || ',') LIKE '%,reddit,%'
+                     AND max_posts_total IS NOT NULL
+                     AND posts_made < max_posts_total
+                     AND suffix IS NOT NULL AND suffix <> ''
+                   ORDER BY id"""
+            )
+            return [(r[0], r[1], float(r[2])) for r in cur.fetchall()]
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
+
+def _log_dm_outbound(chat_url, content):
+    """After a successful send, look up dm_id by chat_url and log via the
+    canonical CLI. The CLI's auto-suffix-detection will set campaign_id and
+    bump the campaign counter when the content ends with an active suffix.
+    Returns True on logged or already-logged-as-dedup."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import db as _db
+        _db.load_env()
+        conn = _db.get_conn()
+        try:
+            row = conn.execute(
+                "SELECT id FROM dms WHERE platform='reddit' AND chat_url = %s "
+                "ORDER BY id DESC LIMIT 1",
+                (chat_url,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return False
+        dm_id = row["id"] if hasattr(row, "__getitem__") else row[0]
+        subprocess.run(
+            ["python3", os.path.join(os.path.dirname(os.path.abspath(__file__)), "dm_conversation.py"),
+             "log-outbound", "--dm-id", str(dm_id), "--content", content],
+            capture_output=True, text=True, timeout=20,
+        )
+        return True
+    except Exception as e:
+        print(f"[reddit_browser] internal log-outbound failed: {e}", file=sys.stderr)
+        return False
+
+
 def send_dm(chat_url, message):
     """Send a message in a Reddit chat or PM thread.
 
     For chat URLs (reddit.com/chat/...), navigates to the chat room and
     types/sends the message. For PM URLs, uses old.reddit.com message compose.
 
-    Returns: {"ok": true, "thread_url": "..."} or {"ok": false, "error": "..."}
+    Active Reddit campaigns with a `suffix` are applied at this tool layer:
+    the suffix is appended to `message` (per `sample_rate` coin flip per
+    campaign) before typing, so the literal text is guaranteed to be
+    delivered. After a verified send, logs via dm_conversation.py log-outbound
+    so the campaign counter advances automatically (the CLI auto-detects the
+    suffix in stored content).
+
+    Returns: {"ok": true, "thread_url": "...", "message_sent": "...",
+              "applied_campaigns": [...]} or {"ok": false, "error": "..."}
     """
     from playwright.sync_api import sync_playwright
+
+    # Tool-level campaign suffix injection (guaranteed delivery of literal text).
+    applied_campaigns = []
+    for cid, suffix, sample_rate in _load_active_reddit_campaigns_for_dm():
+        if random.random() < sample_rate:
+            message = message + suffix
+            applied_campaigns.append(cid)
 
     with sync_playwright() as p:
         browser, page, is_cdp = get_browser_and_page(p)
@@ -1072,10 +1147,15 @@ def send_dm(chat_url, message):
                     return body.includes(msgStart);
                 }""", msg_start)
 
+                if verified:
+                    _log_dm_outbound(chat_url, message)
+
                 return {
                     "ok": True,
                     "thread_url": page.url,
                     "verified": verified,
+                    "message_sent": message,
+                    "applied_campaigns": applied_campaigns,
                 }
 
             else:
@@ -1111,10 +1191,14 @@ def send_dm(chat_url, message):
 
                 page.wait_for_timeout(4000)
 
+                _log_dm_outbound(chat_url, message)
+
                 return {
                     "ok": True,
                     "thread_url": page.url,
                     "verified": True,
+                    "message_sent": message,
+                    "applied_campaigns": applied_campaigns,
                 }
 
         finally:
