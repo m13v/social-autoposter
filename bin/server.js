@@ -2089,8 +2089,16 @@ async function handleApi(req, res) {
       );
       if (!dmRows || !dmRows.length) return json(res, { error: 'dm_not_found' }, 404);
       const dm = dmRows[0];
-      const dmPc = auth.projectClause(req.user, "COALESCE(p_direct.project_name, p_via_reply.project_name, d.target_project)", dm.project_name);
-      if (!dmPc.ok) return json(res, { error: 'forbidden' }, 403);
+      // Per-row auth: admin always allowed; non-admin must have the DM's
+      // project name in their claim. (auth.projectClause is for SQL list
+      // filters and rejects names with spaces, so it's the wrong tool here.)
+      if (!req.user || !req.user.admin) {
+        const projName = dm.project_name || '';
+        const claims = (req.user && Array.isArray(req.user.projects)) ? req.user.projects : [];
+        if (!projName || !claims.includes(projName)) {
+          return json(res, { error: 'forbidden' }, 403);
+        }
+      }
       const ins = await pq(
         "INSERT INTO human_dm_replies (dm_id, platform, their_author, project_name, " +
           "instructions, email_subject, resend_email_id, status) " +
