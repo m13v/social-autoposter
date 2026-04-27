@@ -186,7 +186,7 @@ done || true
 
 HUMAN_REPLIES=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
-        SELECT h.id, h.dm_id, h.platform, h.their_author, h.reply_content,
+        SELECT h.id, h.dm_id, h.platform, h.their_author, h.instructions,
                d.chat_url, h.project_name, h.attempts
         FROM human_dm_replies h
         JOIN dms d ON d.id = h.dm_id
@@ -335,7 +335,7 @@ fi
 HUMAN_REPLY_KB=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(json_build_object(
         'platform', platform, 'project', project_name,
-        'their_author', their_author, 'reply', LEFT(reply_content, 300)
+        'their_author', their_author, 'instructions', LEFT(instructions, 300)
     ))
     FROM human_dm_replies
     WHERE status = 'sent'
