@@ -290,9 +290,12 @@ def generate_keywords_dataforseo(project):
             # Add competitor names
             for ck in project.get("competitive_positioning", {}):
                 rw.update(w.lower() for w in ck.replace("vs_", "").split("_") if len(w) > 3)
-            # Add ICP terms
-            for icp in project.get("icp", [])[:5]:
-                rw.update(w.lower() for w in icp.split() if len(w) > 4)
+            # Add ICP terms (icp may be a dict {personas, verticals} or a flat list)
+            icp_raw = project.get("icp") or []
+            if isinstance(icp_raw, dict):
+                icp_raw = [s for v in icp_raw.values() for s in (v if isinstance(v, list) else [v])]
+            for icp in icp_raw[:5]:
+                rw.update(w.lower() for w in str(icp).split() if len(w) > 4)
             generate_keywords_dataforseo._relevance_words = rw
         if not any(tw in key for tw in generate_keywords_dataforseo._relevance_words):
             continue
