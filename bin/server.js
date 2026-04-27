@@ -848,22 +848,43 @@ async function handleApi(req, res) {
   // route to map a DM short code to a Cal.com URL with full UTM. No auth, no
   // admin gate — the blast radius is a noisy click counter, and the response
   // does not leak DM contents (only target_url + dm_id + project + platform).
+  // The target_url is frozen on the dms row at mint time, so the container
+  // doesn't need config.json or python (CLOUD RUN-friendly).
   if (p.startsWith('/api/short-links/') && req.method === 'GET') {
     const code = decodeURIComponent(p.slice('/api/short-links/'.length).split('/')[0] || '').trim();
     if (!/^[a-z0-9]{4,32}$/i.test(code)) {
       return json(res, { error: 'bad_code' }, 400);
     }
+    const pool = getPool();
+    if (!pool) return json(res, { error: 'no_db' }, 500);
     try {
-      const out = execSync(
-        `python3 ${path.join(DEST, 'scripts', 'dm_short_links.py')} resolve --code ${code}`,
-        { stdio: 'pipe', timeout: 5000, env: { ...process.env, ...loadEnv() } }
-      ).toString().trim();
-      const parsed = JSON.parse(out);
-      if (parsed.error) return json(res, parsed, 404);
-      return json(res, parsed);
+      const r = await pool.query(
+        `UPDATE dms SET
+            short_link_clicks = short_link_clicks + 1,
+            short_link_first_click_at = COALESCE(short_link_first_click_at, NOW()),
+            short_link_last_click_at = NOW()
+          WHERE short_link_code = $1
+          RETURNING id AS dm_id, platform, target_project, project_name, short_link_target_url AS target_url`,
+        [code]
+      );
+      if (!r.rows.length) {
+        return json(res, { error: 'not_found', code }, 404);
+      }
+      const row = r.rows[0];
+      if (!row.target_url) {
+        return json(res, { error: 'no_target_url', dm_id: row.dm_id }, 404);
+      }
+      let platform = (row.platform || 'reddit').toLowerCase();
+      if (platform === 'x') platform = 'twitter';
+      return json(res, {
+        dm_id: row.dm_id,
+        platform,
+        project: row.target_project || row.project_name || null,
+        target_url: row.target_url,
+      });
     } catch (e) {
-      const stderr = (e.stderr && e.stderr.toString()) || e.message;
-      return json(res, { error: 'resolver_failed', detail: stderr.slice(0, 500) }, 500);
+      console.error('[short-links] resolver db error:', e.message);
+      return json(res, { error: 'resolver_failed', detail: String(e.message).slice(0, 500) }, 500);
     }
   }
 
