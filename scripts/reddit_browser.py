@@ -1030,27 +1030,33 @@ def _load_active_reddit_campaigns_for_dm():
         return []
 
 
-def _log_dm_outbound(chat_url, content):
-    """After a successful send, look up dm_id by chat_url and log via the
-    canonical CLI. The CLI's auto-suffix-detection will set campaign_id and
-    bump the campaign counter when the content ends with an active suffix.
-    Returns True on logged or already-logged-as-dedup."""
+def _log_dm_outbound(chat_url, content, dm_id=None):
+    """After a successful send, log via the canonical CLI so the suffix-
+    detection path attributes the message to the active campaign.
+
+    If `dm_id` is provided (preferred), skip the lookup. Otherwise fall back
+    to looking up the most recent dms row by chat_url. Many production rows
+    have an empty `dms.chat_url`, so the dm_id path is the reliable one.
+    Returns True if log-outbound was invoked."""
     try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        import db as _db
-        _db.load_env()
-        conn = _db.get_conn()
-        try:
-            row = conn.execute(
-                "SELECT id FROM dms WHERE platform='reddit' AND chat_url = %s "
-                "ORDER BY id DESC LIMIT 1",
-                (chat_url,),
-            ).fetchone()
-        finally:
-            conn.close()
-        if not row:
-            return False
-        dm_id = row["id"] if hasattr(row, "__getitem__") else row[0]
+        if dm_id is None:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import db as _db
+            _db.load_env()
+            conn = _db.get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT id FROM dms WHERE platform='reddit' AND chat_url = %s "
+                    "ORDER BY id DESC LIMIT 1",
+                    (chat_url,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if not row:
+                print("[reddit_browser] log-outbound skipped: no dm_id and chat_url lookup miss",
+                      file=sys.stderr)
+                return False
+            dm_id = row["id"] if hasattr(row, "__getitem__") else row[0]
         subprocess.run(
             ["python3", os.path.join(os.path.dirname(os.path.abspath(__file__)), "dm_conversation.py"),
              "log-outbound", "--dm-id", str(dm_id), "--content", content],
@@ -1062,7 +1068,7 @@ def _log_dm_outbound(chat_url, content):
         return False
 
 
-def send_dm(chat_url, message):
+def send_dm(chat_url, message, dm_id=None):
     """Send a message in a Reddit chat or PM thread.
 
     For chat URLs (reddit.com/chat/...), navigates to the chat room and
@@ -1075,6 +1081,9 @@ def send_dm(chat_url, message):
     so the campaign counter advances automatically (the CLI auto-detects the
     suffix in stored content).
 
+    `dm_id` (optional) is preferred over chat_url for the post-send log; many
+    rows have empty `dms.chat_url` so the chat_url lookup misses.
+
     Returns: {"ok": true, "thread_url": "...", "message_sent": "...",
               "applied_campaigns": [...]} or {"ok": false, "error": "..."}
     """
@@ -1086,6 +1095,8 @@ def send_dm(chat_url, message):
         if random.random() < sample_rate:
             message = message + suffix
             applied_campaigns.append(cid)
+    print(f"[send_dm] applied_campaigns={applied_campaigns} message_len={len(message)} dm_id={dm_id}",
+          file=sys.stderr)
 
     with sync_playwright() as p:
         browser, page, is_cdp = get_browser_and_page(p)
@@ -1153,7 +1164,7 @@ def send_dm(chat_url, message):
                 }""", msg_start)
 
                 if verified:
-                    _log_dm_outbound(chat_url, message)
+                    _log_dm_outbound(chat_url, message, dm_id=dm_id)
 
                 return {
                     "ok": True,
@@ -1196,7 +1207,7 @@ def send_dm(chat_url, message):
 
                 page.wait_for_timeout(4000)
 
-                _log_dm_outbound(chat_url, message)
+                _log_dm_outbound(chat_url, message, dm_id=dm_id)
 
                 return {
                     "ok": True,
@@ -1711,11 +1722,17 @@ def main():
     elif cmd == "send-dm":
         if len(sys.argv) < 4:
             print(
-                "Usage: reddit_browser.py send-dm <chat_url> <message>",
+                "Usage: reddit_browser.py send-dm <chat_url> <message> [dm_id]",
                 file=sys.stderr,
             )
             sys.exit(1)
-        result = send_dm(sys.argv[2], sys.argv[3])
+        dm_id_arg = None
+        if len(sys.argv) >= 5 and sys.argv[4].strip():
+            try:
+                dm_id_arg = int(sys.argv[4])
+            except ValueError:
+                print(f"[send-dm] ignoring non-int dm_id arg: {sys.argv[4]!r}", file=sys.stderr)
+        result = send_dm(sys.argv[2], sys.argv[3], dm_id=dm_id_arg)
         print(json.dumps(result, indent=2))
 
     elif cmd == "compose-dm":
