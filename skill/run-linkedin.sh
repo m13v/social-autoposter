@@ -85,6 +85,19 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
    Browse the search URL via mcp__linkedin-agent__browser_navigate to find actual posts.
    If nothing good for the first project, try another.
 2. Pick the best LinkedIn post and the project that fits it best.
+2b. **SELF-AUTHOR GUARD (MANDATORY).** Our LinkedIn account is
+    Matthew Diakonov, profile at https://www.linkedin.com/in/m13v/.
+    Search results frequently include posts authored by us (Matthew
+    posts often about MCP, AI agents, desktop automation, the same
+    topics our search runs use). Commenting on our own post is wasteful
+    and looks like astroturfing.
+    Before proceeding to step 3, check the candidate post's author:
+      - If the author profile URL contains '/in/m13v/' OR the author
+        name is 'Matthew Diakonov' OR the post header shows the
+        '· You' or 'Author' tag next to the author name, SKIP this
+        post and pick another.
+      - Apply this same check to every candidate; never log or post
+        on a self-authored thread.
 3. **Engagement pre-check (MANDATORY, must run before drafting)**.
    The URL bar alone is not a reliable identity for a LinkedIn post,
    because /posts/<slug>-share-<X>-<sfx> and /feed/update/activity:<Y>/
