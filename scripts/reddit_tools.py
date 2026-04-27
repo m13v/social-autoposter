@@ -387,19 +387,21 @@ def cmd_log_post(args):
         return
 
     session_id = os.environ.get("CLAUDE_SESSION_ID") or None
-    conn.execute(
+    cur = conn.execute(
         """INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
            thread_title, thread_content, our_url, our_content, our_account,
            source_summary, project_name, status, posted_at, feedback_report_used, engagement_style, claude_session_id, search_topic)
-           VALUES ('reddit', %s, %s, %s, %s, '', %s, %s, %s, '', %s, 'active', NOW(), TRUE, %s, %s, %s)""",
+           VALUES ('reddit', %s, %s, %s, %s, '', %s, %s, %s, '', %s, 'active', NOW(), TRUE, %s, %s, %s)
+           RETURNING id""",
         [args.thread_url, args.thread_author, args.thread_author, args.thread_title,
          args.our_url, args.our_text, args.account, args.project,
          getattr(args, 'engagement_style', None), session_id,
          getattr(args, 'search_topic', None)],
     )
+    new_post_id = cur.fetchone()[0]
     conn.commit()
     conn.close()
-    print(json.dumps({"logged": True, "claude_session_id": session_id}))
+    print(json.dumps({"logged": True, "post_id": new_post_id, "claude_session_id": session_id}))
 
 
 def main():
