@@ -152,10 +152,12 @@ def log_outbound(conn, dm_id, content, author=None):
 
     claude_session_id = os.environ.get("CLAUDE_SESSION_ID") or None
 
-    conn.execute("""
+    inserted = conn.execute("""
         INSERT INTO dm_messages (dm_id, direction, author, content, message_at, logged_at, claude_session_id)
         VALUES (%s, 'outbound', %s, %s, NOW(), NOW(), %s)
-    """, (dm_id, author, content, claude_session_id))
+        RETURNING id
+    """, (dm_id, author, content, claude_session_id)).fetchone()
+    new_msg_id = inserted["id"] if inserted else None
 
     conn.execute("""
         UPDATE dms SET last_message_at = NOW(), message_count = message_count + 1,
@@ -164,6 +166,39 @@ def log_outbound(conn, dm_id, content, author=None):
         WHERE id = %s
     """, (claude_session_id, dm_id))
     conn.commit()
+
+    # Auto-attribute to any active Reddit campaign whose literal suffix matches
+    # the tail of `content`. The LLM never passes campaign IDs; we detect from
+    # the actual stored text. This works because reddit_browser.py send_dm
+    # appends the suffix at the tool layer before the message is typed, so
+    # whatever is stored here mirrors what was actually delivered.
+    if new_msg_id and (row.get("platform") == "reddit"):
+        try:
+            cur = conn.execute(
+                """SELECT id, suffix FROM campaigns
+                   WHERE status='active'
+                     AND (',' || platforms || ',') LIKE '%,reddit,%'
+                     AND max_posts_total IS NOT NULL
+                     AND posts_made < max_posts_total
+                     AND suffix IS NOT NULL AND suffix <> ''"""
+            )
+            for camp_row in cur.fetchall():
+                cid = camp_row["id"]
+                cs = camp_row["suffix"]
+                if content.endswith(cs):
+                    conn.execute(
+                        "UPDATE dm_messages SET campaign_id = %s WHERE id = %s AND campaign_id IS NULL",
+                        (cid, new_msg_id),
+                    )
+                    conn.execute(
+                        "UPDATE campaigns SET posts_made = posts_made + 1, updated_at = NOW() "
+                        "WHERE id = %s",
+                        (cid,),
+                    )
+            conn.commit()
+        except Exception as e:
+            print(f"  WARNING: campaign suffix auto-attribution failed: {e}")
+
     print(f"  Logged outbound to {row['their_author']} (DM #{dm_id})")
     return True
 
