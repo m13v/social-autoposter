@@ -86,8 +86,11 @@ function scopedProjects(user, requested) {
 // Returns { clause, ok } where clause is a " AND <column> IN ('a','b')" fragment
 // (possibly empty when admin + no filter) and ok=false means the user has no
 // access (non-admin with empty projects claim) so the handler should 403.
-// Project names are validated against a conservative charset to prevent injection.
-const PROJECT_NAME_RE = /^[A-Za-z0-9_\-]{1,64}$/;
+// Project names are validated against a conservative charset; single quotes
+// are also SQL-escaped below as defense in depth. Spaces are allowed because
+// real config.json names include them ('WhatsApp MCP', 'AI Browser Profile',
+// 'macOS MCP', 'macOS Session Replay').
+const PROJECT_NAME_RE = /^[A-Za-z0-9 _\-]{1,64}$/;
 
 function projectClause(user, column, requested) {
   const list = scopedProjects(user, requested);
