@@ -40,6 +40,7 @@ ALTER TABLE posts ADD COLUMN IF NOT EXISTS feedback_report_used BOOLEAN DEFAULT 
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS engagement_style TEXT;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS resurrected_at TIMESTAMP;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS model TEXT;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS campaign_id INTEGER REFERENCES campaigns(id);
 
 CREATE INDEX IF NOT EXISTS idx_posts_platform ON posts(platform);
 CREATE INDEX IF NOT EXISTS idx_posts_resurrected_at ON posts(resurrected_at) WHERE resurrected_at IS NOT NULL;
@@ -80,15 +81,13 @@ CREATE TABLE IF NOT EXISTS campaigns (
 );
 
 ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS max_posts_total INTEGER;
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS suffix TEXT;
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS sample_rate NUMERIC(4,3) DEFAULT 1.000;
 
-CREATE TABLE IF NOT EXISTS post_campaigns (
-    post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
-    campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE,
-    attached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (post_id, campaign_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_post_campaigns_campaign ON post_campaigns(campaign_id);
+-- Campaign attribution lives as a single nullable column on each surface
+-- table (posts, replies, dm_messages). One campaign per outbound action,
+-- which matches reality. The legacy post_campaigns join table was dropped
+-- 2026-04-27.
 
 CREATE TABLE IF NOT EXISTS replies (
     id SERIAL PRIMARY KEY,
@@ -282,6 +281,8 @@ ALTER TABLE dm_messages  ADD COLUMN IF NOT EXISTS claude_session_id UUID;
 -- Per-row model stamp, backfilled by log_claude_session.py after each session
 -- ends. Lets dashboards / audits filter by model without joining claude_sessions.
 ALTER TABLE dm_messages  ADD COLUMN IF NOT EXISTS model TEXT;
+ALTER TABLE replies      ADD COLUMN IF NOT EXISTS campaign_id INTEGER REFERENCES campaigns(id);
+ALTER TABLE dm_messages  ADD COLUMN IF NOT EXISTS campaign_id INTEGER REFERENCES campaigns(id);
 
 CREATE INDEX IF NOT EXISTS idx_posts_claude_session       ON posts(claude_session_id)       WHERE claude_session_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_replies_claude_session     ON replies(claude_session_id)     WHERE claude_session_id IS NOT NULL;
