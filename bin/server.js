@@ -6985,6 +6985,70 @@ function toggleDmExpansion(tr, dmId, colCount) {
   window.__dmExpandedIds[dmId] = true;
 }
 
+// POST a new human-authored instruction for this DM. Inserts into
+// human_dm_replies (status='pending'). The next launchd tick of
+// engage-dm-replies-<platform> picks it up and the LLM there crafts the DM.
+async function submitDmInstructions(btn, dmId) {
+  const ta = document.getElementById('dm-esc-ta-' + dmId);
+  const fb = document.getElementById('dm-esc-fb-' + dmId);
+  if (!ta || !fb) return;
+  const txt = (ta.value || '').trim();
+  if (txt.length < 5) {
+    fb.className = 'dm-esc-feedback dm-esc-feedback-err';
+    fb.textContent = 'Please write at least 5 characters of instructions.';
+    return;
+  }
+  btn.disabled = true;
+  fb.className = 'dm-esc-feedback';
+  fb.textContent = 'Sending...';
+  try {
+    const resp = await fetch('/api/dm/' + dmId + '/instructions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instructions: txt }),
+    });
+    let data = {};
+    try { data = await resp.json(); } catch (_) {}
+    if (!resp.ok) {
+      fb.className = 'dm-esc-feedback dm-esc-feedback-err';
+      fb.textContent = (data && data.error) ? ('Failed: ' + data.error) : ('Failed (HTTP ' + resp.status + ')');
+      btn.disabled = false;
+      return;
+    }
+    const ins = data.instruction || {};
+    const dm = (window.__dmsById || {})[dmId];
+    if (dm) {
+      if (!Array.isArray(dm.human_instructions)) dm.human_instructions = [];
+      dm.human_instructions.push(ins);
+    }
+    ta.value = '';
+    fb.className = 'dm-esc-feedback dm-esc-feedback-ok';
+    fb.textContent = 'Queued. The agent will send the DM on its next run (~every 30 min for this platform).';
+    btn.disabled = false;
+  } catch (e) {
+    fb.className = 'dm-esc-feedback dm-esc-feedback-err';
+    fb.textContent = 'Network error: ' + ((e && e.message) || 'unknown');
+    btn.disabled = false;
+  }
+}
+
+// Cmd/Ctrl+Enter inside any escalation textarea triggers send.
+if (!window.__dmEscKeydownInstalled) {
+  window.__dmEscKeydownInstalled = true;
+  document.addEventListener('keydown', function(e) {
+    const t = e.target;
+    if (!t || !t.classList || !t.classList.contains('dm-esc-textarea')) return;
+    if (!((e.metaKey || e.ctrlKey) && e.key === 'Enter')) return;
+    e.preventDefault();
+    const idStr = (t.id || '').replace('dm-esc-ta-', '');
+    const dmId = parseInt(idStr, 10);
+    if (!dmId) return;
+    const card = t.closest('.dm-esc-card');
+    const btn = card ? card.querySelector('.dm-esc-submit') : null;
+    if (btn && !btn.disabled) submitDmInstructions(btn, dmId);
+  });
+}
+
 async function loadTopDms(force, opts) {
   if (_topDmsLoading) return;
   const append = !!(opts && opts.append);
