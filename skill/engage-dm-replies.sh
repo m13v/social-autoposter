@@ -768,8 +768,9 @@ Never send the booking link twice. If \`booking_link_sent_at\` is not NULL, Step
 
 **Reddit Chat** (try CDP first, fall back to mcp__reddit-agent__* browser):
 \`\`\`bash
-cd ~/social-autoposter && python3 scripts/reddit_browser.py send-dm "CHAT_URL" "YOUR_REPLY_TEXT"
+cd ~/social-autoposter && python3 scripts/reddit_browser.py send-dm "CHAT_URL" "YOUR_REPLY_TEXT" DM_ID
 \`\`\`
+Pass the conversation's DM_ID as the third positional arg so the tool can self-log the outbound (some rows have empty chat_url which would otherwise miss). The tool may append a campaign suffix to the message before typing; trust its return — \`message_sent\` is what was actually delivered.
 If the CDP script returns {ok:false} (Reddit Chat SPA may not render via CDP), fall back to using mcp__reddit-agent__* browser tools:
 1. Navigate to the chat room (use chat_url if available, or find via sidebar)
 2. Type the reply in the message input
