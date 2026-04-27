@@ -941,7 +941,21 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
 
     ct = CONTENT_TYPES.get(content_type, CONTENT_TYPES["guide"])
     route_prefix = ct["route_prefix"]
+    # Prefer a candidate whose anchored app-router root (src/app or app) exists
+    # in this repo, so consumer sites with a bare app/ router (no src/) get a
+    # primary_path that lands inside their actual app, instead of being told
+    # to write into a non-existent src/app tree (which Next.js would silently
+    # ignore in favor of the bare app/ router).
+    has_src_app = os.path.isdir(os.path.join(repo, "src", "app"))
+    has_bare_app = os.path.isdir(os.path.join(repo, "app"))
     primary_path = ct["path_candidates"][0].format(slug=slug)
+    for tmpl in ct["path_candidates"]:
+        if tmpl.startswith("src/app/") and has_src_app:
+            primary_path = tmpl.format(slug=slug)
+            break
+        if tmpl.startswith("app/") and has_bare_app and not has_src_app:
+            primary_path = tmpl.format(slug=slug)
+            break
     example_dirs_str = ", ".join(f"`{repo}/{d}`" for d in ct["example_dirs"])
     page_url = f"{website.rstrip('/')}{route_prefix}{slug}"
 
