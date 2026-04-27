@@ -69,6 +69,21 @@ def get_engaged_linkedin_authors():
     return {row[0] for row in rows}
 
 
+def get_engaged_linkedin_post_ids():
+    """Return sorted list of every LinkedIn URN ID we've engaged with —
+    16-19 digit numbers found in thread_url or our_url for platform='linkedin'.
+    LinkedIn surfaces the same post under /feed/update/urn:li:activity:<X>/,
+    /posts/...-share-<Y>-<suffix>, and /posts/...-ugcPost-<Z>-<suffix>;
+    the X/Y/Z are different numbers but the SET of IDs across all rows
+    that touch the same post overlaps. Used by run-linkedin.sh to brief
+    the LLM so it skips a candidate whose URL contains any engaged ID."""
+    import linkedin_url as li_url
+    conn = dbmod.get_conn()
+    ids = li_url.get_engaged_ids(conn)
+    conn.close()
+    return ids
+
+
 def get_recent_posts(limit=5):
     """Return our last N post contents for repetition checking."""
     conn = dbmod.get_conn()
@@ -488,6 +503,11 @@ def main():
     if args.include_linkedin:
         output["engaged_linkedin_authors"] = sorted(get_engaged_linkedin_authors())
         output["engaged_linkedin_count"] = len(output["engaged_linkedin_authors"])
+        # ID-set dedup: every URN we've engaged with on LinkedIn. LLM must
+        # extract the activity/share/ugcPost ID from a candidate post URL
+        # and skip if it appears here. Catches URL-shape drift across runs
+        # (/feed/update/ vs /posts/...-share-...).
+        output["engaged_linkedin_post_ids"] = get_engaged_linkedin_post_ids()
 
     print(json.dumps(output, indent=2))
 
