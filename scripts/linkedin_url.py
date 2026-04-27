@@ -119,6 +119,13 @@ def main():
     parser.add_argument("--canonicalize", help="Print the canonical form of URL")
     parser.add_argument("--check-engaged", help="Check if URL collides with any "
                         "existing linkedin row. Exits 0 on collision, 1 otherwise.")
+    parser.add_argument("--check-engaged-ids", help="Comma- or whitespace-separated "
+                        "list of LinkedIn URN IDs (16-19 digits each) extracted "
+                        "from a candidate post's DOM. Pre-comment dedup primary path: "
+                        "the URL bar may only carry the share URN while our DB rows "
+                        "store the activity URN, so the browser-side script must "
+                        "walk componentkey/data-testid for ALL URNs and pipe them in. "
+                        "Exits 0 on collision, 1 otherwise.")
     parser.add_argument("--list-engaged-ids", action="store_true",
                         help="Print every linkedin ID we've engaged with, one per line.")
     args = parser.parse_args()
@@ -137,6 +144,28 @@ def main():
         match = find_existing_engagement(conn, ids)
         conn.close()
         out = {"url": args.check_engaged, "ids": ids, "engaged": bool(match)}
+        if match:
+            out["match"] = {
+                "post_id": match[0],
+                "posted_at": str(match[1]),
+                "thread_url": match[2],
+                "our_url": match[3],
+                "our_account": match[4],
+            }
+        print(json.dumps(out, indent=2))
+        sys.exit(0 if match else 1)
+    if args.check_engaged_ids:
+        import db as dbmod
+        dbmod.load_env()
+        conn = dbmod.get_conn()
+        # Accept comma, whitespace, or newline separation. Filter to 16-19
+        # digit numeric IDs so we don't pollute with ad campaign mcid values
+        # or random noise the browser-side walker might pick up.
+        raw = re.split(r"[,\s]+", args.check_engaged_ids.strip())
+        ids = [v for v in raw if re.fullmatch(r"\d{16,19}", v or "")]
+        match = find_existing_engagement(conn, ids)
+        conn.close()
+        out = {"ids": ids, "engaged": bool(match)}
         if match:
             out["match"] = {
                 "post_id": match[0],
