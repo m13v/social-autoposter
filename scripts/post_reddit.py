@@ -15,6 +15,7 @@ Usage:
 import argparse
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -196,6 +197,35 @@ def get_recent_comments(limit=5):
     results = [row[0] for row in cur.fetchall()]
     conn.close()
     return results
+
+
+def load_active_reddit_campaigns():
+    """Active Reddit campaigns that carry a literal suffix.
+
+    Tool-level enforcement: the LLM never sees these. We append the suffix to
+    the drafted text in Python before posting, so the literal text is
+    guaranteed to land on Reddit. sample_rate gates the per-post coin flip
+    for concurrent A/B (e.g. 0.5 = ~half of posts get tagged).
+    """
+    dbmod.load_env()
+    conn = dbmod.get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT id, suffix, COALESCE(sample_rate, 1.000)
+               FROM campaigns
+               WHERE status = 'active'
+                 AND (',' || platforms || ',') LIKE '%,reddit,%'
+                 AND max_posts_total IS NOT NULL
+                 AND posts_made < max_posts_total
+                 AND suffix IS NOT NULL AND suffix <> ''
+               ORDER BY id"""
+        )
+        return [
+            {"id": r[0], "suffix": r[1], "sample_rate": float(r[2])}
+            for r in cur.fetchall()
+        ]
+    finally:
+        conn.close()
 
 
 def build_content_angle(project, config):
@@ -473,7 +503,7 @@ def post_via_cdp(thread_url, reply_to_url, text):
 
 
 def log_post(thread_url, permalink, text, project_name, thread_author, thread_title, reddit_username, engagement_style=None, search_topic=None):
-    """Log a successful post to the database."""
+    """Log a successful post to the database. Returns the new post_id, or None."""
     try:
         cmd = ["python3", REDDIT_TOOLS, "log-post",
              thread_url, permalink or "", text, project_name,
@@ -483,9 +513,30 @@ def log_post(thread_url, permalink, text, project_name, thread_author, thread_ti
             cmd.extend(["--engagement-style", engagement_style])
         if search_topic:
             cmd.extend(["--search-topic", search_topic])
-        subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        try:
+            payload = json.loads((result.stdout or "").strip())
+            return payload.get("post_id")
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            return None
     except Exception as e:
         print(f"[post_reddit] WARNING: log-post failed: {e}")
+        return None
+
+
+def bump_campaigns(post_id, campaign_ids):
+    """Attach a post to its applied campaigns and increment their counters."""
+    if not post_id or not campaign_ids:
+        return
+    try:
+        subprocess.run(
+            ["python3", os.path.join(REPO_DIR, "scripts", "campaign_bump.py"),
+             "--post-id", str(post_id),
+             "--campaign-ids", ",".join(str(i) for i in campaign_ids)],
+            capture_output=True, text=True, timeout=15,
+        )
+    except Exception as e:
+        print(f"[post_reddit] WARNING: campaign_bump failed: {e}")
 
 
 def parse_post_decisions(output):
