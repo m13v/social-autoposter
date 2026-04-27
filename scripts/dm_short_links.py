@@ -109,6 +109,13 @@ def cmd_mint(args):
         if not website:
             raise SystemExit(f"Project {project_name!r} has no website in config.json")
 
+        target = _build_target_url(
+            booking,
+            dm_id=args.dm_id,
+            project=project_name,
+            platform=platform,
+        )
+
         cur = conn.execute(
             "SELECT short_link_code FROM dms WHERE id = %s",
             (args.dm_id,),
@@ -117,13 +124,20 @@ def cmd_mint(args):
         existing = (row or {}).get('short_link_code') if isinstance(row, dict) else (row[0] if row else None)
         if existing and not args.force:
             code = existing
+            # Refresh the cached target_url (project config may have changed UTM
+            # campaign or booking_link since the original mint).
+            conn.execute(
+                "UPDATE dms SET short_link_target_url = %s WHERE id = %s",
+                (target, args.dm_id),
+            )
+            conn.commit()
         else:
             for _ in range(8):
                 code = _gen_code()
                 cur = conn.execute(
-                    "UPDATE dms SET short_link_code = %s WHERE id = %s "
-                    "AND (short_link_code IS NULL OR %s)",
-                    (code, args.dm_id, args.force),
+                    "UPDATE dms SET short_link_code = %s, short_link_target_url = %s "
+                    "WHERE id = %s AND (short_link_code IS NULL OR %s)",
+                    (code, target, args.dm_id, args.force),
                 )
                 if cur.rowcount:
                     break
@@ -131,12 +145,6 @@ def cmd_mint(args):
                 raise SystemExit("Could not allocate a unique short_link_code after 8 tries")
             conn.commit()
 
-        target = _build_target_url(
-            booking,
-            dm_id=args.dm_id,
-            project=project_name,
-            platform=platform,
-        )
         short_url = f"{website}/r/{code}"
         if args.json:
             print(json.dumps({
