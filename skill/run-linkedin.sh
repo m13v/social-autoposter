@@ -131,6 +131,60 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
 
 4. Draft the comment using the engagement style that best fits the post. Professional but casual tone, NEVER use em dashes.
 5. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools).
+5b. **POST-SUBMIT VERIFICATION (MANDATORY).** LinkedIn often silently
+   rejects comments via a soft-block that looks like success (editor
+   clears, no exception raised). You MUST verify the comment actually
+   landed before logging as success.
+
+   5b.1. Immediately after clicking the Comment submit button, call:
+       mcp__linkedin-agent__browser_network_requests with:
+         filter: 'normCommentsCreate|normComments|contentcreation|socialActions'
+         requestBody: true
+         static: false
+       Save the response. Look for the POST request to a comment-create
+       endpoint and note its status code and response body. Record this
+       string verbatim as NETWORK_RESPONSE.
+
+   5b.2. Take a viewport screenshot via
+       mcp__linkedin-agent__browser_take_screenshot. The toast
+       'Your comment could not be created at this time' is brief, so
+       grab it quickly. Save the screenshot path.
+
+   5b.3. Take a fresh snapshot via mcp__linkedin-agent__browser_snapshot
+       (depth 12) and inspect:
+         (a) the comment count near the post (e.g. '4 comments' before,
+             should now show '5 comments' or higher)
+         (b) any newly-rendered comment whose author text contains
+             'Matthew Diakonov' or 'You'
+         (c) presence of the toast text 'could not be created'
+         (d) editor textbox state (active/empty placeholder vs still
+             holding your text)
+
+   5b.4. Decide:
+       SUCCESS = comment count increased AND a fresh comment by you
+           is in the DOM AND no 'could not be created' toast.
+       REJECTED = toast text present OR comment count unchanged after
+           reload (you may navigate to the same URL once to confirm).
+
+   5b.5. If REJECTED: do NOT call the success log_post.py path. Instead
+       record the rejection so dedup blocks future retries on this thread:
+         python3 $REPO_DIR/scripts/log_post.py --rejected \\
+           --platform linkedin \\
+           --thread-url THREAD_URL \\
+           --our-content 'YOUR_COMMENT_TEXT' \\
+           --project PROJECT_YOU_CHOSE \\
+           --thread-author AUTHOR \\
+           --thread-title 'POST_TITLE' \\
+           --engagement-style STYLE_YOU_CHOSE \\
+           --language DETECTED_LANGUAGE \\
+           --rejection-reason 'TOAST: <verbatim toast text or quiet-fail>' \\
+           --network-response 'NETWORK_RESPONSE_FROM_5b.1'
+       Then stop the run with '## Comment soft-blocked, ledgered'. Do
+       NOT retry the same post. Do NOT pick another post in the same
+       run (consecutive submits compound the throttle).
+
+   5b.6. If SUCCESS: proceed to step 6.
+
 6. **CAPTURE THE CANONICAL POST URL**. Use the activityId you saved in
    step 3c to build:
        https://www.linkedin.com/feed/update/urn:li:activity:<activityId>/
