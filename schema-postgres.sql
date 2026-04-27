@@ -162,6 +162,7 @@ ALTER TABLE dms ADD COLUMN IF NOT EXISTS model TEXT;                       -- do
 -- 302s to Cal.com with metadata[utm_content]=dm_<id> so cal_bookings closes
 -- the loop. Click count + first/last click are stamped by the resolver on hit.
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS short_link_code TEXT;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS short_link_target_url TEXT;
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS short_link_clicks INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS short_link_first_click_at TIMESTAMP;
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS short_link_last_click_at TIMESTAMP;
