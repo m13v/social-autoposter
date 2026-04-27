@@ -84,46 +84,64 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
    From the output, pick ONLY linkedin candidates (discovery_method: search_url).
    Browse the search URL via mcp__linkedin-agent__browser_navigate to find actual posts.
    If nothing good for the first project, try another.
-2. Pick the best LinkedIn post and the project that fits it best
-3. **Engagement pre-check (MANDATORY)**: extract the post's permalink, then
-   run \`python3 $REPO_DIR/scripts/linkedin_url.py --check-engaged \"<permalink>\"\`.
-   If exit code is 0 (already engaged), discard this post and pick another.
-   Only proceed to draft when exit code is 1.
-4. Draft the comment using the engagement style that best fits the post. Professional but casual tone, NEVER use em dashes.
-5. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools)
-6. **CAPTURE THE POST URL** — BEFORE closing the tab, extract the actual post URL.
-   After posting the comment, run this JS via mcp__linkedin-agent__browser_run_code:
+2. Pick the best LinkedIn post and the project that fits it best.
+3. **Engagement pre-check (MANDATORY, must run before drafting)**.
+   The URL bar alone is not a reliable identity for a LinkedIn post,
+   because /posts/<slug>-share-<X>-<sfx> and /feed/update/activity:<Y>/
+   are the same post with different URNs. Walk the rendered DOM for ALL
+   URNs and pipe them to linkedin_url.py.
+
+   3a. With the candidate post page already loaded in linkedin-agent,
+       run this JS via mcp__linkedin-agent__browser_run_code and capture
+       its return value (an object with allIds and activityId):
    \`\`\`javascript
    async (page) => {
-     const url = page.url();
-     // If on a feed/update page, use it directly
-     if (url.includes('/feed/update/')) return url.split('?')[0];
-     // Otherwise extract from the page - find the post's share/permalink
-     const shareLink = await page.evaluate(() => {
-       // Look for the post's activity URN in the page
-       const postEl = document.querySelector('[data-urn*=\"activity\"], [data-id*=\"activity\"]');
-       if (postEl) {
-         const urn = postEl.getAttribute('data-urn') || postEl.getAttribute('data-id');
-         const match = urn.match(/activity:(\\d+)/);
-         if (match) return 'https://www.linkedin.com/feed/update/urn:li:activity:' + match[1] + '/';
+     await page.waitForTimeout(2000);
+     return await page.evaluate(() => {
+       const all = new Set();
+       let activity = null;
+       const re = /(activity|share|ugcPost)[:_-](\\d{16,19})/gi;
+       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+       let node, scanned = 0;
+       while ((node = walker.nextNode()) && scanned++ < 8000) {
+         for (const a of node.attributes || []) {
+           const v = a.value || '';
+           let m;
+           re.lastIndex = 0;
+           while ((m = re.exec(v))) {
+             all.add(m[2]);
+             if (m[1].toLowerCase() === 'activity' && !activity) activity = m[2];
+           }
+         }
        }
-       // Fallback: check URL bar or og:url meta
-       const ogUrl = document.querySelector('meta[property=\"og:url\"]');
-       if (ogUrl) return ogUrl.content;
-       return null;
+       const urlMatch = location.href.match(/(\\d{16,19})/g) || [];
+       urlMatch.forEach(v => all.add(v));
+       return { allIds: Array.from(all), activityId: activity };
      });
-     return shareLink || url;
    }
    \`\`\`
-   Use this URL as \`our_url\` in the database INSERT. It MUST be a linkedin.com/feed/update/ URL.
-   If you cannot get a feed/update URL, use the current page URL as fallback.
+
+   3b. Pipe the allIds array (comma-separated) to:
+       python3 $REPO_DIR/scripts/linkedin_url.py --check-engaged-ids "ID1,ID2,ID3"
+       Exit code 0 = already engaged, SKIP this post and pick another.
+       Exit code 1 = not engaged, proceed to step 4.
+
+   3c. Remember the activityId returned by the JS. You'll need it in
+       step 6 to construct a canonical our_url.
+
+4. Draft the comment using the engagement style that best fits the post. Professional but casual tone, NEVER use em dashes.
+5. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools).
+6. **CAPTURE THE CANONICAL POST URL**. Use the activityId you saved in
+   step 3c to build:
+       https://www.linkedin.com/feed/update/urn:li:activity:<activityId>/
+   That is the our_url you log. If you somehow have no activityId
+   (rare; the DOM walk in 3a almost always finds one), fall back to the
+   current page URL via page.url().split('?')[0].
 7. Log to database (MANDATORY tool call, do NOT use raw INSERT SQL):
      python3 $REPO_DIR/scripts/log_post.py --platform linkedin --thread-url THREAD_URL --our-url CAPTURED_FEED_UPDATE_URL --our-content 'YOUR_COMMENT_TEXT' --project PROJECT_YOU_CHOSE --thread-author AUTHOR --thread-title 'POST_TITLE' --engagement-style STYLE_YOU_CHOSE --language DETECTED_LANGUAGE
-   This validates the URL, canonicalizes it, enforces status='active', AND
-   refuses with DUPLICATE_LINKEDIN_POST if any URN ID overlaps with an
-   existing row. If log_post returns DUPLICATE_LINKEDIN_POST, DO NOT
-   delete the comment from LinkedIn (it's already up), but treat this
-   post as no-longer-available for future runs and move on.
+   log_post.py validates the URL, canonicalizes our_url to the
+   /feed/update/urn:li:activity:<id>/ form, and enforces status='active'.
+   Duplicate prevention is the responsibility of step 3, NOT this step.
 
 Up to 30 posts per run. If nothing fits, say '## No good post found' and stop.
 
