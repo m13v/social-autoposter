@@ -6788,6 +6788,7 @@ function buildDmExpansionRow(dm, colCount) {
   const linkInfo = dmOpenUrl(dm);
   if (linkInfo) metaParts.push('<a class="dm-exp-meta-link" href="' + escapeHtml(linkInfo.url) + '" target="_blank" rel="noopener">' + escapeHtml(linkInfo.label) + '</a>');
   const metaHtml = '<div class="dm-exp-meta">' + metaParts.join('') + '</div>';
+  const escHtml = renderDmEscalationCard(dm);
   const contextHtml = renderDmContextBlock(dm);
   let bodyHtml;
   if (!total) {
@@ -6799,7 +6800,7 @@ function buildDmExpansionRow(dm, colCount) {
   }
   return '<tr class="dm-exp-row" data-exp-for="' + Number(dm.id) + '">' +
     '<td colspan="' + colCount + '" class="dm-exp-cell">' +
-      '<div class="dm-exp-inner">' + metaHtml + contextHtml + bodyHtml + '</div>' +
+      '<div class="dm-exp-inner">' + metaHtml + escHtml + contextHtml + bodyHtml + '</div>' +
     '</td>' +
   '</tr>';
 }
@@ -6886,19 +6887,70 @@ function renderDmContextBlock(dm) {
     '</div>');
   }
 
-  // Fallback: when no post/reply/seed context is linked (e.g. an escalation
-  // flagged without a replies row), the human_reason is often the only
-  // narrative describing what originally happened. Show it so the operator
-  // isn't flying blind.
-  if (!sections.length && dm.human_reason) {
-    sections.push('<div class="dm-exp-ctx-section">' +
-      '<div class="dm-exp-ctx-head"><span class="dm-exp-ctx-label">escalation note</span></div>' +
-      '<div class="dm-exp-ctx-body">' + escapeHtml(String(dm.human_reason)) + '</div>' +
-    '</div>');
-  }
-
   if (!sections.length) return '';
   return '<div class="dm-exp-ctx">' + sections.join('') + '</div>';
+}
+
+// Renders the escalation card: visible when this DM was flagged for human
+// handoff (conversation_status='needs_human' or human_reason is set) or when
+// any human-authored instructions are queued/sent for it. Composing a new
+// instruction inserts a row into human_dm_replies (status='pending'); Phase 0
+// of engage-dm-replies.sh consumes it on the next platform tick and the LLM
+// there crafts the actual DM from the instructions text.
+function renderDmEscalationCard(dm) {
+  if (!dm) return '';
+  const reason = dm.human_reason ? String(dm.human_reason) : '';
+  const list = Array.isArray(dm.human_instructions) ? dm.human_instructions : [];
+  const isFlagged = dm.conversation_status === 'needs_human';
+  if (!reason && !list.length && !isFlagged) return '';
+
+  const head =
+    '<div class="dm-esc-head">' +
+      '<span class="dm-esc-tag">escalation</span>' +
+      (dm.flagged_at ? '<span class="dm-exp-ctx-author">flagged ' + escapeHtml(relTime(dm.flagged_at)) + '</span>' : '') +
+    '</div>';
+
+  const reasonHtml = reason
+    ? '<div class="dm-esc-reason">' + escapeHtml(reason) + '</div>'
+    : '';
+
+  const itemsHtml = list.length
+    ? '<div class="dm-esc-list">' + list.map(it => {
+        const status = String(it && it.status || 'pending');
+        const source = String(it && it.source || 'gmail');
+        const created = it && it.created_at ? relTime(it.created_at) : '';
+        const sent = it && it.sent_at ? relTime(it.sent_at) : '';
+        const attempts = it && Number(it.attempts) || 0;
+        const lastErr = it && it.last_error ? String(it.last_error) : '';
+        const meta =
+          '<span class="dm-esc-status dm-esc-status-' + escapeHtml(status) + '">' + escapeHtml(status) + '</span>' +
+          '<span class="dm-esc-source">' + escapeHtml(source) + '</span>' +
+          (created ? '<span>' + escapeHtml(created) + '</span>' : '') +
+          (sent ? '<span>· sent ' + escapeHtml(sent) + '</span>' : '') +
+          (attempts > 0 ? '<span>· ' + attempts + ' attempt' + (attempts === 1 ? '' : 's') + '</span>' : '') +
+          (lastErr ? '<span title="' + escapeHtml(lastErr) + '">· error</span>' : '');
+        return '<div class="dm-esc-item">' +
+          '<div class="dm-esc-item-meta">' + meta + '</div>' +
+          '<div class="dm-esc-item-body">' + escapeHtml(String(it && it.instructions || '')) + '</div>' +
+        '</div>';
+      }).join('') + '</div>'
+    : '';
+
+  const composeId = 'dm-esc-ta-' + Number(dm.id);
+  const feedbackId = 'dm-esc-fb-' + Number(dm.id);
+  const compose =
+    '<div class="dm-esc-compose">' +
+      '<textarea id="' + composeId + '" class="dm-esc-textarea" placeholder="Briefly, what should we say back? The agent will craft the actual DM from these instructions."></textarea>' +
+      '<div class="dm-esc-bar">' +
+        '<span class="dm-esc-hint">Cmd/Ctrl+Enter to send</span>' +
+        '<button type="button" class="dm-esc-submit" onclick="submitDmInstructions(this, ' + Number(dm.id) + ')">Send instructions</button>' +
+      '</div>' +
+      '<div id="' + feedbackId + '" class="dm-esc-feedback"></div>' +
+    '</div>';
+
+  return '<div class="dm-esc-card" data-esc-for="' + Number(dm.id) + '">' +
+    head + reasonHtml + itemsHtml + compose +
+  '</div>';
 }
 
 function renderDmExpansionMsg(m) {
