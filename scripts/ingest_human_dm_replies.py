@@ -224,7 +224,7 @@ def main():
             conn.execute(
                 """
                 INSERT INTO human_dm_replies (dm_id, platform, their_author, project_name,
-                                              reply_content, email_subject, resend_email_id, status)
+                                              instructions, email_subject, resend_email_id, status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending')
                 """,
                 (dm_id, dm_row["platform"], dm_row["their_author"], project,
