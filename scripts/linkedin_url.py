@@ -22,6 +22,10 @@ CLI:
     python3 scripts/linkedin_url.py --check-engaged URL
         Exits 0 if the URL has any ID overlap with an existing
         platform='linkedin' row. Prints JSON with {engaged, ids, match}.
+    python3 scripts/linkedin_url.py --check-self-author URL_OR_SLUG
+        Exits 0 if the author profile URL/slug matches one of our own
+        LinkedIn accounts (we should never comment on our own posts).
+        Exits 1 otherwise. Prints JSON with {input, slug, self}.
 """
 
 import argparse
@@ -35,6 +39,37 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 ID_RE = re.compile(r"\b(\d{16,19})\b")
 ACTIVITY_URN_RE = re.compile(r"urn:li:activity:(\d{16,19})", re.IGNORECASE)
+
+# LinkedIn public profile slugs we own. Author URL match against this set
+# means "this is our own post; skip". Add any future account here.
+SELF_LINKEDIN_SLUGS = {"m13v"}
+
+
+def extract_slug(author_url_or_slug):
+    """Pull the public profile slug from a LinkedIn author identifier.
+
+    Accepts any of:
+      'https://www.linkedin.com/in/m13v/'
+      'https://www.linkedin.com/in/m13v'
+      '/in/m13v/'
+      'm13v'
+    Returns the lowercase slug, or '' if nothing parseable.
+    """
+    if not author_url_or_slug:
+        return ""
+    s = urllib.parse.unquote(author_url_or_slug.strip()).lower().rstrip("/")
+    m = re.search(r"/in/([a-z0-9\-_]+)", s)
+    if m:
+        return m.group(1)
+    if re.fullmatch(r"[a-z0-9\-_]+", s):
+        return s
+    return ""
+
+
+def is_self_author(author_url_or_slug):
+    """True if the given author URL/slug is one of our own LinkedIn
+    accounts. Used to skip posts authored by us during pipeline discovery."""
+    return extract_slug(author_url_or_slug) in SELF_LINKEDIN_SLUGS
 
 
 def extract_ids(url):
@@ -128,6 +163,12 @@ def main():
                         "Exits 0 on collision, 1 otherwise.")
     parser.add_argument("--list-engaged-ids", action="store_true",
                         help="Print every linkedin ID we've engaged with, one per line.")
+    parser.add_argument("--check-self-author", help="Author profile URL or "
+                        "public-ID slug from a candidate post. Exits 0 if it "
+                        "matches one of our own LinkedIn accounts (skip the "
+                        "post), 1 otherwise (proceed). Pre-comment guard so "
+                        "the pipeline doesn't comment on Matthew's own posts "
+                        "when search results surface them.")
     args = parser.parse_args()
 
     if args.extract:
@@ -176,6 +217,15 @@ def main():
             }
         print(json.dumps(out, indent=2))
         sys.exit(0 if match else 1)
+    if args.check_self_author:
+        slug = extract_slug(args.check_self_author)
+        matched = slug in SELF_LINKEDIN_SLUGS
+        print(json.dumps({
+            "input": args.check_self_author,
+            "slug": slug,
+            "self": matched,
+        }))
+        sys.exit(0 if matched else 1)
     if args.list_engaged_ids:
         import db as dbmod
         dbmod.load_env()
