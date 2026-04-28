@@ -2223,23 +2223,45 @@ async function handleApi(req, res) {
               "'created_at', hr.created_at, 'sent_at', hr.sent_at, " +
               "'attempts', hr.attempts, 'last_error', hr.last_error, " +
               "'source', CASE WHEN hr.resend_email_id IS NOT NULL THEN 'gmail' ELSE 'dashboard' END, " +
+              "'reply_channel', hr.reply_channel, " +
+              // DM side: only meaningful when reply_channel is 'dm' or 'both'.
+              // Same time-window heuristic as before to pair the human
+              // instruction with the outbound dm_messages row phase 0 logged.
               "'generated_reply', (" +
-                "SELECT m.content FROM dm_messages m " +
-                "WHERE m.dm_id = d.id AND m.direction = 'outbound' " +
-                  "AND hr.sent_at IS NOT NULL " +
-                  "AND m.message_at >= hr.sent_at - interval '5 minutes' " +
-                  "AND m.message_at <= hr.sent_at + interval '5 minutes' " +
-                "ORDER BY ABS(EXTRACT(EPOCH FROM (m.message_at - hr.sent_at))) ASC " +
-                "LIMIT 1" +
+                "CASE WHEN hr.reply_channel IN ('dm','both') THEN (" +
+                  "SELECT m.content FROM dm_messages m " +
+                  "WHERE m.dm_id = d.id AND m.direction = 'outbound' " +
+                    "AND hr.sent_at IS NOT NULL " +
+                    "AND m.message_at >= hr.sent_at - interval '5 minutes' " +
+                    "AND m.message_at <= hr.sent_at + interval '5 minutes' " +
+                  "ORDER BY ABS(EXTRACT(EPOCH FROM (m.message_at - hr.sent_at))) ASC " +
+                  "LIMIT 1" +
+                ") ELSE NULL END" +
               "), " +
               "'generated_reply_at', (" +
-                "SELECT m.message_at FROM dm_messages m " +
-                "WHERE m.dm_id = d.id AND m.direction = 'outbound' " +
-                  "AND hr.sent_at IS NOT NULL " +
-                  "AND m.message_at >= hr.sent_at - interval '5 minutes' " +
-                  "AND m.message_at <= hr.sent_at + interval '5 minutes' " +
-                "ORDER BY ABS(EXTRACT(EPOCH FROM (m.message_at - hr.sent_at))) ASC " +
-                "LIMIT 1" +
+                "CASE WHEN hr.reply_channel IN ('dm','both') THEN (" +
+                  "SELECT m.message_at FROM dm_messages m " +
+                  "WHERE m.dm_id = d.id AND m.direction = 'outbound' " +
+                    "AND hr.sent_at IS NOT NULL " +
+                    "AND m.message_at >= hr.sent_at - interval '5 minutes' " +
+                    "AND m.message_at <= hr.sent_at + interval '5 minutes' " +
+                  "ORDER BY ABS(EXTRACT(EPOCH FROM (m.message_at - hr.sent_at))) ASC " +
+                  "LIMIT 1" +
+                ") ELSE NULL END" +
+              "), " +
+              // Public side: pulled directly from the linked replies row.
+              // Phase 0 stamps human_dm_replies.public_reply_id once it logs
+              // the public reply, so this is precise (no time-window heuristic
+              // needed). Null when reply_channel='dm' or when phase 0 has not
+              // delivered the public side yet.
+              "'public_reply', (" +
+                "SELECT pr.our_reply_content FROM replies pr WHERE pr.id = hr.public_reply_id" +
+              "), " +
+              "'public_reply_url', (" +
+                "SELECT pr.our_reply_url FROM replies pr WHERE pr.id = hr.public_reply_id" +
+              "), " +
+              "'public_reply_at', (" +
+                "SELECT pr.replied_at FROM replies pr WHERE pr.id = hr.public_reply_id" +
               ")" +
             ") ORDER BY hr.created_at ASC), '[]'::json) " +
             "FROM human_dm_replies hr WHERE hr.dm_id = d.id) AS human_instructions, " +
@@ -7454,35 +7476,56 @@ function renderDmEscalationCard(dm) {
     ? '<div class="dm-esc-list">' + list.map(it => {
         const status = String(it && it.status || 'pending');
         const source = String(it && it.source || 'gmail');
+        const channel = String(it && it.reply_channel || 'dm');
         const created = it && it.created_at ? relTime(it.created_at) : '';
         const sent = it && it.sent_at ? relTime(it.sent_at) : '';
         const attempts = it && Number(it.attempts) || 0;
         const lastErr = it && it.last_error ? String(it.last_error) : '';
         const instructionsText = String(it && it.instructions || '');
-        const replyText = String(it && it.generated_reply || '');
+        const dmReplyText = String(it && it.generated_reply || '');
+        const publicReplyText = String(it && it.public_reply || '');
+        const publicReplyUrl = String(it && it.public_reply_url || '');
+        const wantsDm = (channel === 'dm' || channel === 'both');
+        const wantsPublic = (channel === 'public' || channel === 'both');
+        const channelLabel = channel === 'both' ? 'DM + public' : (channel === 'public' ? 'public reply' : 'DM');
         const meta =
           '<span class="dm-esc-status dm-esc-status-' + escapeHtml(status) + '">' + escapeHtml(status) + '</span>' +
+          '<span class="dm-esc-channel dm-esc-channel-' + escapeHtml(channel) + '">' + escapeHtml(channelLabel) + '</span>' +
           '<span class="dm-esc-source">' + escapeHtml(source) + '</span>' +
           (created ? '<span>' + escapeHtml(created) + '</span>' : '') +
           (sent ? '<span>· sent ' + escapeHtml(sent) + '</span>' : '') +
           (attempts > 0 ? '<span>· ' + attempts + ' attempt' + (attempts === 1 ? '' : 's') + '</span>' : '') +
           (lastErr ? '<span title="' + escapeHtml(lastErr) + '">· error</span>' : '');
-        // Each instruction renders as two paired blocks: the human's
-        // instructions (always shown) and the agent's crafted reply (shown
-        // when status='sent' and we matched an outbound dm_messages row
-        // within the heuristic time window).
-        const replyBlock = replyText
-          ? '<div class="dm-esc-item-label dm-esc-item-label-reply">agent reply</div>' +
-            '<div class="dm-esc-item-reply">' + escapeHtml(replyText) + '</div>'
-          : (status === 'sent'
-            ? '<div class="dm-esc-item-label dm-esc-item-label-reply">agent reply</div>' +
-              '<div class="dm-esc-item-reply dm-esc-item-reply-missing">(could not match outbound DM, see message thread above)</div>'
-            : '');
-        return '<div class="dm-esc-item">' +
+        // Render distinct paired blocks per channel. Each delivered surface
+        // gets its own labeled block so the operator can see precisely what
+        // went out where. A 'both' instruction renders BOTH blocks; a 'public'
+        // instruction renders ONLY the public block (no "missing DM" stub).
+        const dmBlock = wantsDm
+          ? (dmReplyText
+              ? '<div class="dm-esc-item-label dm-esc-item-label-reply">agent reply (DM)</div>' +
+                '<div class="dm-esc-item-reply">' + escapeHtml(dmReplyText) + '</div>'
+              : (status === 'sent'
+                  ? '<div class="dm-esc-item-label dm-esc-item-label-reply">agent reply (DM)</div>' +
+                    '<div class="dm-esc-item-reply dm-esc-item-reply-missing">(could not match outbound DM, see message thread above)</div>'
+                  : ''))
+          : '';
+        const publicBlock = wantsPublic
+          ? (publicReplyText
+              ? '<div class="dm-esc-item-label dm-esc-item-label-reply dm-esc-item-label-public">agent reply (public)' +
+                  (publicReplyUrl ? ' <a class="dm-esc-public-link" href="' + escapeHtml(publicReplyUrl) + '" target="_blank" rel="noopener">open ↗</a>' : '') +
+                '</div>' +
+                '<div class="dm-esc-item-reply dm-esc-item-reply-public">' + escapeHtml(publicReplyText) + '</div>'
+              : (status === 'sent'
+                  ? '<div class="dm-esc-item-label dm-esc-item-label-reply dm-esc-item-label-public">agent reply (public)</div>' +
+                    '<div class="dm-esc-item-reply dm-esc-item-reply-missing">(public_reply_id not stamped — phase 0 may not have logged it yet)</div>'
+                  : ''))
+          : '';
+        return '<div class="dm-esc-item dm-esc-item-channel-' + escapeHtml(channel) + '">' +
           '<div class="dm-esc-item-meta">' + meta + '</div>' +
           '<div class="dm-esc-item-label">your instructions</div>' +
           '<div class="dm-esc-item-body">' + escapeHtml(instructionsText) + '</div>' +
-          replyBlock +
+          dmBlock +
+          publicBlock +
         '</div>';
       }).join('') + '</div>'
     : '';
