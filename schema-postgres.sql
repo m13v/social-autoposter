@@ -236,9 +236,13 @@ CREATE INDEX IF NOT EXISTS idx_dm_messages_direction ON dm_messages(direction);
 -- emails (matching [DM #N] in the subject) ingested by ingest_human_dm_replies.py,
 -- and (2) the dashboard /api/dm/:id/instructions endpoint. Phase 0 of
 -- engage-dm-replies.sh treats `instructions` as direction (not literal text) and
--- has the LLM craft a natural DM from it.
+-- has the LLM craft a natural reply from it.
 -- Column 'resend_email_id' is historical; we now store the Gmail message id here
 -- when the source is Gmail (NULL for dashboard inserts).
+-- reply_channel selects the delivery surface: 'dm' (private only, default),
+-- 'public' (post on the original public thread only), or 'both' (post publicly
+-- AND send the DM, paired, same instruction text drives both). public_reply_id
+-- is set by phase 0 once the public-side `replies` row is logged.
 CREATE TABLE IF NOT EXISTS human_dm_replies (
     id SERIAL PRIMARY KEY,
     dm_id INTEGER NOT NULL REFERENCES dms(id),
@@ -252,12 +256,23 @@ CREATE TABLE IF NOT EXISTS human_dm_replies (
     attempts INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    sent_at TIMESTAMP
+    sent_at TIMESTAMP,
+    reply_channel TEXT NOT NULL DEFAULT 'dm'
+        CHECK (reply_channel IN ('dm', 'public', 'both')),
+    public_reply_id INTEGER REFERENCES replies(id)
 );
+
+-- Backwards-compat for deployments that pre-date the channel split.
+ALTER TABLE human_dm_replies
+    ADD COLUMN IF NOT EXISTS reply_channel TEXT NOT NULL DEFAULT 'dm'
+        CHECK (reply_channel IN ('dm', 'public', 'both'));
+ALTER TABLE human_dm_replies
+    ADD COLUMN IF NOT EXISTS public_reply_id INTEGER REFERENCES replies(id);
 
 CREATE INDEX IF NOT EXISTS idx_human_dm_replies_status ON human_dm_replies(status);
 CREATE INDEX IF NOT EXISTS idx_human_dm_replies_dm_id ON human_dm_replies(dm_id);
 CREATE INDEX IF NOT EXISTS idx_human_dm_replies_project ON human_dm_replies(project_name);
+CREATE INDEX IF NOT EXISTS idx_human_dm_replies_reply_channel ON human_dm_replies(reply_channel);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_human_dm_replies_gmail_id
     ON human_dm_replies(resend_email_id) WHERE resend_email_id IS NOT NULL;
 
