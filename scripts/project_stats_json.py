@@ -805,6 +805,9 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
             # null when the project has no `amplitude` block or the fetch
             # fails — dashboard falls back to get_started_clicks.
             "amplitude_signups": amplitude_signups,
+            # Filter shape (e.g. {"utm_source": "studyly.io"}) for tooltip;
+            # null when the project has no `amplitude` block.
+            "amplitude_filter": (proj.get("amplitude") or {}).get("attribution_filter") if proj.get("amplitude") else None,
             "ctr_pct": ctr,
             "conv_pct": conv,
             # Domain-wide siblings: the dashboard shows each as "<scoped>
