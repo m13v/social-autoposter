@@ -47,69 +47,85 @@ def find_orphan_authors(conn, platform):
     return [row["their_author"] for row in cur.fetchall()]
 
 
-def ensure_dm(platform, author):
-    try:
-        out = subprocess.run(
-            ["python3", DM_CONV, "ensure-dm", "--platform", platform, "--author", author],
-            capture_output=True, text=True, timeout=30,
+def bulk_insert_orphans(conn, platform):
+    """Single INSERT ... SELECT that creates dms rows for every orphan author.
+
+    Mirrors dm_conversation.ensure_dm's auto-link semantics: pick the most
+    recent replies row per author, link reply_id + post_id + comment_context
+    from it. Drops the 720-hour lookback (backfill wants to link historical
+    rows even if old; the original lookback exists to prevent cold DMs from
+    auto-linking to ancient unrelated thread engagement, which doesn't apply
+    when we're walking the replies table itself). Atomic, idempotent — safe
+    to re-run.
+
+    Returns the number of rows inserted.
+    """
+    cur = conn.execute(
+        """
+        WITH latest_per_author AS (
+          SELECT DISTINCT ON (their_author)
+                 id, platform, their_author, post_id, their_content
+          FROM replies
+          WHERE platform = %s
+            AND status IN ('replied','sent')
+            AND their_author IS NOT NULL AND their_author <> ''
+          ORDER BY their_author, discovered_at DESC
         )
-        return out.returncode == 0, (out.stdout or out.stderr or "").strip()
-    except subprocess.TimeoutExpired:
-        return False, "TIMEOUT"
-    except Exception as e:
-        return False, f"EXC: {e}"
+        INSERT INTO dms (platform, their_author, reply_id, post_id,
+                         comment_context, status, conversation_status, tier,
+                         discovered_at)
+        SELECT r.platform, r.their_author, r.id, r.post_id,
+               LEFT(r.their_content, 1000),
+               'sent', 'active', 1, NOW()
+        FROM latest_per_author r
+        WHERE NOT EXISTS (
+          SELECT 1 FROM dms d
+          WHERE d.platform = r.platform AND d.their_author = r.their_author
+        )
+        RETURNING id, their_author
+        """,
+        (platform,),
+    )
+    inserted = cur.fetchall()
+    conn.commit()
+    return inserted
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--platform", default="reddit", choices=["reddit", "linkedin", "x", "twitter"])
     ap.add_argument("--apply", action="store_true",
-                    help="Actually call ensure-dm. Without this flag, only the count is printed.")
-    ap.add_argument("--limit", type=int, default=None,
-                    help="Cap the number of authors to backfill in this run (for staged rollout).")
+                    help="Actually run the bulk insert. Without this flag, only the count is printed.")
     args = ap.parse_args()
 
     dbmod.load_env()
     conn = dbmod.get_conn()
-    authors = find_orphan_authors(conn, args.platform)
-    conn.close()
+    try:
+        authors = find_orphan_authors(conn, args.platform)
+        if not authors:
+            print(f"No orphan authors found for platform={args.platform}. Nothing to do.")
+            return 0
 
-    if not authors:
-        print(f"No orphan authors found for platform={args.platform}. Nothing to do.")
+        print(f"Found {len(authors)} orphan {args.platform} authors (have replies rows but no dms row).")
+
+        if not args.apply:
+            sample = authors[:10]
+            print("Sample (first 10):")
+            for a in sample:
+                print(f"  - {a}")
+            print()
+            print("Dry-run only. Re-run with --apply to actually create dms rows.")
+            return 0
+
+        start = time.time()
+        inserted = bulk_insert_orphans(conn, args.platform)
+        elapsed = time.time() - start
+        print(f"Backfill complete: inserted={len(inserted)} elapsed={elapsed:.2f}s")
+        if inserted:
+            print(f"  first 5: {[r['their_author'] for r in inserted[:5]]}")
         return 0
-
-    if args.limit:
-        authors = authors[: args.limit]
-
-    print(f"Found {len(authors)} orphan {args.platform} authors (have replies rows but no dms row).")
-
-    if not args.apply:
-        sample = authors[:10]
-        print("Sample (first 10):")
-        for a in sample:
-            print(f"  - {a}")
-        print()
-        print("Dry-run only. Re-run with --apply to actually create dms rows.")
-        return 0
-
-    start = time.time()
-    ok = 0
-    fail = 0
-    for i, author in enumerate(authors, 1):
-        success, out = ensure_dm(args.platform, author)
-        if success:
-            ok += 1
-        else:
-            fail += 1
-            print(f"  [FAIL] @{author}: {out[:200]}")
-        if i % 25 == 0 or i == len(authors):
-            elapsed = time.time() - start
-            print(f"  {i}/{len(authors)} done ok={ok} fail={fail} ({elapsed:.1f}s)")
-
-    elapsed = time.time() - start
-    print()
-    print(f"Backfill complete: ok={ok} fail={fail} elapsed={elapsed:.1f}s")
-    return 0 if fail == 0 else 1
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
