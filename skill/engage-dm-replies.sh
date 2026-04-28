@@ -859,6 +859,7 @@ If CDP returns {ok:false} with any other non-recoverable error, fall back to mcp
 cd ~/social-autoposter && python3 scripts/twitter_browser.py send-dm "THREAD_URL" "YOUR_REPLY_TEXT"
 \`\`\`
 Returns JSON with {ok: true, thread_url, verified} on success. Handles the encrypted DM passcode automatically.
+On {ok:false}, treat these errors as TERMINAL for this run: \`rate_limited\`, \`conversation_not_found_in_sidebar\`, \`message_box_not_found\`, \`tweet_not_found\`. They mean platform-level state we can't fix mid-cycle. SKIP the conversation, do NOT retry, do NOT flag-human, do NOT log-outbound. The next launchd cycle handles its own backoff. The generic "retry up to 3 times" rule does NOT apply to these errors — retrying a rate_limited burns more X-side budget.
 
 ### Step 5: Log the reply
 \`\`\`bash
