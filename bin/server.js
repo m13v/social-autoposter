@@ -3101,7 +3101,11 @@ const HTML = `<!DOCTYPE html>
   .dm-esc-list { display: flex; flex-direction: column; gap: 6px; }
   .dm-esc-item { background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 6px 8px; }
   .dm-esc-item-meta { display: flex; align-items: center; gap: 6px; font-size: 10px; text-transform: lowercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 4px; font-weight: 600; }
+  .dm-esc-item-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); font-weight: 700; margin-top: 6px; margin-bottom: 2px; }
+  .dm-esc-item-label-reply { color: #047857; }
   .dm-esc-item-body { white-space: pre-wrap; word-break: break-word; color: var(--text); font-size: 12px; }
+  .dm-esc-item-reply { white-space: pre-wrap; word-break: break-word; color: var(--text); font-size: 12px; padding: 6px 8px; background: rgba(16, 185, 129, 0.08); border-left: 2px solid #10b981; border-radius: 0 4px 4px 0; }
+  .dm-esc-item-reply-missing { color: var(--text-muted); font-style: italic; background: transparent; border-left-color: var(--border); }
   .dm-esc-status { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 9px; font-weight: 700; }
   .dm-esc-status-pending { background: #fef3c7; color: #92400e; }
   .dm-esc-status-sent    { background: #d1fae5; color: #065f46; }
