@@ -409,9 +409,84 @@ log "=== Stats Pipeline complete: $(date) ==="
 # regex in bin/server.js (^stats_(\w+)$) classifies the row correctly.
 RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
 STATS_FAILED=$(( (STEP1_EXIT != 0 ? 1 : 0) + (STEP2_EXIT != 0 ? 1 : 0) + (STEP3_EXIT != 0 ? 1 : 0) + (STEP4_EXIT != 0 ? 1 : 0) ))
-ACTIVE=$(psql "${DATABASE_URL:-}" -t -A -c "SELECT COUNT(*) FROM posts WHERE status='active';" 2>/dev/null | tr -d '[:space:]')
-[ -z "$ACTIVE" ] && ACTIVE=0
 SCRIPT_TAG="stats${PLATFORM:+_$PLATFORM}"
+
+# Parse the per-run log to extract REAL counters for the dashboard. Before
+# 2026-04-28 we logged `--posted "$ACTIVE"` (total active posts in the DB),
+# which was meaningless and made every stats row read like "posted=18216".
+# Now we extract the real per-run counters from the structured summary lines
+# each step prints:
+#
+#   Step 1 (Reddit views leg):
+#     Reddit Views: <N> had views, <M> DB posts updated, <U> unmatched
+#   Step 2 (Reddit detail leg):
+#     Reddit: <T> total, <S> skipped, <C> checked, <U> updated, <D> deleted, <R> removed, <E> errors [...]
+#   Step 3 (Twitter):
+#     Twitter: <T> total, <S> skipped, <C> checked, <U> updated, <D> deleted, <E> errors
+#   Step 4 (LinkedIn) and Moltbook (Step 2 --moltbook-only): no structured summary, count as 0.
+#
+# Missing platforms simply contribute 0 to each total. awk handles parsing
+# robustly even when commas/brackets vary.
+extract_field() {
+    # Usage: extract_field <line> <field>
+    # Pulls the integer that precedes <field> in a comma-separated counter
+    # line such as "Reddit: 4346 total, 1696 skipped, ..."  Echoes 0 when the
+    # field isn't present.
+    local line="$1" field="$2"
+    echo "$line" | awk -v f=" $field" '{
+        n = split($0, parts, ",")
+        for (i = 1; i <= n; i++) {
+            if (index(parts[i], f) > 0) {
+                # Strip leading whitespace, then the leading integer is the value.
+                gsub(/^[[:space:]]+/, "", parts[i])
+                if (match(parts[i], /^[0-9]+/)) {
+                    print substr(parts[i], RSTART, RLENGTH)
+                    exit
+                }
+            }
+        }
+        print 0
+    }'
+}
+
+REDDIT_VIEWS_LINE=$(grep -E "^Reddit Views:" "$LOGFILE" 2>/dev/null | tail -1)
+REDDIT_DETAIL_LINE=$(grep -E "^Reddit: [0-9]+ total" "$LOGFILE" 2>/dev/null | tail -1)
+TWITTER_LINE=$(grep -E "^Twitter: [0-9]+ total" "$LOGFILE" 2>/dev/null | tail -1)
+
+# Reddit views leg: "<M> DB posts updated" — only the "updated" leg matters here.
+REDDIT_VIEWS_UPDATED=0
+if [ -n "$REDDIT_VIEWS_LINE" ]; then
+    REDDIT_VIEWS_UPDATED=$(echo "$REDDIT_VIEWS_LINE" | awk '{
+        for (i = 1; i <= NF; i++) {
+            if ($i == "DB" && $(i+1) == "posts" && $(i+2) == "updated,") {
+                print $(i-1); exit
+            }
+        }
+        print 0
+    }')
+fi
+
+REDDIT_CHECKED=$(extract_field "$REDDIT_DETAIL_LINE" "checked")
+REDDIT_DETAIL_UPDATED=$(extract_field "$REDDIT_DETAIL_LINE" "updated")
+REDDIT_DELETED=$(extract_field "$REDDIT_DETAIL_LINE" "deleted")
+REDDIT_REMOVED_FIELD=$(extract_field "$REDDIT_DETAIL_LINE" "removed")
+REDDIT_SKIPPED=$(extract_field "$REDDIT_DETAIL_LINE" "skipped")
+REDDIT_ERRORS=$(extract_field "$REDDIT_DETAIL_LINE" "errors")
+
+TWITTER_CHECKED=$(extract_field "$TWITTER_LINE" "checked")
+TWITTER_UPDATED=$(extract_field "$TWITTER_LINE" "updated")
+TWITTER_DELETED=$(extract_field "$TWITTER_LINE" "deleted")
+TWITTER_SKIPPED=$(extract_field "$TWITTER_LINE" "skipped")
+TWITTER_ERRORS=$(extract_field "$TWITTER_LINE" "errors")
+
+CHECKED=$(( REDDIT_CHECKED + TWITTER_CHECKED ))
+UPDATED=$(( REDDIT_VIEWS_UPDATED + REDDIT_DETAIL_UPDATED + TWITTER_UPDATED ))
+REMOVED=$(( REDDIT_DELETED + REDDIT_REMOVED_FIELD + TWITTER_DELETED ))
+SKIPPED_REAL=$(( REDDIT_SKIPPED + TWITTER_SKIPPED ))
+# API errors are surfaced via a per-platform counter but are folded into the
+# "failed" pill alongside step-exit counts. Stays bounded since API errors
+# cap at a few hundred and step exits are 0-4.
+FAILED_REAL=$(( STATS_FAILED + REDDIT_ERRORS + TWITTER_ERRORS ))
 
 # Pull the reply-refresh count for this platform out of the sidecar JSON.
 # Defaults to 0 if the file is missing or the platform's pass didn't run.
@@ -426,7 +501,17 @@ if [ -s "$REPLY_SUMMARY_FILE" ]; then
     fi
 fi
 
-python3 "$REPO_DIR/scripts/log_run.py" --script "$SCRIPT_TAG" --posted "$ACTIVE" --skipped 0 --failed "$STATS_FAILED" --replies-refreshed "$REPLIES_REFRESHED" --cost 0 --elapsed "$RUN_ELAPSED"
+python3 "$REPO_DIR/scripts/log_run.py" \
+    --script "$SCRIPT_TAG" \
+    --posted 0 \
+    --skipped "$SKIPPED_REAL" \
+    --failed "$FAILED_REAL" \
+    --replies-refreshed "$REPLIES_REFRESHED" \
+    --checked "$CHECKED" \
+    --updated "$UPDATED" \
+    --removed "$REMOVED" \
+    --cost 0 \
+    --elapsed "$RUN_ELAPSED"
 
 # Clean up old logs (keep last 7 days). Covers both new `stats-<platform>-*`
 # and any legacy `stats-YYYY-*` filenames.
