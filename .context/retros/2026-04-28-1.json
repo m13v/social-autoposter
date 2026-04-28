@@ -1,0 +1,64 @@
+{
+  "date": "2026-04-28",
+  "window": "7d",
+  "metrics": {
+    "commits": 589,
+    "contributors": 1,
+    "prs_merged": 0,
+    "insertions": 117172,
+    "deletions": 5118,
+    "net_loc": 112054,
+    "test_loc": 0,
+    "test_ratio": 0.0,
+    "active_days": 6,
+    "sessions": 25,
+    "deep_sessions": 11,
+    "medium_sessions": 5,
+    "micro_sessions": 9,
+    "avg_session_minutes": 66,
+    "active_minutes": 1655,
+    "loc_per_session_hour": 950,
+    "feat_pct": 0.56,
+    "fix_pct": 0.065,
+    "refactor_pct": 0.029,
+    "update_pct": 0.224,
+    "remove_pct": 0.044,
+    "peak_hour": 14,
+    "secondary_peak_hour": 19,
+    "ai_assisted_commits_estimate": 559
+  },
+  "authors": {
+    "m13v": {
+      "commits": 589,
+      "insertions": 117172,
+      "deletions": 5118,
+      "test_ratio": 0.0,
+      "top_area": "scripts/"
+    }
+  },
+  "hotspots": [
+    {"file": "bin/server.js", "changes": 123},
+    {"file": "seo/generate_page.py", "changes": 25},
+    {"file": "skill/engage-dm-replies.sh", "changes": 17},
+    {"file": "scripts/post_reddit.py", "changes": 13},
+    {"file": "skill/run-linkedin.sh", "changes": 12},
+    {"file": "scripts/engage_reddit.py", "changes": 12},
+    {"file": "skill/engage-twitter.sh", "changes": 11},
+    {"file": "scripts/engagement_styles.py", "changes": 11}
+  ],
+  "themes": [
+    "Engagement styles candidate system (LLM-invented styles, promotion job)",
+    "SEO fact-verification gates (post-generation)",
+    "LinkedIn pipeline split (discovery / posting phases, browser lock release)",
+    "Reddit grounding overhaul (two-lane rules, anti-fabrication, meta-callout detection)",
+    "DM escalation cross-pipeline history",
+    "Em dash purge across prompts and seed data"
+  ],
+  "ship_of_the_week": "Engagement styles candidate system (model invents new styles, dashboard candidate tab, promote/retire job, ~700 LOC across ~12 commits)",
+  "version_range": null,
+  "streak_days": 3,
+  "team_streak_days": 3,
+  "active_dates": ["2026-04-21", "2026-04-22", "2026-04-23", "2026-04-24", "2026-04-26", "2026-04-27", "2026-04-28"],
+  "missed_days": ["2026-04-25"],
+  "tweetable": "Week of Apr 21-28: 589 commits (solo, mostly auto-committed), +117k/-5k LOC across 632 files, 25 sessions over 27.5h, peak hours 1pm and 7pm. Streak: 3d."
+}
