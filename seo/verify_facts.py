@@ -144,6 +144,12 @@ def _probe_url(url: str) -> tuple[str, str | None]:
     except (socket.gaierror, UnicodeError) as e:
         return url, f"dns: {e}"
 
+    # Statuses that mean "the host answered, the URL exists" even if the
+    # response body is gated. Redirects count as alive (the URL resolves to
+    # something). 401/403/429 are anti-bot/auth gates, not 'URL is broken'.
+    ALIVE_STATUSES = {200, 201, 202, 203, 204, 205, 206,
+                      301, 302, 303, 307, 308,
+                      401, 403, 429}
     for method in ("HEAD", "GET"):
         try:
             req = urllib.request.Request(
@@ -151,15 +157,15 @@ def _probe_url(url: str) -> tuple[str, str | None]:
                 headers={"User-Agent": "Mozilla/5.0 (verify_facts/1.0)"},
             )
             with urllib.request.urlopen(req, timeout=URL_PROBE_TIMEOUT) as resp:
-                if 200 <= resp.status < 400:
+                if resp.status in ALIVE_STATUSES or 200 <= resp.status < 400:
                     return url, None
                 if method == "GET":
                     return url, f"http {resp.status}"
         except urllib.error.HTTPError as e:
-            if e.code in (405, 403) and method == "HEAD":
-                continue
-            if e.code in (401, 403, 429):
+            if e.code in ALIVE_STATUSES:
                 return url, None
+            if e.code == 405 and method == "HEAD":
+                continue
             if method == "GET":
                 return url, f"http {e.code}"
         except (urllib.error.URLError, socket.timeout, ConnectionError, TimeoutError) as e:
@@ -440,23 +446,36 @@ def extract_and_verify_factual_claims(repo_path: str,
 
 def main() -> int:
     """CLI for ad-hoc use:
-        python3 verify_facts.py <repo_path> <relative_file> [...] [--gate=urls|time|claims|all]
+        python3 verify_facts.py <repo_path> <relative_file> [...]
+            [--gate=urls|time|claims|all] [--no-cleanup]
+
+    Gates default to ALL three. Pass --no-cleanup to keep the file on disk
+    on failure (useful for ad-hoc audits; the in-pipeline gates always
+    cleanup so the auto-commit cron has nothing to push).
     """
     args = sys.argv[1:]
     gate = "all"
+    no_cleanup = False
     files: list[str] = []
     repo_path = ""
     for a in args:
         if a.startswith("--gate="):
             gate = a.split("=", 1)[1]
+        elif a == "--no-cleanup":
+            no_cleanup = True
         elif not repo_path:
             repo_path = a
         else:
             files.append(a)
     if not repo_path or not files:
-        print("usage: verify_facts.py <repo_path> <rel_file> [...] [--gate=urls|time|claims|all]",
+        print("usage: verify_facts.py <repo_path> <rel_file> [...] [--gate=urls|time|claims|all] [--no-cleanup]",
               file=sys.stderr)
         return 2
+
+    if no_cleanup:
+        global _cleanup_files
+        _orig_cleanup = _cleanup_files
+        _cleanup_files = lambda repo, paths: []  # noqa: E731
 
     results: dict[str, dict] = {}
     if gate in ("urls", "all"):
