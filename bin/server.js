@@ -303,7 +303,9 @@ function getLaunchAgentPath(unitFile) {
 // failed=N cost=$X elapsed=Ns`. WARNING lines are interleaved and skipped.
 
 const RUN_MONITOR_PATH = path.join(LOG_DIR, 'run_monitor.log');
-const RUN_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*posted=(\d+)\s+skipped=(\d+)\s+failed=(\d+)\s+cost=\$([\d.]+)\s+elapsed=(\d+)s/;
+// Optional `replies_refreshed=N` segment (added 2026-04-28) sits between
+// `failed=` and `cost=`. Old log lines still match because the group is `?`.
+const RUN_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*posted=(\d+)\s+skipped=(\d+)\s+failed=(\d+)(?:\s+replies_refreshed=(\d+))?\s+cost=\$([\d.]+)\s+elapsed=(\d+)s/;
 
 // posts.platform is lowercase; UI labels are capitalized.
 const PLATFORM_LABELS = {
@@ -374,7 +376,7 @@ function parseRunMonitorLog(maxLines) {
   for (const line of tail) {
     const m = line.match(RUN_LINE_RE);
     if (!m) continue;
-    const [, ts, script, posted, skipped, failed, cost, elapsed] = m;
+    const [, ts, script, posted, skipped, failed, repliesRefreshed, cost, elapsed] = m;
     // log_run.py writes naive local-wallclock time (strftime without tz), so
     // `new Date(ts)` in node interprets it as local on the server. That is
     // correct since the dashboard server runs on the same host.
@@ -398,6 +400,7 @@ function parseRunMonitorLog(maxLines) {
         posted: parseInt(posted, 10),
         skipped: parseInt(skipped, 10),
         failed: parseInt(failed, 10),
+        replies_refreshed: repliesRefreshed ? parseInt(repliesRefreshed, 10) : 0,
         cost_usd: parseFloat(cost),
       },
     });
@@ -4273,13 +4276,17 @@ function renderResult(run) {
       (cost ? '<span style="font-size:12px;color:var(--muted);">$' + cost.toFixed(2) + '</span>' : '')
     );
   }
-  // Generic fallback: posted/skipped/failed from run_monitor.log
+  // Generic fallback: posted/skipped/failed/replies_refreshed from run_monitor.log
   const posted = r.posted || 0, skipped = r.skipped || 0, failed = r.failed || 0;
-  if (!posted && !skipped && !failed) return '<span style="color:var(--muted);font-size:12px;">—</span>';
+  const repliesRefreshed = r.replies_refreshed || 0;
+  if (!posted && !skipped && !failed && !repliesRefreshed) {
+    return '<span style="color:var(--muted);font-size:12px;">—</span>';
+  }
   return (
     pill('posted', posted, '#22c55e') +
     pill('skipped', skipped, '#eab308') +
-    (failed ? pill('failed', failed, '#ef4444') : '')
+    (failed ? pill('failed', failed, '#ef4444') : '') +
+    (repliesRefreshed ? pill('replies refreshed', repliesRefreshed, '#3b82f6') : '')
   );
 }
 
