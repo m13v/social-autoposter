@@ -81,8 +81,9 @@ Process ALL of them. For each post:
    d. If success, use \`page_url\` from the JSON output for the Reddit link edit.
    e. If failure, DO NOT fall back to a bare project website or github URL. DO NOT edit the Reddit comment. DO NOT update link_edited_at on the post. Log the error in your output and move to the next post. The post will stay eligible and be retried on the next scheduled run (every 6h). A custom landing page per thread is a hard requirement; a bare homepage link is never acceptable.
    If the matched project has NO landing_pages config at all (not a generation failure, genuinely unconfigured), then and only then use the project's website URL.
-4. Write 1 casual sentence + project link.
-   - For Reddit (first person): "fwiw there's a tool that does this - URL"
+4. Write 1 casual sentence + project link. ALWAYS frame as our own creation, never as a third-party tool we just discovered. We built / made / shipped this; we are not "finding" or "stumbling on" it.
+   - For Reddit (first person, claim ownership): "fwiw I built a tool for exactly this, URL", "we made this for it, URL", "I shipped a small thing that does this, URL".
+   - NEVER write: "I found this", "there's a tool", "came across this", "saw this manual", "found this guide". That phrasing pretends we are a neutral commenter pointing at someone else's project. We are the authors. Say so.
 5. Append it to our_content with a blank line separator.
 6. Navigate to old.reddit.com comment permalink via the reddit-agent browser. Click "edit", append the link text to the existing content, save, verify.
 7. After each successful edit, update the DB:
