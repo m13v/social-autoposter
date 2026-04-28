@@ -586,6 +586,54 @@ def _seo_pages_count(conn, name, days):
     return int((row and row[0]) or 0)
 
 
+def _amplitude_signups(proj, days, env):
+    """Pull attributed end-product signup count from the client's Amplitude.
+
+    For projects with an `amplitude` config block (project_id, api_key_env,
+    secret_key_env, signup_event, attribution_filter). Returns total signups
+    matching the filter over the last `days`, or None if not configured /
+    creds missing / API errors. Errors are non-fatal — they collapse to None
+    so the dashboard falls back to the click-based metric.
+    """
+    amp = proj.get("amplitude")
+    if not amp:
+        return None
+    api_key = env.get(amp.get("api_key_env", ""))
+    secret_key = env.get(amp.get("secret_key_env", ""))
+    if not api_key or not secret_key:
+        return None
+    import base64
+    end_dt = datetime.now(timezone.utc)
+    start_dt = end_dt - timedelta(days=max(1, days) - 1)
+    e = json.dumps({
+        "event_type": amp.get("signup_event", "New User Sign Up"),
+        "filters": [
+            {"subprop_type": "event", "subprop_key": k, "subprop_op": "is", "subprop_value": [v]}
+            for k, v in (amp.get("attribution_filter") or {}).items()
+        ],
+    })
+    qs = urllib.parse.urlencode({
+        "e": e,
+        "start": start_dt.strftime("%Y%m%d"),
+        "end": end_dt.strftime("%Y%m%d"),
+        "i": "1",
+        "m": "totals",
+    })
+    auth_b64 = base64.b64encode(f"{api_key}:{secret_key}".encode()).decode()
+    req = urllib.request.Request(
+        f"https://amplitude.com/api/2/events/segmentation?{qs}",
+        headers={"Authorization": f"Basic {auth_b64}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+    except Exception as exc:
+        print(f"  amplitude signups fetch error ({proj.get('name')}): {exc}", file=sys.stderr)
+        return None
+    series = (data.get("data", {}).get("series") or [[]])[0]
+    return int(sum(int(x or 0) for x in series))
+
+
 def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, ph_results):
     name = proj["name"]
     post_stats = ps.get_post_stats(conn, name, days)
@@ -718,6 +766,7 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
     real = bookings.get("real_bookings", 0) if bookings else 0
     dm_clicks = _dm_short_link_stats(conn, name, days)
     dm_bookings = _dm_booking_count(conn, bookings_conn, name, days)
+    amplitude_signups = _amplitude_signups(proj, days, env)
     if not analytics_error:
         conv = (real / ctas * 100) if ctas else None
 
@@ -751,6 +800,11 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
             "real_bookings": real,
             "dm_clicks": dm_clicks,
             "dm_bookings": dm_bookings,
+            # Attributed signups on the client's product (Amplitude), filtered
+            # by the UTM source we forward (config.json projects[].amplitude).
+            # null when the project has no `amplitude` block or the fetch
+            # fails — dashboard falls back to get_started_clicks.
+            "amplitude_signups": amplitude_signups,
             "ctr_pct": ctr,
             "conv_pct": conv,
             # Domain-wide siblings: the dashboard shows each as "<scoped>
