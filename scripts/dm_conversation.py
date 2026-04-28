@@ -489,17 +489,89 @@ def _scrub_dashes(s):
     return s.replace("\u2014", ",").replace("\u2013", ",")
 
 
+def _fetch_upstream_context(conn, dm_id):
+    """Pull the public-thread chain that preceded this DM.
+
+    Mirrors the COALESCE strategy used by bin/server.js /api/top/dms so the
+    email matches what the dashboard expansion shows: thread post, our
+    top-level comment, the prospect's comment that triggered outreach, and
+    our public reply to that comment. Each leg is rendered only when data
+    exists, so cold DMs with no public-engagement trail print a short
+    "(no upstream public exchange logged)" stub.
+    """
+    return conn.execute(
+        """
+        SELECT
+            COALESCE(p_direct.thread_title,   p_via_reply.thread_title,   p_via_fb.thread_title)   AS thread_title,
+            COALESCE(p_direct.thread_url,     p_via_reply.thread_url,     p_via_fb.thread_url)     AS thread_url,
+            COALESCE(p_direct.thread_content, p_via_reply.thread_content, p_via_fb.thread_content) AS thread_content,
+            COALESCE(p_direct.thread_author,  p_via_reply.thread_author,  p_via_fb.thread_author)  AS thread_author,
+            COALESCE(p_direct.our_content,    p_via_reply.our_content,    p_via_fb.our_content)    AS our_top_content,
+            COALESCE(p_direct.our_url,        p_via_reply.our_url,        p_via_fb.our_url)        AS our_top_url,
+            COALESCE(p_direct.our_account,    p_via_reply.our_account,    p_via_fb.our_account)    AS our_top_account,
+            COALESCE(p_direct.posted_at,      p_via_reply.posted_at,      p_via_fb.posted_at)      AS our_top_posted_at,
+            COALESCE(r_link.their_content,     r_fallback.their_content)     AS their_comment_content,
+            COALESCE(r_link.their_comment_url, r_fallback.their_comment_url) AS their_comment_url,
+            COALESCE(r_link.their_author,      r_fallback.their_author)      AS their_comment_author,
+            COALESCE(r_link.our_reply_content, r_fallback.our_reply_content) AS our_reply_content,
+            COALESCE(r_link.our_reply_url,     r_fallback.our_reply_url)     AS our_reply_url,
+            COALESCE(r_link.replied_at,        r_fallback.replied_at)        AS our_reply_at,
+            CASE WHEN r_fallback.id IS NOT NULL AND d.reply_id IS NULL AND d.post_id IS NULL THEN TRUE ELSE FALSE END AS is_fallback
+        FROM dms d
+        LEFT JOIN posts   p_direct    ON p_direct.id    = d.post_id
+        LEFT JOIN replies r_link      ON r_link.id      = d.reply_id
+        LEFT JOIN posts   p_via_reply ON p_via_reply.id = r_link.post_id
+        LEFT JOIN LATERAL (
+            SELECT r2.* FROM replies r2
+            WHERE d.reply_id IS NULL AND d.post_id IS NULL
+              AND r2.platform = d.platform AND r2.their_author = d.their_author
+            ORDER BY r2.discovered_at DESC LIMIT 1
+        ) r_fallback ON TRUE
+        LEFT JOIN posts   p_via_fb    ON p_via_fb.id    = r_fallback.post_id
+        WHERE d.id = %s
+        """,
+        (dm_id,),
+    ).fetchone()
+
+
+def _render_upstream_card(label, lines):
+    """Render one card as a labeled plain-text block.
+
+    Cards are separated by a divider so the human can scan the public chain
+    distinctly from the DM tracker. Empty cards return ''.
+    """
+    body = "\n".join(line for line in lines if line)
+    if not body.strip():
+        return ""
+    return f"--- {label} ---\n{body}\n"
+
+
+def _ts(dt_value):
+    if not dt_value:
+        return ""
+    try:
+        return dt_value.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return str(dt_value)
+
+
 def _send_escalation_email(conn, dm_id, platform, their_author, reason):
     """Send an escalation email with conversation history.
 
     Sends from i@m13v.com to NOTIFICATION_EMAIL (defaults to i@m13v.com).
     Subject embeds [DM #N] so ingest can match the reply back to this thread.
+
+    The body renders the full chain as distinct cards: the public thread,
+    our top-level post/comment, their public comment that triggered
+    outreach, our public reply, the DM-promotion exchange, and the actual
+    DM thread (if a private chat_url exists). This mirrors the dashboard
+    expansion view so the human sees the same context in either surface.
     """
     to_email = os.environ.get("NOTIFICATION_EMAIL", "i@m13v.com")
 
     dm = conn.execute("""
         SELECT d.id, d.tier, d.chat_url, d.project_name, d.target_project,
-               d.human_reason, d.flagged_at
+               d.human_reason, d.flagged_at, d.comment_context, d.our_dm_content
         FROM dms d WHERE d.id = %s
     """, (dm_id,)).fetchone()
 
@@ -508,23 +580,103 @@ def _send_escalation_email(conn, dm_id, platform, their_author, reason):
         FROM dm_messages WHERE dm_id = %s ORDER BY message_at ASC
     """, (dm_id,)).fetchall()
 
-    history_lines = []
-    for msg in messages:
-        arrow = ">>" if msg["direction"] == "outbound" else "<<"
-        ts = msg["message_at"].strftime("%Y-%m-%d %H:%M") if msg["message_at"] else "?"
-        history_lines.append(f"  {arrow} [{ts}] {msg['author']}: {msg['content']}")
-    history_text = "\n".join(history_lines) if history_lines else "(no messages logged)"
+    upstream = _fetch_upstream_context(conn, dm_id) or {}
 
+    # --- Card: public thread (the post) ------------------------------------
+    thread_lines = []
+    if upstream.get("thread_title"):
+        thread_lines.append(f"Title: {upstream['thread_title']}")
+    if upstream.get("thread_author"):
+        thread_lines.append(f"OP: @{upstream['thread_author']}")
+    if upstream.get("thread_url"):
+        thread_lines.append(f"URL: {upstream['thread_url']}")
+    if upstream.get("thread_content"):
+        thread_lines.append(f"Body: {upstream['thread_content'][:600]}")
+    thread_card = _render_upstream_card(
+        "PUBLIC THREAD" + (" (inferred via author match)" if upstream.get("is_fallback") else ""),
+        thread_lines,
+    )
+
+    # --- Card: our top-level public reply / comment ------------------------
+    our_top_lines = []
+    if upstream.get("our_top_account"):
+        our_top_lines.append(f"From: @{upstream['our_top_account']}")
+    if upstream.get("our_top_posted_at"):
+        our_top_lines.append(f"Posted: {_ts(upstream['our_top_posted_at'])}")
+    if upstream.get("our_top_url"):
+        our_top_lines.append(f"URL: {upstream['our_top_url']}")
+    if upstream.get("our_top_content"):
+        our_top_lines.append(f"Content: {upstream['our_top_content'][:600]}")
+    our_top_card = _render_upstream_card("OUR TOP-LEVEL PUBLIC COMMENT", our_top_lines)
+
+    # --- Card: their public comment that triggered outreach ----------------
+    their_comment_lines = []
+    if upstream.get("their_comment_author"):
+        their_comment_lines.append(f"From: @{upstream['their_comment_author']}")
+    if upstream.get("their_comment_url"):
+        their_comment_lines.append(f"URL: {upstream['their_comment_url']}")
+    if upstream.get("their_comment_content"):
+        their_comment_lines.append(f"Content: {upstream['their_comment_content'][:600]}")
+    their_comment_card = _render_upstream_card(
+        f"THEIR PUBLIC COMMENT (@{their_author})",
+        their_comment_lines,
+    )
+
+    # --- Card: our public reply to their comment ---------------------------
+    our_reply_lines = []
+    if upstream.get("our_reply_at"):
+        our_reply_lines.append(f"Replied: {_ts(upstream['our_reply_at'])}")
+    if upstream.get("our_reply_url"):
+        our_reply_lines.append(f"URL: {upstream['our_reply_url']}")
+    if upstream.get("our_reply_content"):
+        our_reply_lines.append(f"Content: {upstream['our_reply_content'][:600]}")
+    our_reply_card = _render_upstream_card("OUR PUBLIC REPLY TO THEIR COMMENT", our_reply_lines)
+
+    # --- Card: the DM tracker thread ---------------------------------------
+    # If chat_url is set this is an actual private DM. Otherwise dm_messages
+    # is tracking a continued *public* reply chain that we treated as a DM
+    # for funnel purposes. Label the card accordingly so the human knows
+    # whether they need to initiate a private chat or just keep replying.
+    has_chat_url = bool(dm and dm.get("chat_url"))
+    dm_label = (
+        "PRIVATE DM THREAD"
+        if has_chat_url
+        else f"DM-PROMOTION PUBLIC THREAD (no private chat opened yet, chat_url=NULL)"
+    )
+    if messages:
+        dm_lines = []
+        for m in messages:
+            arrow = ">>" if m["direction"] == "outbound" else "<<"
+            ts = _ts(m["message_at"]) or "?"
+            dm_lines.append(f"  {arrow} [{ts}] {m['author']}: {m['content']}")
+        dm_card_body = "\n".join(dm_lines)
+    else:
+        # Fall back to the seed `our_dm_content` if no dm_messages rows exist
+        seed_lines = []
+        if dm and dm.get("our_dm_content"):
+            seed_lines.append(f"  >> (seed) us: {dm['our_dm_content']}")
+        if dm and dm.get("comment_context") and not seed_lines:
+            seed_lines.append(f"  context: {dm['comment_context'][:600]}")
+        dm_card_body = "\n".join(seed_lines) if seed_lines else "(no messages logged)"
+
+    # --- Assemble body -----------------------------------------------------
     project = (dm.get("target_project") or dm.get("project_name") or "unset") if dm else "unset"
     tier = (dm.get("tier") if dm else None) or 1
-    chat_url_line = f"Chat URL: {dm['chat_url']}\n" if (dm and dm.get("chat_url")) else ""
+    chat_url_line = f"Chat URL: {dm['chat_url']}\n" if has_chat_url else "Chat URL: (none, private chat not yet initiated)\n"
+
+    upstream_block = "".join(c for c in (thread_card, our_top_card, their_comment_card, our_reply_card) if c)
+    if not upstream_block:
+        upstream_block = "--- PUBLIC THREAD ---\n(no upstream public exchange logged for this DM)\n"
 
     body = (
         f"DM #{dm_id} [{platform}] with {their_author} needs your attention.\n\n"
         f"Reason: {reason}\n"
         f"Tier: {tier}   Project: {project}\n"
         f"{chat_url_line}\n"
-        f"=== Conversation History ===\n{history_text}\n\n"
+        f"=== Public exchange that preceded this DM ===\n"
+        f"(Each block is a distinct card matching the dashboard expansion view.)\n\n"
+        f"{upstream_block}\n"
+        f"=== {dm_label} ===\n{dm_card_body}\n\n"
         f"---\n"
         f"Reply to this email to respond. Your reply will be sent as a DM on {platform}.\n"
         f"Keep the [DM #{dm_id}] token in the subject line so the pipeline can route it.\n"
