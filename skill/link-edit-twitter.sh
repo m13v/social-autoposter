@@ -88,6 +88,12 @@ Posting MUST use twitter_browser.py (CDP), not the MCP browser tools. If a
 twitter-agent call is blocked or times out, wait 30s and retry (up to 3
 times). If still blocked, skip that post.
 
+CRITICAL: This is a single-shot run. NEVER call ScheduleWakeup, CronCreate,
+CronDelete, CronList, EnterPlanMode, EnterWorktree, or any deferred-execution /
+scheduling tool. You MUST complete or skip every post in this one run; do not
+defer work to "a future run". If you hit a hard block, mark the post SKIPPED
+via step 6 and move on to the next post.
+
 Twitter posts eligible for link follow-up:
 $EDITABLE
 
@@ -172,6 +178,7 @@ PROMPT_EOF
 
 gtimeout 5400 "$REPO_DIR/scripts/run_claude.sh" "link-edit-twitter" \
     --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" \
+    --disallowed-tools "ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,EnterWorktree" \
     -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" \
     || log "WARNING: Twitter link-edit claude exited with code $?"
 rm -f "$PROMPT_FILE"
