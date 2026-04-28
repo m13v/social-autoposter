@@ -2374,6 +2374,12 @@ async function handleApi(req, res) {
       const instructions = String(payload && payload.instructions || '').trim();
       if (instructions.length < 5) return json(res, { error: 'instructions_too_short' }, 400);
       if (instructions.length > 4000) return json(res, { error: 'instructions_too_long' }, 400);
+      // reply_channel selects which surface phase 0 delivers on:
+      //   'dm'     -> private DM only (default, legacy behavior)
+      //   'public' -> public reply on the original thread only
+      //   'both'   -> public reply AND DM (same instruction text drives both)
+      const rawChannel = String(payload && payload.reply_channel || 'dm').toLowerCase().trim();
+      const replyChannel = (rawChannel === 'public' || rawChannel === 'both') ? rawChannel : 'dm';
       const dmRows = await pq(
         "SELECT d.id, d.platform, d.their_author, " +
           "COALESCE(p_direct.project_name, p_via_reply.project_name, d.target_project) AS project_name " +
@@ -2398,10 +2404,10 @@ async function handleApi(req, res) {
       }
       const ins = await pq(
         "INSERT INTO human_dm_replies (dm_id, platform, their_author, project_name, " +
-          "instructions, email_subject, resend_email_id, status) " +
-        "VALUES ($1, $2, $3, $4, $5, $6, NULL, 'pending') " +
-        "RETURNING id, dm_id, status, instructions, created_at, attempts",
-        [dmId, dm.platform, dm.their_author, dm.project_name, instructions, '[DM #' + dmId + '] (dashboard)']
+          "instructions, email_subject, resend_email_id, status, reply_channel) " +
+        "VALUES ($1, $2, $3, $4, $5, $6, NULL, 'pending', $7) " +
+        "RETURNING id, dm_id, status, instructions, created_at, attempts, reply_channel",
+        [dmId, dm.platform, dm.their_author, dm.project_name, instructions, '[DM #' + dmId + '] (dashboard)', replyChannel]
       );
       if (!ins || !ins.length) return json(res, { error: 'insert_failed' }, 500);
       const row = ins[0];
@@ -2414,6 +2420,7 @@ async function handleApi(req, res) {
           created_at: row.created_at,
           attempts: row.attempts,
           source: 'dashboard',
+          reply_channel: row.reply_channel,
         },
       }, 201);
     }).catch(e => json(res, { error: e.message }, 500));
