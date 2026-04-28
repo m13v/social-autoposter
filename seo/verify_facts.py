@@ -58,6 +58,7 @@ TIME_SENSITIVE_PATTERNS = [
     re.compile(
         r'\b([A-Z][A-Za-z0-9.&\-]{1,40}(?:\s+[A-Z][A-Za-z0-9.&\-]{1,40}){0,3})\s+'
         r'(?:shipped|launched|released|announced|unveiled|introduced|published|debuted)\s+'
+        r'(?:an?\s+|the\s+|its\s+|their\s+)?'
         r'([A-Z][A-Za-z0-9 \-/]{2,80}?)\s+'
         r'in\s+'
         r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+'
@@ -68,7 +69,11 @@ TIME_SENSITIVE_PATTERNS = [
         r'raised\s+\$([0-9.]+(?:M|B|million|billion))\b'
     ),
     re.compile(
-        r'\b([A-Z][a-z]+\s+[A-Z][a-z]+)\s+(?:named|appointed|promoted to)\s+CEO\b'
+        r'\b([A-Z][a-z]+\s+[A-Z][a-z]+)\s+(?:named|appointed|promoted to)\s+(?:as\s+)?CEO\b'
+    ),
+    re.compile(
+        r'\b([A-Z][A-Za-z0-9.&\-]{1,40})\s+(?:named|appointed)\s+'
+        r'([A-Z][a-z]+\s+[A-Z][a-z]+)\s+(?:as\s+)?CEO\b'
     ),
     re.compile(
         r'\b([A-Z][A-Za-z0-9.&\-]{1,40})\s+acquired\s+([A-Z][A-Za-z0-9.&\-]{1,40})\b'
@@ -474,7 +479,6 @@ def main() -> int:
 
     if no_cleanup:
         global _cleanup_files
-        _orig_cleanup = _cleanup_files
         _cleanup_files = lambda repo, paths: []  # noqa: E731
 
     results: dict[str, dict] = {}
