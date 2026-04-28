@@ -1074,6 +1074,8 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
         "=== END ESCALATION RUBRIC ===\n\n"
     )
 
+    cfg_json = json.dumps(product_cfg, indent=2, ensure_ascii=False)
+
     return f"""{guidance_block}{setup_self_heal_block}{escalation_rubric_block}You are building one SEO page for {product}. You decide the angle and the content. Your one job is to find something real about the product that no competitor page mentions, and build a page around that.
 
 CONTENT TYPE: {content_type} ({ct['description']})
@@ -1088,6 +1090,12 @@ DIFFERENTIATOR: {differentiator}
 
 TRIGGER: {trigger}
 {trigger_context}
+
+Full product config (authoritative source for description, voice, ICP, personas, features, messaging, founders, proof points, qualification, pricing). Treat fields here as the canonical positioning. Do not invent claims that contradict this block; do quote verbatim from `voice.examples`, `messaging.lead_with_pain / solution / proof`, and `proof_points` when they fit the page's angle.
+
+```json
+{cfg_json}
+```
 
 {guardrails_block}
 {cross_roundup_block}
