@@ -127,6 +127,42 @@ def get_next_pending(conn, platform):
     }
 
 
+META_CALLOUT_KEYWORDS = re.compile(
+    r"(?i)\b("
+    r"written\s+(?:by|with)\s+(?:ai|chatgpt|gpt|llm|a\s+(?:bot|machine|model))"
+    r"|(?:are|r)\s+you\s+(?:an?\s+)?(?:ai|bot|llm|gpt|chatgpt|automated)"
+    r"|you(?:'re|\s+are)\s+(?:an?\s+)?(?:ai|bot|llm|gpt|chatgpt|automated)"
+    r"|is\s+this\s+(?:an?\s+)?(?:ai|bot|llm|gpt|chatgpt|automated)"
+    r"|chatgpt\s+(?:wrote|generated|response|reply)"
+    r"|ai[-\s]+(?:generated|written|response|reply|comment)"
+    r"|automated\s+(?:response|reply|comment|account)"
+    r"|bot\s+(?:account|reply|response|comment)"
+    r"|(?:smells?|sounds?|reads?)\s+like\s+(?:an?\s+)?(?:ai|bot|gpt|chatgpt|llm)"
+    r")\b"
+)
+
+
+def detect_meta_callout(parent_content):
+    """Detect whether the parent comment is calling out our AI/bot use.
+
+    Returns a dict {"keyword", "evidence"} when a callout is matched,
+    None otherwise. Soft-signal only: the prompt surfaces it as a
+    'consider acknowledging and disengaging' nudge, the LLM still owns the
+    skip/reply decision. False positives are tolerable; missing a real
+    callout is the costly direction (we end up arguing past the off-ramp,
+    as in the Fit-Conversation856 thread).
+    """
+    if not parent_content:
+        return None
+    m = META_CALLOUT_KEYWORDS.search(parent_content)
+    if not m:
+        return None
+    start = max(0, m.start() - 60)
+    end = min(len(parent_content), m.end() + 60)
+    snippet = parent_content[start:end].replace("\n", " ").strip()
+    return {"keyword": m.group(0), "evidence": snippet}
+
+
 def check_cross_pipeline_history(conn, platform, author, post_id):
     """Cross-pipeline check before posting a comment-reply.
 
@@ -240,7 +276,7 @@ def get_recent_archetypes(conn, platform, limit=3):
     return [row[0] for row in cur.fetchall()]
 
 
-def build_prompt(reply, recent_replies, config, excluded_authors, top_report="", prior_history_block=""):
+def build_prompt(reply, recent_replies, config, excluded_authors, top_report="", prior_history_block="", meta_callout=None):
     """Build a minimal prompt for one reply."""
     reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "Deep_Ad1959")
     reply_json = json.dumps(reply, indent=2)
@@ -258,6 +294,21 @@ Your last {len(recent_replies)} replies (vary your style, don't repeat the same 
 
     top_context = f"\n## FEEDBACK FROM PAST PERFORMANCE (use this to write better replies):\n{top_report}\n" if top_report else ""
     history_block = f"\n{prior_history_block}\n" if prior_history_block else ""
+    callout_block = ""
+    if meta_callout:
+        callout_block = (
+            "\n## Meta-callout detected in parent comment\n"
+            f"The parent comment contains language matching `{meta_callout['keyword']}`. "
+            "Evidence (60 chars on each side of the match):\n"
+            f"  > {meta_callout['evidence']}\n"
+            "This means the partner has likely noticed our AI disclosure or is asking whether they're talking to a bot. "
+            "Default behavior: acknowledge it briefly, do NOT pitch a project, and prefer skipping over arguing. "
+            "If you do reply, address the callout directly in one short sentence (no defensiveness) and consider "
+            "outputting `{\"action\": \"skip\", \"reason\": \"meta_callout_acknowledged\"}` so the thread is not "
+            "kept alive by another bot reply. Continuing the prior pitch as if nothing was said is the wrong move "
+            "— the Fit-Conversation856 thread (2026-04-28) burned through 4 follow-up replies past this signal "
+            "before the engage-dm-replies pipeline disengaged.\n"
+        )
 
     voice_block = ""
     project_name = reply.get("project_name")
@@ -282,7 +333,7 @@ Apply this voice when drafting: follow `tone`, never violate any item in `never`
 
 ## Context
 Read ~/social-autoposter/config.json for project details and content_angle.
-{recent_context}{top_context}{voice_block}{history_block}
+{recent_context}{top_context}{voice_block}{history_block}{callout_block}
 ## Content rules
 {get_content_rules("reddit")}
 - First person, specific details from content_angle in config.json.
