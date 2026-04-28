@@ -118,6 +118,18 @@ ALTER TABLE replies ADD COLUMN IF NOT EXISTS engagement_style TEXT;
 ALTER TABLE replies ADD COLUMN IF NOT EXISTS model TEXT;
 ALTER TABLE replies ADD CONSTRAINT IF NOT EXISTS replies_platform_comment_id_unique UNIQUE (platform, their_comment_id);
 
+-- Per-reply engagement stats. Mirror posts schema so dashboards can UNION
+-- the two surfaces. Populated by update_stats.py reply functions.
+-- Reddit + GitHub: views always 0 (not exposed). LinkedIn + Moltbook
+-- replies: not populated (LinkedIn scraping pattern banned 2026-04-17;
+-- Moltbook reply API not wired). engagement_updated_at is the freshness
+-- gate so reply scrapers can skip rows refreshed in the last few hours.
+ALTER TABLE replies ADD COLUMN IF NOT EXISTS upvotes INTEGER DEFAULT 0;
+ALTER TABLE replies ADD COLUMN IF NOT EXISTS comments_count INTEGER DEFAULT 0;
+ALTER TABLE replies ADD COLUMN IF NOT EXISTS views INTEGER DEFAULT 0;
+ALTER TABLE replies ADD COLUMN IF NOT EXISTS engagement_updated_at TIMESTAMP;
+CREATE INDEX IF NOT EXISTS idx_replies_engagement_updated_at ON replies(engagement_updated_at);
+
 CREATE TABLE IF NOT EXISTS dms (
     id SERIAL PRIMARY KEY,
     platform TEXT NOT NULL DEFAULT 'reddit',
