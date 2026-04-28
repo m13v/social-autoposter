@@ -70,13 +70,38 @@ def guess_project(text, config):
     text_lower = (text or "").lower()
     for p in projects:
         name = p.get("name", "")
-        topics = p.get("twitter_topics", []) + p.get("topics", [])
+        # Phase 1 unified seed list, with legacy fields as fallback for
+        # pre-migration safety.
+        topics = (
+            p.get("search_topics", [])
+            or (p.get("twitter_topics", []) + p.get("topics", []))
+        )
         for topic in topics:
             if topic.lower() in text_lower:
                 return name
         if name.lower() in text_lower:
             return name
     return config.get("default_project", "General")
+
+
+def most_recent_active_project(conn):
+    """Project_name of the most recent active twitter post we made.
+
+    Used as a fallback for replies-to-us where the notification feed doesn't
+    expose the parent tweet ID, so we can't identify *which* of our posts
+    the mention is under. Recency is a much stronger signal than
+    keyword-matching a 3-word reply body.
+    """
+    row = conn.execute(
+        "SELECT project_name FROM posts "
+        "WHERE platform='twitter' AND status='active' "
+        "AND project_name IS NOT NULL AND project_name <> '' "
+        "AND our_content <> '(mention - no original post)' "
+        "ORDER BY posted_at DESC LIMIT 1"
+    ).fetchone()
+    if not row:
+        return None
+    return row[0] if isinstance(row, (list, tuple)) else row["project_name"]
 
 
 def process_notifications(notifications, conn, config):
@@ -86,6 +111,7 @@ def process_notifications(notifications, conn, config):
 
     existing_ids = get_existing_reply_ids(conn)
     our_posts = get_our_posts(conn)
+    recent_project = most_recent_active_project(conn)
 
     stats = {
         "new": 0,
@@ -125,14 +151,19 @@ def process_notifications(notifications, conn, config):
         # reply under one of our tweets; otherwise fall back to stub post.
         post_id = None
         post_row = None
-        # Look for any of our tweets referenced in the URL chain (best-effort:
-        # we don't have conversation_id from the page, so rely on replying_to).
-        if replying_to == OUR_HANDLE.lower() and our_posts:
-            # Can't identify WHICH tweet; leave as stub linked to the reply URL.
-            pass
+        is_reply_to_us = replying_to == OUR_HANDLE.lower() and bool(our_posts)
+        # Note: notifications don't expose conversation_id, so we can't link to
+        # the specific parent tweet. We still attribute project_name to the
+        # right project below by inheriting from our most recent active post.
 
         if not post_id:
-            project = guess_project(text, config)
+            # Reply-to-us: short reply text is unreliable for keyword matching;
+            # inherit the project of our most recent active post instead.
+            # Other mentions: fall back to keyword-matching the mention text.
+            if is_reply_to_us and recent_project:
+                project = recent_project
+            else:
+                project = guess_project(text, config)
             cur = conn.execute(
                 """INSERT INTO posts (platform, thread_url, thread_author, thread_title,
                    our_url, our_content, our_account, project_name, status, posted_at)
