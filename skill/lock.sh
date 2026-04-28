@@ -87,33 +87,6 @@ acquire_lock() {
   # Write PID immediately after acquiring lock
   echo $$ > "$lock_dir/pid"
   _SA_LOCK_DIRS+=("$lock_dir")
-}
-
-# Explicit early release. Use this when a long-running script only needs the
-# browser for part of its run (e.g. run-twitter-cycle.sh holds the lock for
-# Phase 1 scrape, releases during the 5-min T1 sleep + Phase 2a HTTP poll, then
-# re-acquires before Phase 2b posting). Without this, sibling pipelines waiting
-# on the same profile lock block for the full cycle even when the holder is
-# only sleeping.
-release_lock() {
-  local name="$1"
-  local lock_dir="/tmp/social-autoposter-${name}.lock"
-  rm -rf "$lock_dir"
-  # Rebuild the lock stack without this entry so the EXIT trap doesn't try to
-  # rm it again (harmless, but keeps the stack honest if release_lock is paired
-  # with a later re-acquire of the same name).
-  if [ "${#_SA_LOCK_DIRS[@]}" -gt 0 ]; then
-    local new_stack=()
-    local d
-    for d in "${_SA_LOCK_DIRS[@]}"; do
-      [ "$d" != "$lock_dir" ] && new_stack+=("$d")
-    done
-    if [ "${#new_stack[@]}" -gt 0 ]; then
-      _SA_LOCK_DIRS=("${new_stack[@]}")
-    else
-      _SA_LOCK_DIRS=()
-    fi
-  fi
 
   # Platform-browser locks: sweep orphan Chromes holding the profile. A prior
   # run may have exited without cleanly closing Chrome (parent playwright-mcp
@@ -141,6 +114,33 @@ release_lock() {
       echo "$mcp_pids" | xargs kill -TERM 2>/dev/null || true
       echo "Killed orphan MCP wrappers (ppid=1) for ${platform}-agent: $(echo $mcp_pids | tr '\n' ' ')"
       sleep 1
+    fi
+  fi
+}
+
+# Explicit early release. Use this when a long-running script only needs the
+# browser for part of its run (e.g. run-twitter-cycle.sh holds the lock for
+# Phase 1 scrape, releases during the 5-min T1 sleep + Phase 2a HTTP poll, then
+# re-acquires before Phase 2b posting). Without this, sibling pipelines waiting
+# on the same profile lock block for the full cycle even when the holder is
+# only sleeping.
+release_lock() {
+  local name="$1"
+  local lock_dir="/tmp/social-autoposter-${name}.lock"
+  rm -rf "$lock_dir"
+  # Rebuild the lock stack without this entry so the EXIT trap doesn't try to
+  # rm it again (harmless, but keeps the stack honest if release_lock is paired
+  # with a later re-acquire of the same name).
+  if [ "${#_SA_LOCK_DIRS[@]}" -gt 0 ]; then
+    local new_stack=()
+    local d
+    for d in "${_SA_LOCK_DIRS[@]}"; do
+      [ "$d" != "$lock_dir" ] && new_stack+=("$d")
+    done
+    if [ "${#new_stack[@]}" -gt 0 ]; then
+      _SA_LOCK_DIRS=("${new_stack[@]}")
+    else
+      _SA_LOCK_DIRS=()
     fi
   fi
 }
