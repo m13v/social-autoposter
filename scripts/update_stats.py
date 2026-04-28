@@ -1394,6 +1394,10 @@ def main():
                         help="Skip per-reply stat refresh (only update posts)")
     parser.add_argument("--replies-only", action="store_true",
                         help="Only refresh per-reply stats; skip posts entirely")
+    parser.add_argument("--reply-summary", default=None,
+                        help="Write a small JSON file with per-platform reply update "
+                             "counts ({reddit, twitter, github}) so the calling shell "
+                             "can pass them to log_run.py for the dashboard.")
     args = parser.parse_args()
 
     config = load_config()
@@ -1480,6 +1484,22 @@ def main():
         output["twitter_replies"] = twitter_reply_stats
     if github_reply_stats is not None:
         output["github_replies"] = github_reply_stats
+
+    # Sidecar JSON for the dashboard Jobs row. Always written when the flag is
+    # set, even if a platform was skipped (count = 0). The shell consumer then
+    # forwards the right count to log_run.py per platform.
+    if args.reply_summary:
+        try:
+            summary = {
+                "reddit": (reddit_reply_stats or {}).get("updated", 0),
+                "twitter": (twitter_reply_stats or {}).get("updated", 0),
+                "github": (github_reply_stats or {}).get("updated", 0),
+            }
+            with open(args.reply_summary, "w") as f:
+                json.dump(summary, f)
+        except Exception as e:
+            print(f"WARN: failed to write reply summary {args.reply_summary}: {e}",
+                  file=sys.stderr)
 
     if args.json:
         print(json.dumps(output, indent=2))
