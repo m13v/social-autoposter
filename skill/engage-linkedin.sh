@@ -304,9 +304,26 @@ When you recommend a project in a reply (Tier 2 or Tier 3), set project_name on 
 
 MANDATORY reply flow for every item:
   Step 1: python3 reply_db.py processing ID      <- mark BEFORE posting
-  Step 2: post reply (OAuth API first, browser fallback)
-  Step 3: python3 reply_db.py replied ID "text" [url] [engagement_style] [is_recommendation]   <- mark AFTER success. engagement_style is TONE; pass is_recommendation="1" only when you mentioned a project (Tier 2/3).
-If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run.
+  Step 2: NAVIGATE TO THE THREAD AND READ CONTEXT (mandatory, do NOT skip).
+          Do NOT draft a reply from the notification snippet alone — the snippet
+          is truncated and lacks the parent post content + sibling replies.
+          a) mcp__linkedin-agent__browser_navigate to their_comment_url
+          b) mcp__linkedin-agent__browser_snapshot (depth 8) to read:
+             - the FULL parent post text (our original post if this is on our thread)
+             - the immediate ancestor of their_comment_id
+             - sibling replies (so you don't repeat what someone else already said)
+          c) Extract the activity_id from the URL or comment URN. Look it up in
+             OUR_POSTS_INDEX above. If found, OVERRIDE the project_name on this
+             reply row to the indexed project (the scan-time guess is unreliable):
+               source ~/social-autoposter/.env
+               psql "\$DATABASE_URL" -c "UPDATE replies SET project_name='RESOLVED_PROJECT' WHERE id=REPLY_ID;"
+             Then use that project's voice from PROJECTS_VOICE_JSON for drafting.
+             If unmatched, keep whatever the row already has and follow global rules.
+  Step 3: Draft the reply using the resolved project's voice + chosen engagement
+          style. Professional but casual. NEVER em dashes. Match parent post language.
+  Step 4: post reply (OAuth API first, browser fallback)
+  Step 5: python3 reply_db.py replied ID "text" [url] [engagement_style] [is_recommendation]   <- mark AFTER success. engagement_style is TONE; pass is_recommendation="1" only when you mentioned a project (Tier 2/3).
+If Step 5 fails, the item stays 'processing' and will be reset to 'pending' on the next run.
 
 For LinkedIn replies - use the OAuth API first:
 1. Extract the activity ID from their_comment_url or their_comment_id.
