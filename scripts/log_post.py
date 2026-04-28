@@ -167,32 +167,40 @@ def log_rejected(args):
 
     claude_session_id = os.environ.get("CLAUDE_SESSION_ID") or None
 
+    # Same URN harvesting for rejected attempts so a soft-blocked thread
+    # is locked out of future runs even if the activity URN was never
+    # exposed (the rejection response sometimes carries it in the body).
+    urn_ids = []
+    if args.platform == "linkedin":
+        urn_ids = parse_urn_ids(args.urns, args.thread_url, args.network_response)
+
     cur = conn.execute(
         """INSERT INTO posts (
             platform, thread_url, thread_author, thread_author_handle,
             thread_title, thread_content, our_url, our_content, our_account,
             source_summary, project_name, status, posted_at,
             feedback_report_used, engagement_style, is_recommendation,
-            language, claude_session_id
+            language, claude_session_id, urns
         ) VALUES (
             %s, %s, %s, %s,
             %s, '', '', %s, %s,
             %s, %s, 'rejected_by_platform', NOW(),
             FALSE, %s, FALSE,
-            %s, %s
+            %s, %s, %s
         ) RETURNING id""",
         [
             args.platform, args.thread_url, args.thread_author, args.thread_author,
             args.thread_title, args.our_content, account,
             summary, args.project, args.engagement_style,
             args.language, claude_session_id,
+            urn_ids if urn_ids else None,
         ],
     )
     row = cur.fetchone()
     post_id = row[0] if row else None
     conn.commit()
     conn.close()
-    print(json.dumps({"rejected": True, "post_id": post_id}))
+    print(json.dumps({"rejected": True, "post_id": post_id, "urns": urn_ids}))
 
 
 def main():
@@ -317,26 +325,27 @@ def main():
             thread_title, thread_content, our_url, our_content, our_account,
             source_summary, project_name, status, posted_at,
             feedback_report_used, engagement_style, is_recommendation,
-            language, claude_session_id
+            language, claude_session_id, urns
         ) VALUES (
             %s, %s, %s, %s,
             %s, '', %s, %s, %s,
             '', %s, 'active', NOW(),
             TRUE, %s, %s,
-            %s, %s
+            %s, %s, %s
         ) RETURNING id""",
         [
             args.platform, args.thread_url, args.thread_author, args.thread_author,
             args.thread_title, args.our_url, args.our_content, account,
             args.project, args.engagement_style, bool(args.is_recommendation),
             args.language, claude_session_id,
+            urn_ids if urn_ids else None,
         ],
     )
     row = cur.fetchone()
     post_id = row[0] if row else None
     conn.commit()
     conn.close()
-    print(json.dumps({"logged": True, "post_id": post_id}))
+    print(json.dumps({"logged": True, "post_id": post_id, "urns": urn_ids}))
 
 
 if __name__ == "__main__":
