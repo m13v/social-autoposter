@@ -5791,7 +5791,11 @@ function renderFunnelStats(payload) {
     a.pageviews        += Number(f.pageviews)        || 0;
     a.email_signups    += Number(f.email_signups)    || 0;
     a.schedule_clicks  += Number(f.schedule_clicks)  || 0;
-    a.get_started_clicks += Number(f.get_started_clicks) || 0;
+    // Get Started footer prefers Amplitude-attributed end-product signups
+    // when present (clients with `amplitude` block in config.json), else the
+    // CTA-click count. Keeps the footer consistent with what each row cell
+    // actually displays.
+    a.get_started_clicks += (f.amplitude_signups != null ? Number(f.amplitude_signups) : Number(f.get_started_clicks)) || 0;
     a.cross_product_clicks += Number(f.cross_product_clicks) || 0;
     a.d_pageviews      += Number(f.domain_pageviews) || 0;
     a.d_email_signups  += Number(f.domain_email_signups) || 0;
@@ -5836,6 +5840,11 @@ function renderFunnelStats(payload) {
       email_signups:    asNum(f.email_signups),
       schedule_clicks:  asNum(f.schedule_clicks),
       get_started_clicks: asNum(f.get_started_clicks),
+      // Amplitude-attributed end-product signups (clients with an
+      // `amplitude` block in config.json). When non-null, the Get Started
+      // cell renders this verified count in place of get_started_clicks.
+      amplitude_signups: asNum(f.amplitude_signups),
+      amplitude_filter: f.amplitude_filter || null,
       cross_product_clicks: asNum(f.cross_product_clicks),
       // Domain-wide counterparts, rendered in parens next to the scoped value.
       domain_pageviews:        asNum(f.domain_pageviews),
@@ -5894,7 +5903,20 @@ function renderFunnelStats(payload) {
       { key: 'pageviews',        label: 'Pageviews',       type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_pageviews') },
       { key: 'email_signups',    label: 'Email Signups',   type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_email_signups') },
       { key: 'schedule_clicks',  label: 'Schedule Clicks', type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_schedule_clicks') },
-      { key: 'get_started_clicks', label: 'Get Started',   type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_get_started_clicks') },
+      // Get Started: prefer Amplitude-attributed end-product signups
+      // (clients with `amplitude` block in config.json). Falls back to the
+      // CTA click count for projects without that wiring. Tooltip + green
+      // tint distinguishes the verified end-product signal from the click.
+      { key: 'get_started_clicks', label: 'Get Started',   type: 'numeric', align: 'right',
+        formatter: (v, r) => {
+          if (r && r.amplitude_signups != null) {
+            const n = Number(r.amplitude_signups) || 0;
+            const filt = r.amplitude_filter && Object.entries(r.amplitude_filter).map(([k,vv]) => k + '=' + vv).join(', ');
+            const tip = 'Amplitude-attributed end-product signups' + (filt ? ' (' + filt + ')' : '') + '. Falls back to CTA clicks when not configured.';
+            return '<span data-tooltip="' + escapeHtml(tip) + '" style="color:var(--success);font-weight:600;font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
+          }
+          return makeFunnelFmt('domain_get_started_clicks')(v, r);
+        } },
       { key: 'bookings',         label: 'Bookings',        type: 'numeric', align: 'right', formatter: fmt },
       // DM Clicks: SUM(dms.short_link_clicks) for DMs targeting this project
       // in the window. Counts every click on a /r/code short link that
