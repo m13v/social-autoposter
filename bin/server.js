@@ -3312,6 +3312,9 @@ const HTML = `<!DOCTYPE html>
   .dm-esc-feedback { font-size: 11px; padding: 4px 0; }
   .dm-esc-feedback-ok  { color: #047857; }
   .dm-esc-feedback-err { color: #b91c1c; }
+  .dm-esc-link { margin-left: auto; padding: 2px 8px; font-size: 11px; font-weight: 600; color: #92400e; background: #fef3c7; border: 1px solid #fde68a; border-radius: 4px; text-decoration: none; }
+  .dm-esc-link:hover { background: #fde68a; }
+  .dm-esc-link-missing { font-size: 10px; color: var(--text-muted); font-style: italic; }
 
   .prospect-modal-overlay { position: fixed; inset: 0; background: var(--shadow-modal); display: flex; align-items: flex-start; justify-content: center; z-index: 9999; padding: 60px 20px 20px; overflow-y: auto; }
   .prospect-modal { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; max-width: 640px; width: 100%; padding: 24px 28px; color: var(--text); font-size: 13px; line-height: 1.5; }
@@ -7028,6 +7031,22 @@ function dmOpenUrl(dm) {
   return null;
 }
 
+// Best-effort profile URL when the DM thread URL is missing. Prefers the
+// stamped prospect_profile_url, falls back to a platform+author guess so the
+// "open profile" escape hatch on the escalation card still works for legacy
+// rows where prospect enrichment never ran.
+function dmProfileUrl(dm) {
+  const stamped = String((dm && dm.prospect_profile_url) || '').trim();
+  if (stamped) return stamped;
+  const author = String((dm && dm.their_author) || '').trim().replace(/^@/, '');
+  if (!author) return '';
+  const p = String((dm && dm.platform) || '').toLowerCase();
+  if (p === 'twitter' || p === 'x') return 'https://x.com/' + encodeURIComponent(author);
+  if (p === 'reddit')               return 'https://www.reddit.com/user/' + encodeURIComponent(author);
+  if (p === 'linkedin')             return 'https://www.linkedin.com/in/' + encodeURIComponent(author);
+  return '';
+}
+
 function renderDmThreadCell(dm) {
   const author = escapeHtml(dm.their_author || '');
   const tier = dm.tier ? '<span class="dm-thread-tier">T' + Number(dm.tier) + '</span>' : '';
@@ -7402,10 +7421,22 @@ function renderDmEscalationCard(dm) {
   const isFlagged = dm.conversation_status === 'needs_human';
   if (!reason && !list.length && !isFlagged) return '';
 
+  const chatLink = dmOpenUrl(dm);
+  let linkHtml = '';
+  if (chatLink) {
+    linkHtml = '<a class="dm-esc-link" href="' + escapeHtml(chatLink.url) + '" target="_blank" rel="noopener">' + escapeHtml(chatLink.label) + '</a>';
+  } else {
+    const profileUrl = dmProfileUrl(dm);
+    if (profileUrl) {
+      linkHtml = '<span class="dm-esc-link-missing">DM link missing</span>' +
+        '<a class="dm-esc-link" href="' + escapeHtml(profileUrl) + '" target="_blank" rel="noopener">open profile</a>';
+    }
+  }
   const head =
     '<div class="dm-esc-head">' +
       '<span class="dm-esc-tag">escalation</span>' +
       (dm.flagged_at ? '<span class="dm-exp-ctx-author">flagged ' + escapeHtml(relTime(dm.flagged_at)) + '</span>' : '') +
+      linkHtml +
     '</div>';
 
   const reasonHtml = reason
