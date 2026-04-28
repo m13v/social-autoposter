@@ -41,6 +41,24 @@ LOCK_FILE = os.path.expanduser("~/.claude/reddit-agent-lock.json")
 LOCK_EXPIRY = 300  # Must match reddit-agent-lock.sh
 LOCK_WAIT_MAX = 45  # seconds to wait for lock to free before giving up
 LOCK_POLL_INTERVAL = 2
+
+# Side log for tool-layer diagnostics. Stdout would corrupt the JSON contract
+# every CLI caller relies on; stderr is dropped on the floor by both
+# subprocess.check_output(stderr=DEVNULL) callers AND by claude -p without
+# --output-format stream-json. A side file is the only place these lines
+# survive the round-trip, so verification (e.g. "did the suffix gate fire
+# this run") becomes a cheap grep.
+DIAG_LOG = os.path.expanduser("~/social-autoposter/skill/logs/reddit_browser_diag.log")
+
+
+def _diag_log(msg):
+    try:
+        os.makedirs(os.path.dirname(DIAG_LOG), exist_ok=True)
+        with open(DIAG_LOG, "a") as f:
+            from datetime import datetime
+            f.write(f"{datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')} {msg}\n")
+    except Exception:
+        pass
 VIEWPORT = {"width": 911, "height": 1016}
 
 # Load Reddit username from config
@@ -427,8 +445,9 @@ def reply_to_comment(comment_permalink, text, dm_id=None):
         for cid, suffix, _ in _load_active_reddit_campaigns_for_dm():
             if suffix and text.endswith(suffix):
                 applied_campaigns.append(cid)
-    print(f"[reply_to_comment] applied_campaigns={applied_campaigns} text_len={len(text)} dm_id={dm_id}",
-          file=sys.stderr)
+    _diag_msg = f"[reply_to_comment] applied_campaigns={applied_campaigns} text_len={len(text)} dm_id={dm_id}"
+    print(_diag_msg, file=sys.stderr)
+    _diag_log(_diag_msg)
 
     with sync_playwright() as p:
         browser, page, is_cdp = get_browser_and_page(p)
@@ -1133,8 +1152,9 @@ def send_dm(chat_url, message, dm_id=None):
         if random.random() < sample_rate:
             message = message + suffix
             applied_campaigns.append(cid)
-    print(f"[send_dm] applied_campaigns={applied_campaigns} message_len={len(message)} dm_id={dm_id}",
-          file=sys.stderr)
+    _diag_msg = f"[send_dm] applied_campaigns={applied_campaigns} message_len={len(message)} dm_id={dm_id}"
+    print(_diag_msg, file=sys.stderr)
+    _diag_log(_diag_msg)
 
     with sync_playwright() as p:
         browser, page, is_cdp = get_browser_and_page(p)
