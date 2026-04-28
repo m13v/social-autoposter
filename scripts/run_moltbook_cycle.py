@@ -28,6 +28,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
 from moltbook_tools import fetch_moltbook_json, MoltbookRateLimitedError
+from engagement_styles import validate_or_register
 
 REPO_DIR = os.path.expanduser("~/social-autoposter")
 SCRIPTS = os.path.join(REPO_DIR, "scripts")
@@ -186,7 +187,8 @@ Return ONLY a single JSON object, no prose, with this exact shape:
       "thread_title": "<candidate title>",
       "thread_author": "<candidate author>",
       "matched_project": "<project name from config>",
-      "engagement_style": "<one of the valid styles>",
+      "engagement_style": "<one of the valid styles, or your invented name>",
+      "new_style": null,
       "language": "<detected language, e.g. en>",
       "comment_text": "<the actual comment to post>"
     }}
@@ -196,6 +198,22 @@ Return ONLY a single JSON object, no prose, with this exact shape:
   ]
 }}
 ```
+
+If — and ONLY if — none of the listed styles fits, you may invent a new style.
+To do so, set `engagement_style` to your new name (snake_case) AND replace the
+`new_style: null` with a populated block:
+
+```json
+"new_style": {{
+  "description": "<what this style is, in one sentence>",
+  "example": "<a short example utterance>",
+  "note": "<when to use, when not to>",
+  "why_existing_didnt_fit": "<which existing style was closest, and why it didn't fit>"
+}}
+```
+
+If the engagement_style matches one of the listed styles, leave `new_style` as null.
+Inventing should be rare — prefer an existing style if it's even 80% right.
 
 CRITICAL: Do NOT call moltbook_post.py or any Bash tool. Only return the JSON.
 The orchestrator will post and log."""
@@ -285,6 +303,19 @@ def post_and_log(decisions, claude_session_id):
                 except Exception:
                     continue
 
+        # Validate or register the engagement_style. Unknown style + a
+        # well-formed new_style block lands as a candidate in the sidecar;
+        # unknown style with no/invalid block is recorded as NULL.
+        validated_style, style_action = validate_or_register(
+            p,
+            source_post={
+                "platform": "moltbook",
+                "post_url": our_url or p.get("thread_url", ""),
+                "post_id": None,
+                "model": p.get("model"),
+            },
+        )
+
         conn.execute(
             """
             INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
@@ -303,13 +334,16 @@ def post_and_log(decisions, claude_session_id):
                 our_url,
                 text,
                 p.get("matched_project", ""),
-                p.get("engagement_style", ""),
+                validated_style or "",
                 p.get("language", "en"),
                 claude_session_id,
             ],
         )
         posted += 1
-        log(f"  posted to {tid}  project={p.get('matched_project')}  style={p.get('engagement_style')}")
+        style_tag = validated_style or "(none)"
+        if style_action == "registered":
+            style_tag += " [REGISTERED candidate]"
+        log(f"  posted to {tid}  project={p.get('matched_project')}  style={style_tag}")
 
     conn.commit()
     conn.close()
