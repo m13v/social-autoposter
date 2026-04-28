@@ -218,25 +218,6 @@ c = json.load(open('$REPO_DIR/config.json'))
 print(json.dumps({p['name']: p.get('voice', {}) for p in c.get('projects', []) if p.get('voice')}, indent=2))
 " 2>/dev/null || echo "{}")
 
-    # Index of our recent active posts: activity_id -> {project, our_content, posted_at}.
-    # Used by the engage step to resolve the *real* parent post when navigating
-    # the thread, since the scanner's project_name may be best-effort.
-    OUR_POSTS_INDEX=$(psql "$DATABASE_URL" -t -A -c "
-        SELECT COALESCE(json_object_agg(
-            (regexp_match(our_url, 'urn:li:activity:([0-9]+)'))[1],
-            json_build_object(
-                'project', project_name,
-                'our_content', LEFT(our_content, 500),
-                'thread_url', thread_url,
-                'posted_at', posted_at
-            )
-        ), '{}'::json)
-        FROM posts
-        WHERE platform='linkedin' AND status='active'
-          AND our_url ~ 'urn:li:activity:[0-9]+'
-          AND posted_at > NOW() - INTERVAL '30 days'
-    " 2>/dev/null || echo "{}")
-
     # Generate engagement style and content rules from shared module
     source "$REPO_DIR/skill/styles.sh"
     STYLES_BLOCK=$(generate_styles_block linkedin replying)
@@ -279,9 +260,10 @@ $STYLES_BLOCK
 For each reply you draft, look up the matched project's voice block below and apply it: follow \`voice.tone\`, never violate any item in \`voice.never\`, mirror \`voice.examples\` / \`voice.examples_good\` when present.
 $PROJECTS_VOICE_JSON
 
-## Our recent active posts (activity_id -> {project, our_content, thread_url, posted_at})
-Each pending row's \`project_name\` is a best-effort guess. After navigating the thread (Step 2 below), use this index to resolve the *real* parent post and override the project before drafting. Match by activity_id extracted from the page URL or comment URN.
-$OUR_POSTS_INDEX
+## Resolving the parent post (replaces the old prompt-blob index)
+Each pending row's \`project_name\` is a best-effort guess. After navigating the thread (Step 2), extract the activity_id from the page URL/comment URN and resolve it via:
+  python3 $REPO_DIR/scripts/lookup_post.py linkedin ACTIVITY_ID
+Returns JSON: {"project": "fazm", "our_content": "...full text...", "thread_url": "..."} or {"project": null} if it's not one of our posts.
 
 Here are the replies to process:
 $PENDING_DATA
@@ -312,13 +294,17 @@ MANDATORY reply flow for every item:
              - the FULL parent post text (our original post if this is on our thread)
              - the immediate ancestor of their_comment_id
              - sibling replies (so you don't repeat what someone else already said)
-          c) Extract the activity_id from the URL or comment URN. Look it up in
-             OUR_POSTS_INDEX above. If found, OVERRIDE the project_name on this
-             reply row to the indexed project (the scan-time guess is unreliable):
+          c) Extract the activity_id (the long numeric string after \`urn:li:activity:\`)
+             from the URL or comment URN. Resolve it:
+               python3 $REPO_DIR/scripts/lookup_post.py linkedin ACTIVITY_ID
+             If the response has a non-null \"project\", that's our post — OVERRIDE
+             the reply row and use that project's voice for drafting:
                source ~/social-autoposter/.env
                psql "\$DATABASE_URL" -c "UPDATE replies SET project_name='RESOLVED_PROJECT' WHERE id=REPLY_ID;"
-             Then use that project's voice from PROJECTS_VOICE_JSON for drafting.
-             If unmatched, keep whatever the row already has and follow global rules.
+             Use the returned \"our_content\" as the FULL text of the post being
+             replied to (more accurate than the truncated our_content in PENDING_DATA).
+             If \"project\" is null, we're a guest in someone else's thread; keep
+             the existing project_name and follow global content rules.
   Step 3: Draft the reply using the resolved project's voice + chosen engagement
           style. Professional but casual. NEVER em dashes. Match parent post language.
   Step 4: post reply (OAuth API first, browser fallback)
