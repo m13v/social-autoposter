@@ -32,7 +32,7 @@ REDDIT_TOOLS = os.path.join(REPO_DIR, "scripts", "reddit_tools.py")
 RATELIMIT_FILE = "/tmp/reddit_ratelimit.json"
 PREFLIGHT_WAIT_BUDGET_SECONDS = 180
 
-from engagement_styles import VALID_STYLES, get_styles_prompt, get_content_rules
+from engagement_styles import VALID_STYLES, get_styles_prompt, get_content_rules, validate_or_register
 
 
 def _apply_rate_limit_policy(remaining, reset_seconds, source, budget_seconds):
@@ -373,7 +373,9 @@ Search defaults to sort=relevance and time=week. Use --time month for broader re
 ## CRITICAL OUTPUT FORMAT
 You MUST output each draft as a raw JSON object on its own line. No commentary before or after. Example:
 
-{{"action": "post", "thread_url": "https://old.reddit.com/r/sub/comments/abc/title/", "reply_to_url": null, "text": "your comment here", "thread_author": "username", "thread_title": "thread title", "engagement_style": "critic", "search_topic": "the seed concept you picked"}}
+{{"action": "post", "thread_url": "https://old.reddit.com/r/sub/comments/abc/title/", "reply_to_url": null, "text": "your comment here", "thread_author": "username", "thread_title": "thread title", "engagement_style": "critic", "search_topic": "the seed concept you picked", "new_style": null}}
+
+If, and ONLY if, none of the listed styles fits, you may invent one. Set "engagement_style" to your snake_case name AND replace `"new_style": null` with `{{"description": "...", "example": "...", "note": "...", "why_existing_didnt_fit": "..."}}`. Inventing should be rare; prefer an existing style if it's even 80% right.
 
 After all {limit} JSON objects, output DONE on its own line.
 Do NOT describe what you are doing. Do NOT narrate. Just search, draft, output JSON, DONE.
@@ -645,10 +647,19 @@ def run_one_iteration(args, config, reddit_username, already_picked):
         text = decision["text"]
         thread_author = decision.get("thread_author", "unknown")
         thread_title = decision.get("thread_title", "unknown")
-        engagement_style = decision.get("engagement_style")
-        if engagement_style and engagement_style not in VALID_STYLES:
-            print(f"[post_reddit] unknown style '{engagement_style}', clearing")
-            engagement_style = None
+        # validate_or_register accepts known styles, registers well-formed
+        # new ones as candidates, and returns None for unknown-and-undocumented.
+        # source_post URL is the thread we're replying to; we don't have our
+        # own URL until after the post lands.
+        engagement_style, _style_action = validate_or_register(
+            decision,
+            source_post={
+                "platform": "reddit",
+                "post_url": thread_url,
+                "post_id": None,
+                "model": decision.get("model"),
+            },
+        )
         search_topic = decision.get("search_topic") or None
 
         applied_campaign_ids = []
