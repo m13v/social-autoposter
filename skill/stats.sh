@@ -166,11 +166,19 @@ fi
 # row Step 1 couldn't cover. Rows refreshed by Step 1 within the last 4h
 # are skipped via the engagement_updated_at freshness window.
 # ═══════════════════════════════════════════════════════
+# Sidecar JSON written by update_stats.py --reply-summary so we can forward
+# the per-platform reply-refresh count to log_run.py at the end of the run.
+# The Python side writes {reddit, twitter, github} integers (zeros if a
+# platform's reply pass didn't run).
+REPLY_SUMMARY_FILE=$(mktemp -t fazm-reply-summary.XXXXXX)
+trap 'rm -f "$REPLY_SUMMARY_FILE"' EXIT
+
 if [ "$RUN_STEP2" -eq 1 ]; then
     # Narrow the Python call per platform. Without --platform we run the
     # default all-platforms pass (kept for manual invocations only).
     STEP2_ARGS=()
     [ "$QUIET" = "--quiet" ] && STEP2_ARGS+=("--quiet")
+    STEP2_ARGS+=("--reply-summary" "$REPLY_SUMMARY_FILE")
     case "$PLATFORM" in
         reddit)   STEP2_ARGS+=("--reddit-only") ;;
         moltbook) STEP2_ARGS+=("--moltbook-only") ;;
@@ -194,11 +202,9 @@ fi
 # ═══════════════════════════════════════════════════════
 if [ "$RUN_STEP3" -eq 1 ]; then
     log "Step 3: X/Twitter stats (API via fxtwitter)"
-    if [ "$QUIET" = "--quiet" ]; then
-        python3 "$REPO_DIR/scripts/update_stats.py" --twitter-only --quiet >> "$LOGFILE" 2>&1
-    else
-        python3 "$REPO_DIR/scripts/update_stats.py" --twitter-only >> "$LOGFILE" 2>&1
-    fi
+    STEP3_ARGS=("--twitter-only" "--reply-summary" "$REPLY_SUMMARY_FILE")
+    [ "$QUIET" = "--quiet" ] && STEP3_ARGS+=("--quiet")
+    python3 "$REPO_DIR/scripts/update_stats.py" "${STEP3_ARGS[@]}" >> "$LOGFILE" 2>&1
     STEP3_EXIT=$?
     if [ "$STEP3_EXIT" -ne 0 ]; then
         log "Step 3: FAILED (exit $STEP3_EXIT)"
@@ -406,7 +412,21 @@ STATS_FAILED=$(( (STEP1_EXIT != 0 ? 1 : 0) + (STEP2_EXIT != 0 ? 1 : 0) + (STEP3_
 ACTIVE=$(psql "${DATABASE_URL:-}" -t -A -c "SELECT COUNT(*) FROM posts WHERE status='active';" 2>/dev/null | tr -d '[:space:]')
 [ -z "$ACTIVE" ] && ACTIVE=0
 SCRIPT_TAG="stats${PLATFORM:+_$PLATFORM}"
-python3 "$REPO_DIR/scripts/log_run.py" --script "$SCRIPT_TAG" --posted "$ACTIVE" --skipped 0 --failed "$STATS_FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
+
+# Pull the reply-refresh count for this platform out of the sidecar JSON.
+# Defaults to 0 if the file is missing or the platform's pass didn't run.
+REPLIES_REFRESHED=0
+if [ -s "$REPLY_SUMMARY_FILE" ]; then
+    KEY="${PLATFORM:-reddit}"  # all-platforms run reports reddit + twitter + github separately;
+                                # without --platform we just total them.
+    if [ -n "$PLATFORM" ]; then
+        REPLIES_REFRESHED=$(python3 -c "import json,sys; d=json.load(open('$REPLY_SUMMARY_FILE')); print(d.get('$KEY', 0))" 2>/dev/null || echo 0)
+    else
+        REPLIES_REFRESHED=$(python3 -c "import json,sys; d=json.load(open('$REPLY_SUMMARY_FILE')); print(sum(d.values()))" 2>/dev/null || echo 0)
+    fi
+fi
+
+python3 "$REPO_DIR/scripts/log_run.py" --script "$SCRIPT_TAG" --posted "$ACTIVE" --skipped 0 --failed "$STATS_FAILED" --replies-refreshed "$REPLIES_REFRESHED" --cost 0 --elapsed "$RUN_ELAPSED"
 
 # Clean up old logs (keep last 7 days). Covers both new `stats-<platform>-*`
 # and any legacy `stats-YYYY-*` filenames.
