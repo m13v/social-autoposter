@@ -39,6 +39,6 @@
     "note": "Description backfilled 2026-04-28 from first-use post content. The fact must be true and verifiable; do not invent regulations or specs.",
     "promoted_at": null,
     "status": "candidate",
-    "why_existing_didnt_fit": "data_point_drop wants a believable metric ('$12k in a month'); the fact here is a regulation or technical constraint, not a number. pattern_recognizer is too abstract — this style is concrete, verifiable, and source-citable."
+    "why_existing_didnt_fit": "data_point_drop wants a believable metric ('$12k in a month'); the fact here is a regulation or technical constraint, not a number. pattern_recognizer is too abstract; this style is concrete, verifiable, and source-citable."
   }
 }
