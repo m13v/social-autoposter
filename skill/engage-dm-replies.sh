@@ -187,9 +187,18 @@ done || true
 HUMAN_REPLIES=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT h.id, h.dm_id, h.platform, h.their_author, h.instructions,
-               d.chat_url, h.project_name, h.attempts
+               h.reply_channel, h.public_reply_id,
+               d.chat_url, d.reply_id, d.post_id,
+               h.project_name, h.attempts,
+               r.their_comment_url AS public_target_url,
+               r.their_comment_id  AS public_target_comment_id,
+               r.our_reply_url     AS our_prior_public_reply_url,
+               r.post_id           AS public_target_post_id,
+               p.url               AS public_target_post_url
         FROM human_dm_replies h
         JOIN dms d ON d.id = h.dm_id
+        LEFT JOIN replies r ON r.id = d.reply_id
+        LEFT JOIN posts   p ON p.id = COALESCE(r.post_id, d.post_id)
         WHERE (h.status = 'pending' OR (h.status = 'failed' AND h.attempts < 3))
           AND $HR_PLATFORM_FILTER
         ORDER BY h.created_at ASC
@@ -205,9 +214,9 @@ You are the Social Autoposter DM delivery bot.
 
 Read $SKILL_FILE for content rules (tone, anti-AI detection, no em dashes).
 
-## Task: Send pending human replies as DMs
+## Task: Deliver pending human replies on the correct channel(s)
 
-The following replies were written by the human operator via email as INSTRUCTIONS for how to respond. Use each reply as a prompt — understand the intent, tone, and key points, then craft a natural DM that:
+The following replies were written by the human operator (via email or the dashboard) as INSTRUCTIONS for how to respond. Use each reply as a prompt, understand the intent, tone, and key points, then craft a natural reply that:
 - Matches the conversational tone of the thread (casual, texting style, 1-3 sentences)
 - Incorporates the human's key points and decisions
 - Sounds like the same person who sent the previous outbound messages in the conversation
@@ -215,39 +224,71 @@ The following replies were written by the human operator via email as INSTRUCTIO
 
 The human's reply is your DIRECTION, not the literal message. Think of it as "the human told you what to say, now say it naturally."
 
+Each pending reply has a \`reply_channel\` field that selects the delivery surface:
+- \`dm\` (default, legacy): send only as a private DM
+- \`public\`: post only as a public reply on the original public thread (their comment that started the DM)
+- \`both\`: do BOTH, post the public reply AND send the DM (paired delivery, same instruction text drives both)
+
 Pending human replies:
 $HUMAN_REPLIES
 
-For each reply:
+For each reply, branch on \`reply_channel\`:
 
-1. First, read the full conversation history:
+### Step A. Always read context first
+
+\`\`\`bash
+cd ~/social-autoposter && python3 scripts/dm_conversation.py history --dm-id DM_ID
+\`\`\`
+
+### Step B. If \`reply_channel\` is \`public\` or \`both\`: deliver the public reply
+
+The \`public_target_url\` field is THEIR public comment that originally led to this DM thread (from the joined \`replies\` row via \`dms.reply_id\`). The \`public_target_post_url\` is the parent post URL for context. If \`public_target_url\` is null, fall back to \`our_prior_public_reply_url\` (we can reply under our own previous reply on the same thread).
+
+1. Craft a natural public reply based on the human's instructions. Public replies are visible to everyone, so keep them appropriate for a public audience: friendly, helpful, concise, and on-brand. The instruction text typically asks you to share a link, so include it naturally in the public reply.
+2. Navigate to \`public_target_url\` on the correct platform and post the public reply:
+   - **Reddit** (mcp__reddit-agent__* tools): navigate, click reply on the target comment, type, submit. Capture the resulting comment URL.
+   - **LinkedIn** (mcp__linkedin-agent__* tools): navigate to the post, expand to find the target comment, reply, capture URL.
+   - **X/Twitter** (mcp__twitter-agent__* tools): navigate to the tweet URL, click reply, type, post. Capture the resulting status URL.
+3. Insert a fresh \`replies\` row capturing the public reply (use the \`their_comment_id\` from \`public_target_comment_id\` so the dedup index does not collide; if null, synthesize a unique id like \`hr_<REPLY_ID>_pub\`):
    \`\`\`bash
-   cd ~/social-autoposter && python3 scripts/dm_conversation.py history --dm-id DM_ID
+   psql "$DATABASE_URL" -t -A -c "INSERT INTO replies (post_id, platform, their_comment_id, their_author, their_content, their_comment_url, our_reply_content, our_reply_url, depth, status, replied_at) VALUES (PUBLIC_TARGET_POST_ID_OR_NULL, 'PLATFORM', 'COMMENT_ID', 'THEIR_AUTHOR', NULL, 'PUBLIC_TARGET_URL', 'CRAFTED_PUBLIC_REPLY', 'OUR_NEW_PUBLIC_REPLY_URL', 2, 'replied', NOW()) RETURNING id"
    \`\`\`
-2. Craft a natural DM based on the human's instructions and the conversation context.
-3. Navigate to the conversation on the correct platform using chat_url (or find the conversation with their_author).
+4. Stamp the \`replies.id\` back onto the human instruction so the dashboard can pair them:
+   \`\`\`bash
+   psql "$DATABASE_URL" -c "UPDATE human_dm_replies SET public_reply_id = NEW_REPLY_ID WHERE id = REPLY_ID"
+   \`\`\`
+
+### Step C. If \`reply_channel\` is \`dm\` or \`both\`: deliver the DM
+
+1. Craft a natural DM based on the human's instructions and the conversation context.
+2. Navigate to the conversation on the correct platform using \`chat_url\` (or find the conversation with their_author).
    - **Reddit Chat** (mcp__reddit-agent__* tools)
    - **LinkedIn Messages** (mcp__linkedin-agent__* tools)
-   - **X/Twitter DMs** (mcp__twitter-agent__* tools) — if encrypted DM passcode dialog appears, enter: $TWITTER_DM_PASSCODE
-4. Type and send the crafted reply.
-5. Log the outbound message (log what you ACTUALLY SENT, not the human's instructions):
+   - **X/Twitter DMs** (mcp__twitter-agent__* tools), if encrypted DM passcode dialog appears, enter: $TWITTER_DM_PASSCODE
+3. Type and send the crafted DM.
+4. Log the outbound message (log what you ACTUALLY SENT, not the human's instructions):
    \`\`\`bash
-   cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "THE_CRAFTED_REPLY_YOU_SENT"
-   \`\`\`
-4. Mark the human reply as sent:
-   \`\`\`bash
-   psql "$DATABASE_URL" -c "UPDATE human_dm_replies SET status = 'sent', sent_at = NOW() WHERE id = REPLY_ID"
-   \`\`\`
-5. Update the DM conversation status back to active:
-   \`\`\`bash
-   cd ~/social-autoposter && python3 scripts/dm_conversation.py set-status --dm-id DM_ID --status active
+   cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "THE_CRAFTED_DM_YOU_SENT"
    \`\`\`
 
-If sending fails for a reply, increment the attempts counter and record the reason. Use a short error string (single line, no quotes):
+### Step D. Always finalize after the channel work succeeds
+
+ONLY mark the human reply as sent after every required channel succeeded for it. For \`both\`, that means the public reply landed AND the DM landed. Partial success counts as failure (see error handling below).
+
+\`\`\`bash
+psql "$DATABASE_URL" -c "UPDATE human_dm_replies SET status = 'sent', sent_at = NOW() WHERE id = REPLY_ID"
+cd ~/social-autoposter && python3 scripts/dm_conversation.py set-status --dm-id DM_ID --status active
+\`\`\`
+
+### Error handling
+
+If any required channel fails, increment the attempts counter and record the reason. Use a short error string (single line, no quotes); for partial \`both\` failures include which side failed:
 \`\`\`bash
 psql "$DATABASE_URL" -c "UPDATE human_dm_replies SET status = 'failed', attempts = attempts + 1, last_error = 'ERROR_REASON' WHERE id = REPLY_ID"
 \`\`\`
-Rows with \`status = 'failed'\` AND \`attempts < 3\` will be picked up automatically on the next Phase 0 run for this platform. After 3 attempts they stay failed and stop retrying — notify the human in the run summary so they can handle manually.
+Rows with \`status = 'failed'\` AND \`attempts < 3\` will be picked up automatically on the next Phase 0 run for this platform. After 3 attempts they stay failed and stop retrying, notify the human in the run summary so they can handle manually.
+
+Idempotency for \`both\` retries: if \`public_reply_id\` is already set when you re-process a failed row, the public side is already live, do NOT post it again, only redo the DM side.
 
 Note: each Phase 0 run is scoped to a single platform ($PLATFORM), so you will only see replies for that platform here. Do not worry about replies for other platforms.
 PHASE0_EOF
