@@ -5666,6 +5666,78 @@ function renderStyleStats(payload) {
   });
 }
 
+async function loadStyleCandidates() {
+  const body = document.getElementById('style-candidates-body');
+  const totalEl = document.getElementById('style-candidates-total');
+  if (!body) return;
+  body.innerHTML = '<div class="style-stats-empty">Loading.</div>';
+  try {
+    const r = await fetch('/api/styles/candidates');
+    const data = await r.json();
+    if (data.error) {
+      body.innerHTML = '<div class="style-stats-empty">' + escapeHtml(data.error) + '</div>';
+      if (totalEl) totalEl.textContent = 'error';
+      return;
+    }
+    const cands = data.candidates || [];
+    if (totalEl) totalEl.textContent = cands.length + (cands.length === 1 ? ' style' : ' styles');
+    if (!cands.length) {
+      body.innerHTML = '<div class="style-stats-empty">No model-invented candidates yet.</div>';
+      return;
+    }
+    const fmt = n => (Number(n) || 0).toLocaleString();
+    const rows = cands.map(c => {
+      const usage = (c.usage || []).map(u =>
+        '<span class="style-cand-pill">' + escapeHtml(u.platform) +
+        ' n=' + fmt(u.posts) + ' med=' + (Number(u.median).toFixed(1)) + '</span>'
+      ).join(' ');
+      const totalPosts = (c.usage || []).reduce((a, u) => a + (Number(u.posts) || 0), 0);
+      const link = c.first_post_url
+        ? '<a href="' + escapeHtml(c.first_post_url) + '" target="_blank" rel="noopener">first use</a>'
+        : '(no post URL)';
+      const statusClass = c.status === 'active' ? 'active' :
+                          c.status === 'retired' ? 'retired' : 'candidate';
+      return '<div class="style-cand-card status-' + statusClass + '">' +
+        '<div class="style-cand-head">' +
+          '<span class="style-cand-name">' + escapeHtml(c.name) + '</span>' +
+          '<span class="style-cand-status">' + escapeHtml(c.status) + '</span>' +
+          '<span class="style-cand-totals">' + fmt(totalPosts) + ' post' + (totalPosts === 1 ? '' : 's') + '</span>' +
+        '</div>' +
+        '<div class="style-cand-desc">' + escapeHtml(c.description || '(no description)') + '</div>' +
+        (c.why_existing_didnt_fit
+          ? '<div class="style-cand-why"><span>Why invented:</span> ' + escapeHtml(c.why_existing_didnt_fit) + '</div>'
+          : '') +
+        (usage ? '<div class="style-cand-usage">' + usage + '</div>' : '') +
+        '<div class="style-cand-meta">' +
+          (c.invented_at ? 'invented ' + escapeHtml(c.invented_at.slice(0, 10)) : '') +
+          (c.first_post_platform ? ' on ' + escapeHtml(c.first_post_platform) : '') +
+          ' &middot; ' + link +
+        '</div>' +
+      '</div>';
+    }).join('');
+    body.innerHTML =
+      '<style>' +
+        '.style-cand-card{border:1px solid var(--border,#2a2a2a);border-radius:6px;padding:10px 12px;margin:8px 0;background:var(--card-bg,#181818);}' +
+        '.style-cand-card.status-active{border-left:3px solid #4ade80;}' +
+        '.style-cand-card.status-candidate{border-left:3px solid #fbbf24;}' +
+        '.style-cand-card.status-retired{border-left:3px solid #6b7280;opacity:0.6;}' +
+        '.style-cand-head{display:flex;gap:10px;align-items:baseline;margin-bottom:4px;}' +
+        '.style-cand-name{font-weight:600;font-family:ui-monospace,monospace;}' +
+        '.style-cand-status{font-size:11px;text-transform:uppercase;color:var(--muted,#888);}' +
+        '.style-cand-totals{margin-left:auto;font-size:12px;color:var(--muted,#888);}' +
+        '.style-cand-desc{font-size:13px;line-height:1.4;margin:4px 0;}' +
+        '.style-cand-why{font-size:12px;color:var(--muted,#888);margin:4px 0;}' +
+        '.style-cand-why span{font-weight:600;}' +
+        '.style-cand-usage{margin:6px 0;display:flex;gap:6px;flex-wrap:wrap;}' +
+        '.style-cand-pill{font-size:11px;padding:2px 8px;border-radius:10px;background:var(--card-bg-alt,#222);font-family:ui-monospace,monospace;}' +
+        '.style-cand-meta{font-size:11px;color:var(--muted,#888);margin-top:6px;}' +
+      '</style>' + rows;
+  } catch (e) {
+    body.innerHTML = '<div class="style-stats-empty">load failed: ' + escapeHtml(e.message || String(e)) + '</div>';
+    if (totalEl) totalEl.textContent = 'error';
+  }
+}
+
 async function loadStyleStats() {
   try {
     const platformRow = document.getElementById('style-stats-platform-pills');
@@ -7883,6 +7955,14 @@ document.querySelectorAll('.tab').forEach(tab => {
   if (!el) return;
   el.addEventListener('toggle', () => {
     if (el.open) loadDmStats();
+  });
+})();
+
+(function wireStyleCandidates() {
+  const el = document.getElementById('style-candidates');
+  if (!el) return;
+  el.addEventListener('toggle', () => {
+    if (el.open) loadStyleCandidates();
   });
 })();
 
