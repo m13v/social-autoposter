@@ -71,6 +71,9 @@ def update_linkedin_stats(db, scraped_data, quiet=False):
     matched = 0
     unmatched = 0
     removed = 0
+    unavailable = 0  # subset of `removed`: posts where LinkedIn returned an
+                     # explicit "post unavailable" string (vs. just our comment
+                     # not being locatable). Surfaced separately on the dashboard.
 
     for post in posts:
         db_id, our_url = post[0], post[1]
@@ -97,6 +100,7 @@ def update_linkedin_stats(db, scraped_data, quiet=False):
                         [db_id],
                     )
                     removed += 1
+                    unavailable += 1
                     if not quiet:
                         signal = item.get("signal", "<unavailable>")
                         print(f"  [{db_id}] REMOVED (post unavailable: {signal})")
@@ -144,6 +148,7 @@ def update_linkedin_stats(db, scraped_data, quiet=False):
         "matched": matched,
         "unmatched": unmatched,
         "removed": removed,
+        "unavailable": unavailable,
         "scraped_total": len(scraped_data),
         "db_total": len(posts),
     }
@@ -154,6 +159,9 @@ def main():
     parser.add_argument("--from-json", required=True, help="Path to JSON file with scraped stats")
     parser.add_argument("--quiet", action="store_true", help="Minimal output")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("--summary", default=None,
+                        help="Write a small JSON file ({refreshed, removed, unavailable, "
+                             "not_found}) so stats.sh can aggregate the dashboard pills.")
     args = parser.parse_args()
 
     if not os.path.exists(args.from_json):
