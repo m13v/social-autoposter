@@ -32,7 +32,7 @@ REPLY_DB = os.path.join(REPO_DIR, "scripts", "reply_db.py")
 CAMPAIGN_BUMP = os.path.join(REPO_DIR, "scripts", "campaign_bump.py")
 REDDIT_MCP_CONFIG = os.path.expanduser("~/.claude/browser-agent-configs/reddit-agent-mcp.json")
 
-from engagement_styles import REPLY_STYLES as VALID_STYLES, get_styles_prompt, get_content_rules, get_anti_patterns
+from engagement_styles import REPLY_STYLES as VALID_STYLES, get_styles_prompt, get_content_rules, get_anti_patterns, validate_or_register
 
 
 def load_config():
@@ -337,7 +337,7 @@ Read ~/social-autoposter/config.json for project details and content_angle.
 {recent_context}{top_context}{voice_block}{history_block}{callout_block}
 ## Content rules
 {get_content_rules("reddit")}
-- First person is preferred ONLY when the specifics are grounded in content_angle / voice / messaging in config.json. If they're not, swap to observation framing per the GROUNDING RULE below. Do not invent personal anecdotes.
+- First person has TWO valid forms per the GROUNDING RULE below. Lane 1: open with a disclosure phrase ("hypothetically", "imagine someone running this", "scenario:") and then invent freely. Lane 2: stay first-person only when every specific is grounded in content_angle / voice / messaging in config.json, or drop the specific and pattern-frame ("the part that breaks down is..."). Never undisclosed first-person with invented numbers / places / programs.
 - Vary openings. Don't always start with credentials.
 
 {get_styles_prompt("reddit", context="replying")}
