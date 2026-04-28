@@ -766,7 +766,9 @@ Never send the booking link twice. If \`booking_link_sent_at\` is not NULL, Step
 
 ### Step 4: Send the reply
 
-**Reddit Chat** (try CDP first, fall back to mcp__reddit-agent__* browser):
+Reddit dms split into two surfaces — pick by whether \`chat_url\` is set on the dms row:
+
+**Reddit Chat** (chat_url set; true DM — try CDP first, fall back to mcp__reddit-agent__* browser):
 \`\`\`bash
 cd ~/social-autoposter && python3 scripts/reddit_browser.py send-dm "CHAT_URL" "YOUR_REPLY_TEXT" DM_ID
 \`\`\`
@@ -775,6 +777,14 @@ If the CDP script returns {ok:false} (Reddit Chat SPA may not render via CDP), f
 1. Navigate to the chat room (use chat_url if available, or find via sidebar)
 2. Type the reply in the message input
 3. Press Enter to send
+4. **Campaign suffix on the MCP fallback:** if $REDDIT_CAMPAIGN_SUFFIX_LITERAL is non-empty (the shell precomputes it from the active reddit campaign), flip a coin AT \$REDDIT_CAMPAIGN_SAMPLE_RATE and, on heads, type the suffix verbatim at the end of the message before pressing Enter. The CDP path does this automatically; the MCP fallback must do it by hand or the campaign attribution is lost.
+
+**Reddit comment reply** (chat_url empty / null; the inbound is a public comment, not a chat message — use the CDP path so suffix injection runs at the tool layer):
+\`\`\`bash
+cd ~/social-autoposter && python3 scripts/reddit_browser.py reply "COMMENT_PERMALINK" "YOUR_REPLY_TEXT" DM_ID
+\`\`\`
+Pass DM_ID as the third positional arg so the tool logs to dm_messages with auto-attribution. The tool injects the active campaign suffix at \`sample_rate\`; \`reply_text\` in the JSON return is what was actually posted. \`COMMENT_PERMALINK\` is the inbound comment URL on reddit.com (the tool normalizes to old.reddit.com internally).
+If CDP returns {ok:false} with a non-recoverable error, fall back to mcp__reddit-agent__* browser to type the reply on the post page. On the MCP fallback path, the same Step-4 suffix rule applies — if $REDDIT_CAMPAIGN_SUFFIX_LITERAL is set, append it verbatim at \$REDDIT_CAMPAIGN_SAMPLE_RATE before submitting; if $REDDIT_CAMPAIGN_SUFFIX_LITERAL is empty, do nothing extra.
 
 **LinkedIn Messages** (mcp__linkedin-agent__* tools ONLY, no Python CDP, no /voyager/api/):
 1. mcp__linkedin-agent__browser_navigate to THREAD_URL.
