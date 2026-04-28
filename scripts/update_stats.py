@@ -1398,6 +1398,13 @@ def main():
                         help="Write a small JSON file with per-platform reply update "
                              "counts ({reddit, twitter, github}) so the calling shell "
                              "can pass them to log_run.py for the dashboard.")
+    parser.add_argument("--stats-summary", default=None,
+                        help="Write a small JSON file with per-platform stats refresh "
+                             "counts ({platform: {refreshed, removed}}) so stats.sh "
+                             "can aggregate refreshed/removed pills for the dashboard. "
+                             "`refreshed` rolls up posts.updated + replies.updated; "
+                             "`removed` rolls up posts.removed + posts.deleted "
+                             "(+ posts.suspended for twitter).")
     args = parser.parse_args()
 
     config = load_config()
@@ -1499,6 +1506,30 @@ def main():
                 json.dump(summary, f)
         except Exception as e:
             print(f"WARN: failed to write reply summary {args.reply_summary}: {e}",
+                  file=sys.stderr)
+
+    # Richer sidecar JSON: per-platform refreshed/removed totals so stats.sh
+    # can render real "refreshed N, removed N" pills instead of the legacy
+    # posted=<active count> mush.
+    if args.stats_summary:
+        try:
+            def pkey(post_stats, reply_stats, removed_keys=("removed", "deleted")):
+                ps = post_stats or {}
+                rs = reply_stats or {}
+                refreshed = int(ps.get("updated", 0) or 0) + int(rs.get("updated", 0) or 0)
+                removed = sum(int(ps.get(k, 0) or 0) for k in removed_keys)
+                return {"refreshed": refreshed, "removed": removed}
+            stats_summary = {
+                "reddit":   pkey(reddit_stats, reddit_reply_stats),
+                "twitter":  pkey(twitter_stats, twitter_reply_stats,
+                                 removed_keys=("deleted", "suspended")),
+                "moltbook": pkey(moltbook_stats, None),
+                "github":   pkey(github_stats, github_reply_stats),
+            }
+            with open(args.stats_summary, "w") as f:
+                json.dump(stats_summary, f)
+        except Exception as e:
+            print(f"WARN: failed to write stats summary {args.stats_summary}: {e}",
                   file=sys.stderr)
 
     if args.json:
