@@ -2059,8 +2059,8 @@ async function handleApi(req, res) {
                 "SELECT m.content FROM dm_messages m " +
                 "WHERE m.dm_id = d.id AND m.direction = 'outbound' " +
                   "AND hr.sent_at IS NOT NULL " +
-                  "AND m.message_at >= hr.sent_at - interval '2 minutes' " +
-                  "AND m.message_at <= hr.sent_at + interval '30 seconds' " +
+                  "AND m.message_at >= hr.sent_at - interval '5 minutes' " +
+                  "AND m.message_at <= hr.sent_at + interval '5 minutes' " +
                 "ORDER BY ABS(EXTRACT(EPOCH FROM (m.message_at - hr.sent_at))) ASC " +
                 "LIMIT 1" +
               "), " +
@@ -2068,8 +2068,8 @@ async function handleApi(req, res) {
                 "SELECT m.message_at FROM dm_messages m " +
                 "WHERE m.dm_id = d.id AND m.direction = 'outbound' " +
                   "AND hr.sent_at IS NOT NULL " +
-                  "AND m.message_at >= hr.sent_at - interval '2 minutes' " +
-                  "AND m.message_at <= hr.sent_at + interval '30 seconds' " +
+                  "AND m.message_at >= hr.sent_at - interval '5 minutes' " +
+                  "AND m.message_at <= hr.sent_at + interval '5 minutes' " +
                 "ORDER BY ABS(EXTRACT(EPOCH FROM (m.message_at - hr.sent_at))) ASC " +
                 "LIMIT 1" +
               ")" +
