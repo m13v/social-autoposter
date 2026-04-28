@@ -702,10 +702,25 @@ def _send_escalation_email(conn, dm_id, platform, their_author, reason):
 
 
 def flag_human(conn, dm_id, reason):
-    """Flag a conversation as needing human attention and send escalation email."""
+    """Flag a conversation as needing human attention and send escalation email.
+
+    Guard: if the most recent message in the thread is outbound, we have
+    already replied (probably via Phase 0 of engage-dm-replies.sh after the
+    human gave instructions). Re-flagging in that state pins threads at
+    needs_human even though the ball is in the prospect's court. Skip
+    re-flagging until a fresh inbound arrives.
+    """
     row = conn.execute("SELECT platform, their_author, conversation_status FROM dms WHERE id = %s", (dm_id,)).fetchone()
     if not row:
         print(f"ERROR: DM #{dm_id} not found")
+        return False
+
+    last_msg = conn.execute("""
+        SELECT direction FROM dm_messages
+        WHERE dm_id = %s ORDER BY message_at DESC LIMIT 1
+    """, (dm_id,)).fetchone()
+    if last_msg and last_msg["direction"] == "outbound":
+        print(f"  SKIP flag-human: DM #{dm_id} ({row['their_author']} [{row['platform']}]) last message is OUTBOUND. We already replied; ball is in their court. Reason was: {reason}")
         return False
 
     conn.execute("""
