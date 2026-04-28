@@ -122,7 +122,9 @@ CRITICAL — Browser agent rule: Each platform MUST use its dedicated browser ag
 - Twitter: mcp__twitter-agent__* tools (e.g. mcp__twitter-agent__browser_navigate)
 - LinkedIn: mcp__linkedin-agent__* tools (e.g. mcp__linkedin-agent__browser_navigate)
 Each agent has its own browser lock. Using the wrong agent bypasses the lock and causes session conflicts.
-CRITICAL: If a browser agent tool call is blocked or times out, DO NOT fall back to any other browser tool (especially not macos-use). Wait 30 seconds and retry the same agent. Repeat up to 3 times. If still blocked, skip that item and move on.
+CRITICAL: If a browser agent tool call is blocked or times out, DO NOT fall back to any other browser tool (especially not macos-use). Wait 30 seconds and retry the same agent. Repeat up to 3 times.
+CRITICAL: TECHNICAL FAILURES ARE NOT TERMINAL. If after retries the action still failed for any technical reason (browser blocked, MCP timeout, page rendering issue, reddit/moltbook unreachable, CDP_ERROR, no_response), DO NOT call reply_db.py skipped. Leave the row in 'processing' status and move on to the next pending item. The next engage run's start-of-script cleanup resets stuck 'processing' rows back to 'pending' and retries automatically.
+CRITICAL: ONLY call reply_db.py skipped for content/policy reasons (e.g., light_acknowledgment, drive_by_self_promo, hostile_user, mod_removal, troll, off_topic, meta_callout_acknowledged, excluded_author, cross_pipeline_disengage). NEVER skip for technical browser/network failures: those must be retry-able.
 
 PROMPT_HEADER
 
