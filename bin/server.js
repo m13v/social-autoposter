@@ -6853,6 +6853,12 @@ function renderTopDms(payload) {
     last_msg: d.last_msg || '',
     last_dir: d.last_dir || '',
     messages: Array.isArray(d.messages) ? d.messages : [],
+    // Escalation card needs this whole array (instructions text + agent's
+    // generated reply per item) so it can render the paired blocks. Was
+    // missing here, which is why the escalation card never showed any
+    // history despite the SQL aggregating it correctly.
+    human_instructions: Array.isArray(d.human_instructions) ? d.human_instructions : [],
+    flagged_at: d.flagged_at || null,
   }));
   window.__dmsById = Object.create(null);
   for (const r of normalized) { window.__dmsById[r.id] = r; }
