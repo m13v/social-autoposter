@@ -2041,7 +2041,40 @@ async function handleApi(req, res) {
           // NOT NULL) or the dashboard /api/dm/:id/instructions endpoint
           // (resend_email_id IS NULL). Phase 0 of engage-dm-replies.sh
           // consumes status='pending' rows and crafts DMs from them.
-          "(SELECT COALESCE(json_agg(json_build_object('id', hr.id, 'status', hr.status, 'instructions', hr.instructions, 'created_at', hr.created_at, 'sent_at', hr.sent_at, 'attempts', hr.attempts, 'last_error', hr.last_error, 'source', CASE WHEN hr.resend_email_id IS NOT NULL THEN 'gmail' ELSE 'dashboard' END) ORDER BY hr.created_at ASC), '[]'::json) FROM human_dm_replies hr WHERE hr.dm_id = d.id) AS human_instructions, " +
+          //
+          // generated_reply heuristic: engage-dm-replies.sh logs the outbound
+          // DM via dm_conversation.py log-outbound (creates dm_messages row)
+          // immediately before UPDATE human_dm_replies SET status='sent',
+          // sent_at=NOW(). So the matching outbound dm_messages row has
+          // message_at within seconds of hr.sent_at. We pick the closest
+          // outbound message in a (-2 min, +30 sec) window. No FK exists
+          // because engage-dm-replies.sh is uchg-locked; this is the
+          // cleanest pairing we can do without a schema change.
+          "(SELECT COALESCE(json_agg(json_build_object(" +
+              "'id', hr.id, 'status', hr.status, 'instructions', hr.instructions, " +
+              "'created_at', hr.created_at, 'sent_at', hr.sent_at, " +
+              "'attempts', hr.attempts, 'last_error', hr.last_error, " +
+              "'source', CASE WHEN hr.resend_email_id IS NOT NULL THEN 'gmail' ELSE 'dashboard' END, " +
+              "'generated_reply', (" +
+                "SELECT m.content FROM dm_messages m " +
+                "WHERE m.dm_id = d.id AND m.direction = 'outbound' " +
+                  "AND hr.sent_at IS NOT NULL " +
+                  "AND m.message_at >= hr.sent_at - interval '2 minutes' " +
+                  "AND m.message_at <= hr.sent_at + interval '30 seconds' " +
+                "ORDER BY ABS(EXTRACT(EPOCH FROM (m.message_at - hr.sent_at))) ASC " +
+                "LIMIT 1" +
+              "), " +
+              "'generated_reply_at', (" +
+                "SELECT m.message_at FROM dm_messages m " +
+                "WHERE m.dm_id = d.id AND m.direction = 'outbound' " +
+                  "AND hr.sent_at IS NOT NULL " +
+                  "AND m.message_at >= hr.sent_at - interval '2 minutes' " +
+                  "AND m.message_at <= hr.sent_at + interval '30 seconds' " +
+                "ORDER BY ABS(EXTRACT(EPOCH FROM (m.message_at - hr.sent_at))) ASC " +
+                "LIMIT 1" +
+              ")" +
+            ") ORDER BY hr.created_at ASC), '[]'::json) " +
+            "FROM human_dm_replies hr WHERE hr.dm_id = d.id) AS human_instructions, " +
           "CASE WHEN d.conversation_status = 'needs_human' THEN 0 " +
                "WHEN d.conversation_status IN ('converted','closed') THEN 90 " +
                "WHEN d.interest_level = 'hot' THEN 10 " +
@@ -7080,6 +7113,8 @@ function renderDmEscalationCard(dm) {
         const sent = it && it.sent_at ? relTime(it.sent_at) : '';
         const attempts = it && Number(it.attempts) || 0;
         const lastErr = it && it.last_error ? String(it.last_error) : '';
+        const instructionsText = String(it && it.instructions || '');
+        const replyText = String(it && it.generated_reply || '');
         const meta =
           '<span class="dm-esc-status dm-esc-status-' + escapeHtml(status) + '">' + escapeHtml(status) + '</span>' +
           '<span class="dm-esc-source">' + escapeHtml(source) + '</span>' +
@@ -7087,9 +7122,22 @@ function renderDmEscalationCard(dm) {
           (sent ? '<span>· sent ' + escapeHtml(sent) + '</span>' : '') +
           (attempts > 0 ? '<span>· ' + attempts + ' attempt' + (attempts === 1 ? '' : 's') + '</span>' : '') +
           (lastErr ? '<span title="' + escapeHtml(lastErr) + '">· error</span>' : '');
+        // Each instruction renders as two paired blocks: the human's
+        // instructions (always shown) and the agent's crafted reply (shown
+        // when status='sent' and we matched an outbound dm_messages row
+        // within the heuristic time window).
+        const replyBlock = replyText
+          ? '<div class="dm-esc-item-label dm-esc-item-label-reply">agent reply</div>' +
+            '<div class="dm-esc-item-reply">' + escapeHtml(replyText) + '</div>'
+          : (status === 'sent'
+            ? '<div class="dm-esc-item-label dm-esc-item-label-reply">agent reply</div>' +
+              '<div class="dm-esc-item-reply dm-esc-item-reply-missing">(could not match outbound DM, see message thread above)</div>'
+            : '');
         return '<div class="dm-esc-item">' +
           '<div class="dm-esc-item-meta">' + meta + '</div>' +
-          '<div class="dm-esc-item-body">' + escapeHtml(String(it && it.instructions || '')) + '</div>' +
+          '<div class="dm-esc-item-label">your instructions</div>' +
+          '<div class="dm-esc-item-body">' + escapeHtml(instructionsText) + '</div>' +
+          replyBlock +
         '</div>';
       }).join('') + '</div>'
     : '';
