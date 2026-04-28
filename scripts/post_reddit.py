@@ -347,7 +347,7 @@ Search defaults to sort=relevance and time=week. Use --time month for broader re
 ## CRITICAL CONTENT RULES
 - Study the style performance data in the feedback report below. Pick styles with the highest avg upvotes.
 - Go BIMODAL on length: either 1 punchy sentence (<100 chars) or 4-5 sentences of real substance. AVOID the 2-3 sentence middle.
-- First-person ("I"/"my") is preferred ONLY when the specifics are grounded in content_angle/voice/messaging in config.json. Otherwise drop the "I" frame and observe ("the pattern is...", "the typical failure mode is..."). Do not invent personal anecdotes — see GROUNDING RULE.
+- First-person ("I"/"my") is preferred ONLY when the specifics are grounded in content_angle/voice/messaging in config.json. Otherwise drop the "I" frame and observe ("the pattern is...", "the typical failure mode is..."). Do not invent personal anecdotes; see GROUNDING RULE.
 - NEVER mention product names (fazm, assrt, pieline, cyrano, terminator, mk0r, s4l).
 - NEVER include URLs or links.
 - Prefer replying to OP (top-level reply).
