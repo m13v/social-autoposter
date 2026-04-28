@@ -203,7 +203,7 @@ MANDATORY reply flow for every item:
           g) Capture REPLY_URL:
              - mcp__twitter-agent__browser_navigate to https://x.com/m13v_/with_replies
              - mcp__twitter-agent__browser_snapshot
-             - Find the topmost link matching /m13v_/status/<digits> — that's REPLY_URL.
+             - Find the topmost link matching /m13v_/status/<digits>. That is REPLY_URL.
              If no fresh reply URL appears within 30s, leave REPLY_URL empty and
              continue to Step 5 (the reply IS posted; we just lack the URL link).
   Step 5: python3 reply_db.py replied ID "reply text" REPLY_URL ENGAGEMENT_STYLE [IS_RECOMMENDATION]   <- mark AFTER success. ENGAGEMENT_STYLE is TONE (e.g. critic, storyteller). Pass IS_RECOMMENDATION="1" ONLY when the reply casually recommends a project (Tier 2/3); leave unset otherwise. Tone and intent are independent.
