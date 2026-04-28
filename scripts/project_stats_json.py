@@ -477,6 +477,74 @@ def _bookings_shared(bookings_conn, client_slug, days, table="cal_bookings"):
         return None
 
 
+def _dm_short_link_stats(conn, name, days):
+    """Per-project DM short-link click + booking attribution.
+
+    `dm_clicks`: SUM(dms.short_link_clicks) for DMs targeting this project that
+    were last touched in the window. Captures every DM click (multi-clicks
+    bumped at the resolver) that is plausibly attributable to recent activity.
+
+    Booking count is computed by callers via _dm_booking_count which needs
+    bookings_conn; kept separate to avoid requiring it here.
+    """
+    if not name:
+        return 0
+    try:
+        cur = conn.execute(
+            "SELECT COALESCE(SUM(short_link_clicks), 0)::int "
+            "FROM dms "
+            "WHERE COALESCE(target_project, project_name) = %s "
+            "AND short_link_code IS NOT NULL "
+            "AND COALESCE(last_message_at, discovered_at) >= NOW() - INTERVAL '" + str(int(days)) + " days'",
+            (name,),
+        )
+        return int((cur.fetchone() or (0,))[0])
+    except Exception as e:
+        print(f"  dm_short_link_stats error for {name}: {e}", file=sys.stderr)
+        return 0
+
+
+def _dm_booking_count(conn, bookings_conn, name, days):
+    """Count cal_bookings within the window whose metadata.utm_content
+    (`dm_<id>`) maps to a DM targeting this project.
+
+    The webhook stores the entire Cal.com payload under cal_bookings.metadata,
+    and the original UTM lives at metadata.payload.metadata.utm_content. We
+    parse the dm_id out of `dm_<n>`, then join against dms.target_project /
+    project_name in the main DB to scope by project.
+    """
+    if not bookings_conn or not name:
+        return 0
+    try:
+        cur = bookings_conn.cursor()
+        cur.execute(
+            "SELECT metadata#>>'{payload,metadata,utm_content}' AS utm_content "
+            "FROM cal_bookings "
+            "WHERE metadata#>>'{payload,metadata,utm_content}' LIKE 'dm_%%' "
+            "AND created_at >= NOW() - INTERVAL '" + str(int(days)) + " days' "
+            "AND COALESCE(attendee_email, '') NOT ILIKE '%%test%%'"
+        )
+        dm_ids = []
+        for (utm,) in cur.fetchall():
+            if utm and utm.startswith('dm_'):
+                try:
+                    dm_ids.append(int(utm.split('_', 1)[1]))
+                except (ValueError, IndexError):
+                    pass
+        cur.close()
+        if not dm_ids:
+            return 0
+        cur2 = conn.execute(
+            "SELECT COUNT(*)::int FROM dms WHERE id = ANY(%s) "
+            "AND COALESCE(target_project, project_name) = %s",
+            (dm_ids, name),
+        )
+        return int((cur2.fetchone() or (0,))[0])
+    except Exception as e:
+        print(f"  dm_booking_count error for {name}: {e}", file=sys.stderr)
+        return 0
+
+
 def _windowed_post_engagement(conn, name, days):
     """Sum engagement only for posts *created within the window*.
 
@@ -648,6 +716,8 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
         analytics_suspected_broken = (domain_wide_pv >= 500) and ((domain_wide_signups + domain_wide_sched + domain_wide_get_started) == 0)
 
     real = bookings.get("real_bookings", 0) if bookings else 0
+    dm_clicks = _dm_short_link_stats(conn, name, days)
+    dm_bookings = _dm_booking_count(conn, bookings_conn, name, days)
     if not analytics_error:
         conv = (real / ctas * 100) if ctas else None
 
@@ -679,6 +749,8 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
             "get_started_clicks": get_started_clicks,
             "cross_product_clicks": cross_product_clicks,
             "real_bookings": real,
+            "dm_clicks": dm_clicks,
+            "dm_bookings": dm_bookings,
             "ctr_pct": ctr,
             "conv_pct": conv,
             # Domain-wide siblings: the dashboard shows each as "<scoped>
