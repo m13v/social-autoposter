@@ -1099,6 +1099,244 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
             "errors": errors, "skipped": skipped, "results": results}
 
 
+def update_reddit_replies(db, user_agent, quiet=False):
+    """Refresh score + reply count for our Reddit comments stored in `replies`.
+
+    Uses batch_fetch_info (up to 100 t1_ IDs per API call) so the whole table
+    typically scans in 1-3 hits. Reddit doesn't expose per-comment views, so
+    `views` stays 0. Skips rows refreshed within FRESH_WINDOW.
+    """
+    from reddit_tools import batch_fetch_info, RateLimitedError
+
+    FRESH_WINDOW = timedelta(hours=4)
+    now_utc = datetime.now(timezone.utc)
+
+    rows = db.execute(
+        "SELECT id, our_reply_id, engagement_updated_at FROM replies "
+        "WHERE platform='reddit' AND status='replied' AND our_reply_id IS NOT NULL "
+        "ORDER BY id"
+    ).fetchall()
+
+    pending = []
+    skipped_fresh = 0
+    for row in rows:
+        rid, our_reply_id, eu = row[0], row[1], row[2]
+        if eu:
+            if eu.tzinfo is None:
+                eu = eu.replace(tzinfo=timezone.utc)
+            if now_utc - eu < FRESH_WINDOW:
+                skipped_fresh += 1
+                continue
+        # our_reply_id is stored as bare base-36 ID (no t1_ prefix). Normalize.
+        thing_id = our_reply_id if our_reply_id.startswith("t1_") else f"t1_{our_reply_id}"
+        pending.append((rid, thing_id))
+
+    total = len(pending)
+    if total == 0:
+        if not quiet:
+            print(f"  reddit replies: nothing to refresh ({skipped_fresh} fresh)", flush=True)
+        return {"total": 0, "updated": 0, "errors": 0, "skipped_fresh": skipped_fresh}
+
+    thing_ids = [t for _, t in pending]
+    try:
+        info = batch_fetch_info(thing_ids, user_agent=user_agent)
+    except RateLimitedError as e:
+        if not quiet:
+            print(f"  reddit replies: rate-limited (reset in {int(e.reset_in)}s)", flush=True)
+        return {"total": total, "updated": 0, "errors": total, "skipped_fresh": skipped_fresh}
+    except Exception as e:
+        if not quiet:
+            print(f"  reddit replies: batch fetch failed: {e}", flush=True)
+        return {"total": total, "updated": 0, "errors": total, "skipped_fresh": skipped_fresh}
+
+    updated = errors = 0
+    for rid, thing_id in pending:
+        d = info.get(thing_id)
+        if not d:
+            errors += 1
+            continue
+        score = int(d.get("score") or 0)
+        # Count direct replies on the comment.
+        replies_obj = d.get("replies", "")
+        reply_count = 0
+        if replies_obj and isinstance(replies_obj, dict):
+            children = replies_obj.get("data", {}).get("children", [])
+            reply_count = sum(1 for c in children if c.get("kind") == "t1")
+            reply_count += sum(c.get("data", {}).get("count", 0)
+                               for c in children if c.get("kind") == "more")
+        db.execute(
+            "UPDATE replies SET upvotes=%s, comments_count=%s, "
+            "engagement_updated_at=NOW() WHERE id=%s",
+            [score, reply_count, rid],
+        )
+        updated += 1
+
+    db.commit()
+    progress.done("reddit_replies", total, updated=updated, errors=errors)
+    if not quiet:
+        print(f"  reddit replies: {total} checked, {updated} updated, "
+              f"{errors} errors, {skipped_fresh} fresh", flush=True)
+    return {"total": total, "updated": updated, "errors": errors,
+            "skipped_fresh": skipped_fresh}
+
+
+def update_twitter_replies(db, quiet=False):
+    """Refresh per-reply stats (likes, replies count, views) for our reply
+    tweets stored in `replies`. Reuses the fxtwitter API per reply tweet ID.
+    """
+    FRESH_WINDOW = timedelta(days=7)
+    now_utc = datetime.now(timezone.utc)
+
+    rows = db.execute(
+        "SELECT id, our_reply_url, engagement_updated_at FROM replies "
+        "WHERE platform='twitter' AND status='replied' AND our_reply_url IS NOT NULL "
+        "ORDER BY id"
+    ).fetchall()
+
+    total = updated = errors = skipped_fresh = 0
+    for row in rows:
+        rid, url, eu = row[0], row[1], row[2]
+        if eu:
+            if eu.tzinfo is None:
+                eu = eu.replace(tzinfo=timezone.utc)
+            if now_utc - eu < FRESH_WINDOW:
+                skipped_fresh += 1
+                continue
+
+        total += 1
+        m = re.search(r'/status/(\d+)', url or '')
+        if not m:
+            errors += 1
+            continue
+        tweet_id = m.group(1)
+        username_m = re.search(r'(?:x|twitter)\.com/([^/]+)/status', url or '')
+        username = username_m.group(1) if username_m else 'i'
+
+        api_url = f"https://api.fxtwitter.com/{username}/status/{tweet_id}"
+        data = fetch_json(api_url)
+        if not data:
+            time.sleep(2)
+            data = fetch_json(api_url)
+            if not data:
+                errors += 1
+                continue
+        if data.get("code") == 404 or data.get("tweet") is None:
+            errors += 1
+            continue
+
+        tweet = data["tweet"]
+        views = int(tweet.get("views") or 0)
+        likes = int(tweet.get("likes") or 0)
+        replies_count = int(tweet.get("replies") or 0)
+
+        db.execute(
+            "UPDATE replies SET upvotes=%s, comments_count=%s, views=%s, "
+            "engagement_updated_at=NOW() WHERE id=%s",
+            [likes, replies_count, views, rid],
+        )
+        updated += 1
+
+        # fxtwitter pacing — same 1s as posts
+        time.sleep(1)
+        if total % 50 == 0:
+            db.commit()
+            progress.tick("twitter_replies", total, len(rows) - skipped_fresh,
+                          updated=updated, errors=errors)
+
+    db.commit()
+    progress.done("twitter_replies", total, updated=updated, errors=errors)
+    if not quiet:
+        print(f"  twitter replies: {total} checked, {updated} updated, "
+              f"{errors} errors, {skipped_fresh} fresh", flush=True)
+    return {"total": total, "updated": updated, "errors": errors,
+            "skipped_fresh": skipped_fresh}
+
+
+def update_github_replies(db, quiet=False, limit=None):
+    """Refresh reaction count for our GitHub comments stored in `replies`.
+
+    Uses `gh api` per comment. GitHub has no view counter, so views stays 0.
+    comments_count is left at 0 (replies-on-replies are rare in our flows
+    and would add a per-issue scan we don't need today).
+    """
+    import subprocess
+
+    sql = ("SELECT id, our_reply_url, engagement_updated_at FROM replies "
+           "WHERE platform='github' AND status='replied' AND our_reply_url IS NOT NULL "
+           "ORDER BY id")
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    rows = db.execute(sql).fetchall()
+
+    FRESH_WINDOW = timedelta(days=3)
+    now_utc = datetime.now(timezone.utc)
+    comment_url_re = re.compile(
+        r"https?://github\.com/([^/]+)/([^/]+)/(?:issues|pull)/\d+#issuecomment-(\d+)"
+    )
+
+    total = updated = errors = skipped_fresh = 0
+    for row in rows:
+        rid, url, eu = row[0], row[1], row[2]
+        if eu:
+            if eu.tzinfo is None:
+                eu = eu.replace(tzinfo=timezone.utc)
+            if now_utc - eu < FRESH_WINDOW:
+                skipped_fresh += 1
+                continue
+
+        total += 1
+        m = comment_url_re.match(url or "")
+        if not m:
+            errors += 1
+            continue
+        owner, repo, comment_id = m.group(1), m.group(2), m.group(3)
+
+        try:
+            proc = subprocess.run(
+                ["gh", "api", f"repos/{owner}/{repo}/issues/comments/{comment_id}"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except Exception:
+            errors += 1
+            continue
+
+        if proc.returncode != 0:
+            err_text = (proc.stderr or "") + (proc.stdout or "")
+            if "rate limit" in err_text.lower():
+                if not quiet:
+                    print(f"  github replies: rate-limited at {total}, sleeping 60s",
+                          flush=True)
+                time.sleep(60)
+            errors += 1
+            continue
+
+        try:
+            data = json.loads(proc.stdout)
+        except Exception:
+            errors += 1
+            continue
+
+        reactions = int((data.get("reactions") or {}).get("total_count") or 0)
+        db.execute(
+            "UPDATE replies SET upvotes=%s, engagement_updated_at=NOW() WHERE id=%s",
+            [reactions, rid],
+        )
+        updated += 1
+        time.sleep(0.1)
+        if total % 100 == 0:
+            db.commit()
+            progress.tick("github_replies", total, len(rows) - skipped_fresh,
+                          updated=updated, errors=errors)
+
+    db.commit()
+    progress.done("github_replies", total, updated=updated, errors=errors)
+    if not quiet:
+        print(f"  github replies: {total} checked, {updated} updated, "
+              f"{errors} errors, {skipped_fresh} fresh", flush=True)
+    return {"total": total, "updated": updated, "errors": errors,
+            "skipped_fresh": skipped_fresh}
+
+
 def get_aggregate_totals(db):
     """Get aggregate stats across all platforms."""
     from datetime import datetime, timezone
@@ -1152,6 +1390,10 @@ def main():
     parser.add_argument("--moltbook-only", action="store_true", help="Only update Moltbook stats")
     parser.add_argument("--github-only", action="store_true", help="Only update GitHub stats")
     parser.add_argument("--github-limit", type=int, default=None, help="Limit github backfill to N posts (for smoke tests)")
+    parser.add_argument("--skip-replies", action="store_true",
+                        help="Skip per-reply stat refresh (only update posts)")
+    parser.add_argument("--replies-only", action="store_true",
+                        help="Only refresh per-reply stats; skip posts entirely")
     args = parser.parse_args()
 
     config = load_config()
@@ -1166,24 +1408,55 @@ def main():
     moltbook_stats = None
     twitter_stats = None
     github_stats = None
+    reddit_reply_stats = None
+    twitter_reply_stats = None
+    github_reply_stats = None
 
-    if args.twitter_audit:
+    # Each platform's reply refresh piggybacks on that platform's stat pass
+    # (no new launchd job, no shell-script edits). --skip-replies bypasses,
+    # --replies-only runs only the reply pass for that platform's scope.
+    do_replies = not args.skip_replies
+
+    if args.replies_only:
+        if args.twitter_only or args.twitter_audit:
+            twitter_reply_stats = update_twitter_replies(db, quiet=args.quiet)
+        elif args.reddit_only:
+            reddit_reply_stats = update_reddit_replies(db, user_agent, quiet=args.quiet)
+        elif args.github_only:
+            github_reply_stats = update_github_replies(db, quiet=args.quiet, limit=args.github_limit)
+        else:
+            reddit_reply_stats = update_reddit_replies(db, user_agent, quiet=args.quiet)
+            twitter_reply_stats = update_twitter_replies(db, quiet=args.quiet)
+            github_reply_stats = update_github_replies(db, quiet=args.quiet)
+    elif args.twitter_audit:
         twitter_stats = update_twitter(db, config=config, quiet=args.quiet, audit_mode=True)
+        if do_replies:
+            twitter_reply_stats = update_twitter_replies(db, quiet=args.quiet)
     elif args.twitter_only:
         twitter_stats = update_twitter(db, config=config, quiet=args.quiet)
+        if do_replies:
+            twitter_reply_stats = update_twitter_replies(db, quiet=args.quiet)
     elif args.reddit_resurrect:
         reddit_resurrect_stats = update_reddit_resurrect(db, user_agent, config=config, quiet=args.quiet, days=args.resurrect_days)
     elif args.reddit_only:
         reddit_stats = update_reddit(db, user_agent, config=config, quiet=args.quiet)
+        if do_replies:
+            reddit_reply_stats = update_reddit_replies(db, user_agent, quiet=args.quiet)
     elif args.moltbook_only:
         moltbook_stats = update_moltbook(db, os.environ.get("MOLTBOOK_API_KEY", ""), quiet=args.quiet)
     elif args.github_only:
         github_stats = update_github(db, quiet=args.quiet, limit=args.github_limit)
+        if do_replies:
+            github_reply_stats = update_github_replies(db, quiet=args.quiet, limit=args.github_limit)
     else:
         reddit_stats = update_reddit(db, user_agent, config=config, quiet=args.quiet)
         moltbook_stats = update_moltbook(db, os.environ.get("MOLTBOOK_API_KEY", ""), quiet=args.quiet)
         twitter_stats = update_twitter(db, config=config, quiet=args.quiet)
         github_stats = update_github(db, quiet=args.quiet)
+        if do_replies:
+            reddit_reply_stats = update_reddit_replies(db, user_agent, quiet=args.quiet)
+            twitter_reply_stats = update_twitter_replies(db, quiet=args.quiet)
+            github_reply_stats = update_github_replies(db, quiet=args.quiet)
 
     # Gather aggregate totals across all platforms
     totals = get_aggregate_totals(db)
@@ -1201,6 +1474,12 @@ def main():
         output["twitter"] = twitter_stats
     if github_stats is not None:
         output["github"] = github_stats
+    if reddit_reply_stats is not None:
+        output["reddit_replies"] = reddit_reply_stats
+    if twitter_reply_stats is not None:
+        output["twitter_replies"] = twitter_reply_stats
+    if github_reply_stats is not None:
+        output["github_replies"] = github_reply_stats
 
     if args.json:
         print(json.dumps(output, indent=2))
@@ -1258,6 +1537,14 @@ def main():
                 print(f"{'ID':>5} {'React':>5} {'Reply':>5}  URL")
                 for row in top:
                     print(f"{row['id']:>5} {row['reactions']:>5} {row['replies']:>5}  {row['url']}")
+
+        for label, stats in (("Reddit replies", reddit_reply_stats),
+                             ("Twitter replies", twitter_reply_stats),
+                             ("GitHub replies", github_reply_stats)):
+            if stats is None:
+                continue
+            print(f"\n{label}: {stats['total']} checked, {stats['updated']} updated, "
+                  f"{stats['errors']} errors, {stats.get('skipped_fresh', 0)} fresh")
 
         print_aggregate_totals(totals)
 
