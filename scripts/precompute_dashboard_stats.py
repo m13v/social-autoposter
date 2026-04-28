@@ -155,26 +155,58 @@ def precompute_activity(hours=24):
 
 def precompute_style(hours=24):
     """Mirror the engagement-style aggregate in bin/server.js /api/style/stats
-    for the default all/all filter the dashboard asks for on load."""
+    for the default all/all filter the dashboard asks for on load.
+
+    Adds reply_* columns (replies count, reply_upvotes, reply_comments,
+    reply_views) sourced from the `replies` table, joined on engagement_style.
+    Existing post-side columns are unchanged — the dashboard JS keeps working;
+    new fields are additive and ignored until surfaced."""
     conn = get_conn()
     t0 = time.time()
     # upvotes_discounted applies the Reddit/Moltbook -1 clamp per row before summing,
     # so the per-post score computed client-side matches top_performers.SCORE_SQL.
     # Both platforms have a default OP self-upvote that inflates the raw count.
+    win = f"INTERVAL '{int(hours)} hours'"
     q_rows = (
-        "SELECT json_agg(row_to_json(r)) FROM ("
-        "SELECT COALESCE(engagement_style, '(none)') AS style, COUNT(*)::int AS posts, "
-        "COUNT(*) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues'))::int AS views_posts, "
-        "COALESCE(SUM(upvotes), 0)::int AS upvotes, "
-        "COALESCE(SUM(CASE WHEN LOWER(platform) IN ('reddit', 'moltbook') "
-        "THEN GREATEST(0, COALESCE(upvotes,0) - 1) "
-        "ELSE COALESCE(upvotes,0) END), 0)::int AS upvotes_discounted, "
-        "COALESCE(SUM(comments_count), 0)::int AS comments, "
-        "COALESCE(SUM(views) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues')), 0)::int AS views, "
-        "COALESCE(SUM(CASE WHEN is_recommendation THEN 1 ELSE 0 END), 0)::int AS recommendations "
-        f"FROM posts WHERE posted_at >= NOW() - INTERVAL '{int(hours)} hours' "
-        "AND our_content <> '(mention - no original post)' "
-        "GROUP BY engagement_style ORDER BY posts DESC) r"
+        "WITH p AS ("
+        "  SELECT COALESCE(engagement_style, '(none)') AS style, "
+        "  COUNT(*)::int AS posts, "
+        "  COUNT(*) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues'))::int AS views_posts, "
+        "  COALESCE(SUM(upvotes), 0)::int AS upvotes, "
+        "  COALESCE(SUM(CASE WHEN LOWER(platform) IN ('reddit', 'moltbook') "
+        "    THEN GREATEST(0, COALESCE(upvotes,0) - 1) "
+        "    ELSE COALESCE(upvotes,0) END), 0)::int AS upvotes_discounted, "
+        "  COALESCE(SUM(comments_count), 0)::int AS comments, "
+        "  COALESCE(SUM(views) FILTER (WHERE LOWER(platform) NOT IN ('moltbook', 'github', 'github_issues')), 0)::int AS views, "
+        "  COALESCE(SUM(CASE WHEN is_recommendation THEN 1 ELSE 0 END), 0)::int AS recommendations "
+        f"  FROM posts WHERE posted_at >= NOW() - {win} "
+        "  AND our_content <> '(mention - no original post)' "
+        "  GROUP BY engagement_style"
+        "), r AS ("
+        "  SELECT COALESCE(engagement_style, '(none)') AS style, "
+        "  COUNT(*)::int AS replies, "
+        "  COALESCE(SUM(upvotes), 0)::int AS reply_upvotes, "
+        "  COALESCE(SUM(comments_count), 0)::int AS reply_comments, "
+        "  COALESCE(SUM(views) FILTER (WHERE LOWER(platform) NOT IN ('reddit', 'github', 'linkedin', 'moltbook')), 0)::int AS reply_views "
+        f"  FROM replies WHERE status='replied' AND replied_at >= NOW() - {win} "
+        "  GROUP BY engagement_style"
+        ") "
+        "SELECT json_agg(row_to_json(s)) FROM ("
+        "  SELECT COALESCE(p.style, r.style) AS style, "
+        "  COALESCE(p.posts, 0) AS posts, "
+        "  COALESCE(p.views_posts, 0) AS views_posts, "
+        "  COALESCE(p.upvotes, 0) AS upvotes, "
+        "  COALESCE(p.upvotes_discounted, 0) AS upvotes_discounted, "
+        "  COALESCE(p.comments, 0) AS comments, "
+        "  COALESCE(p.views, 0) AS views, "
+        "  COALESCE(p.recommendations, 0) AS recommendations, "
+        "  COALESCE(r.replies, 0) AS replies, "
+        "  COALESCE(r.reply_upvotes, 0) AS reply_upvotes, "
+        "  COALESCE(r.reply_comments, 0) AS reply_comments, "
+        "  COALESCE(r.reply_views, 0) AS reply_views "
+        "  FROM p FULL OUTER JOIN r ON p.style = r.style "
+        "  ORDER BY COALESCE(p.posts, 0) + COALESCE(r.replies, 0) DESC"
+        ") s"
     )
     q_platforms = (
         "SELECT json_agg(p) FROM ("
