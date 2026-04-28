@@ -645,18 +645,45 @@ def get_styles_prompt(platform, context="posting"):
         lines.append(f"- Never on {platform}: {', '.join(sorted(never_styles))}.")
     lines.append("")
 
+    full_universe = get_all_styles()
     for t in targets:
-        style = STYLES.get(t["style"])
+        style = full_universe.get(t["style"])
         if not style:
             continue
-        best = style["best_in"].get(platform, [])
-        lines.append(f"**{t['style']}**: {style['description']}")
+        best = style.get("best_in", {}).get(platform, [])
+        tag = " [NEW — model-invented candidate]" if t.get("is_candidate") else ""
+        lines.append(f"**{t['style']}**{tag}: {style['description']}")
         lines.append(f'  "{style["example"]}"')
         if best:
             lines.append(f"  Best in: {', '.join(best)}.")
         if style.get("note"):
             lines.append(f"  {style['note']}")
+        if t.get("is_candidate") and style.get("why_existing_didnt_fit"):
+            lines.append(f"  Invented because: {style['why_existing_didnt_fit']}")
         lines.append("")
+
+    lines.append(
+        "## Inventing a new style"
+    )
+    lines.append(
+        "If none of the styles above genuinely fit the thread, you may invent "
+        "a new one. To do so, set `engagement_style` to your new name and ALSO "
+        "include a `new_style` block in the same JSON object:"
+    )
+    lines.append("")
+    lines.append('  "new_style": {')
+    lines.append('    "description": "<what this style is, in one sentence>",')
+    lines.append('    "example": "<a short example utterance>",')
+    lines.append('    "note": "<when to use, when not to>",')
+    lines.append('    "why_existing_didnt_fit": "<why none of the styles above worked here>"')
+    lines.append('  }')
+    lines.append("")
+    lines.append(
+        "Use this sparingly. If an existing style is even 80% right, prefer "
+        "it. New styles are accepted as candidates and only graduate to full "
+        "weight after they prove out across multiple posts."
+    )
+    lines.append("")
 
     if context == "replying":
         lines.append(
@@ -827,8 +854,18 @@ def get_valid_styles(context="posting"):
 
 
 def validate_style(style, context="posting"):
-    """Check if a style name is valid. Returns the style or None."""
+    """Check if a style name is valid. Returns the style or None.
+
+    Consults the live universe (hardcoded STYLES + sidecar candidates) so
+    a candidate registered in this process or by another agent passes.
+    """
+    if not style:
+        return None
+    if style in get_all_styles():
+        return style
+    # Backwards path: a few callers (like locked octolens scripts) only
+    # know the hardcoded set. Keep that path working for them.
     valid = get_valid_styles(context)
-    if style and style in valid:
+    if style in valid:
         return style
     return None
