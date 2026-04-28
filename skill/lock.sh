@@ -93,10 +93,26 @@ acquire_lock() {
   # dies, Chrome gets reparented to PID 1, profile stays locked). Since we
   # now hold the exclusive shell lock, any Chrome on this profile is an
   # orphan and safe to kill before the caller launches a fresh MCP session.
+  #
+  # Also sweep orphan playwright-mcp / node wrappers reparented to PID 1. A
+  # live holder's MCP child is parented to its claude process; only true
+  # orphans (parent died without running the EXIT trap, e.g. SIGKILL/OOM)
+  # end up at ppid=1 and survive. The ppid==1 filter keeps a manually-
+  # attached Claude session pointed at the same agent config safe: its MCP
+  # child has the live claude as parent, not init. Without this sweep,
+  # orphan wrappers accumulate over days and keep launchd from re-firing
+  # because launchd treats the slot as still in flight.
   if $is_browser_lock; then
     local platform="${name%-browser}"
     if pkill -f "user-data-dir=.*browser-profiles/${platform}" 2>/dev/null; then
       echo "Killed orphan Chrome holding ${platform} profile"
+      sleep 1
+    fi
+    local mcp_pids
+    mcp_pids=$(ps -A -o pid=,ppid=,command= | awk -v plat="${platform}-agent.json" '$2 == "1" && index($0, plat) > 0 {print $1}')
+    if [ -n "$mcp_pids" ]; then
+      echo "$mcp_pids" | xargs kill -TERM 2>/dev/null || true
+      echo "Killed orphan MCP wrappers (ppid=1) for ${platform}-agent: $(echo $mcp_pids | tr '\n' ' ')"
       sleep 1
     fi
   fi
