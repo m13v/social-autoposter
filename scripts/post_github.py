@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
 from engagement_styles import (
     VALID_STYLES, get_styles_prompt, get_content_rules, get_anti_patterns,
+    validate_or_register,
 )
 
 REPO_DIR = os.path.expanduser("~/social-autoposter")
@@ -356,7 +357,8 @@ Return ONLY a single JSON object. No prose, no markdown fencing, no Bash calls:
       "thread_title": "<issue title>",
       "thread_author": "<issue author>",
       "matched_project": "{project['name']}",
-      "engagement_style": "<one of {', '.join(sorted(VALID_STYLES))}>",
+      "engagement_style": "<one of {', '.join(sorted(VALID_STYLES))}, or your invented snake_case name>",
+      "new_style": null,
       "search_topic": "<the seed from the candidate block, copied verbatim>",
       "language": "<ISO 639-1 code matching the issue language: en, ja, zh, es, ...>",
       "comment_text": "<the actual comment to post, 400-600 chars, NO links>"
@@ -366,6 +368,11 @@ Return ONLY a single JSON object. No prose, no markdown fencing, no Bash calls:
     {{ "url": "<issue url>", "reason": "<short reason>" }}
   ]
 }}
+
+If, and ONLY if, none of the listed styles fits, you may invent one. Set
+"engagement_style" to your snake_case name AND replace `"new_style": null` with
+`{{"description": "...", "example": "...", "note": "...", "why_existing_didnt_fit": "..."}}`.
+Inventing should be rare; prefer an existing style if it's even 80% right.
 
 CRITICAL: Do NOT call gh, Bash, or any tool. The orchestrator already searched
 and viewed; just return the JSON.
@@ -673,10 +680,15 @@ def main():
         text = (decision.get("comment_text") or "").strip()
         thread_author = decision.get("thread_author", "unknown")
         thread_title = decision.get("thread_title", "")
-        engagement_style = decision.get("engagement_style")
-        if engagement_style and engagement_style not in VALID_STYLES:
-            log(f"unknown style '{engagement_style}', clearing")
-            engagement_style = None
+        engagement_style, _style_action = validate_or_register(
+            decision,
+            source_post={
+                "platform": "github",
+                "post_url": thread_url,
+                "post_id": None,
+                "model": decision.get("model"),
+            },
+        )
         language = (decision.get("language") or "en").strip().lower()[:5] or "en"
 
         owner, repo, number = parse_issue_url(thread_url)
