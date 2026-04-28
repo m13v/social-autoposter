@@ -3330,6 +3330,16 @@ const HTML = `<!DOCTYPE html>
   .dm-esc-status-sent    { background: #d1fae5; color: #065f46; }
   .dm-esc-status-failed  { background: #fee2e2; color: #991b1b; }
   .dm-esc-source { padding: 1px 5px; border: 1px solid var(--border); border-radius: 3px; }
+  .dm-esc-channel { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 9px; font-weight: 700; letter-spacing: 0.04em; }
+  .dm-esc-channel-dm     { background: #dbeafe; color: #1e40af; }
+  .dm-esc-channel-public { background: #ede9fe; color: #5b21b6; }
+  .dm-esc-channel-both   { background: #fce7f3; color: #9d174d; }
+  .dm-esc-item-label-public { color: #5b21b6; }
+  .dm-esc-item-label-public .dm-esc-public-link { font-size: 9px; font-weight: 600; margin-left: 6px; color: #5b21b6; text-decoration: underline; text-transform: none; letter-spacing: 0; }
+  .dm-esc-item-reply-public { background: rgba(139, 92, 246, 0.08); border-left-color: #8b5cf6; }
+  .dm-esc-channel-picker { display: inline-flex; align-items: center; gap: 10px; font-size: 11px; color: var(--text-secondary); }
+  .dm-esc-channel-picker label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+  .dm-esc-channel-picker input { margin: 0; }
   .dm-esc-compose { display: flex; flex-direction: column; gap: 6px; }
   .dm-esc-textarea { width: 100%; box-sizing: border-box; min-height: 64px; padding: 8px 10px; font-family: inherit; font-size: 12px; line-height: 1.5; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 5px; resize: vertical; }
   .dm-esc-textarea:focus { outline: none; border-color: var(--link); }
@@ -7532,10 +7542,20 @@ function renderDmEscalationCard(dm) {
 
   const composeId = 'dm-esc-ta-' + Number(dm.id);
   const feedbackId = 'dm-esc-fb-' + Number(dm.id);
+  const channelName = 'dm-esc-ch-' + Number(dm.id);
+  // Channel selector: drives reply_channel on the API call. Default is 'dm'
+  // (legacy behavior). 'public' posts only on the original thread; 'both' does
+  // both (paired delivery, same instruction text drives the public reply and
+  // the DM). Phase 0 of engage-dm-replies.sh reads reply_channel and branches.
   const compose =
     '<div class="dm-esc-compose">' +
-      '<textarea id="' + composeId + '" class="dm-esc-textarea" placeholder="Briefly, what should we say back? The agent will craft the actual DM from these instructions."></textarea>' +
+      '<textarea id="' + composeId + '" class="dm-esc-textarea" placeholder="Briefly, what should we say back? The agent will craft the actual reply from these instructions."></textarea>' +
       '<div class="dm-esc-bar">' +
+        '<div class="dm-esc-channel-picker" role="radiogroup" aria-label="Reply channel">' +
+          '<label><input type="radio" name="' + channelName + '" value="dm" checked /> DM</label>' +
+          '<label><input type="radio" name="' + channelName + '" value="public" /> public reply</label>' +
+          '<label><input type="radio" name="' + channelName + '" value="both" /> both</label>' +
+        '</div>' +
         '<span class="dm-esc-hint">Cmd/Ctrl+Enter to send</span>' +
         '<button type="button" class="dm-esc-submit" onclick="submitDmInstructions(this, ' + Number(dm.id) + ')">Send instructions</button>' +
       '</div>' +
@@ -7592,6 +7612,11 @@ async function submitDmInstructions(btn, dmId) {
     fb.textContent = 'Please write at least 5 characters of instructions.';
     return;
   }
+  // Pull channel from the radio group inside this card. Falls back to 'dm'
+  // (legacy default) if the picker is missing for any reason.
+  const card = ta.closest('.dm-esc-card');
+  const checked = card ? card.querySelector('input[name="dm-esc-ch-' + dmId + '"]:checked') : null;
+  const replyChannel = (checked && checked.value) || 'dm';
   btn.disabled = true;
   fb.className = 'dm-esc-feedback';
   fb.textContent = 'Sending...';
@@ -7599,7 +7624,7 @@ async function submitDmInstructions(btn, dmId) {
     const resp = await fetch('/api/dm/' + dmId + '/instructions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instructions: txt }),
+      body: JSON.stringify({ instructions: txt, reply_channel: replyChannel }),
     });
     let data = {};
     try { data = await resp.json(); } catch (_) {}
@@ -7617,7 +7642,10 @@ async function submitDmInstructions(btn, dmId) {
     }
     ta.value = '';
     fb.className = 'dm-esc-feedback dm-esc-feedback-ok';
-    fb.textContent = 'Queued. The agent will send the DM on its next run (~every 30 min for this platform).';
+    const queuedLabel = replyChannel === 'both'
+      ? 'public reply + DM'
+      : (replyChannel === 'public' ? 'public reply' : 'DM');
+    fb.textContent = 'Queued. The agent will send the ' + queuedLabel + ' on its next run (~every 30 min for this platform).';
     btn.disabled = false;
   } catch (e) {
     fb.className = 'dm-esc-feedback dm-esc-feedback-err';
