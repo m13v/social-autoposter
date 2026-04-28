@@ -36,7 +36,7 @@ STYLES = {
         ),
         "example": (
             "GROUNDED (config-anchored): 'on a 90-slide deck the rubric scored "
-            "81.3 vs ~68 field average — the cards weren't the bottleneck, the "
+            "81.3 vs ~68 field average; the cards weren't the bottleneck, the "
             "rubric was.' "
             "OBSERVATIONAL: 'the whisper-to-gpt-to-anki setup isn't where this "
             "breaks. card generation is. raw prompts hit roughly a third usable "
@@ -51,7 +51,7 @@ STYLES = {
             "NEVER pivot to a product pitch. NEVER invent specific personal "
             "anecdotes ('last semester for two anatomy blocks', 'ran 22 cameras "
             "across three properties for 8 months', 'sat 6 courses across three "
-            "centers') — see GROUNDING RULE. If a specific isn't in config.json, "
+            "centers'); see GROUNDING RULE. If a specific isn't in config.json, "
             "drop it or hedge to observation; do not invent."
         ),
     },
@@ -461,23 +461,24 @@ def get_grounding_rule():
     and then the account is burned.
 
     Rule split:
-      A. NO FABRICATION of specifics — numbers, durations, dates, place
-         names, course/program names, headcount, brand/tool names — unless
-         they appear verbatim in the matched project's content_angle, voice
-         (tone/examples/examples_good), or messaging (lead_with_pain /
-         solution / proof) in config.json.
-      B. DISCLOSE WHEN STORYTELLING — if you frame an experience or example
-         that you can't ground in config.json, frame it as observation, not
-         lived memoir. Replace 'I did X for 8 months' with 'the pattern is
-         X' / 'people who try this find...' / 'in setups I've seen...'.
-         The reader still gets the insight; we don't fake a biography.
+      A. NO FABRICATION of specifics: numbers, durations, dates, place
+         names, course/program names, headcount, brand/tool names. None
+         of these are allowed unless they appear verbatim in the matched
+         project's content_angle, voice (tone/examples/examples_good),
+         or messaging (lead_with_pain / solution / proof) in config.json.
+      B. DISCLOSE WHEN STORYTELLING: if you frame an experience or example
+         that you can't ground in config.json, frame it as observation,
+         not lived memoir. Replace 'I did X for 8 months' with 'the
+         pattern is X' / 'people who try this find...' / 'in setups
+         I've seen...'. The reader still gets the insight; we don't
+         fake a biography.
 
     These two rules together preserve specificity (good for engagement) for
     the parts the project author actually wrote down, and convert the rest
-    into honest pattern-recognition — which on niche subs is what high-trust
+    into honest pattern-recognition, which on niche subs is what high-trust
     answers actually read like.
     """
-    return """## GROUNDING RULE (highest priority — overrides any other style guidance)
+    return """## GROUNDING RULE (highest priority; overrides any other style guidance)
 
 The pipeline previously rewarded "specificity" as an authenticity signal.
 This rule narrows that: specifics still win, but only the ones that are
@@ -523,7 +524,7 @@ Worked examples (drawn from real posts in our DB):
 
   GOOD (config-grounded, first-person OK because the specifics are real):
     "on a 90-slide deck the eval scored 81.3 vs the field average around
-    68 — the cards weren't the bottleneck, the rubric was."
+    68; the cards weren't the bottleneck, the rubric was."
     (The 81.3 / 68 / 90-slide numbers come from the matched project's
     messaging.proof and voice.examples.)
 
@@ -545,7 +546,7 @@ def get_content_rules(platform):
         "NO em dashes. Use commas, periods, or regular dashes (-).",
         "Never say 'I built' or 'we built'. Never mention any project by name unless recommending.",
         'Never start with "exactly", "yeah totally", "100%", "that\'s smart".',
-        "Specificity is the #1 authenticity signal — but only for specifics that are TRUE. See GROUNDING RULE: any number, duration, date, place, course/program, headcount, or named tool must come from the matched project's config.json (content_angle / voice / messaging). Otherwise drop the specific or hedge to observation framing.",
+        "Specificity is the #1 authenticity signal, but only for specifics that are TRUE. See GROUNDING RULE: any number, duration, date, place, course/program, headcount, or named tool must come from the matched project's config.json (content_angle / voice / messaging). Otherwise drop the specific or hedge to observation framing.",
         "Include imperfections: contractions, casual asides, occasional lowercase.",
     ]
 
@@ -578,7 +579,7 @@ def get_content_rules(platform):
 def get_anti_patterns():
     """Content anti-patterns shared across all platforms."""
     return """## Anti-patterns
-- NEVER fabricate personal specifics — invented durations ("for 8 months", "last semester"), counts ("22 cameras", "380 baselines"), places ("Dhammamanda", "north fork"), course/program names ("two anatomy blocks"), or brand/tool names not in config. See GROUNDING RULE: ground from config.json or hedge to observation.
+- NEVER fabricate personal specifics: invented durations ("for 8 months", "last semester"), counts ("22 cameras", "380 baselines"), places ("Dhammamanda", "north fork"), course/program names ("two anatomy blocks"), or brand/tool names not in config. See GROUNDING RULE: ground from config.json or hedge to observation.
 - NEVER start with "exactly", "yeah totally", "100%", "that's smart". Vary first words.
 - NEVER say "I built" / "we built" / "I'm working on". Frame products as recommendations, not self-promotion.
 - NEVER suggest calls, meetings, demos.
