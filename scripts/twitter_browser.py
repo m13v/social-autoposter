@@ -32,7 +32,7 @@ import sys
 import time
 
 
-PROFILE_DIR = os.path.expanduser("~/.claude/browser-profiles/twitter")
+PROFILE_DIR = os.path.expanduser("~/.claude/browser-profiles/twitter-poster")
 LOCK_FILE = os.path.expanduser("~/.claude/twitter-agent-lock.json")
 LOCK_EXPIRY = 300  # Must match twitter-agent-lock.sh
 LOCK_WAIT_MAX = 45  # seconds to wait for lock to free before giving up
@@ -52,52 +52,15 @@ if not DM_PASSCODE:
                     break
 
 
-def find_twitter_cdp_port():
-    """Find the CDP port of the running twitter-agent MCP browser."""
-    try:
-        ps_out = subprocess.check_output(
-            ["ps", "aux"], text=True, stderr=subprocess.DEVNULL
-        )
-        ports = set()
-        for line in ps_out.splitlines():
-            if "chromium" not in line.lower() and "chrome" not in line.lower():
-                continue
-            m = re.search(r"remote-debugging-port=(\d+)", line)
-            if m:
-                ports.add(int(m.group(1)))
-
-        import urllib.request
-
-        best_port = None
-        for port in sorted(ports):
-            try:
-                resp = urllib.request.urlopen(
-                    f"http://localhost:{port}/json", timeout=2
-                )
-                pages = json.loads(resp.read())
-                twitter_urls = [
-                    p.get("url", "")
-                    for p in pages
-                    if "x.com" in p.get("url", "") or "twitter.com" in p.get("url", "")
-                ]
-                if not twitter_urls:
-                    continue
-                # Prefer ports with logged-in pages (home, chat, notifications)
-                logged_in = any(
-                    ("home" in u or "chat" in u or "notifications" in u or "status" in u)
-                    and "login" not in u
-                    for u in twitter_urls
-                )
-                if logged_in:
-                    return port
-                if best_port is None:
-                    best_port = port
-            except Exception:
-                continue
-        return best_port
-    except Exception:
-        pass
-    return None
+# NOTE: find_twitter_cdp_port + connect_over_cdp branch removed 2026-04-28.
+# The playwright-mcp twitter-agent launches Chrome with --remote-debugging-pipe
+# (not =PORT), so this function always returned None and we always fell back to
+# launch_persistent_context. With both processes pointed at the same profile
+# dir, the headless Chromium contended with the MCP's headed Chrome and x.com
+# wedged on Loading…, causing 30s text_content("main") timeouts × 3 retries
+# per pending. Fix: poster now uses its own profile dir
+# (~/.claude/browser-profiles/twitter-poster), seeded once from the MCP
+# profile's auth files.
 
 
 _LOCK_SESSION_ID = f"python:{os.getpid()}"
@@ -176,35 +139,14 @@ def _refresh_browser_lock():
 
 
 def get_browser_and_page(playwright):
-    """Connect to the twitter-agent MCP browser via CDP, or launch a new one.
+    """Launch a dedicated headless Chromium for posting against PROFILE_DIR.
 
-    Returns (browser, page, is_cdp). When is_cdp=True, `page` is a reused
-    existing Twitter tab (navigate it, don't close it). When is_cdp=False,
-    it's a new headless page.
+    Returns (context, page, is_cdp). is_cdp is always False now (we always own
+    the browser and close it on exit); kept in the return tuple so existing
+    `if not is_cdp:` cleanup callsites continue to work unchanged.
     """
     _acquire_browser_lock()
-    cdp_port = find_twitter_cdp_port()
 
-    if cdp_port:
-        try:
-            browser = playwright.chromium.connect_over_cdp(
-                f"http://localhost:{cdp_port}"
-            )
-            contexts = browser.contexts
-            if contexts:
-                context = contexts[0]
-                for pg in context.pages:
-                    if ("x.com" in pg.url or "twitter.com" in pg.url) and "login" not in pg.url:
-                        return browser, pg, True
-                if context.pages:
-                    return browser, context.pages[0], True
-        except Exception:
-            pass
-
-    # Fallback: launch persistent browser with saved profile.
-    # Retry on Chromium SingletonLock collisions (MCP holds the OS-level profile
-    # lock for its entire server lifetime; the JSON lock can expire while the
-    # OS lock is still held).
     deadline = time.time() + LOCK_WAIT_MAX
     while True:
         try:
