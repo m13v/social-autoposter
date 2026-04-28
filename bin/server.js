@@ -6,7 +6,17 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execSync, spawn, spawnSync } = require('child_process');
-const { Pool } = require('pg');
+const pg = require('pg');
+const { Pool } = pg;
+// Postgres `timestamp without time zone` columns are stored in UTC across this
+// repo (DB session tz is GMT and inserts use NOW()). The default node-postgres
+// parser interprets naive timestamps as the Node process's LOCAL time, which
+// silently shifts every dashboard timestamp by the local offset (e.g. 7h in
+// PDT). Force OID 1114 (timestamp) to be parsed as UTC so posted_at,
+// engagement_updated_at, status_checked_at, etc. render with the correct
+// relative-time on the dashboard. See investigation 2026-04-27 (Cyrano post
+// id=20555 displaying "19m ago" for a 7-hour-old post).
+pg.types.setTypeParser(1114, str => str === null ? null : new Date(str + 'Z'));
 const platform = require('./platform');
 const scheduler = require('./scheduler');
 const auth = require('./auth');
