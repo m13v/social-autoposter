@@ -179,13 +179,26 @@ def main():
     result = update_linkedin_stats(db, scraped_data, quiet=args.quiet)
     db.close()
 
+    if args.summary:
+        try:
+            with open(args.summary, "w") as f:
+                json.dump({
+                    "refreshed":   int(result.get("matched", 0) or 0),
+                    "removed":     int(result.get("removed", 0) or 0),
+                    "unavailable": int(result.get("unavailable", 0) or 0),
+                    "not_found":   int(result.get("unmatched", 0) or 0),
+                }, f)
+        except Exception as e:
+            print(f"WARN: failed to write summary {args.summary}: {e}", file=sys.stderr)
+
     if args.json:
         print(json.dumps(result, indent=2))
     else:
         print(
             f"LinkedIn Stats: {result['scraped_total']} scraped, "
             f"{result['matched']} DB posts updated, "
-            f"{result['removed']} removed, "
+            f"{result['removed']} removed "
+            f"({result.get('unavailable', 0)} unavailable), "
             f"{result['unmatched']} unmatched"
         )
 
