@@ -257,6 +257,7 @@ Your last {len(recent_replies)} replies (vary your style, don't repeat the same 
         return None  # will be skipped by caller
 
     top_context = f"\n## FEEDBACK FROM PAST PERFORMANCE (use this to write better replies):\n{top_report}\n" if top_report else ""
+    history_block = f"\n{prior_history_block}\n" if prior_history_block else ""
 
     voice_block = ""
     project_name = reply.get("project_name")
@@ -281,7 +282,7 @@ Apply this voice when drafting: follow `tone`, never violate any item in `never`
 
 ## Context
 Read ~/social-autoposter/config.json for project details and content_angle.
-{recent_context}{top_context}{voice_block}{('\n' + prior_history_block + '\n') if prior_history_block else ''}
+{recent_context}{top_context}{voice_block}{history_block}
 ## Content rules
 {get_content_rules("reddit")}
 - First person, specific details from content_angle in config.json.
