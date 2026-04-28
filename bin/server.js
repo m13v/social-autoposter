@@ -6770,6 +6770,15 @@ function renderTopDms(payload) {
     qualification_status: d.qualification_status || '',
     qualification_notes: d.qualification_notes || '',
     booking_link_sent_at: d.booking_link_sent_at || null,
+    short_link_code: d.short_link_code || '',
+    short_link_clicks: Number(d.short_link_clicks) || 0,
+    short_link_first_click_at: d.short_link_first_click_at || null,
+    short_link_last_click_at: d.short_link_last_click_at || null,
+    bookings_count: Number(d.bookings_count) || 0,
+    bookings_booked: Number(d.bookings_booked) || 0,
+    bookings_cancelled: Number(d.bookings_cancelled) || 0,
+    last_booking_at: d.last_booking_at || null,
+    recent_bookings: Array.isArray(d.recent_bookings) ? d.recent_bookings : [],
     prospect_headline: d.prospect_headline || '',
     prospect_bio: d.prospect_bio || '',
     prospect_company: d.prospect_company || '',
@@ -6798,7 +6807,27 @@ function renderTopDms(payload) {
     { key: 'last_msg',       label: 'Last message', type: 'text', align: 'left', widthPct: 32,
       formatter: (_v, r) => renderDmLastMsgCell(r) },
     { key: 'message_count',  label: 'Msgs',     type: 'numeric', align: 'right', widthPct: 5,  formatter: fmt },
-    { key: 'interest_level', label: 'Class',    type: 'text',    align: 'left',  widthPct: 13,
+    { key: 'short_link_clicks', label: 'Clicks', type: 'numeric', align: 'right', widthPct: 5,
+      formatter: (v, r) => {
+        const n = Number(v) || 0;
+        if (!r.short_link_code) return '<span style="color:var(--text-faint);">—</span>';
+        const code = String(r.short_link_code);
+        const lastAt = r.short_link_last_click_at ? new Date(r.short_link_last_click_at).toLocaleString() : 'never';
+        const tip = '/r/' + code + (n ? (' • last click: ' + lastAt) : ' • no clicks yet');
+        const color = n > 0 ? 'var(--accent)' : 'var(--text-muted)';
+        return '<span data-tooltip="' + escapeHtml(tip) + '" style="color:' + color + ';font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
+      } },
+    { key: 'bookings_count', label: 'Booked', type: 'numeric', align: 'right', widthPct: 5,
+      formatter: (v, r) => {
+        const total = Number(v) || 0;
+        if (!total) return '<span style="color:var(--text-faint);">—</span>';
+        const booked = Number(r.bookings_booked) || 0;
+        const cancelled = Number(r.bookings_cancelled) || 0;
+        const lastAt = r.last_booking_at ? new Date(r.last_booking_at).toLocaleString() : '';
+        const tip = booked + ' booked' + (cancelled ? (' • ' + cancelled + ' cancelled') : '') + (lastAt ? (' • last: ' + lastAt) : '');
+        return '<span data-tooltip="' + escapeHtml(tip) + '" style="color:var(--success);font-weight:600;font-variant-numeric:tabular-nums;">' + fmt(booked) + '</span>';
+      } },
+    { key: 'interest_level', label: 'Class',    type: 'text',    align: 'left',  widthPct: 11,
       formatter: (_v, r) => dmClassBadge(r) },
     { key: 'last_ts',        label: 'Last message', type: 'numeric', align: 'right', widthPct: 10,
       formatter: (_v, r) => {
