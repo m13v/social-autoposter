@@ -184,6 +184,9 @@ def main():
     parser.add_argument("--from-json", required=True, help="Path to JSON file with scraped views")
     parser.add_argument("--quiet", action="store_true", help="Minimal output")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("--summary", default=None,
+                        help="Write a small JSON file ({refreshed: N, unmatched: N}) so "
+                             "stats.sh can aggregate the dashboard refreshed pill.")
     args = parser.parse_args()
 
     if not os.path.exists(args.from_json):
@@ -224,6 +227,16 @@ def main():
         "total_comments": total_comments, "total_posts": total_posts,
         "days_active": days, "views_per_day": round(total_views / days) if days else 0,
     }
+
+    if args.summary:
+        try:
+            with open(args.summary, "w") as f:
+                json.dump({
+                    "refreshed": int(result.get("matched", 0) or 0),
+                    "unmatched": int(result.get("unmatched", 0) or 0),
+                }, f)
+        except Exception as e:
+            print(f"WARN: failed to write summary {args.summary}: {e}", file=sys.stderr)
 
     if args.json:
         print(json.dumps(result, indent=2))
