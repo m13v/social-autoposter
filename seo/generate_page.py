@@ -57,6 +57,11 @@ if ENV_PATH.exists():
 sys.path.insert(0, str(SCRIPT_DIR))
 import db_helpers  # noqa: E402
 from claude_wait import wait_for_claude  # noqa: E402
+from verify_facts import (  # noqa: E402
+    verify_dead_urls,
+    verify_time_sensitive_claims,
+    extract_and_verify_factual_claims,
+)
 
 
 CLAUDE_TIMEOUT_SECONDS = 1200  # 20 minutes, generous for research + generation
@@ -1234,6 +1239,15 @@ Also check that the repo has `transpilePackages: ["@seo/components"]` in its `ne
 - Style: no em dashes, no en dashes, anywhere. Plain direct prose. First person fine where natural.
 - At least one section must surface the anchor_fact from your concept, with enough specificity that a reader could verify it (file name, command, number, behavior description). This is the uncopyable part of the page.
 - Do not invent statistics. Do not fabricate quotes. If you use numbers, they come from something you read or ran.
+
+### Claim discipline (post-generation gates will check this)
+
+After you finish, three automated gates run before this page can ship:
+1. Every external URL on the page is DNS-resolved and HEAD-fetched. If any URL returns ENOTFOUND or 404, the page is removed and the row goes back to pending. Treat any concrete URL you write as a load-bearing fact, not a placeholder. If you do not have a real URL, write `<placeholder>` or omit the link.
+2. Every sentence matching shapes like "<Vendor> shipped X in <Month> <Year>", "<Vendor> raised $X", or "<Person> named CEO of <Vendor>" is re-verified via WebSearch. Wrong dates and amounts fail the page. Use WebSearch yourself before writing any time-stamped vendor event; do not write from recall.
+3. A claims-extractor pass reads the rendered page and re-checks every name, date, dollar amount, customer logo, license name, and product feature against a fresh search. Mis-named products ("X with Y AI" when the real name is just "X Y"), invented metric precision ("172 customers, one third Fortune 500"), and wrong open-source licenses all fail.
+
+A useful working pattern: as you draft, keep a private list of `(claim, source_url, evidence_quote)` tuples. Every concrete number, date, customer name, integration, and feature you write about a real third-party entity should trace to one of those tuples. If you cannot fill the source_url, replace the assertion with a more general phrasing or drop it.
 
 ### Pick a page skeleton (or invent your own)
 
@@ -2416,6 +2430,51 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
                 "error": theme_err,
                 "content_type": content_type,
                 "cleaned": cleaned,
+                "stream_log": stream["stream_log_path"],
+                "tool_summary": stream["tool_summary"]}
+
+    # Fact-verification gates. Three checks, cheapest first, each follows the
+    # same cleanup-and-pending pattern as the gates above. Backs the post-
+    # 2026-04-27 tenxats audit (Sean Thompson / mcp.10xats.com / Greenhouse
+    # AI Principles date / Ashby fraud-detection date / OpenCATS license /
+    # 'Real Talent AI' product name etc).
+    #
+    # Gate A: dead-URL probe. Pure Python, no LLM. Catches invented endpoints
+    #         like https://mcp.10xats.com/v1.
+    # Gate B: time-sensitive claim trip-wire. Regex matches '<Vendor> shipped
+    #         X in <Month Year>' / '<Vendor> raised $X' / '<Person> named CEO'
+    #         and re-verifies each via Claude+WebSearch. Catches wrong dates
+    #         and amounts.
+    # Gate C: full claims extractor + verifier. Claude+WebSearch reads the
+    #         page, extracts every checkable factual claim, and confirms each
+    #         against a fresh search. Catches mis-named products, invented
+    #         metric precision, and wrong license attribution.
+    #
+    # Skipped failures (verifier exception, claude unreachable) return ok=True
+    # with a 'skipped' field so a transient web outage never blocks a page.
+    # Only verdicts the verifier returned with confidence trip the gate.
+    for gate_name, gate_fn in (
+        ("dead_urls", verify_dead_urls),
+        ("time_sensitive", verify_time_sensitive_claims),
+        ("factual_claims", extract_and_verify_factual_claims),
+    ):
+        gate_result = gate_fn(repo_path, expected_file_candidates)
+        if gate_result.get("ok"):
+            continue
+        gate_err = gate_result.get("error", "")[:800]
+        cleaned = gate_result.get("cleaned", [])
+        note = f"{gate_name}_failed; cleaned={cleaned}; {gate_err}"[:500]
+        update_state(trigger, product, keyword, "pending",
+                     notes=note, slug=slug,
+                     content_type=content_type,
+                     claude_session_id=session_id)
+        return {"success": False,
+                "error": gate_err,
+                "content_type": content_type,
+                "cleaned": cleaned,
+                "fact_gate": gate_name,
+                "fact_details": {k: v for k, v in gate_result.items()
+                                 if k not in ("cleaned", "error", "ok")},
                 "stream_log": stream["stream_log_path"],
                 "tool_summary": stream["tool_summary"]}
 
