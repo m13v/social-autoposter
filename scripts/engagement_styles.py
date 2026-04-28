@@ -253,7 +253,7 @@ def register_style(name, meta, source_post=None):
         return "rejected", {"error": f"new_style missing fields: {missing}"}
     if name in STYLES:
         # The model picked a hardcoded name and *also* shipped a new_style
-        # block. Treat as "existing" — never overwrite the curated entry.
+        # block. Treat as "existing"; never overwrite the curated entry.
         return "existing", _normalize_entry(STYLES[name], "active")
 
     src = source_post or {}
@@ -442,7 +442,7 @@ def get_dynamic_tiers(platform, context="posting"):
 
     for style in candidate_styles:
         s = stats.get(style)
-        # Sidecar `candidate` styles never enter the trusted bucket — they
+        # Sidecar `candidate` styles never enter the trusted bucket; they
         # only get floor-weight exploration until the promoter graduates them.
         is_candidate = universe[style].get("status") == "candidate"
         if s and s["n"] >= MIN_SAMPLE_SIZE and not is_candidate:
