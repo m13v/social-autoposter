@@ -1,7 +1,21 @@
 #!/bin/bash
-# Social Autoposter - LinkedIn posting only
-# Finds LinkedIn posts and adds up to 30 comments per run.
-# Called by launchd every 3 hours.
+# Social Autoposter - LinkedIn posting (two-phase)
+#
+# Phase A (discovery, ~$10-15 target): pick a project, browse 1-2 LinkedIn
+#   search URLs, pick a candidate post, extract URNs, run --check-self-author
+#   + --check-engaged-ids, write JSON to a tmp file, STOP. No drafting, no
+#   posting, no engagement style block in context.
+#
+# Phase B (compose+post, ~$10-15 target): given Phase A's JSON, navigate
+#   straight to the chosen URL, defensively re-check engaged-ids, draft using
+#   the single chosen project's voice block + engagement styles + top
+#   performers report, post via mcp__linkedin-agent, verify (network + DOM),
+#   log via log_post.py, STOP.
+#
+# Phasing cuts cache_read by ~50%: each phase carries far less context per
+# turn (Phase A skips voice/styles/top-performers; Phase B skips the search
+# loop and gets the chosen project's full config alone instead of all 20+).
+# Pattern matches engage-linkedin.sh's existing Phase A / Phase B split.
 
 set -euo pipefail
 
@@ -16,269 +30,311 @@ RUN_START_EPOCH=$(date +%s)
 
 echo "=== LinkedIn Post Run: $(date) ===" | tee "$LOG_FILE"
 
-# Serialize with other linkedin-agent consumers (engage-linkedin,
-# dm-outreach-linkedin, link-edit-linkedin, engage-dm-replies --platform linkedin,
-# stats.sh Step 4). Without this, concurrent pipelines collide on the shared
-# linkedin-agent browser profile and Claude calls abort mid-run.
+# Hold the linkedin-browser lock for the entire run. Phase A's claude exits
+# (closing its Chrome) before Phase B's claude starts, so the profile dir is
+# free for Phase B's fresh MCP session — but we must NOT release the shell
+# lock between phases or a sibling pipeline would steal the browser.
 source "$REPO_DIR/skill/lock.sh"
 acquire_lock "linkedin-browser" 3600
 
-# Load all projects for LLM-driven selection
-ALL_PROJECTS_JSON=$(python3 -c "
-import json, os
-config = json.load(open(os.path.expanduser('~/social-autoposter/config.json')))
-print(json.dumps({p['name']: p for p in config.get('projects', [])}, indent=2))
-" 2>/dev/null || echo "{}")
-
-# Project distribution (how many posts per project today, so LLM can balance)
+# ===== Phase A: discovery (slim context) =====
 PROJECT_DIST=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform linkedin --distribution 2>/dev/null || echo "(distribution unavailable)")
 
-# Generate top performers feedback report (platform-wide)
-TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform linkedin 2>/dev/null || echo "(top performers report unavailable)")
+# Slim project list: name + description + qualification only. Drops voice,
+# features, links, search topics, etc. that Phase A doesn't need. Cuts the
+# inlined JSON from ~177KB to ~25KB per turn.
+PROJECTS_SLIM_JSON=$(python3 -c "
+import json, os
+config = json.load(open(os.path.expanduser('~/social-autoposter/config.json')))
+slim = {p['name']: {k: p[k] for k in ('name','description','qualification') if k in p} for p in config.get('projects', [])}
+print(json.dumps(slim, indent=2))
+" 2>/dev/null || echo "{}")
 
-# Generate engagement style and content rules from shared module
+PHASE_A_OUT=$(mktemp /tmp/sa-run-linkedin-phaseA.XXXXXX.json)
+PHASE_A_PROMPT=$(mktemp /tmp/sa-run-linkedin-phaseA-prompt.XXXXXX.txt)
+
+cat > "$PHASE_A_PROMPT" <<PROMPT_EOF
+You are the Social Autoposter LinkedIn discovery scout (Phase A).
+
+Your only job: find ONE good LinkedIn post we should comment on, write its
+details to $PHASE_A_OUT as JSON, and STOP. Do NOT draft a comment. Do NOT
+post anything. Phase B handles drafting and posting.
+
+## Project candidates (slim list: name + description + qualification)
+$PROJECTS_SLIM_JSON
+
+## Today's distribution (prefer underrepresented projects)
+$PROJECT_DIST
+
+## Workflow
+
+1. Pick ONE underrepresented project from the distribution that has a
+   plausible content fit. Do NOT iterate through many projects.
+
+2. Run:
+     python3 $REPO_DIR/scripts/find_threads.py --include-linkedin --project 'PROJECT_NAME'
+   The output gives you the LinkedIn search URL for that project.
+
+3. Browse that search URL with mcp__linkedin-agent__browser_navigate. If the
+   first project's results are weak, you MAY try ONE alternative project.
+   Hard cap: at most 2 search URL navigations across this whole phase.
+
+4. From the rendered DOM, identify the BEST candidate post. Skip:
+   - Posts authored by Matthew Diakonov / linkedin.com/in/m13v/
+   - Posts we already engaged on (DOM walk for ALL URNs)
+   - Vendor/spam/recycled content
+
+5. Extract every URN from the candidate post's DOM (activity, share, ugcPost
+   forms) via mcp__linkedin-agent__browser_run_code:
+\`\`\`javascript
+async (page) => {
+  await page.waitForTimeout(2000);
+  return await page.evaluate(() => {
+    const all = new Set();
+    let activity = null;
+    const re = /(activity|share|ugcPost)[:_-](\d{16,19})/gi;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    let node, scanned = 0;
+    while ((node = walker.nextNode()) && scanned++ < 8000) {
+      for (const a of node.attributes || []) {
+        const v = a.value || '';
+        let m;
+        re.lastIndex = 0;
+        while ((m = re.exec(v))) {
+          all.add(m[2]);
+          if (m[1].toLowerCase() === 'activity' && !activity) activity = m[2];
+        }
+      }
+    }
+    return { allIds: Array.from(all), activityId: activity };
+  });
+}
+\`\`\`
+
+6. Run engaged-id check:
+     python3 $REPO_DIR/scripts/linkedin_url.py --check-engaged-ids 'ID1,ID2,...'
+   Exit code 0 = already engaged, pick another candidate. Exit 1 = clean.
+
+7. Capture the post's author profile URL via DOM walk on the post header
+   (\`a[href*="/in/"]\` inside the post element).
+
+8. Run self-author check:
+     python3 $REPO_DIR/scripts/linkedin_url.py --check-self-author 'AUTHOR_URL'
+   Exit code 0 = self-authored, SKIP. Exit 1 = not self.
+
+9. Once you have a clean candidate, write JSON to $PHASE_A_OUT and STOP:
+\`\`\`bash
+cat > $PHASE_A_OUT <<JSON_EOF
+{
+  "project": "PROJECT_NAME",
+  "thread_url": "https://www.linkedin.com/feed/update/urn:li:activity:ACTIVITY_ID/",
+  "activity_id": "ACTIVITY_ID",
+  "all_urns": ["ID1","ID2"],
+  "author_name": "First Last",
+  "author_profile_url": "https://www.linkedin.com/in/SLUG/",
+  "post_excerpt": "first 250 chars of post text, no newlines, no double quotes",
+  "post_title_hint": "short label for the post",
+  "language": "en"
+}
+JSON_EOF
+\`\`\`
+   Then say '## Phase A: candidate ready' and STOP.
+
+If no good candidate is found within the 2-search-URL budget, do NOT write
+the file, say '## No good post found', and STOP. Phase B will skip cleanly.
+
+CRITICAL: Use ONLY mcp__linkedin-agent__* tools. NEVER click the comment
+textbox. NEVER call createComment. NEVER navigate to a post-compose flow.
+Phase B does all of that.
+CRITICAL: Hard cap of 2 search-URL navigations. The whole point of phasing
+is to converge fast. If you can't find a fit in 2 searches, exit cleanly so
+the next launchd cycle gets a fresh shot.
+CRITICAL: post_excerpt must be safe to embed in a bash double-quoted string.
+Strip backticks, double quotes, and newlines before writing it.
+PROMPT_EOF
+
+set +e
+"$REPO_DIR/scripts/run_claude.sh" "run-linkedin-phaseA" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "$(cat "$PHASE_A_PROMPT")" 2>&1 | tee -a "$LOG_FILE"
+PA_RC=${PIPESTATUS[0]}
+set -e
+rm -f "$PHASE_A_PROMPT"
+
+# ===== Validate Phase A output =====
+if [ "$PA_RC" -ne 0 ] || [ ! -s "$PHASE_A_OUT" ]; then
+  echo "Phase A: no candidate (rc=$PA_RC, $([ -s "$PHASE_A_OUT" ] && echo 'file non-empty' || echo 'file empty')). Skipping Phase B." | tee -a "$LOG_FILE"
+  rm -f "$PHASE_A_OUT"
+  ELAPSED=$(( $(date +%s) - RUN_START_EPOCH ))
+  python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted 0 --skipped 1 --failed 0 --cost 0 --elapsed "$ELAPSED" || true
+  echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
+  find "$LOG_DIR" -name "run-linkedin-*.log" -mtime +7 -delete 2>/dev/null || true
+  exit 0
+fi
+
+PA_PROJECT=$(python3 -c "import json; print(json.load(open('$PHASE_A_OUT')).get('project',''))" 2>/dev/null || echo "")
+PA_URL=$(python3 -c "import json; print(json.load(open('$PHASE_A_OUT')).get('thread_url',''))" 2>/dev/null || echo "")
+PA_ACTIVITY_ID=$(python3 -c "import json; print(json.load(open('$PHASE_A_OUT')).get('activity_id',''))" 2>/dev/null || echo "")
+PA_ALL_URNS=$(python3 -c "import json; print(','.join(json.load(open('$PHASE_A_OUT')).get('all_urns',[])))" 2>/dev/null || echo "")
+PA_AUTHOR_NAME=$(python3 -c "import json; print(json.load(open('$PHASE_A_OUT')).get('author_name',''))" 2>/dev/null || echo "")
+PA_AUTHOR_URL=$(python3 -c "import json; print(json.load(open('$PHASE_A_OUT')).get('author_profile_url',''))" 2>/dev/null || echo "")
+PA_EXCERPT=$(python3 -c "import json; print(json.load(open('$PHASE_A_OUT')).get('post_excerpt',''))" 2>/dev/null || echo "")
+PA_TITLE_HINT=$(python3 -c "import json; print(json.load(open('$PHASE_A_OUT')).get('post_title_hint',''))" 2>/dev/null || echo "")
+PA_LANG=$(python3 -c "import json; print(json.load(open('$PHASE_A_OUT')).get('language','en'))" 2>/dev/null || echo "en")
+
+if [ -z "$PA_PROJECT" ] || [ -z "$PA_URL" ] || [ -z "$PA_ACTIVITY_ID" ]; then
+  echo "Phase A output missing required fields (project='$PA_PROJECT' url='$PA_URL' activity_id='$PA_ACTIVITY_ID'). Skipping." | tee -a "$LOG_FILE"
+  rm -f "$PHASE_A_OUT"
+  ELAPSED=$(( $(date +%s) - RUN_START_EPOCH ))
+  python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted 0 --skipped 0 --failed 1 --cost 0 --elapsed "$ELAPSED" || true
+  echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
+  exit 0
+fi
+
+# Sanity: thread_url must be a real LinkedIn activity URL
+case "$PA_URL" in
+  https://www.linkedin.com/feed/update/urn:li:activity:*) ;;
+  *)
+    echo "Phase A returned invalid thread_url '$PA_URL'. Skipping Phase B." | tee -a "$LOG_FILE"
+    rm -f "$PHASE_A_OUT"
+    ELAPSED=$(( $(date +%s) - RUN_START_EPOCH ))
+    python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted 0 --skipped 0 --failed 1 --cost 0 --elapsed "$ELAPSED" || true
+    echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
+    exit 0
+    ;;
+esac
+
+echo "Phase A: candidate ready — project=$PA_PROJECT activity=$PA_ACTIVITY_ID" | tee -a "$LOG_FILE"
+
+# Look up the chosen project's full config (only this one, not all 20+ projects)
+PROJECT_FULL=$(python3 -c "
+import json, os
+c = json.load(open(os.path.expanduser('~/social-autoposter/config.json')))
+p = next((p for p in c.get('projects',[]) if p['name']=='$PA_PROJECT'), {})
+print(json.dumps(p, indent=2))
+")
+
+# Phase B inputs (only Phase B needs styles + top performers)
+TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform linkedin 2>/dev/null || echo "(top performers report unavailable)")
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block linkedin posting)
 
-set +e
-"$REPO_DIR/scripts/run_claude.sh" "run-linkedin" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "You are the Social Autoposter.
+# Allow Chrome's profile lockfile to release between phases.
+# Phase A's claude exits, its playwright-mcp wrapper exits, its Chrome dies;
+# the profile dir's SingletonLock takes a beat to clear before Phase B's
+# fresh Chrome can claim it.
+sleep 3
 
-Read $SKILL_FILE for the full workflow, content rules, and platform details.
-Read $REPO_DIR/config.json for account name.
+# ===== Phase B: compose + post + verify + log =====
+PHASE_B_PROMPT=$(mktemp /tmp/sa-run-linkedin-phaseB-prompt.XXXXXX.txt)
+cat > "$PHASE_B_PROMPT" <<PROMPT_EOF
+You are the Social Autoposter (Phase B). Your job: post ONE comment on a
+pre-selected LinkedIn post, verify it landed, log it. STOP. Do NOT search
+for other candidates — Phase A already picked one.
 
-## PROJECT SELECTION (LLM-driven, you choose)
-Pick the best project for this run based on post quality and project fit.
-Here are all projects and their configs:
-$ALL_PROJECTS_JSON
+Read $SKILL_FILE for tone and content rules.
 
-Today's distribution (balance underrepresented projects):
-$PROJECT_DIST
+## Pre-selected candidate (from Phase A — DO NOT rediscover)
+- Project: **$PA_PROJECT**
+- Thread URL: $PA_URL
+- Activity URN: $PA_ACTIVITY_ID
+- All URNs already seen: $PA_ALL_URNS
+- Author: $PA_AUTHOR_NAME ($PA_AUTHOR_URL)
+- Post excerpt: $PA_EXCERPT
+- Post title hint: $PA_TITLE_HINT
+- Language: $PA_LANG
 
-You may search for posts across 1-2 projects to find the best opportunity:
-  python3 $REPO_DIR/scripts/find_threads.py --include-linkedin --project 'PROJECT_NAME'
-Choose the project that has the best natural fit with the post you find.
+## Project config (only the chosen project's full block)
+$PROJECT_FULL
 
-## FEEDBACK FROM PAST PERFORMANCE (use this to write better comments):
+## Top performers feedback (use to pick a comment angle)
 $TOP_REPORT
-
-## ENGAGED LINKEDIN POST DEDUP (DO NOT comment on a post we already commented on)
-The same LinkedIn post surfaces under several URL shapes with different
-numeric URNs (activity URN, share URN, ugcPost URN). For example
-'/feed/update/urn:li:activity:7443531396306100224/' and
-'/posts/<slug>-share-7443531393558638592-<sfx>' are the SAME post but
-contain different numbers. The URL bar alone is not a reliable identity.
-
-The mandatory pre-comment check is in step 3 of the workflow below: walk
-the rendered DOM for every URN it contains, then pipe ALL of them to
-linkedin_url.py --check-engaged-ids. If any one collides with our DB,
-skip the post.
-
-This is non-negotiable. Posting a second comment on a post we already
-commented on costs us reputation and looks spammy.
 
 $STYLES_BLOCK
 
-Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
-1. Find candidate posts for 1-2 projects you think fit best:
-     python3 $REPO_DIR/scripts/find_threads.py --include-linkedin --project 'PROJECT_NAME'
-   From the output, pick ONLY linkedin candidates (discovery_method: search_url).
-   Browse the search URL via mcp__linkedin-agent__browser_navigate to find actual posts.
-   If nothing good for the first project, try another.
-2. Pick the best LinkedIn post and the project that fits it best.
-2b. **SELF-AUTHOR GUARD (MANDATORY, programmatic).** Our LinkedIn
-    account is Matthew Diakonov, profile at
-    https://www.linkedin.com/in/m13v/. Search results frequently
-    surface posts we authored (Matthew posts on MCP, AI agents,
-    desktop automation, the same topics our search runs use).
-    Commenting on our own post is wasteful and looks like astroturfing.
+## Workflow
 
-    2b.1. Extract the candidate post's author profile URL from the
-        rendered DOM via mcp__linkedin-agent__browser_run_code. The
-        author link is the anchor wrapping the author name in the
-        post header. Sample JS:
-   \`\`\`javascript
-   async (page) => {
-     return await page.evaluate(() => {
-       // First post in the rendered list / detail page
-       const post = document.querySelector('[data-urn*=\"activity\"], div.feed-shared-update-v2');
-       if (!post) return null;
-       const anchor = post.querySelector('a[href*=\"/in/\"]');
-       return anchor ? anchor.href : null;
-     });
-   }
-   \`\`\`
-        If multiple candidate posts are visible, capture each post's
-        author URL and check them all individually.
+1. Navigate to $PA_URL via mcp__linkedin-agent__browser_navigate.
 
-    2b.2. For each captured author URL, run:
-        python3 $REPO_DIR/scripts/linkedin_url.py --check-self-author 'AUTHOR_URL_HERE'
-        Substitute AUTHOR_URL_HERE with the actual URL string (single
-        quotes keep shell metachars safe). Exit code 0 = self-authored,
-        SKIP this post and pick another. Exit code 1 = not self,
-        proceed to step 3 with this candidate. The script accepts
-        full URLs, /in/SLUG/ paths, or bare slugs; it canonicalizes
-        case and strips trailing slashes, so pass whatever you got.
+2. Defensive engaged-id re-check (Phase A may have missed a URN that only
+   surfaces after the post page fully loads). Walk the rendered DOM for ALL
+   URNs (activity, share, ugcPost forms — same JS as Phase A), merge with
+   '$PA_ALL_URNS', and run:
+     python3 $REPO_DIR/scripts/linkedin_url.py --check-engaged-ids 'MERGED_URNS'
+   If exit code 0 (already engaged), STOP with '## Already engaged
+   (defensive catch in Phase B)' and do NOT log.
 
-    2b.3. Visual fallback. If for some reason the DOM walk returns
-        null and you cannot get an author URL, look for a '· You' or
-        'Author' tag next to the author name in the snapshot. Either
-        means it's our post; skip it. Do NOT proceed without a
-        successful author check.
-3. **Engagement pre-check (MANDATORY, must run before drafting)**.
-   The URL bar alone is not a reliable identity for a LinkedIn post,
-   because /posts/<slug>-share-<X>-<sfx> and /feed/update/activity:<Y>/
-   are the same post with different URNs. Walk the rendered DOM for ALL
-   URNs and pipe them to linkedin_url.py.
+3. Pick the engagement style that best fits the post + project's voice
+   block above (apply voice.tone, never violate voice.never, mirror
+   voice.examples / voice.examples_good if present). Reply in $PA_LANG.
+   NEVER use em dashes.
 
-   3a. With the candidate post page already loaded in linkedin-agent,
-       run this JS via mcp__linkedin-agent__browser_run_code and capture
-       its return value (an object with allIds and activityId):
-   \`\`\`javascript
-   async (page) => {
-     await page.waitForTimeout(2000);
-     return await page.evaluate(() => {
-       const all = new Set();
-       let activity = null;
-       const re = /(activity|share|ugcPost)[:_-](\\d{16,19})/gi;
-       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-       let node, scanned = 0;
-       while ((node = walker.nextNode()) && scanned++ < 8000) {
-         for (const a of node.attributes || []) {
-           const v = a.value || '';
-           let m;
-           re.lastIndex = 0;
-           while ((m = re.exec(v))) {
-             all.add(m[2]);
-             if (m[1].toLowerCase() === 'activity' && !activity) activity = m[2];
-           }
-         }
-       }
-       const urlMatch = location.href.match(/(\\d{16,19})/g) || [];
-       urlMatch.forEach(v => all.add(v));
-       return { allIds: Array.from(all), activityId: activity };
-     });
-   }
-   \`\`\`
+4. Post the comment via mcp__linkedin-agent (find textbox, click, type,
+   submit).
 
-   3b. Pipe the allIds array (comma-separated) to:
-       python3 $REPO_DIR/scripts/linkedin_url.py --check-engaged-ids "ID1,ID2,ID3"
-       Exit code 0 = already engaged, SKIP this post and pick another.
-       Exit code 1 = not engaged, proceed to step 4.
-       The check matches against posts.urns (GIN-indexed, all known
-       URN forms for each prior post) AND against thread_url/our_url
-       ILIKE as a fallback. Going forward, log_post.py --urns seeds
-       posts.urns from the createComment network response so search-page
-       DOM walks (which often only expose the ugcPost URN) collide
-       cleanly with rows whose canonical our_url stored the activity URN.
-
-   3c. Remember the activityId returned by the JS. You'll need it in
-       step 6 to construct a canonical our_url.
-
-4. Draft the comment using the engagement style that best fits the post. Professional but casual tone, NEVER use em dashes. Apply the matched project's \`voice\` block from ALL_PROJECTS_JSON above: follow \`voice.tone\`, never violate any item in \`voice.never\`, and mirror \`voice.examples\` / \`voice.examples_good\` when present.
-5. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools).
-5b. **POST-SUBMIT VERIFICATION (MANDATORY).** LinkedIn often silently
-   rejects comments via a soft-block that looks like success (editor
-   clears, no exception raised). You MUST verify the comment actually
-   landed before logging as success.
-
-   5b.1. Immediately after clicking the Comment submit button, call:
-       mcp__linkedin-agent__browser_network_requests with:
+5. POST-SUBMIT VERIFICATION (mandatory).
+   5a. mcp__linkedin-agent__browser_network_requests with:
          filter: 'normCommentsCreate|normComments|contentcreation|socialActions'
          requestBody: true
          static: false
-       Save the response. Look for the POST request to a comment-create
-       endpoint and note its status code and response body. Record this
-       string verbatim as NETWORK_RESPONSE.
+       Save response verbatim as NETWORK_RESPONSE.
+   5b. Walk NETWORK_RESPONSE for every 16-19 digit URN, dedupe with the
+       seed URN list above into ALL_POST_URNS (comma-separated).
+   5c. mcp__linkedin-agent__browser_take_screenshot for the toast.
+   5d. mcp__linkedin-agent__browser_snapshot (depth 12). Check:
+         (a) comment count went up by at least 1
+         (b) a fresh comment by 'Matthew Diakonov' / 'You' is rendered
+         (c) NO 'could not be created' toast
+         (d) editor textbox cleared
+   5e. SUCCESS = all four pass. REJECTED = toast present OR count unchanged.
 
-   5b.1.1. **EXTRACT EVERY URN ID FROM NETWORK_RESPONSE**. The
-       createComment payload typically references the post under several
-       URN forms in the same response (activity, ugcPost, share, comment).
-       Walk NETWORK_RESPONSE for every 16-19 digit number and collect
-       them into ALL_POST_URNS (comma-separated, deduped). Include the
-       activityId from step 3c too. You will pass ALL_POST_URNS to
-       log_post.py in step 7 so dedup catches future cross-URN hits on
-       the same post (search-page DOM only exposes the ugcPost URN
-       while our DB previously stored only the activity URN; storing
-       every URN closes that gap).
-       If you cannot get NETWORK_RESPONSE (rare), fall back to
-       activityId alone — log_post.py will still extract IDs from
-       thread_url and our_url and merge them.
+6. If REJECTED, do NOT call the success log path. Instead:
+     python3 $REPO_DIR/scripts/log_post.py --rejected \\
+       --platform linkedin \\
+       --thread-url '$PA_URL' \\
+       --our-content 'YOUR_COMMENT_TEXT' \\
+       --project '$PA_PROJECT' \\
+       --thread-author '$PA_AUTHOR_NAME' \\
+       --thread-title '$PA_TITLE_HINT' \\
+       --engagement-style STYLE_YOU_CHOSE \\
+       --language '$PA_LANG' \\
+       --rejection-reason 'TOAST: <verbatim toast text or quiet-fail>' \\
+       --network-response 'NETWORK_RESPONSE'
+   Then STOP with '## Comment soft-blocked, ledgered'.
 
-   5b.2. Take a viewport screenshot via
-       mcp__linkedin-agent__browser_take_screenshot. The toast
-       'Your comment could not be created at this time' is brief, so
-       grab it quickly. Save the screenshot path.
+7. If SUCCESS, log to DB:
+     python3 $REPO_DIR/scripts/log_post.py \\
+       --platform linkedin \\
+       --thread-url '$PA_URL' \\
+       --our-url '$PA_URL' \\
+       --our-content 'YOUR_COMMENT_TEXT' \\
+       --project '$PA_PROJECT' \\
+       --thread-author '$PA_AUTHOR_NAME' \\
+       --thread-title '$PA_TITLE_HINT' \\
+       --engagement-style STYLE_YOU_CHOSE \\
+       --language '$PA_LANG' \\
+       --urns 'ALL_POST_URNS'
 
-   5b.3. Take a fresh snapshot via mcp__linkedin-agent__browser_snapshot
-       (depth 12) and inspect:
-         (a) the comment count near the post (e.g. '4 comments' before,
-             should now show '5 comments' or higher)
-         (b) any newly-rendered comment whose author text contains
-             'Matthew Diakonov' or 'You'
-         (c) presence of the toast text 'could not be created'
-         (d) editor textbox state (active/empty placeholder vs still
-             holding your text)
+CRITICAL: ONE post only. If anything fails, STOP — do NOT pick another
+candidate (Phase A's job, not Phase B's).
+CRITICAL: Use ONLY mcp__linkedin-agent__* tools.
+CRITICAL: NEVER use em dashes.
+PROMPT_EOF
 
-   5b.4. Decide:
-       SUCCESS = comment count increased AND a fresh comment by you
-           is in the DOM AND no 'could not be created' toast.
-       REJECTED = toast text present OR comment count unchanged after
-           reload (you may navigate to the same URL once to confirm).
-
-   5b.5. If REJECTED: do NOT call the success log_post.py path. Instead
-       record the rejection so dedup blocks future retries on this thread:
-         python3 $REPO_DIR/scripts/log_post.py --rejected \\
-           --platform linkedin \\
-           --thread-url THREAD_URL \\
-           --our-content 'YOUR_COMMENT_TEXT' \\
-           --project PROJECT_YOU_CHOSE \\
-           --thread-author AUTHOR \\
-           --thread-title 'POST_TITLE' \\
-           --engagement-style STYLE_YOU_CHOSE \\
-           --language DETECTED_LANGUAGE \\
-           --rejection-reason 'TOAST: <verbatim toast text or quiet-fail>' \\
-           --network-response 'NETWORK_RESPONSE_FROM_5b.1'
-       Then stop the run with '## Comment soft-blocked, ledgered'. Do
-       NOT retry the same post. Do NOT pick another post in the same
-       run (consecutive submits compound the throttle).
-
-   5b.6. If SUCCESS: proceed to step 6.
-
-6. **CAPTURE THE CANONICAL POST URL**. Use the activityId you saved in
-   step 3c to build:
-       https://www.linkedin.com/feed/update/urn:li:activity:<activityId>/
-   That is the our_url you log. If you somehow have no activityId
-   (rare; the DOM walk in 3a almost always finds one), fall back to the
-   current page URL via page.url().split('?')[0].
-7. Log to database (MANDATORY tool call, do NOT use raw INSERT SQL):
-     python3 $REPO_DIR/scripts/log_post.py --platform linkedin --thread-url THREAD_URL --our-url CAPTURED_FEED_UPDATE_URL --our-content 'YOUR_COMMENT_TEXT' --project PROJECT_YOU_CHOSE --thread-author AUTHOR --thread-title 'POST_TITLE' --engagement-style STYLE_YOU_CHOSE --language DETECTED_LANGUAGE --urns 'ALL_POST_URNS'
-   log_post.py validates the URL, canonicalizes our_url to the
-   /feed/update/urn:li:activity:<id>/ form, enforces status='active',
-   and stores ALL_POST_URNS (comma- or whitespace-separated 16-19 digit
-   IDs from step 5b.1.1) into posts.urns so the next run's
-   --check-engaged-ids dedup catches the post under any URN form.
-   --urns is required for LinkedIn; pass at minimum the activityId.
-   Duplicate prevention is the responsibility of step 3, NOT this step.
-
-Up to 30 posts per run. If nothing fits, say '## No good post found' and stop.
-
-CRITICAL: Ignore the 'Max 40 posts per 24 hours' limit in SKILL.md. The actual daily limit is 4000 posts. Post up to 30 per this run.
-CRITICAL: Reply in the SAME LANGUAGE as the post. Match the language exactly.
-CRITICAL: NEVER use em dashes in any content. Use commas, periods, or regular dashes (-) instead.
-CRITICAL: Use ONLY mcp__linkedin-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__*.
-CRITICAL: If a browser tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). If still blocked, skip and stop." 2>&1 | tee -a "$LOG_FILE"
-RC=${PIPESTATUS[0]}
+set +e
+"$REPO_DIR/scripts/run_claude.sh" "run-linkedin-phaseB" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE"
+PB_RC=${PIPESTATUS[0]}
 set -e
+rm -f "$PHASE_B_PROMPT"
+rm -f "$PHASE_A_OUT"
 
-# --- Persist to run_monitor.log so Job History picks up LinkedIn Post rows ---
-# Count posts inserted during this run via NOW() arithmetic to stay timezone-safe
-# regardless of the psql client session tz.
+# ===== Persist run-level summary (one row per script invocation) =====
+# Counts posts inserted during this run via NOW() arithmetic so the dashboard
+# 'Post · LinkedIn' row keeps showing the same shape regardless of phasing.
 ELAPSED=$(( $(date +%s) - RUN_START_EPOCH ))
 WINDOW_SEC=$(( ELAPSED + 60 ))
 POSTED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE platform='linkedin' AND posted_at >= NOW() - interval '$WINDOW_SEC seconds'" 2>/dev/null | tr -d '[:space:]' || true)
 [ -z "$POSTED" ] && POSTED=0
 FAILED=0
-if [ "$RC" -ne 0 ] && [ "$POSTED" = "0" ]; then FAILED=1; fi
+if [ "$PB_RC" -ne 0 ] && [ "$POSTED" = "0" ]; then FAILED=1; fi
 python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted "$POSTED" --skipped 0 --failed "$FAILED" --cost 0 --elapsed "$ELAPSED" || true
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
