@@ -5601,8 +5601,10 @@ function renderFunnelStats(payload) {
     a.d_schedule_clicks += Number(f.domain_schedule_clicks) || 0;
     a.d_get_started_clicks += Number(f.domain_get_started_clicks) || 0;
     a.bookings         += Number(f.real_bookings)    || 0;
+    a.dm_clicks        += Number(f.dm_clicks)        || 0;
+    a.dm_bookings      += Number(f.dm_bookings)      || 0;
     return a;
-  }, { posts: 0, seo: 0, pageviews: 0, email_signups: 0, schedule_clicks: 0, get_started_clicks: 0, cross_product_clicks: 0, d_pageviews: 0, d_email_signups: 0, d_schedule_clicks: 0, d_get_started_clicks: 0, bookings: 0 });
+  }, { posts: 0, seo: 0, pageviews: 0, email_signups: 0, schedule_clicks: 0, get_started_clicks: 0, cross_product_clicks: 0, d_pageviews: 0, d_email_signups: 0, d_schedule_clicks: 0, d_get_started_clicks: 0, bookings: 0, dm_clicks: 0, dm_bookings: 0 });
   // Compact cell: "<scoped> (<domain>)" when they differ, just "<scoped>"
   // when equal. Keeps the table scannable while still exposing domain-wide
   // traffic that doesn't happen to land on pages generated this window.
@@ -5644,6 +5646,8 @@ function renderFunnelStats(payload) {
       domain_schedule_clicks:  asNum(f.domain_schedule_clicks),
       domain_get_started_clicks: asNum(f.domain_get_started_clicks),
       bookings:         Number(f.real_bookings)     || 0,
+      dm_clicks:        Number(f.dm_clicks)         || 0,
+      dm_bookings:      Number(f.dm_bookings)       || 0,
     };
   });
   const fmtProjectName = (v, r) => {
@@ -5695,6 +5699,27 @@ function renderFunnelStats(payload) {
       { key: 'schedule_clicks',  label: 'Schedule Clicks', type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_schedule_clicks') },
       { key: 'get_started_clicks', label: 'Get Started',   type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_get_started_clicks') },
       { key: 'bookings',         label: 'Bookings',        type: 'numeric', align: 'right', formatter: fmt },
+      // DM Clicks: SUM(dms.short_link_clicks) for DMs targeting this project
+      // in the window. Counts every click on a /r/code short link that
+      // resolves to one of this project's DMs. NOT the same as Schedule
+      // Clicks (which is on-page CTA taps via withBookingAttribution).
+      { key: 'dm_clicks',        label: 'DM Clicks',       type: 'numeric', align: 'right',
+        formatter: (v, r) => {
+          const n = Number(v) || 0;
+          if (!n) return '<span style="color:var(--text-faint);">\u2014</span>';
+          return '<span data-tooltip="Clicks on short links sent in DMs targeting this project" style="font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
+        } },
+      // DM Bookings: subset of the Bookings column whose utm_content matches
+      // dm_<id> and the DM targets this project. Tells you of the bookings
+      // this project got, how many were attributable to a DM we sent.
+      { key: 'dm_bookings',      label: 'DM Bookings',     type: 'numeric', align: 'right',
+        formatter: (v, r) => {
+          const n = Number(v) || 0;
+          if (!n) return '<span style="color:var(--text-faint);">\u2014</span>';
+          const total = Number(r && r.bookings) || 0;
+          const tip = total ? (n + ' of ' + total + ' bookings came from DMs') : (n + ' DM-attributed booking' + (n === 1 ? '' : 's'));
+          return '<span data-tooltip="' + escapeHtml(tip) + '" style="color:var(--success);font-weight:600;font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
+        } },
       // Cross-product: clicks on CTAs that promote a sibling product
       // (e.g. Claude Meter CTA on Fazm blog posts). Fires the
       // cross_product_click event via trackCrossProductClick.
