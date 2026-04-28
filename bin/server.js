@@ -90,6 +90,8 @@ const JOBS = [
   { label: 'com.m13v.social-octolens-reddit', name: 'Octolens Reddit', type: 'Octolens', platform: 'Reddit', script: 'octolens-reddit.sh', logPrefix: 'octolens-reddit-', plist: 'com.m13v.social-octolens-reddit.plist' },
   { label: 'com.m13v.social-octolens-twitter', name: 'Octolens Twitter', type: 'Octolens', platform: 'Twitter', script: 'octolens-twitter.sh', logPrefix: 'octolens-twitter-', plist: 'com.m13v.social-octolens-twitter.plist' },
   { label: 'com.m13v.social-octolens-linkedin', name: 'Octolens LinkedIn', type: 'Octolens', platform: 'LinkedIn', script: 'octolens-linkedin.sh', logPrefix: 'octolens-linkedin-', plist: 'com.m13v.social-octolens-linkedin.plist' },
+  // Other (cross-platform housekeeping)
+  { label: 'com.m13v.social-promote-engagement-styles', name: 'Promote Engagement Styles', type: 'Other', platform: null, script: 'promote-engagement-styles.sh', logPrefix: 'promote-engagement-styles-', plist: 'com.m13v.social-promote-engagement-styles.plist' },
 ];
 
 // --- Helpers ---
