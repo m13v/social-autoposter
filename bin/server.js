@@ -94,6 +94,43 @@ const JOBS = [
   { label: 'com.m13v.social-promote-engagement-styles', name: 'Promote Engagement Styles', type: 'Other', platform: null, script: 'promote-engagement-styles.sh', logPrefix: 'promote-engagement-styles-', plist: 'com.m13v.social-promote-engagement-styles.plist' },
 ];
 
+// Each script's required locks (acquired via skill/lock.sh). Used to detect
+// "Blocked" — alive but waiting on a lock held by a different PID. Keep in
+// sync when adding/removing acquire_lock calls in skill/*.sh.
+const REQUIRED_LOCKS = {
+  'run-reddit-search.sh':           ['reddit-browser'],
+  'run-reddit-threads.sh':          ['reddit-browser', 'reddit-threads'],
+  'run-twitter-cycle.sh':           ['twitter-browser'],
+  'run-linkedin.sh':                ['linkedin-browser'],
+  'engage-moltbook.sh':             ['engage-moltbook'],
+  'engage-twitter.sh':              ['twitter-browser', 'twitter'],
+  'engage-linkedin.sh':             ['linkedin-browser', 'linkedin'],
+  'github-engage.sh':               ['github'],
+  'run-scan-reddit-replies.sh':     ['scan-reddit-replies'],
+  'run-scan-moltbook-replies.sh':   ['scan-moltbook-replies'],
+  'scan-twitter-followups.sh':      ['twitter-browser', 'scan-twitter-followups'],
+  'dm-outreach-reddit.sh':          ['reddit-browser', 'dm-outreach-reddit'],
+  'dm-outreach-twitter.sh':         ['twitter-browser', 'dm-outreach-twitter'],
+  'dm-outreach-linkedin.sh':        ['linkedin-browser', 'dm-outreach-linkedin'],
+  'engage-dm-replies-reddit.sh':    ['reddit-browser', 'dm-replies-reddit'],
+  'engage-dm-replies-twitter.sh':   ['twitter-browser', 'dm-replies-twitter'],
+  'engage-dm-replies-linkedin.sh':  ['linkedin-browser', 'dm-replies-linkedin'],
+  'link-edit-reddit.sh':            ['reddit-browser', 'link-edit-reddit'],
+  'link-edit-twitter.sh':           ['twitter-browser', 'link-edit-twitter'],
+  'link-edit-linkedin.sh':          ['linkedin-browser', 'link-edit-linkedin'],
+  'link-edit-moltbook.sh':          ['link-edit-moltbook'],
+  'link-edit-github.sh':            ['link-edit-github'],
+  'stats-reddit.sh':                ['reddit-browser'],
+  'audit-reddit.sh':                ['reddit-browser', 'audit-reddit'],
+  'audit-twitter.sh':               ['twitter-browser', 'audit-twitter'],
+  'audit-linkedin.sh':              ['linkedin-browser', 'audit-linkedin'],
+  'audit-moltbook.sh':              ['audit-moltbook'],
+  'audit-reddit-resurrect.sh':      ['reddit-browser', 'audit-reddit-resurrect'],
+  'octolens-reddit.sh':             ['reddit-browser', 'octolens-reddit'],
+  'octolens-twitter.sh':            ['twitter-browser', 'octolens-twitter'],
+  'octolens-linkedin.sh':           ['linkedin-browser', 'octolens-linkedin'],
+};
+
 // --- Helpers ---
 
 function readBody(req) {
@@ -136,9 +173,60 @@ function buildBatchSnapshot() {
     try { return fs.readdirSync(LOG_DIR); } catch { return []; }
   })();
 
-  const snap = { loadedLabels, pidByLabel, logFiles };
+  const lockHolders = readLockHoldersFromTmp();
+
+  const snap = { loadedLabels, pidByLabel, logFiles, lockHolders };
   _batchSnapshotCache = { at: now, value: snap };
   return snap;
+}
+
+// Read /tmp/social-autoposter-<name>.lock/pid for every active lock. Returns
+// Map<lockName, holderPid> for live holders only (signal-0 check skips lock
+// dirs whose owner has died — those will be swept by the next acquire_lock
+// in skill/lock.sh, so they don't actually block anyone).
+function readLockHoldersFromTmp() {
+  const out = new Map();
+  let entries;
+  try {
+    entries = fs.readdirSync('/tmp');
+  } catch { return out; }
+  const re = /^social-autoposter-(.+)\.lock$/;
+  for (const name of entries) {
+    const m = name.match(re);
+    if (!m) continue;
+    const lockName = m[1];
+    let pid;
+    try {
+      const raw = fs.readFileSync(`/tmp/${name}/pid`, 'utf8').trim();
+      pid = parseInt(raw, 10);
+    } catch { continue; }
+    if (!Number.isFinite(pid) || pid <= 0) continue;
+    try {
+      process.kill(pid, 0);
+    } catch { continue; }
+    out.set(lockName, pid);
+  }
+  return out;
+}
+
+// Status for a matrix/Other job. Adds a "blocked" state on top of the legacy
+// running/scheduled/stopped triple: the bash process is alive, but at least
+// one of the locks the script needs is currently held by a different PID
+// (i.e. the script is parked in skill/lock.sh's mkdir-poll loop). Without
+// this, every dashboard pulse on an idle-waiting pipeline looks identical to
+// real work.
+function derivePipelineStatus(job, pids, snap) {
+  if (pids.length === 0) {
+    return snap.loadedLabels.has(job.label) ? 'scheduled' : 'stopped';
+  }
+  const required = job.script ? REQUIRED_LOCKS[job.script] : null;
+  if (!required || required.length === 0) return 'running';
+  const myPid = pids[0];
+  for (const lockName of required) {
+    const holder = snap.lockHolders.get(lockName);
+    if (holder && holder !== myPid) return 'blocked';
+  }
+  return 'running';
 }
 
 function pidsForLabelFromSnapshot(snap, label) {
