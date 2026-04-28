@@ -25,6 +25,15 @@ def main():
                         help="Number of per-reply stat rows refreshed in this run "
                              "(stats_*, engage_github). Surfaces as a separate pill "
                              "in the dashboard Jobs table.")
+    parser.add_argument("--checked", type=int, default=0,
+                        help="Stats jobs only: posts the run pulled fresh data for "
+                             "(per platform). Renders as a 'checked' pill on stats rows.")
+    parser.add_argument("--updated", type=int, default=0,
+                        help="Stats jobs only: rows where any tracked metric "
+                             "(views/upvotes/comments) actually changed. Renders as 'updated'.")
+    parser.add_argument("--removed", type=int, default=0,
+                        help="Stats jobs only: posts newly flagged deleted/removed in this run. "
+                             "Renders as 'removed'.")
     args = parser.parse_args()
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -35,10 +44,16 @@ def main():
         f" replies_refreshed={args.replies_refreshed}"
         if args.replies_refreshed else ""
     )
+    # Stats-job per-run counters. Emitted as a single optional segment so the
+    # regex in bin/server.js can keep them as one optional capture group.
+    stats_segment = (
+        f" checked={args.checked} updated={args.updated} removed={args.removed}"
+        if (args.checked or args.updated or args.removed) else ""
+    )
     line = (
         f"{timestamp} | {args.script} | "
         f"posted={args.posted} skipped={args.skipped} failed={args.failed}"
-        f"{replies_segment} "
+        f"{replies_segment}{stats_segment} "
         f"cost=${args.cost:.2f} elapsed={args.elapsed:.0f}s{model_suffix}"
     )
 
