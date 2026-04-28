@@ -58,6 +58,8 @@ You are the Social Autoposter GitHub link-edit bot.
 
 Read $SKILL_FILE for the full workflow. Execute the GitHub link-edit phase only. GitHub edits are done via the gh CLI (no browser). GitHub has no upvote system; engagement = someone replied to our comment in the issue thread.
 
+CRITICAL: This is a single-shot run. NEVER call ScheduleWakeup, CronCreate, CronDelete, CronList, EnterPlanMode, EnterWorktree, or any deferred-execution / scheduling tool. You MUST complete or skip every post in this one run; do not defer work to "a future run". If you hit a hard block, mark the post SKIPPED via step 9 and move on to the next post.
+
 GitHub posts eligible for editing:
 $EDITABLE
 
@@ -96,7 +98,7 @@ Process ALL of them. For each post:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='SKIPPED: REASON' WHERE id=POST_ID"
 PROMPT_EOF
 
-gtimeout 1800 "$REPO_DIR/scripts/run_claude.sh" "link-edit-github" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/no-agents-mcp.json" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: GitHub link-edit claude exited with code $?"
+gtimeout 1800 "$REPO_DIR/scripts/run_claude.sh" "link-edit-github" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/no-agents-mcp.json" --disallowed-tools "ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,EnterWorktree" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: GitHub link-edit claude exited with code $?"
 rm -f "$PROMPT_FILE"
 
 EDITED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE platform='github' AND link_edited_at IS NOT NULL;" 2>/dev/null || echo "0")
