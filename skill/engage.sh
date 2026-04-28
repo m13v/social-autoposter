@@ -243,6 +243,18 @@ PROMPT_BODY
     log "Batch $BATCH_NUM complete: $PENDING_COUNT -> $NEW_PENDING pending"
 done
 
+# Reset any items left in 'processing' after subprocess exit (tech-failure
+# retry path: agent leaves rows here on browser/MCP failure rather than
+# calling reply_db.py skipped, so the next run picks them up automatically).
+# Filter to platforms this script handles (not linkedin/x).
+POST_RESET=$(psql "$DATABASE_URL" -t -A -c "
+    WITH upd AS (
+        UPDATE replies SET status='pending'
+        WHERE status='processing' AND platform NOT IN ('linkedin', 'x')
+        RETURNING id
+    ) SELECT COUNT(*) FROM upd;")
+[ "$POST_RESET" -gt 0 ] && log "Post-run: Reset $POST_RESET 'processing' Reddit/Moltbook items back to pending"
+
 # Phase E (outbound DM outreach) is now handled by per-platform scripts:
 #   skill/dm-outreach-reddit.sh, dm-outreach-linkedin.sh, dm-outreach-twitter.sh
 # Each runs on its own launchd schedule so a single-platform failure cannot block the others.
