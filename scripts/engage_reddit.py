@@ -367,9 +367,14 @@ Read ~/social-autoposter/config.json for project details and content_angle.
    {{"action": "skip", "reason": "SHORT_REASON"}}
 
 3. If replying, draft 1-3 sentences following the rules above. Output ONLY this JSON:
-   {{"action": "reply", "text": "YOUR_REPLY_TEXT", "project": null, "engagement_style": "STYLE_NAME"}}
-   Set "engagement_style" to the style you used (critic, storyteller, pattern_recognizer, curious_probe, contrarian, data_point_drop, snarky_oneliner, recommendation).
+   {{"action": "reply", "text": "YOUR_REPLY_TEXT", "project": null, "engagement_style": "STYLE_NAME", "new_style": null}}
+   Set "engagement_style" to the style you used (one of: critic, storyteller, pattern_recognizer, curious_probe, contrarian, data_point_drop, snarky_oneliner, plus any candidate styles shown in the styles block above).
    If you recommended a project, set "project" to the project name.
+
+   If, and ONLY if, none of the listed styles fits, you may invent one. Set
+   "engagement_style" to your new snake_case name AND replace "new_style": null with:
+   {{"new_style": {{"description": "...", "example": "...", "note": "...", "why_existing_didnt_fit": "..."}}}}
+   Inventing should be rare. Prefer an existing style if it's even 80% right.
 
 CRITICAL: Your ENTIRE output must be ONLY the JSON object above. No other text, no explanations, no markdown.
 The orchestrator script will handle posting via CDP and database updates automatically.
@@ -643,10 +648,21 @@ def main():
             elif decision.get("action") == "reply":
                 reply_text = decision.get("text", "")
                 project = decision.get("project")
-                engagement_style = decision.get("engagement_style")
-                if engagement_style and engagement_style not in VALID_STYLES:
-                    print(f"[engage_reddit] #{reply['id']} unknown style '{engagement_style}', clearing")
-                    engagement_style = None
+                # validate_or_register accepts known styles, registers
+                # well-formed new ones as candidates, and returns None for
+                # unknown-and-undocumented (matches the prior clear-to-None
+                # behavior). source_post URL is the THEIR comment we're
+                # replying to, since we don't know our own URL until after
+                # the post lands.
+                engagement_style, _style_action = validate_or_register(
+                    decision,
+                    source_post={
+                        "platform": reply.get("platform"),
+                        "post_url": reply.get("their_comment_url"),
+                        "post_id": reply.get("id"),
+                        "model": decision.get("model"),
+                    },
+                )
                 if not reply_text:
                     failed += 1
                     print(f"[engage_reddit] #{reply['id']} empty reply text")
