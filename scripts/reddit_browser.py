@@ -411,8 +411,15 @@ def reply_to_comment(comment_permalink, text, dm_id=None):
     # Tool-level campaign suffix injection (mirrors send_dm). The LLM never
     # sees campaign IDs; we append the literal suffix here so the actual
     # posted text carries the tag and downstream auto-attribution catches it.
+    # Defensive: engage_reddit.py runs its OWN pre-append for the standalone
+    # reply pipeline. If the suffix is already at the tail, do not re-append
+    # (and surface the cid so callers can bump). Without this guard,
+    # engage_reddit-driven replies would get the suffix twice.
     applied_campaigns = []
     for cid, suffix, sample_rate in _load_active_reddit_campaigns_for_dm():
+        if text.endswith(suffix):
+            applied_campaigns.append(cid)
+            continue
         if random.random() < sample_rate:
             text = text + suffix
             applied_campaigns.append(cid)
