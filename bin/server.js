@@ -1016,8 +1016,11 @@ async function handleApi(req, res) {
       const running = pids.length > 0;
       const interval = getPlistInterval(plistPath);
       const lastLog = lastLogFromSnapshot(snap, job);
-      // status: 'running' (process active), 'scheduled' (loaded, waiting), 'stopped' (not loaded)
-      const status = running ? 'running' : loaded ? 'scheduled' : 'stopped';
+      // 'running'  — process active and (if it needs locks) holds them
+      // 'blocked'  — process active but parked waiting on a lock held by a different PID
+      // 'scheduled'— loaded, no live PID
+      // 'stopped'  — not loaded
+      const status = derivePipelineStatus(job, pids, snap);
       return {
         label: job.label,
         name: job.name,
@@ -1045,7 +1048,7 @@ async function handleApi(req, res) {
       const loaded = snap.loadedLabels.has(job.label);
       const pids = pidsForLabelFromSnapshot(snap, job.label);
       const running = pids.length > 0;
-      const status = running ? 'running' : loaded ? 'scheduled' : 'stopped';
+      const status = derivePipelineStatus(job, pids, snap);
       const lastLog = lastLogFromSnapshot(snap, job);
       const plistPath = unitSrcPath(job);
       const schedule = getPlistSchedule(plistPath);
@@ -1075,8 +1078,10 @@ async function handleApi(req, res) {
           const loaded = snap.loadedLabels.has(d.label);
           const pids = pidsForLabelFromSnapshot(snap, d.label);
           const running = pids.length > 0;
-          const status = running ? 'running' : loaded ? 'scheduled' : 'stopped';
           const scriptBasename = d.scriptPath ? path.basename(d.scriptPath) : null;
+          // Discovered jobs aren't in JOBS[], so REQUIRED_LOCKS has no entry —
+          // derivePipelineStatus falls back to running/scheduled/stopped.
+          const status = derivePipelineStatus({ label: d.label, script: scriptBasename }, pids, snap);
           const logPrefix = scriptBasename ? scriptBasename.replace(/\.(sh|py|js)$/, '-') : null;
           const lastLog = logPrefix ? lastLogFromSnapshot(snap, { logPrefix }) : { file: null, time: null };
           // Prefer repo unit file for schedule; fall back to installed
@@ -2898,6 +2903,28 @@ const HTML = `<!DOCTYPE html>
     box-shadow: 0 0 6px #ffffff;
     animation: runningDot 1.1s ease-in-out infinite;
   }
+  .badge.blocked {
+    background: linear-gradient(135deg, #b45309 0%, #f59e0b 100%);
+    color: #fff7ed;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    animation: blockedPulse 2.4s ease-in-out infinite;
+  }
+  .badge.blocked::before {
+    content: '';
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #fde68a;
+    margin-right: 7px;
+    vertical-align: middle;
+    box-shadow: 0 0 4px rgba(253, 230, 138, 0.7);
+  }
+  @keyframes blockedPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55); }
+    50%      { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+  }
   .badge.scheduled { background: #064e3b; color: #6ee7b7; }
   .badge.stopped { background: var(--bg-button); color: var(--text); }
   .toggle-switch { position: relative; display: inline-block; width: 40px; height: 22px; cursor: pointer; flex-shrink: 0; }
@@ -4081,7 +4108,7 @@ function renderToggle(label, loaded) {
 
 function renderCell(job) {
   if (!job) return '<td><span class="matrix-cell-empty">-</span></td>';
-  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
+  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'blocked' ? 'Blocked' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
   const runStopBtn = job.running
     ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
     : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
@@ -4156,7 +4183,7 @@ function buildMatrix(jobs) {
 }
 
 function updateCell(td, job) {
-  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
+  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'blocked' ? 'Blocked' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
   const badge = td.querySelector('[data-field="status"]');
   if (badge) { badge.textContent = statusLabel; badge.className = 'badge ' + job.status; }
   const toggleInput = td.querySelector('[data-field="toggle"] input');
@@ -4172,7 +4199,7 @@ function updateCell(td, job) {
 }
 
 function renderOtherJobRow(job) {
-  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
+  const statusLabel = job.status === 'running' ? 'Running' : job.status === 'blocked' ? 'Blocked' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
   const runStopBtn = job.running
     ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
     : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
@@ -4222,7 +4249,7 @@ function updateOtherJobsInPlace(jobs) {
     const tr = document.querySelector('[data-other-job="' + job.label + '"]');
     if (!tr) return false;
     const badge = tr.querySelector('[data-field="status"]');
-    const statusLabel = job.status === 'running' ? 'Running' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
+    const statusLabel = job.status === 'running' ? 'Running' : job.status === 'blocked' ? 'Blocked' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
     if (badge) { badge.textContent = statusLabel; badge.className = 'badge ' + job.status; }
     const lastrun = tr.querySelector('[data-field="lastrun"]');
     if (lastrun) lastrun.textContent = relTime(job.lastRun);
