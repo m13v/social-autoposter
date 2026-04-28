@@ -112,8 +112,8 @@ EXCLUSIONS - do NOT engage with these accounts (skip and mark as 'skipped' with 
 - Excluded authors: $EXCLUDED_AUTHORS
 - Excluded Twitter accounts: $EXCLUDED_TWITTER
 
-CRITICAL - Reply posting: Use the CDP script to post replies. NEVER use mcp__twitter-agent__*, mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* browser tools for posting.
-CRITICAL: If the CDP script fails, retry up to 3 times with 30 seconds between attempts. If still failing, skip that item and move on.
+CRITICAL - Reply posting: Use the SAME mcp__twitter-agent__ browser session you used in Step 2 (navigate). Do NOT call scripts/twitter_browser.py reply: that launches a second Chromium against the same profile dir as the MCP, which wedges x.com on a Loading state and times out. NEVER use mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* browser tools for posting either.
+CRITICAL: If a browser_click or browser_type fails (stale ref, button not found, page not ready), take a fresh mcp__twitter-agent__browser_snapshot and retry up to 2 times. If still failing, skip with reason 'mcp_post_failed: <short error>' and move on.
 
 ## Respond to pending Twitter/X replies ($PENDING_COUNT total)
 
@@ -185,11 +185,27 @@ MANDATORY reply flow for every item:
              the existing project_name and follow global content rules.
   Step 3: Draft the reply using the resolved project's voice + chosen engagement
           style. 1-2 sentences. NEVER em dashes. Match parent tweet language.
-  Step 4: Post reply via CDP script:
-          python3 $REPO_DIR/scripts/twitter_browser.py reply "TWEET_URL" "YOUR_REPLY_TEXT"
-          Returns JSON with {ok: true, tweet_url, verified} on success.
-          Use their_comment_url as TWEET_URL and your generated reply as YOUR_REPLY_TEXT.
-          Extract tweet_url from the JSON response for Step 5.
+  Step 4: Post the reply via the SAME mcp__twitter-agent__ browser from Step 2.
+          a) mcp__twitter-agent__browser_snapshot to refresh element refs.
+          b) Find the reply textbox: role="textbox" with name like "Post your reply"
+             or "Post text". Then mcp__twitter-agent__browser_click on its ref.
+          c) mcp__twitter-agent__browser_type the YOUR_REPLY_TEXT into that textbox.
+             Pass submit=false (we click the Reply button explicitly in step e).
+          d) mcp__twitter-agent__browser_snapshot again (refs can shift after typing).
+          e) Find the submit button: role="button" with name="Reply", or selector
+             [data-testid="tweetButtonInline"]. mcp__twitter-agent__browser_click it.
+             Do NOT match a generic "Reply" by accessible name without checking testid:
+             every reply icon on the page also reads as "Reply" and you'll click the
+             wrong one.
+          f) Wait ~3s, then mcp__twitter-agent__browser_snapshot to confirm the
+             textbox is empty (= post landed). If your draft text is still in the
+             textbox after 8s, treat as a failed click and retry per the rule above.
+          g) Capture REPLY_URL:
+             - mcp__twitter-agent__browser_navigate to https://x.com/m13v_/with_replies
+             - mcp__twitter-agent__browser_snapshot
+             - Find the topmost link matching /m13v_/status/<digits> — that's REPLY_URL.
+             If no fresh reply URL appears within 30s, leave REPLY_URL empty and
+             continue to Step 5 (the reply IS posted; we just lack the URL link).
   Step 5: python3 reply_db.py replied ID "reply text" REPLY_URL ENGAGEMENT_STYLE [IS_RECOMMENDATION]   <- mark AFTER success. ENGAGEMENT_STYLE is TONE (e.g. critic, storyteller). Pass IS_RECOMMENDATION="1" ONLY when the reply casually recommends a project (Tier 2/3); leave unset otherwise. Tone and intent are independent.
 If Step 5 fails, the item stays 'processing' and will be reset to 'pending' on the next run.
 If the tweet has been deleted or is unavailable, mark as 'skipped' with reason 'tweet_not_found'.
