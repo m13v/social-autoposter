@@ -110,21 +110,32 @@ def canonicalize(url):
 
 def find_existing_engagement(conn, ids):
     """Given a list of LinkedIn IDs, return the first existing posts row
-    that mentions any of them in thread_url or our_url. Returns None if
-    no overlap. Row shape: (id, posted_at, thread_url, our_url, our_account)."""
+    that mentions any of them in posts.urns (primary, GIN-indexed) OR in
+    thread_url / our_url (fallback for any row missed by backfill).
+
+    The urns array path catches the case where the same logical post
+    surfaces under different URN forms: search-page DOM exposes the
+    ugcPost URN, but our DB stored only the activity URN. Storing every
+    URN we ever see for a post into posts.urns means a single
+    ``urns && ARRAY[...]`` overlap query catches the collision regardless
+    of which URN form the candidate page rendered.
+
+    Returns None if no overlap. Row shape: (id, posted_at, thread_url,
+    our_url, our_account).
+    """
     if not ids:
         return None
-    # Build OR of ILIKE clauses. ID strings are pure digits so no escaping
-    # concerns.
-    clauses = []
-    params = []
+    # ID strings are pure digits so no escaping concerns.
+    ilike_clauses = []
+    params = [ids]  # first param: the array for urns && ANY check
     for v in ids:
-        clauses.append("thread_url ILIKE %s OR our_url ILIKE %s")
+        ilike_clauses.append("thread_url ILIKE %s OR our_url ILIKE %s")
         params.append(f"%{v}%")
         params.append(f"%{v}%")
     sql = (
         "SELECT id, posted_at, thread_url, our_url, our_account "
-        "FROM posts WHERE platform='linkedin' AND (" + " OR ".join(clauses) + ") "
+        "FROM posts WHERE platform='linkedin' AND ("
+        "urns && %s::text[] OR " + " OR ".join(ilike_clauses) + ") "
         "ORDER BY posted_at LIMIT 1"
     )
     cur = conn.execute(sql, params)
