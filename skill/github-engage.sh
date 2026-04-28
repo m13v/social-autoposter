@@ -40,15 +40,30 @@ python3 "$REPO_DIR/scripts/scan_github_replies.py" 2>&1 | tee -a "$LOG_FILE"
 # PHASE A.5: Refresh engagement stats on our GitHub comments
 # Reactions pulled via gh api; reply counts tallied from the replies
 # table that Phase A just refreshed. Stored on posts.upvotes +
-# posts.comments_count.
+# posts.comments_count. Per-reply stats also refreshed (same call), and
+# the count is forwarded to a stats_github row in the dashboard Jobs table.
 # ═══════════════════════════════════════════════════════
 log "Phase A.5: Updating github engagement stats (reactions + reply counts)..."
 # Best-effort: stats failures (Neon disconnects, gh rate limits) must not block
 # Phase B reply handling. Subshell scopes the set-flags, `|| true` absorbs rc.
+PHASE_A5_START=$(date +%s)
+GH_REPLY_SUMMARY=$(mktemp -t fazm-gh-reply-summary.XXXXXX)
+trap 'rm -f "$GH_REPLY_SUMMARY"' EXIT
 ( set +e +o pipefail
-  python3 "$REPO_DIR/scripts/update_stats.py" --github-only 2>&1 | tee -a "$LOG_FILE"
+  python3 "$REPO_DIR/scripts/update_stats.py" --github-only --reply-summary "$GH_REPLY_SUMMARY" 2>&1 | tee -a "$LOG_FILE"
 ) || true
-log "Phase A.5: done"
+PHASE_A5_ELAPSED=$(( $(date +%s) - PHASE_A5_START ))
+
+GH_REPLIES_REFRESHED=0
+if [ -s "$GH_REPLY_SUMMARY" ]; then
+    GH_REPLIES_REFRESHED=$(python3 -c "import json; print(json.load(open('$GH_REPLY_SUMMARY')).get('github', 0))" 2>/dev/null || echo 0)
+fi
+GH_ACTIVE=$(psql "${DATABASE_URL:-}" -t -A -c "SELECT COUNT(*) FROM posts WHERE platform='github' AND status='active';" 2>/dev/null | tr -d '[:space:]')
+[ -z "$GH_ACTIVE" ] && GH_ACTIVE=0
+# Emit a stats_github row so the dashboard Jobs table shows the github stats run
+# the same way it shows stats_reddit / stats_twitter.
+python3 "$REPO_DIR/scripts/log_run.py" --script "stats_github" --posted "$GH_ACTIVE" --skipped 0 --failed 0 --replies-refreshed "$GH_REPLIES_REFRESHED" --cost 0 --elapsed "$PHASE_A5_ELAPSED" || true
+log "Phase A.5: done (replies_refreshed=$GH_REPLIES_REFRESHED)"
 
 # ═══════════════════════════════════════════════════════
 # PHASE B: Respond to pending GitHub replies
