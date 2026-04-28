@@ -61,6 +61,8 @@ Read $SKILL_FILE for the full workflow. Execute the LinkedIn link-edit phase onl
 
 CRITICAL: ALL browser calls MUST use mcp__linkedin-agent__* tools (e.g. mcp__linkedin-agent__browser_navigate). NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools. If a linkedin-agent call is blocked or times out, wait 30s and retry the same agent (up to 3 times). If still blocked, skip that post.
 
+CRITICAL: This is a single-shot run. NEVER call ScheduleWakeup, CronCreate, CronDelete, CronList, EnterPlanMode, EnterWorktree, or any deferred-execution / scheduling tool. You MUST complete or skip every post in this one run; do not defer work to "a future run". If you hit a hard block, mark the post SKIPPED via step 9 and move on to the next post.
+
 LinkedIn posts eligible for editing:
 $EDITABLE
 
@@ -96,7 +98,7 @@ Process ALL of them. For each post:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='SKIPPED: REASON' WHERE id=POST_ID"
 PROMPT_EOF
 
-gtimeout 5400 "$REPO_DIR/scripts/run_claude.sh" "link-edit-linkedin" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: LinkedIn link-edit claude exited with code $?"
+gtimeout 5400 "$REPO_DIR/scripts/run_claude.sh" "link-edit-linkedin" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" --disallowed-tools "ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,EnterWorktree" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: LinkedIn link-edit claude exited with code $?"
 rm -f "$PROMPT_FILE"
 
 EDITED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE platform='linkedin' AND link_edited_at IS NOT NULL;" 2>/dev/null || echo "0")
