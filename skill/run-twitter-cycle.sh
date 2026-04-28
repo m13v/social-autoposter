@@ -303,7 +303,7 @@ Reply to AT MOST $POST_LIMIT candidate(s) this cycle (post limit). Pick the ones
 For each chosen candidate:
 1. Navigate to the candidate URL via mcp__twitter-agent__browser_navigate (read-only, to understand context)
 2. Read the full thread
-3. Draft a reply using the best engagement style. Keep it 1-2 sentences. NEVER use em dashes.
+3. Draft a reply using the best engagement style. Keep it 1-2 sentences. NEVER use em dashes. Apply the matched project's \`voice\` block from ALL_PROJECTS_JSON above: follow \`voice.tone\`, never violate any item in \`voice.never\`, and mirror \`voice.examples\` / \`voice.examples_good\` when present.
 4. Post via the CDP script:
      python3 $REPO_DIR/scripts/twitter_browser.py reply \"CANDIDATE_URL\" \"YOUR_REPLY_TEXT\"
    It returns JSON. Parse reply_url. If reply_url is missing/invalid/doesn't match x.com/m13v_/status/, treat as FAILED: do NOT log, mark candidate 'failed' not 'posted'. NEVER use the parent URL as our_url.
