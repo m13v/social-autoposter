@@ -73,6 +73,35 @@ if os.path.exists(_config_path):
         pass
 
 
+def _load_comment_blocked_subs():
+    """Return the set of subreddits (lowercased) we cannot post comments in.
+
+    Mirrors reddit_tools._load_comment_blocked_subs so the reply path can
+    pre-flight without taking that import (and its db dependency).
+    """
+    try:
+        with open(_config_path) as f:
+            cfg = json.load(f)
+        blocked = set()
+        bans = cfg.get("subreddit_bans") or {}
+        if isinstance(bans, dict):
+            for s in bans.get("comment_blocked") or []:
+                blocked.add(s.lower())
+        for s in cfg.get("exclusions", {}).get("subreddits", []):
+            blocked.add(s.lower())
+        return blocked
+    except Exception:
+        return set()
+
+
+def _subreddit_from_permalink(url):
+    """Extract subreddit name (lowercased, no r/ prefix) from a Reddit URL."""
+    if not url:
+        return None
+    m = re.search(r"/r/([^/?#]+)", url)
+    return m.group(1).lower() if m else None
+
+
 def find_reddit_cdp_port():
     """Find the CDP port of the running reddit-agent MCP browser.
 
@@ -425,6 +454,32 @@ def reply_to_comment(comment_permalink, text, dm_id=None):
               or {"ok": false, "error": "..."}
     """
     from playwright.sync_api import sync_playwright
+
+    # Pre-flight: refuse to attempt a reply in a sub we know we can't comment in.
+    # Without this gate, an inbound that landed in `dms` while the sub was still
+    # allowed will keep cycling through the engage-dm-replies pipeline, fail with
+    # `reply_link_not_found`, and trigger a needs_human escalation every run.
+    sub = _subreddit_from_permalink(comment_permalink)
+    if sub and sub in _load_comment_blocked_subs():
+        auto_closed = False
+        if dm_id is not None:
+            try:
+                subprocess.run(
+                    ["python3",
+                     os.path.join(os.path.dirname(os.path.abspath(__file__)), "dm_conversation.py"),
+                     "set-status", "--dm-id", str(dm_id), "--status", "closed"],
+                    capture_output=True, text=True, timeout=20,
+                )
+                auto_closed = True
+            except Exception as e:
+                print(f"[reply_to_comment] auto-close failed for dm_id={dm_id}: {e}",
+                      file=sys.stderr)
+        return {
+            "ok": False,
+            "error": "subreddit_blocked",
+            "subreddit": sub,
+            "auto_closed": auto_closed,
+        }
 
     # Tool-level campaign suffix injection (mirrors send_dm), gated on dm_id.
     # The DM-replies pipeline passes dm_id and relies on this layer to
