@@ -41,22 +41,29 @@ STYLES = {
     },
     "storyteller": {
         "description": (
-            "Narrative grounded in observed pattern, not invented memoir. "
-            "First-person ('I') is ONLY allowed when the specific details "
-            "(numbers, durations, places, course names, brands, headcount) "
-            "come verbatim from the matched project's voice.examples / "
-            "messaging.proof / content_angle in config.json. Otherwise frame "
-            "as observation: 'the pattern is...', 'people who try this find...', "
-            "'in setups I've seen...', 'the typical failure mode is...'. "
-            "Lead with failure/surprise, not success."
+            "Narrative-driven comment. Per the GROUNDING RULE, every "
+            "storyteller comment picks ONE of two mutually exclusive lanes: "
+            "Lane 1 (DISCLOSED STORY) opens with a hedge like "
+            "'hypothetically', 'imagine someone running this', 'scenario:', "
+            "'say a friend tried' and is then free to invent any specifics; "
+            "Lane 2 (NO FABRICATION) stays first-person only when every "
+            "specific (numbers, durations, places, course names, brands, "
+            "headcount) appears verbatim in the matched project's "
+            "content_angle / voice / messaging in config.json, otherwise "
+            "drops the specifics or pattern-frames "
+            "('the part that breaks down is...', 'the typical failure mode "
+            "is...'). Lead with failure or surprise, not success."
         ),
         "example": (
-            "GROUNDED (config-anchored): 'on a 90-slide deck the rubric scored "
-            "81.3 vs ~68 field average; the cards weren't the bottleneck, the "
+            "LANE 1 (disclosed): 'hypothetically, imagine running this for "
+            "a couple of lecture blocks: cheap recorder into whisper into "
+            "gpt into anki. raw prompts get you somewhere around a third "
+            "usable cards before duplicate distractors take over.' "
+            "LANE 2 grounded: 'on a 90-slide deck the rubric scored 81.3 "
+            "vs ~68 field average; the cards weren't the bottleneck, the "
             "rubric was.' "
-            "OBSERVATIONAL: 'the whisper-to-gpt-to-anki setup isn't where this "
-            "breaks. card generation is. raw prompts hit roughly a third usable "
-            "before duplicate distractors take over.'"
+            "LANE 2 pattern-frame: 'the whisper-to-gpt-to-anki setup isn't "
+            "where this breaks. card generation is.'"
         ),
         "best_in": {
             "reddit": ["r/startups", "r/Meditation", "r/vipassana"],
@@ -64,11 +71,13 @@ STYLES = {
             "linkedin": ["career", "leadership", "lessons learned"],
         },
         "note": (
-            "NEVER pivot to a product pitch. NEVER invent specific personal "
-            "anecdotes ('last semester for two anatomy blocks', 'ran 22 cameras "
-            "across three properties for 8 months', 'sat 6 courses across three "
-            "centers'); see GROUNDING RULE. If a specific isn't in config.json, "
-            "drop it or hedge to observation; do not invent."
+            "NEVER pivot to a product pitch. NEVER mix lanes: presenting an "
+            "invented specific as a personal first-hand claim ('i ran this "
+            "exact pipeline last semester for two anatomy blocks', 'ran 22 "
+            "cameras across three properties for 8 months', 'sat 6 courses "
+            "across three centers') without a Lane 1 opener and without "
+            "config.json grounding is the exact failure mode the GROUNDING "
+            "RULE forbids."
         ),
     },
     "pattern_recognizer": {
@@ -705,86 +714,100 @@ def get_styles_prompt(platform, context="posting"):
 
 
 def get_grounding_rule():
-    """The no-fabrication + disclosure rule, shared across every pipeline.
+    """The two-lane grounding rule, shared across every pipeline.
 
-    The pipeline used to reward 'specificity' as an authenticity signal, which
-    pushed the LLM into inventing concrete-but-false personal anecdotes
-    ('last semester for two anatomy blocks', '22 cameras across three
-    properties for 8 months', '6 courses across three centers'). Those land
-    as plausible until someone who actually does the thing calls them out,
-    and then the account is burned.
+    Every comment picks ONE of two mutually exclusive lanes. They cannot
+    be combined: you can disclose a story OR stay grounded, never present
+    a fabricated specific as a personal first-hand fact.
 
-    Rule split:
-      A. NO FABRICATION of specifics: numbers, durations, dates, place
-         names, course/program names, headcount, brand/tool names. None
-         of these are allowed unless they appear verbatim in the matched
-         project's content_angle, voice (tone/examples/examples_good),
-         or messaging (lead_with_pain / solution / proof) in config.json.
-      B. DISCLOSE WHEN STORYTELLING: if you frame an experience or example
-         that you can't ground in config.json, frame it as observation,
-         not lived memoir. Replace 'I did X for 8 months' with 'the
-         pattern is X' / 'people who try this find...' / 'in setups
-         I've seen...'. The reader still gets the insight; we don't
-         fake a biography.
+      LANE 1 - DISCLOSED STORY: invent freely, but flag the frame.
+        Open the story with a hedge that signals it is illustration,
+        not testimony ('hypothetically', 'imagine someone running this',
+        'say a friend tried', 'as a thought experiment', 'scenario:').
+        Once the frame is set, free to use any names, durations, counts,
+        places. The reader can tell from the first phrase that this is
+        a worked example, not a personal claim.
 
-    These two rules together preserve specificity (good for engagement) for
-    the parts the project author actually wrote down, and convert the rest
-    into honest pattern-recognition, which on niche subs is what high-trust
-    answers actually read like.
+      LANE 2 - NO FABRICATION: stay first-person / plain voice, but every
+        specific (number, duration, date, place, course/program, headcount,
+        named tool, named person) must appear verbatim in the matched
+        project's content_angle / voice / messaging in config.json. If a
+        specific is not in config: drop it, generalize ('a few months',
+        'a handful of cameras'), or pattern-frame ('the part that breaks
+        down is...'). Pattern-frame counts as observation, not
+        autobiography, so no disclosure is needed.
+
+    Pick the lane that fits the thread. Niche / expert subs reward Lane 2;
+    casual / advice subs tolerate Lane 1 when the disclosure feels natural.
     """
     return """## GROUNDING RULE (highest priority; overrides any other style guidance)
 
-The pipeline previously rewarded "specificity" as an authenticity signal.
-This rule narrows that: specifics still win, but only the ones that are
-real.
+Every comment picks ONE lane. The two lanes are mutually exclusive: you
+cannot present an invented detail as a personal first-hand claim. Choose:
 
-A. NO FABRICATION
-   You may not invent any of: numbers, durations ("for 8 months", "last
-   semester", "~900 days in"), dates, place names ("Dhammamanda", "north
-   fork", "CYO"), course or program names ("two anatomy blocks"),
-   headcount ("400 alerts a night", "22 cameras", "380 baselines"),
-   brand or tool names not in config, or named people. A specific is
-   allowed ONLY if it appears verbatim in the matched project's
-   content_angle, voice, or messaging block in config.json.
+LANE 1 - DISCLOSED STORY (invent freely, but flag it)
+  Open with a phrase that signals the story is illustration, not lived
+  testimony. Once the frame is set, use whatever names / durations /
+  counts / places fit the point.
+  Acceptable openers: "hypothetically", "imagine someone running this",
+  "say a friend tried", "as a thought experiment", "scenario:",
+  "to make this concrete, picture", "made-up example but".
+  After the opener, full creative license on the details.
 
-B. DISCLOSE WHEN STORYTELLING
-   If you want to share an experience or example that you cannot ground
-   in config.json, frame it as observation, not autobiography:
-     - "the pattern is X" / "the typical failure mode is X"
-     - "in setups I've seen / talked to people running"
-     - "the part that breaks down is X" (no 'I')
-     - "from threads on this, the consistent answer is X"
-   The insight survives; the fake biography does not.
+LANE 2 - NO FABRICATION (first-person OK only if every specific is real)
+  Stay plain-voiced. Any specific (number, duration, date, place name,
+  course/program, headcount, named tool, named person) is allowed ONLY
+  if it appears verbatim in the matched project's content_angle, voice
+  (tone/examples/examples_good), or messaging (lead_with_pain / solution
+  / proof) in config.json. If a specific is not in config: drop it,
+  generalize ("a few months", "a handful of cameras"), or pattern-frame
+  ("the part that breaks down is...", "the typical failure mode is...").
+  Pattern-frame counts as observation, not autobiography, so no
+  disclosure is needed.
+
+NEVER MIX: do not write "i ran 22 cameras for 8 months" without either
+(a) a Lane 1 opener in front of it, or (b) those numbers being in
+config.json. That is the failure mode this rule exists to kill.
 
 Worked examples (drawn from real posts in our DB):
 
-  BAD (fabricated personal anecdote):
+  BAD (fabricated personal anecdote, no disclosure, no config anchor):
     "i ran this exact pipeline last semester for two anatomy blocks,
-    cheap recorder into whisper into gpt into anki..."
-  GOOD (observational rewrite of the same insight):
+    cheap recorder into whisper into gpt into anki, raw gpt got me
+    about 35% usable cards..."
+  LANE 1 REWRITE (same details, but disclosed):
+    "hypothetically, imagine running this for a couple of lecture
+    blocks: cheap recorder into whisper into gpt into anki. raw
+    prompts get you somewhere around a third usable cards before
+    duplicate distractors and trivial restatements take over."
+  LANE 2 REWRITE (pattern-frame, no invented specifics):
     "the whisper-to-gpt-to-anki setup isn't where this breaks. card
     generation is. raw prompts produce roughly a third usable before
     duplicate distractors and trivial restatements take over."
 
-  BAD (fabricated rig):
+  BAD (fabricated rig, no disclosure):
     "i ran 22 cameras across three properties for about 8 months and
     we were getting 400+ 'person detected' pings a night..."
-  GOOD (pattern frame):
+  LANE 1 REWRITE (disclosed scenario):
+    "scenario: 20-something cameras across a few properties, motion
+    alerts firing 400+ times a night. by week two everyone has
+    notifications muted and the system is dead..."
+  LANE 2 REWRITE (no invented numbers):
     "the issue with motion alerts isn't reliability, it's signal to
     noise. once cameras start firing on every shadow and leaf blower,
     everyone mutes notifications inside a week. the fix is filtering
     on intent (vehicle at gate after midnight, person near door,
-    loiter > 60s), not more cameras."
+    loiter over a minute), not more cameras."
 
-  GOOD (config-grounded, first-person OK because the specifics are real):
-    "on a 90-slide deck the eval scored 81.3 vs the field average around
-    68; the cards weren't the bottleneck, the rubric was."
+  GOOD LANE 2 (config-grounded, first-person OK, specifics are real):
+    "on a 90-slide deck the eval scored 81.3 vs the field average
+    around 68; the cards weren't the bottleneck, the rubric was."
     (The 81.3 / 68 / 90-slide numbers come from the matched project's
     messaging.proof and voice.examples.)
 
-If you can't ground a specific, drop the specific or hedge to
-observation. Do not invent. This rule outranks "specificity is the #1
-authenticity signal" wherever they conflict."""
+This rule outranks "specificity is the #1 authenticity signal" wherever
+they conflict. Specificity still wins, but only via Lane 1 disclosure
+or Lane 2 config grounding."""
 
 
 def get_content_rules(platform):
@@ -800,14 +823,14 @@ def get_content_rules(platform):
         "NO em dashes. Use commas, periods, or regular dashes (-).",
         "Never say 'I built' or 'we built'. Never mention any project by name unless recommending.",
         'Never start with "exactly", "yeah totally", "100%", "that\'s smart".',
-        "Specificity is the #1 authenticity signal, but only for specifics that are TRUE. See GROUNDING RULE: any number, duration, date, place, course/program, headcount, or named tool must come from the matched project's config.json (content_angle / voice / messaging). Otherwise drop the specific or hedge to observation framing.",
+        "Specificity is the #1 authenticity signal, but only for specifics you have license to use. See GROUNDING RULE: pick LANE 1 (open with a disclosure phrase like 'hypothetically' or 'scenario:' and then invent freely) OR LANE 2 (no fabricated specifics; first-person only when the numbers, durations, dates, places, course/program names, headcount, or named tools come verbatim from the matched project's config.json). Never present a fabricated specific as a personal first-hand claim.",
         "Include imperfections: contractions, casual asides, occasional lowercase.",
     ]
 
     platform_rules = {
         "reddit": [
             "Go BIMODAL: either 1 punchy sentence (<100 chars, highest avg upvotes) or 4-5 sentences of real substance. AVOID the 2-3 sentence dead zone.",
-            "First-person ('I/my') is preferred IF the specifics are grounded in config.json. If not, swap to observation framing ('the pattern is...', 'the typical failure mode is...', 'in setups I've seen...'). Better an honest observation than a fake memoir.",
+            "First-person ('I/my') has TWO valid forms (see GROUNDING RULE): Lane 1 disclosed-story (open with 'hypothetically', 'imagine someone running this', 'scenario:') so the reader knows it's illustration, OR Lane 2 grounded (every specific is in config.json) or pattern-framed without invented specifics. Never undisclosed first-person with invented numbers / places / programs.",
             "No markdown in Reddit (no ##, **, numbered lists). Casual tone, lowercase OK, fragments OK.",
             "NEVER mention product names (fazm, assrt, pieline, cyrano, terminator, mk0r, s4l). NEVER include URLs or links.",
             "Statements beat questions. Be authoritative, not inquisitive. No 'anyone else experience this?'",
@@ -833,7 +856,7 @@ def get_content_rules(platform):
 def get_anti_patterns():
     """Content anti-patterns shared across all platforms."""
     return """## Anti-patterns
-- NEVER fabricate personal specifics: invented durations ("for 8 months", "last semester"), counts ("22 cameras", "380 baselines"), places ("Dhammamanda", "north fork"), course/program names ("two anatomy blocks"), or brand/tool names not in config. See GROUNDING RULE: ground from config.json or hedge to observation.
+- NEVER present an undisclosed fabricated specific as a personal first-hand claim — invented durations ("for 8 months", "last semester"), counts ("22 cameras", "380 baselines"), places ("Dhammamanda", "north fork"), course/program names ("two anatomy blocks"), brand/tool names not in config. See GROUNDING RULE: pick Lane 1 (open with a disclosure phrase, then invent freely) or Lane 2 (no invented specifics; ground from config.json or pattern-frame).
 - NEVER start with "exactly", "yeah totally", "100%", "that's smart". Vary first words.
 - NEVER say "I built" / "we built" / "I'm working on". Frame products as recommendations, not self-promotion.
 - NEVER suggest calls, meetings, demos.
