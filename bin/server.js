@@ -2096,6 +2096,56 @@ async function handleApi(req, res) {
       const [rows, countRows] = await Promise.all([pq(q), pq(countQ)]);
       const dms = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
       const total = (countRows && countRows.length) ? Number(countRows[0].n) || 0 : 0;
+
+      // Bookings attributed back to specific DMs via metadata.utm_content =
+      // 'dm_<id>'. The cal-webhook stores the full Cal payload under
+      // cal_bookings.metadata, so the original UTM lives at
+      // metadata.payload.metadata.utm_content. We pull every dm_<id> seen for
+      // the DM ids in this page and group by status so the UI can show
+      // "booked" + "cancelled" badges per row.
+      const dmIds = (dms || []).map(d => Number(d.id)).filter(n => Number.isFinite(n));
+      const bookingMap = new Map();
+      if (dmIds.length) {
+        try {
+          const bp = getBookingsPool();
+          if (bp) {
+            const idList = dmIds.map(n => `'dm_${n}'`).join(',');
+            const bq =
+              "SELECT metadata#>>'{payload,metadata,utm_content}' AS utm_content, " +
+                     "status, attendee_email, start_time, created_at " +
+              "FROM cal_bookings " +
+              "WHERE metadata#>>'{payload,metadata,utm_content}' IN (" + idList + ") " +
+              "AND COALESCE(attendee_email, '') NOT ILIKE '%test%'";
+            const br = await bp.query(bq);
+            for (const row of br.rows) {
+              const m = /^dm_(\d+)$/.exec(row.utm_content || '');
+              if (!m) continue;
+              const id = Number(m[1]);
+              if (!bookingMap.has(id)) bookingMap.set(id, { total: 0, booked: 0, cancelled: 0, last_booking_at: null, recent: [] });
+              const e = bookingMap.get(id);
+              e.total += 1;
+              if (row.status === 'cancelled') e.cancelled += 1;
+              else e.booked += 1;
+              const at = row.start_time || row.created_at || null;
+              if (at && (!e.last_booking_at || at > e.last_booking_at)) e.last_booking_at = at;
+              if (e.recent.length < 3) {
+                e.recent.push({ email: row.attendee_email, status: row.status, start_time: row.start_time, created_at: row.created_at });
+              }
+            }
+          }
+        } catch (e) {
+          console.error('[/api/top/dms] bookings lookup failed:', e.message);
+        }
+      }
+      for (const d of (dms || [])) {
+        const b = bookingMap.get(Number(d.id));
+        d.bookings_count = b ? b.total : 0;
+        d.bookings_booked = b ? b.booked : 0;
+        d.bookings_cancelled = b ? b.cancelled : 0;
+        d.last_booking_at = b ? b.last_booking_at : null;
+        d.recent_bookings = b ? b.recent : [];
+      }
+
       return json(res, {
         dms,
         total,
