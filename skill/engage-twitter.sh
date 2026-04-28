@@ -113,7 +113,9 @@ EXCLUSIONS - do NOT engage with these accounts (skip and mark as 'skipped' with 
 - Excluded Twitter accounts: $EXCLUDED_TWITTER
 
 CRITICAL - Reply posting: Use the SAME mcp__twitter-agent__ browser session you used in Step 2 (navigate). Do NOT call scripts/twitter_browser.py reply: that launches a second Chromium against the same profile dir as the MCP, which wedges x.com on a Loading state and times out. NEVER use mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* browser tools for posting either.
-CRITICAL: If a browser_click or browser_type fails (stale ref, button not found, page not ready), take a fresh mcp__twitter-agent__browser_snapshot and retry up to 2 times. If still failing, skip with reason 'mcp_post_failed: <short error>' and move on.
+CRITICAL: If a browser_click or browser_type fails (stale ref, button not found, page not ready, page wedged on Loading), take a fresh mcp__twitter-agent__browser_snapshot and retry up to 2 times.
+CRITICAL: TECHNICAL FAILURES ARE NOT TERMINAL. If after retries the post still failed for any technical reason (browser, network, MCP, x.com unreachable, page rendering issue), DO NOT call reply_db.py skipped. Leave the row in 'processing' status (i.e., do nothing further with it) and move on to the next pending item. The post-run cleanup will reset 'processing' rows back to 'pending' so the next engage run retries automatically.
+CRITICAL: ONLY call reply_db.py skipped for content/policy reasons (e.g., light_acknowledgment, drive_by_self_promo_link_drop, hostile_user, off_topic, troll, mod_removal, excluded_author). NEVER skip for technical browser/network failures: those must be retry-able.
 
 ## Respond to pending Twitter/X replies ($PENDING_COUNT total)
 
