@@ -335,6 +335,17 @@ PROMPT_EOF
     rm -f "$PHASE_B_PROMPT"
 fi
 
+# Reset any items left in 'processing' after subprocess exit (tech-failure
+# retry path: agent leaves rows here on browser/MCP failure rather than
+# calling reply_db.py skipped, so the next run picks them up automatically).
+POST_RESET=$(psql "$DATABASE_URL" -t -A -c "
+    WITH upd AS (
+        UPDATE replies SET status='pending'
+        WHERE platform='linkedin' AND status='processing'
+        RETURNING id
+    ) SELECT COUNT(*) FROM upd;")
+[ "$POST_RESET" -gt 0 ] && log "Post-run: Reset $POST_RESET 'processing' LinkedIn items back to pending"
+
 # ═══════════════════════════════════════════════════════
 # Cleanup
 # ═══════════════════════════════════════════════════════
