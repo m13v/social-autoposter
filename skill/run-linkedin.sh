@@ -164,6 +164,12 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
        python3 $REPO_DIR/scripts/linkedin_url.py --check-engaged-ids "ID1,ID2,ID3"
        Exit code 0 = already engaged, SKIP this post and pick another.
        Exit code 1 = not engaged, proceed to step 4.
+       The check matches against posts.urns (GIN-indexed, all known
+       URN forms for each prior post) AND against thread_url/our_url
+       ILIKE as a fallback. Going forward, log_post.py --urns seeds
+       posts.urns from the createComment network response so search-page
+       DOM walks (which often only expose the ugcPost URN) collide
+       cleanly with rows whose canonical our_url stored the activity URN.
 
    3c. Remember the activityId returned by the JS. You'll need it in
        step 6 to construct a canonical our_url.
@@ -183,6 +189,20 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
        Save the response. Look for the POST request to a comment-create
        endpoint and note its status code and response body. Record this
        string verbatim as NETWORK_RESPONSE.
+
+   5b.1.1. **EXTRACT EVERY URN ID FROM NETWORK_RESPONSE**. The
+       createComment payload typically references the post under several
+       URN forms in the same response (activity, ugcPost, share, comment).
+       Walk NETWORK_RESPONSE for every 16-19 digit number and collect
+       them into ALL_POST_URNS (comma-separated, deduped). Include the
+       activityId from step 3c too. You will pass ALL_POST_URNS to
+       log_post.py in step 7 so dedup catches future cross-URN hits on
+       the same post (search-page DOM only exposes the ugcPost URN
+       while our DB previously stored only the activity URN; storing
+       every URN closes that gap).
+       If you cannot get NETWORK_RESPONSE (rare), fall back to
+       activityId alone — log_post.py will still extract IDs from
+       thread_url and our_url and merge them.
 
    5b.2. Take a viewport screenshot via
        mcp__linkedin-agent__browser_take_screenshot. The toast
@@ -231,9 +251,13 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
    (rare; the DOM walk in 3a almost always finds one), fall back to the
    current page URL via page.url().split('?')[0].
 7. Log to database (MANDATORY tool call, do NOT use raw INSERT SQL):
-     python3 $REPO_DIR/scripts/log_post.py --platform linkedin --thread-url THREAD_URL --our-url CAPTURED_FEED_UPDATE_URL --our-content 'YOUR_COMMENT_TEXT' --project PROJECT_YOU_CHOSE --thread-author AUTHOR --thread-title 'POST_TITLE' --engagement-style STYLE_YOU_CHOSE --language DETECTED_LANGUAGE
+     python3 $REPO_DIR/scripts/log_post.py --platform linkedin --thread-url THREAD_URL --our-url CAPTURED_FEED_UPDATE_URL --our-content 'YOUR_COMMENT_TEXT' --project PROJECT_YOU_CHOSE --thread-author AUTHOR --thread-title 'POST_TITLE' --engagement-style STYLE_YOU_CHOSE --language DETECTED_LANGUAGE --urns 'ALL_POST_URNS'
    log_post.py validates the URL, canonicalizes our_url to the
-   /feed/update/urn:li:activity:<id>/ form, and enforces status='active'.
+   /feed/update/urn:li:activity:<id>/ form, enforces status='active',
+   and stores ALL_POST_URNS (comma- or whitespace-separated 16-19 digit
+   IDs from step 5b.1.1) into posts.urns so the next run's
+   --check-engaged-ids dedup catches the post under any URN form.
+   --urns is required for LinkedIn; pass at minimum the activityId.
    Duplicate prevention is the responsibility of step 3, NOT this step.
 
 Up to 30 posts per run. If nothing fits, say '## No good post found' and stop.
