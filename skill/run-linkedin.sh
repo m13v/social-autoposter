@@ -50,8 +50,13 @@ slim = {p['name']: {k: p[k] for k in ('name','description','qualification') if k
 print(json.dumps(slim, indent=2))
 " 2>/dev/null || echo "{}")
 
-PHASE_A_OUT=$(mktemp /tmp/sa-run-linkedin-phaseA.XXXXXX.json)
-PHASE_A_PROMPT=$(mktemp /tmp/sa-run-linkedin-phaseA-prompt.XXXXXX.txt)
+# BSD mktemp on macOS only substitutes XXXXXX at the end of the template
+# (extensions break the substitution). Keep XXXXXX terminal so the actual
+# path is unique — otherwise the literal X's leak into the prompt and the
+# LLM "helpfully" substitutes them itself, writing to a path the wrapper
+# never sees (lost a full Phase A run on 2026-04-28 to this).
+PHASE_A_OUT=$(mktemp /tmp/sa-run-linkedin-phaseA-XXXXXX)
+PHASE_A_PROMPT=$(mktemp /tmp/sa-run-linkedin-phaseA-prompt-XXXXXX)
 
 cat > "$PHASE_A_PROMPT" <<PROMPT_EOF
 You are the Social Autoposter LinkedIn discovery scout (Phase A).
@@ -224,7 +229,7 @@ STYLES_BLOCK=$(generate_styles_block linkedin posting)
 sleep 3
 
 # ===== Phase B: compose + post + verify + log =====
-PHASE_B_PROMPT=$(mktemp /tmp/sa-run-linkedin-phaseB-prompt.XXXXXX.txt)
+PHASE_B_PROMPT=$(mktemp /tmp/sa-run-linkedin-phaseB-prompt-XXXXXX)
 cat > "$PHASE_B_PROMPT" <<PROMPT_EOF
 You are the Social Autoposter (Phase B). Your job: post ONE comment on a
 pre-selected LinkedIn post, verify it landed, log it. STOP. Do NOT search
