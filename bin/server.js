@@ -5792,9 +5792,9 @@ function renderFunnelStats(payload) {
     a.email_signups    += Number(f.email_signups)    || 0;
     a.schedule_clicks  += Number(f.schedule_clicks)  || 0;
     // Get Started footer prefers Amplitude-attributed end-product signups
-    // when present (clients with `amplitude` block in config.json), else the
-    // CTA-click count. Keeps the footer consistent with what each row cell
-    // actually displays.
+    // when present (clients with an amplitude block in config.json), else
+    // the CTA-click count. Keeps the footer consistent with what each row
+    // cell actually displays.
     a.get_started_clicks += (f.amplitude_signups != null ? Number(f.amplitude_signups) : Number(f.get_started_clicks)) || 0;
     a.cross_product_clicks += Number(f.cross_product_clicks) || 0;
     a.d_pageviews      += Number(f.domain_pageviews) || 0;
@@ -5841,7 +5841,7 @@ function renderFunnelStats(payload) {
       schedule_clicks:  asNum(f.schedule_clicks),
       get_started_clicks: asNum(f.get_started_clicks),
       // Amplitude-attributed end-product signups (clients with an
-      // `amplitude` block in config.json). When non-null, the Get Started
+      // amplitude block in config.json). When non-null, the Get Started
       // cell renders this verified count in place of get_started_clicks.
       amplitude_signups: asNum(f.amplitude_signups),
       amplitude_filter: f.amplitude_filter || null,
@@ -5904,7 +5904,7 @@ function renderFunnelStats(payload) {
       { key: 'email_signups',    label: 'Email Signups',   type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_email_signups') },
       { key: 'schedule_clicks',  label: 'Schedule Clicks', type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_schedule_clicks') },
       // Get Started: prefer Amplitude-attributed end-product signups
-      // (clients with `amplitude` block in config.json). Falls back to the
+      // (clients with an amplitude block in config.json). Falls back to the
       // CTA click count for projects without that wiring. Tooltip + green
       // tint distinguishes the verified end-product signal from the click.
       { key: 'get_started_clicks', label: 'Get Started',   type: 'numeric', align: 'right',
