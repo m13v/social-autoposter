@@ -79,12 +79,12 @@ Process ALL of them. For each post:
    f. Wait ~35s for Vercel deploy, then curl -sI {base_url}/t/{slug} to verify HTTP 200
    g. Use THAT page URL in the link edit. If deploy fails, fall back to the project's website URL.
    If no landing_pages config: use website if available, otherwise github.
-4. Write 1 sentence + project link (GitHub peer tone): "fwiw we have an implementation of this - URL"
+4. Write 1 sentence + project link (GitHub peer tone, claim ownership): "fwiw we built an implementation of this, URL" or "I shipped a tool that does this, URL". ALWAYS frame as our own creation, never as a third-party tool we just discovered. NEVER write "I found this", "there's a tool", "came across this implementation". We are the authors of this code. Say so.
 5. Extract OWNER/REPO from thread_url. Extract COMMENT_ID from our_url; if not directly available, use gh api to find our comment on that issue.
 6. Edit the existing comment (append the new line to the existing content) using gh:
    gh api repos/OWNER/REPO/issues/comments/COMMENT_ID -X PATCH -f body="EXISTING_CONTENT
 
-   fwiw we have an implementation of this - URL"
+   fwiw we built an implementation of this, URL"
 7. After each successful edit, update the DB:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='LINK_TEXT' WHERE id=POST_ID"
 8. COMMITMENT GUARDRAILS (never violate these):
