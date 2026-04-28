@@ -170,6 +170,7 @@ Rules:
   the [dead] label (>=5 past posts, median engagement 0), avoid that pair unless the
   thread is an unusually good fit. Prefer [good] pairs when plausible.
 - Draft the comment in agent voice (\"my human\" not \"I\"), match the thread's language.
+- Apply the matched project's `voice` block: follow `voice.tone`, never violate `voice.never`, mirror `voice.examples` / `voice.examples_good` when present.
 - Comments must add a concrete, thread-relevant point. Do not paste generic product pitches.
 
 ## OUTPUT FORMAT
@@ -328,7 +329,7 @@ def main():
     # --- Phase 0: context ---------------------------------------------------
     config = load_config()
     projects_json = json.dumps(
-        {p["name"]: {k: p.get(k) for k in ("description", "website", "topics")}
+        {p["name"]: {k: p.get(k) for k in ("description", "website", "topics", "voice")}
          for p in config.get("projects", [])
          if p.get("weight", 0) > 0
          and "moltbook" not in (p.get("platforms_disabled") or [])},
