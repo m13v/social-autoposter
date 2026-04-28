@@ -8,7 +8,23 @@ a single source of truth.
 
 Usage:
     from engagement_styles import VALID_STYLES, REPLY_STYLES, get_styles_prompt, get_content_rules, get_anti_patterns
+
+Style universe:
+    The hardcoded STYLES dict is the curated, "active" baseline. The model
+    may also INVENT new styles inline at decision time by emitting a
+    `new_style` block alongside an unknown `engagement_style` in its JSON.
+    Those land in scripts/engagement_styles_extra.json with status="candidate"
+    and merge back into the live universe via _load_extra_styles(). A nightly
+    promoter (scripts/promote_engagement_styles.py) graduates candidates to
+    "active" once they prove out. Until then candidates appear in prompts
+    but only receive STYLE_FLOOR_PCT weight in the picker, so a single weird
+    invention can't dominate.
 """
+
+import json
+import os
+import sys as _sys_mod
+from datetime import datetime, timezone
 
 # ── Style taxonomy ──────────────────────────────────────────────────
 
@@ -115,6 +131,204 @@ STYLES = {
 VALID_STYLES = set(STYLES.keys())
 REPLY_STYLES = VALID_STYLES
 
+# ── Sidecar: model-invented candidate styles ────────────────────────
+#
+# scripts/engagement_styles_extra.json is the registry of styles the model
+# invented at decision time. It is read fresh on every get_all_styles()
+# call so a new candidate registered by another agent shows up without a
+# process restart. Writes are atomic (temp + rename) and serialized via
+# fcntl.flock so concurrent agents inventing the same name don't lose
+# each other's metadata.
+#
+# Each entry shape:
+#   {
+#     "status": "candidate" | "active" | "retired",
+#     "description": str,
+#     "example": str,
+#     "note": str,
+#     "why_existing_didnt_fit": str,           # rationale at invention
+#     "first_post_url": str | None,
+#     "first_post_id": int | None,
+#     "first_post_platform": str | None,
+#     "invented_by_model": str | None,
+#     "invented_at": ISO-8601 UTC,
+#     "promoted_at": ISO-8601 UTC | None,
+#     "best_in": {platform: [hint,...]},       # filled in by promoter
+#   }
+#
+# Hardcoded STYLES are treated as status="active" implicitly.
+
+SIDECAR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "engagement_styles_extra.json")
+
+_REQUIRED_NEW_STYLE_FIELDS = ("description", "example", "why_existing_didnt_fit")
+
+
+def _load_extra_styles():
+    """Read and parse the sidecar JSON. Returns {} on any error or missing file."""
+    try:
+        with open(SIDECAR_PATH, "r") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _normalize_entry(entry, default_status="active"):
+    """Ensure a STYLES-style dict has the fields callers expect."""
+    out = dict(entry) if isinstance(entry, dict) else {}
+    out.setdefault("status", default_status)
+    out.setdefault("description", "")
+    out.setdefault("example", "")
+    out.setdefault("note", "")
+    out.setdefault("best_in", {})
+    return out
+
+
+def get_all_styles():
+    """Merged universe: hardcoded STYLES (active) + sidecar candidates/actives.
+
+    Sidecar entries override hardcoded ones if they share a name (so the
+    promoter or a manual edit can adjust description/best_in without
+    modifying the locked module). Caller MUST treat the returned dict as
+    read-only.
+    """
+    merged = {name: _normalize_entry(meta, "active") for name, meta in STYLES.items()}
+    for name, meta in _load_extra_styles().items():
+        if not isinstance(meta, dict):
+            continue
+        merged[name] = _normalize_entry(meta, "candidate")
+    return merged
+
+
+def _atomic_write_sidecar(data):
+    """Write the sidecar JSON atomically (temp + rename) and fsync."""
+    tmp = SIDECAR_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+        f.write("\n")
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            pass
+    os.replace(tmp, SIDECAR_PATH)
+
+
+def register_style(name, meta, source_post=None):
+    """Register a model-invented style into the sidecar.
+
+    Called when an orchestrator parses a decision JSON whose
+    engagement_style is not in get_all_styles() and whose `new_style`
+    block is well-formed.
+
+    Args:
+        name: the style name the model picked.
+        meta: dict with at least description/example/why_existing_didnt_fit
+              (and optionally note). Anything else is preserved verbatim.
+        source_post: optional dict {platform, post_url, post_id, model}
+              describing the post that birthed this style. Recorded only
+              the FIRST time a name is registered.
+
+    Returns:
+        (status_str, entry_dict): status in {"new", "existing", "rejected"}.
+        On "rejected", entry_dict carries an "error" key describing why.
+    """
+    if not name or not isinstance(name, str):
+        return "rejected", {"error": "name must be a non-empty string"}
+    if not isinstance(meta, dict):
+        return "rejected", {"error": "new_style block must be an object"}
+    missing = [f for f in _REQUIRED_NEW_STYLE_FIELDS
+               if not (isinstance(meta.get(f), str) and meta[f].strip())]
+    if missing:
+        return "rejected", {"error": f"new_style missing fields: {missing}"}
+    if name in STYLES:
+        # The model picked a hardcoded name and *also* shipped a new_style
+        # block. Treat as "existing" — never overwrite the curated entry.
+        return "existing", _normalize_entry(STYLES[name], "active")
+
+    src = source_post or {}
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    try:
+        import fcntl  # POSIX-only; this whole repo is macOS/Linux
+    except ImportError:
+        fcntl = None
+
+    # Open-or-create a lock file alongside the sidecar so flock has a stable inode.
+    lock_path = SIDECAR_PATH + ".lock"
+    lock_fd = None
+    try:
+        lock_fd = open(lock_path, "a+")
+        if fcntl is not None:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+
+        existing = _load_extra_styles()
+        if name in existing:
+            return "existing", existing[name]
+
+        entry = {
+            "status": "candidate",
+            "description": meta["description"].strip(),
+            "example": meta["example"].strip(),
+            "note": (meta.get("note") or "").strip(),
+            "why_existing_didnt_fit": meta["why_existing_didnt_fit"].strip(),
+            "first_post_url": src.get("post_url"),
+            "first_post_id": src.get("post_id"),
+            "first_post_platform": src.get("platform"),
+            "invented_by_model": src.get("model"),
+            "invented_at": now_iso,
+            "promoted_at": None,
+            "best_in": {},
+        }
+        existing[name] = entry
+        _atomic_write_sidecar(existing)
+        return "new", entry
+    finally:
+        if lock_fd is not None:
+            if fcntl is not None:
+                try:
+                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+            lock_fd.close()
+
+
+def validate_or_register(decision, source_post=None, context="posting"):
+    """One-shot helper for orchestrators that parse a decision JSON.
+
+    Reads decision["engagement_style"] (and optional decision["new_style"]).
+    Returns (style_or_None, action) where action is one of:
+        "valid"      → style was already in the universe, accept it
+        "registered" → unknown style + well-formed new_style → registered
+                       as candidate, accept it
+        "rejected"   → unknown style and no usable new_style → caller
+                       should drop the post or null the style column
+    Logs the action to stdout for the orchestrator's run log.
+    """
+    style = decision.get("engagement_style") if isinstance(decision, dict) else None
+    new_style = decision.get("new_style") if isinstance(decision, dict) else None
+
+    if style and style in get_all_styles():
+        return style, "valid"
+
+    if not style:
+        return None, "rejected"
+
+    if not isinstance(new_style, dict):
+        print(f"[engagement_styles] unknown style {style!r} and no new_style block; rejecting")
+        return None, "rejected"
+
+    status, entry = register_style(style, new_style, source_post)
+    if status == "rejected":
+        print(f"[engagement_styles] new_style for {style!r} rejected: {entry.get('error')}")
+        return None, "rejected"
+    if status == "new":
+        src_url = (source_post or {}).get("post_url", "?")
+        print(f"[engagement_styles] REGISTERED candidate style {style!r} from {src_url}")
+    return style, "registered"
+
+
 # ── Platform-specific policy overlay ────────────────────────────────
 #
 # Tier assignment (dominant / secondary / rare) is DB-driven — see
@@ -209,7 +423,8 @@ def get_dynamic_tiers(platform, context="posting"):
       - Cold start (no data at all): every non-never style becomes secondary.
     """
     never = set(PLATFORM_POLICY.get(platform, {}).get("never", []))
-    candidate_styles = [s for s in STYLES.keys() if s not in never]
+    universe = get_all_styles()
+    candidate_styles = [s for s in universe.keys() if s not in never]
 
     stats = _fetch_style_stats(platform)
 
@@ -218,7 +433,10 @@ def get_dynamic_tiers(platform, context="posting"):
 
     for style in candidate_styles:
         s = stats.get(style)
-        if s and s["n"] >= MIN_SAMPLE_SIZE:
+        # Sidecar `candidate` styles never enter the trusted bucket — they
+        # only get floor-weight exploration until the promoter graduates them.
+        is_candidate = universe[style].get("status") == "candidate"
+        if s and s["n"] >= MIN_SAMPLE_SIZE and not is_candidate:
             trusted.append((style, s["avg_up"]))
         else:
             explore.append(style)
@@ -289,7 +507,8 @@ def compute_target_distribution(platform, context="posting"):
       - Cold start (no trusted data): equal share across non-never styles.
     """
     never = set(PLATFORM_POLICY.get(platform, {}).get("never", []))
-    candidates = [s for s in STYLES.keys() if s not in never]
+    universe = get_all_styles()
+    candidates = [s for s in universe.keys() if s not in never]
     stats = _fetch_style_stats(platform)
 
     rows = []
@@ -298,12 +517,17 @@ def compute_target_distribution(platform, context="posting"):
         s = stats.get(style)
         n = int(s["n"]) if s else 0
         avg = float(s["avg_up"]) if s else 0.0
-        trusted = s is not None and n >= MIN_SAMPLE_SIZE
+        # Sidecar candidates never count as trusted; they get floor weight only
+        # until promoted, regardless of their sample count.
+        is_candidate_status = universe[style].get("status") == "candidate"
+        trusted = (s is not None and n >= MIN_SAMPLE_SIZE
+                   and not is_candidate_status)
         weight = (avg ** WEIGHT_EXPONENT) if trusted else 0.0
         if trusted:
             trusted_total += weight
         rows.append({"style": style, "n": n, "avg_up": avg, "trusted": trusted,
-                     "weight": weight, "pct": 0.0})
+                     "weight": weight, "pct": 0.0,
+                     "is_candidate": is_candidate_status})
 
     if not rows:
         return []
@@ -397,9 +621,12 @@ def get_styles_prompt(platform, context="posting"):
     for t in targets:
         if t["trusted"]:
             sample = f"avg_up {t['avg_up']:.2f} · n={t['n']}"
+        elif t.get("is_candidate"):
+            sample = f"n={t['n']} (candidate, model-invented; floor only)"
         else:
             sample = f"n={t['n']} (below trust threshold; floor only)"
-        lines.append(f"- **{t['style']}**: {t['pct']:.0f}%  ({sample})")
+        tag = " [NEW]" if t.get("is_candidate") else ""
+        lines.append(f"- **{t['style']}**{tag}: {t['pct']:.0f}%  ({sample})")
     lines.append("")
     if last_picks:
         lines.append(f"Your last {len(last_picks)} picks on {platform} (newest first): {', '.join(last_picks)}")
