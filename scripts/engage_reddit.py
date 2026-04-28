@@ -102,7 +102,8 @@ def get_next_pending(conn, platform):
                r.their_comment_url, r.their_comment_id, r.depth,
                LEFT(p.thread_title, 100) as thread_title,
                p.thread_url, LEFT(p.our_content, 200) as our_content, p.our_url,
-               CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post
+               CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post,
+               p.project_name
         FROM replies r
         JOIN posts p ON r.post_id = p.id
         WHERE r.status='pending' AND r.platform = %s
@@ -121,6 +122,7 @@ def get_next_pending(conn, platform):
         "thread_title": row[7], "thread_url": row[8],
         "our_content": row[9], "our_url": row[10],
         "is_our_original_post": row[11],
+        "project_name": row[12],
     }
 
 
@@ -155,6 +157,22 @@ Your last {len(recent_replies)} replies (vary your style, don't repeat the same 
 
     top_context = f"\n## FEEDBACK FROM PAST PERFORMANCE (use this to write better replies):\n{top_report}\n" if top_report else ""
 
+    voice_block = ""
+    project_name = reply.get("project_name")
+    if project_name:
+        project_cfg = next(
+            (p for p in config.get("projects", []) if p.get("name") == project_name),
+            None,
+        )
+        voice = (project_cfg or {}).get("voice", {}) or {}
+        if voice:
+            voice_block = f"""
+## Project voice (matched project: {project_name})
+{json.dumps(voice, indent=2)}
+
+Apply this voice when drafting: follow `tone`, never violate any item in `never`, mirror `examples` / `examples_good` when present.
+"""
+
     return f"""Reply to this {reply['platform']} comment. You are the Social Autoposter engagement bot.
 
 ## Reply data
@@ -162,7 +180,7 @@ Your last {len(recent_replies)} replies (vary your style, don't repeat the same 
 
 ## Context
 Read ~/social-autoposter/config.json for project details and content_angle.
-{recent_context}{top_context}
+{recent_context}{top_context}{voice_block}
 ## Content rules
 {get_content_rules("reddit")}
 - First person, specific details from content_angle in config.json.
