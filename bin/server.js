@@ -2000,6 +2000,8 @@ async function handleApi(req, res) {
           "d.human_reason, d.flagged_at, " +
           "d.target_project, d.icp_precheck, d.icp_matches, d.qualification_status, " +
           "d.qualification_notes, d.booking_link_sent_at, " +
+          "d.short_link_code, d.short_link_clicks, " +
+          "d.short_link_first_click_at, d.short_link_last_click_at, " +
           "COALESCE(p_direct.project_name, p_via_reply.project_name) AS project_name, " +
           "pr.headline AS prospect_headline, pr.bio AS prospect_bio, " +
           "pr.company AS prospect_company, pr.role AS prospect_role, " +
