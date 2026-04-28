@@ -1611,6 +1611,66 @@ async function handleApi(req, res) {
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
+  // GET /api/styles/candidates - sidecar-registered candidate styles + DB usage.
+  // Surfaces inventions for human sanity-check before the promoter graduates them.
+  if (p === '/api/styles/candidates' && req.method === 'GET') {
+    return (async () => {
+      const sidecarPath = path.join(DEST, 'scripts', 'engagement_styles_extra.json');
+      let sidecar = {};
+      try { sidecar = JSON.parse(fs.readFileSync(sidecarPath, 'utf8')); } catch {}
+      const names = Object.keys(sidecar);
+      if (!names.length) return json(res, { candidates: [] });
+      // Aggregate posts per (style, platform): count + median engagement.
+      // For median we use upvotes (or upvotes+comments for moltbook, comments_count for github).
+      const escaped = names.map(n => "'" + n.replace(/'/g, "''") + "'").join(',');
+      const q =
+        "SELECT engagement_style, platform, COUNT(*)::int AS posts, " +
+        "PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY " +
+          "CASE LOWER(platform) " +
+            "WHEN 'github' THEN COALESCE(comments_count, 0) " +
+            "WHEN 'moltbook' THEN COALESCE(upvotes, 0) + COALESCE(comments_count, 0) " +
+            "ELSE COALESCE(upvotes, 0) END) AS median_score " +
+        "FROM posts WHERE engagement_style IN (" + escaped + ") AND status='active' " +
+        "AND our_content IS NOT NULL AND LENGTH(our_content) >= 30 " +
+        "GROUP BY engagement_style, platform";
+      let rows = [];
+      try { rows = await pq(q); } catch (e) { return json(res, { error: e.message }, 500); }
+      const stats = {};
+      for (const r of rows) {
+        if (!stats[r.engagement_style]) stats[r.engagement_style] = [];
+        stats[r.engagement_style].push({
+          platform: r.platform, posts: Number(r.posts) || 0,
+          median: Number(r.median_score) || 0,
+        });
+      }
+      const candidates = names.map(name => {
+        const e = sidecar[name] || {};
+        return {
+          name,
+          status: e.status || 'candidate',
+          description: e.description || '',
+          example: e.example || '',
+          note: e.note || '',
+          why_existing_didnt_fit: e.why_existing_didnt_fit || '',
+          first_post_url: e.first_post_url || null,
+          first_post_platform: e.first_post_platform || null,
+          invented_by_model: e.invented_by_model || null,
+          invented_at: e.invented_at || null,
+          promoted_at: e.promoted_at || null,
+          usage: stats[name] || [],
+        };
+      });
+      // Newest first (by invented_at desc), then alphabetical.
+      candidates.sort((a, b) => {
+        const da = a.invented_at || '';
+        const db = b.invented_at || '';
+        if (db !== da) return db.localeCompare(da);
+        return a.name.localeCompare(b.name);
+      });
+      return json(res, { candidates });
+    })().catch(e => json(res, { error: e.message }, 500));
+  }
+
   // GET /api/activity/stats - per-type, per-platform counts over a trailing window (default 24h)
   if (p === '/api/activity/stats' && req.method === 'GET') {
     const url = new URL(req.url, 'http://localhost');
