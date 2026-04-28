@@ -803,7 +803,8 @@ If the CDP script returns {ok:false} (Reddit Chat SPA may not render via CDP), f
 cd ~/social-autoposter && python3 scripts/reddit_browser.py reply "COMMENT_PERMALINK" "YOUR_REPLY_TEXT" DM_ID
 \`\`\`
 Pass DM_ID as the third positional arg so the tool logs to dm_messages with auto-attribution. The tool injects the active campaign suffix at \`sample_rate\`; \`reply_text\` in the JSON return is what was actually posted. \`COMMENT_PERMALINK\` is the inbound comment URL on reddit.com (the tool normalizes to old.reddit.com internally).
-If CDP returns {ok:false} with a non-recoverable error, fall back to mcp__reddit-agent__* browser to type the reply on the post page. On the MCP fallback path, the same Step-4 suffix rule applies — if $REDDIT_CAMPAIGN_SUFFIX_LITERAL is set, append it verbatim at $REDDIT_CAMPAIGN_SAMPLE_RATE before submitting; if $REDDIT_CAMPAIGN_SUFFIX_LITERAL is empty, do nothing extra.
+If CDP returns {ok:false, error:"subreddit_blocked"}, the comment is in a sub on \`subreddit_bans.comment_blocked\` and the tool has already auto-closed the DM (when dm_id was passed). Treat this as a clean SKIP — do NOT fall back to MCP, do NOT flag-human, do NOT retry. Move on to the next conversation.
+If CDP returns {ok:false} with any other non-recoverable error, fall back to mcp__reddit-agent__* browser to type the reply on the post page. On the MCP fallback path, the same Step-4 suffix rule applies — if $REDDIT_CAMPAIGN_SUFFIX_LITERAL is set, append it verbatim at $REDDIT_CAMPAIGN_SAMPLE_RATE before submitting; if $REDDIT_CAMPAIGN_SUFFIX_LITERAL is empty, do nothing extra.
 
 **LinkedIn Messages** (mcp__linkedin-agent__* tools ONLY, no Python CDP, no /voyager/api/):
 1. mcp__linkedin-agent__browser_navigate to THREAD_URL.
