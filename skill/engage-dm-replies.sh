@@ -499,6 +499,25 @@ if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ]; t
 PHASE_C_EOF
 fi
 
+# Precompute the active reddit campaign suffix + sample_rate so the prompt
+# can inline the literal text. If the LLM falls back to mcp__reddit-agent__*
+# (skipping the CDP path that injects the suffix at the tool layer), the
+# literal value lets it append the suffix by hand at the documented rate.
+# When no active campaign exists, both vars resolve to empty strings and the
+# prompt's "if empty, do nothing extra" branch fires.
+REDDIT_CAMPAIGN_SUFFIX_LITERAL=$(psql "$DATABASE_URL" -t -A -c "
+    SELECT suffix FROM campaigns
+    WHERE status='active' AND (',' || platforms || ',') LIKE '%,reddit,%'
+      AND max_posts_total IS NOT NULL AND posts_made < max_posts_total
+      AND suffix IS NOT NULL AND suffix <> ''
+    ORDER BY id LIMIT 1;" 2>/dev/null | tr -d '\n' || echo "")
+REDDIT_CAMPAIGN_SAMPLE_RATE=$(psql "$DATABASE_URL" -t -A -c "
+    SELECT COALESCE(sample_rate, 1.000) FROM campaigns
+    WHERE status='active' AND (',' || platforms || ',') LIKE '%,reddit,%'
+      AND max_posts_total IS NOT NULL AND posts_made < max_posts_total
+      AND suffix IS NOT NULL AND suffix <> ''
+    ORDER BY id LIMIT 1;" 2>/dev/null | tr -d '\n' || echo "")
+
 PHASE_A_PROMPT=$(mktemp)
 cat > "$PHASE_A_PROMPT" <<PROMPT_EOF
 You are the Social Autoposter DM reply engagement bot.
