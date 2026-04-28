@@ -113,8 +113,7 @@ EXCLUSIONS - do NOT engage with these accounts (skip and mark as 'skipped' with 
 - Excluded Twitter accounts: $EXCLUDED_TWITTER
 
 CRITICAL - Reply posting: Use the CDP script to post replies. NEVER use mcp__twitter-agent__*, mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* browser tools for posting.
-CRITICAL: If the CDP script fails, retry up to 2 times with 15 seconds between attempts. If still failing, skip that item with skip_reason 'cdp_failed_2_attempts: <error>' and move on.
-CRITICAL: Per-pending soft cap. If you've spent more than 5 minutes on a single pending reply (any combination of MCP navigation, drafting, and CDP attempts), stop, mark it 'skipped' with reason 'agent_self_timeout_5min', and move to the next. The watchdog kills the whole script at 45 min, so burning all 45 min on one pending wastes budget for the rest.
+CRITICAL: If the CDP script fails, retry up to 3 times with 30 seconds between attempts. If still failing, skip that item and move on.
 
 ## Respond to pending Twitter/X replies ($PENDING_COUNT total)
 
@@ -198,7 +197,7 @@ If the tweet has been deleted or is unavailable, mark as 'skipped' with reason '
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
 
-    gtimeout 1800 "$REPO_DIR/scripts/run_claude.sh" "engage-twitter-phaseB" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B claude exited with code $?"
+    gtimeout 5400 "$REPO_DIR/scripts/run_claude.sh" "engage-twitter-phaseB" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B claude exited with code $?"
     rm -f "$PHASE_B_PROMPT"
 fi
 
