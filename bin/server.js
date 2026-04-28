@@ -3550,6 +3550,15 @@ const HTML = `<!DOCTYPE html>
       <div class="style-stats-empty">Loading\u2026</div>
     </div>
   </details>
+  <details class="style-stats-section" id="style-candidates">
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">&#x25B6;</span><span>Model-invented candidate styles</span></span>
+      <span class="style-stats-total" id="style-candidates-total"></span>
+    </summary>
+    <div id="style-candidates-body">
+      <div class="style-stats-empty">Click to load.</div>
+    </div>
+  </details>
   <details class="style-stats-section" id="funnel-stats" open>
     <summary>
       <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="funnel-stats-heading">Project Funnel Stats (last 24 hours)</span></span>
