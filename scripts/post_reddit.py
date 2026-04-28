@@ -258,6 +258,11 @@ def build_content_angle(project, config):
     voice = project.get("voice", {}) or {}
     if voice.get("tone"):
         parts.append(f"Voice: {voice['tone']}")
+    if voice.get("never"):
+        parts.append("Never: " + "; ".join(voice["never"]))
+    examples = voice.get("examples") or voice.get("examples_good") or []
+    if examples:
+        parts.append("Voice examples: " + " | ".join(examples[:3]))
 
     if parts:
         return " ".join(parts)
