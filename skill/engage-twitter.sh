@@ -183,13 +183,33 @@ This lets the DM pipeline know which project the conversation is about.
 
 MANDATORY reply flow for every item:
   Step 1: python3 reply_db.py processing ID      <- mark BEFORE posting
-  Step 2: Post reply via CDP script:
+  Step 2: NAVIGATE TO THE THREAD AND READ CONTEXT (mandatory, do NOT skip).
+          Do NOT draft a reply from the notification snippet alone — the snippet
+          is truncated and lacks the parent tweet content + sibling replies.
+          a) mcp__twitter-agent__browser_navigate to their_comment_url
+          b) mcp__twitter-agent__browser_snapshot (or browser_run_code) to read:
+             - the FULL parent tweet text (our original post if this is on our thread)
+             - the immediate ancestors of their_comment_id (so you understand the
+               conversational beat being replied to)
+             - sibling replies (so you don't repeat what someone else already said)
+          c) Identify the parent tweet ID by scanning the URL chain / page DOM.
+             Look it up in OUR_POSTS_INDEX above. If found, OVERRIDE the
+             project_name on this reply row to the indexed project (the scan-time
+             guess is unreliable for short reply text):
+               source ~/social-autoposter/.env
+               psql "\$DATABASE_URL" -c "UPDATE replies SET project_name='RESOLVED_PROJECT' WHERE id=REPLY_ID;"
+             Then use that project's voice from PROJECTS_VOICE_JSON for drafting.
+             If unmatched (we're a guest in someone else's thread), keep whatever
+             the row already has and follow global content rules.
+  Step 3: Draft the reply using the resolved project's voice + chosen engagement
+          style. 1-2 sentences. NEVER em dashes. Match parent tweet language.
+  Step 4: Post reply via CDP script:
           python3 $REPO_DIR/scripts/twitter_browser.py reply "TWEET_URL" "YOUR_REPLY_TEXT"
           Returns JSON with {ok: true, tweet_url, verified} on success.
           Use their_comment_url as TWEET_URL and your generated reply as YOUR_REPLY_TEXT.
-          Extract tweet_url from the JSON response for Step 3.
-  Step 3: python3 reply_db.py replied ID "reply text" REPLY_URL ENGAGEMENT_STYLE [IS_RECOMMENDATION]   <- mark AFTER success. ENGAGEMENT_STYLE is TONE (e.g. critic, storyteller). Pass IS_RECOMMENDATION="1" ONLY when the reply casually recommends a project (Tier 2/3); leave unset otherwise. Tone and intent are independent.
-If Step 3 fails, the item stays 'processing' and will be reset to 'pending' on the next run.
+          Extract tweet_url from the JSON response for Step 5.
+  Step 5: python3 reply_db.py replied ID "reply text" REPLY_URL ENGAGEMENT_STYLE [IS_RECOMMENDATION]   <- mark AFTER success. ENGAGEMENT_STYLE is TONE (e.g. critic, storyteller). Pass IS_RECOMMENDATION="1" ONLY when the reply casually recommends a project (Tier 2/3); leave unset otherwise. Tone and intent are independent.
+If Step 5 fails, the item stays 'processing' and will be reset to 'pending' on the next run.
 If the tweet has been deleted or is unavailable, mark as 'skipped' with reason 'tweet_not_found'.
 
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
