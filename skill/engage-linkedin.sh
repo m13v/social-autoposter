@@ -236,7 +236,9 @@ EXCLUSIONS - do NOT engage with these accounts (skip and mark as 'skipped' with 
 - Excluded LinkedIn profiles: $EXCLUDED_LINKEDIN
 
 CRITICAL - Browser agent rule: ONLY use mcp__linkedin-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
-CRITICAL: If a browser agent tool call is blocked or times out, DO NOT fall back to any other browser tool. Wait 30 seconds and retry the same agent. Repeat up to 3 times. If still blocked, skip that item and move on.
+CRITICAL: If a browser agent tool call is blocked or times out, DO NOT fall back to any other browser tool. Wait 30 seconds and retry the same agent. Repeat up to 3 times.
+CRITICAL: TECHNICAL FAILURES ARE NOT TERMINAL. If after retries the action still failed for any technical reason (browser blocked, MCP timeout, page rendering issue, linkedin.com unreachable, linkedin_api.py 5xx), DO NOT call reply_db.py skipped. Leave the row in 'processing' status and move on to the next pending item. The next engage run's start-of-script cleanup resets stuck 'processing' rows back to 'pending' and retries automatically.
+CRITICAL: ONLY call reply_db.py skipped for content/policy reasons (e.g., light_acknowledgment, drive_by_self_promo, hostile_user, off_topic, troll, excluded_author). NEVER skip for technical browser/network failures: those must be retry-able.
 CRITICAL: Do NOT call /voyager/api/ endpoints. Posting goes through linkedin_api.py (OAuth api.linkedin.com). Browser is the fallback only.
 
 ## Respond to pending LinkedIn replies ($PENDING_COUNT total)
