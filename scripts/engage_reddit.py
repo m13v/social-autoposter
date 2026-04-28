@@ -558,13 +558,23 @@ def main():
             processed += 1
             continue
 
+        # Meta-callout detection on the parent comment text. Soft signal:
+        # surfaces an authorize-to-ack-and-disengage block in the prompt
+        # without auto-skipping. Catches the case where engage-dm-replies
+        # has not yet classified the partner but the inbound text already
+        # calls out our AI disclosure or asks if they're talking to a bot.
+        meta_callout = detect_meta_callout(reply.get("their_content"))
+        if meta_callout:
+            print(f"[engage_reddit] #{reply['id']} meta-callout detected: keyword={meta_callout['keyword']!r}")
+
         # Get recent replies for archetype rotation
         recent = get_recent_archetypes(conn, args.platform, limit=3)
 
         # Build prompt
         prompt = build_prompt(reply, recent, config, excluded_authors,
                               top_report=top_report,
-                              prior_history_block=prior_history_block)
+                              prior_history_block=prior_history_block,
+                              meta_callout=meta_callout)
         if prompt is None:
             skipped += 1
             processed += 1
