@@ -390,15 +390,34 @@ def post_comment(thread_url, text):
                 browser.close()
 
 
-def reply_to_comment(comment_permalink, text):
+def reply_to_comment(comment_permalink, text, dm_id=None):
     """Reply to an existing Reddit comment.
 
     Navigates to the comment permalink on old.reddit.com, clicks the
     "reply" link to expand the reply box, fills in the text, and submits.
 
-    Returns: {"ok": true} or {"ok": false, "error": "..."}
+    Active Reddit campaigns with a `suffix` are applied at this tool layer:
+    the suffix is appended to `text` (per `sample_rate` coin flip per
+    campaign) before typing, so the literal text is guaranteed to be
+    delivered. When `dm_id` is provided, after a verified post the message
+    is logged via dm_conversation.py log-outbound so dm_messages.campaign_id
+    auto-attributes via suffix detection (single source of truth).
+
+    Returns: {"ok": true, "applied_campaigns": [...], "reply_text": "..."}
+              or {"ok": false, "error": "..."}
     """
     from playwright.sync_api import sync_playwright
+
+    # Tool-level campaign suffix injection (mirrors send_dm). The LLM never
+    # sees campaign IDs; we append the literal suffix here so the actual
+    # posted text carries the tag and downstream auto-attribution catches it.
+    applied_campaigns = []
+    for cid, suffix, sample_rate in _load_active_reddit_campaigns_for_dm():
+        if random.random() < sample_rate:
+            text = text + suffix
+            applied_campaigns.append(cid)
+    print(f"[reply_to_comment] applied_campaigns={applied_campaigns} text_len={len(text)} dm_id={dm_id}",
+          file=sys.stderr)
 
     with sync_playwright() as p:
         browser, page, is_cdp = get_browser_and_page(p)
@@ -531,10 +550,18 @@ def reply_to_comment(comment_permalink, text):
                 return authorLinks.length > 0;
             }""", OUR_USERNAME)
 
+            # When invoked from the DM-replies pipeline (dm_id provided), log
+            # the outbound through the canonical CLI so dm_messages.campaign_id
+            # auto-attributes via the suffix-detection path. Mirrors send_dm.
+            if verified and dm_id is not None:
+                _log_dm_outbound("", text, dm_id=dm_id)
+
             return {
                 "ok": True,
                 "verified": verified,
                 "comment_permalink": comment_permalink,
+                "reply_text": text,
+                "applied_campaigns": applied_campaigns,
             }
 
         finally:
@@ -1688,11 +1715,17 @@ def main():
     elif cmd == "reply":
         if len(sys.argv) < 4:
             print(
-                "Usage: reddit_browser.py reply <comment_permalink> <text>",
+                "Usage: reddit_browser.py reply <comment_permalink> <text> [dm_id]",
                 file=sys.stderr,
             )
             sys.exit(1)
-        result = reply_to_comment(sys.argv[2], sys.argv[3])
+        dm_id_arg = None
+        if len(sys.argv) >= 5 and sys.argv[4].strip():
+            try:
+                dm_id_arg = int(sys.argv[4])
+            except ValueError:
+                print(f"[reply] ignoring non-int dm_id arg: {sys.argv[4]!r}", file=sys.stderr)
+        result = reply_to_comment(sys.argv[2], sys.argv[3], dm_id=dm_id_arg)
         print(json.dumps(result, indent=2))
 
     elif cmd == "edit":
