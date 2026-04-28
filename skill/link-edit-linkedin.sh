@@ -82,7 +82,7 @@ Process ALL of them. For each post:
    f. Wait ~35s for Vercel deploy, then curl -sI {base_url}/t/{slug} to verify HTTP 200
    g. Use THAT page URL in the link edit. If deploy fails, fall back to the project's website URL.
    If no landing_pages config: use website if available, otherwise github.
-4. Write 1 sentence + project link (LinkedIn professional tone): "I've been building something related - URL"
+4. Write 1 sentence + project link (LinkedIn professional tone, claim ownership): "I've been building something for this, URL" or "we shipped a tool that does this, URL". ALWAYS frame as our own creation. NEVER write "I found this", "there's a tool", "came across this guide". We are the authors. Say so.
 5. Append it to our_content with a blank line separator.
 6. Navigate to the post URL via the linkedin-agent browser, find our comment, click the three-dot menu on it, click "Edit", append the link text to the existing content, save, verify.
 7. After each successful edit, update the DB:
