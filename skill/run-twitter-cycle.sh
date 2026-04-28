@@ -14,7 +14,8 @@
 #   - SQL gate: only candidates with delta_score >= 1 (skip zero-momentum duds)
 #   - Claude reads top 10 by delta, drops unsuitable, posts top N where N is
 #     adaptive: 3 if ≥3 candidates cleared Δ≥10 (strong momentum), else 1
-#   - mark remaining batch rows as expired
+#   - keep remaining pending rows: salvaged into the next cycle, hard-expired
+#     by Phase 0 once tweet age crosses FRESHNESS_HOURS
 #
 # Launchd cadence: every 20 minutes. One combined job, one browser lock.
 
@@ -29,6 +30,10 @@ BATCH_ID="twcycle-$(date +%Y%m%d-%H%M%S)"
 LOG_FILE="$LOG_DIR/twitter-cycle-$(date +%Y-%m-%d_%H%M%S).log"
 RAW_FILE="/tmp/twitter_cycle_raw_$(date +%s).json"
 RUN_START=$(date +%s)
+# Tweets older than this are no longer worth replying to. Pending rows older
+# than this are hard-expired by Phase 0; younger pending rows are salvaged
+# from prior cycles into this batch.
+FRESHNESS_HOURS=6
 
 [ -f "$REPO_DIR/.env" ] && source "$REPO_DIR/.env"
 
@@ -42,6 +47,31 @@ log "=== Twitter Cycle (batch=$BATCH_ID): $(date) ==="
 # twitter-agent browser profile and scraping/posting aborts mid-run.
 source "$REPO_DIR/skill/lock.sh"
 acquire_lock "twitter-browser" 3600
+
+# --- Phase 0: hard-expire stale pending + salvage recent orphans -------------
+# Pending rows from prior cycles fall into two buckets:
+#   - tweet_posted_at older than FRESHNESS_HOURS  -> hard-expire (lost the
+#     replying window, no value in retrying)
+#   - still-fresh                                 -> re-assign to this batch
+#     so Phase 2a re-measures T1 and Phase 2b reconsiders them. This is the
+#     recovery path for cycles whose Phase 2b died on Anthropic org quota,
+#     X rate limit, browser crash, or any other infra failure.
+EXPIRED_STALE=$(psql "$DATABASE_URL" -t -A -c "
+    UPDATE twitter_candidates
+    SET status='expired'
+    WHERE status='pending' AND tweet_posted_at < NOW() - INTERVAL '$FRESHNESS_HOURS hours'
+    RETURNING id
+" 2>/dev/null | wc -l | tr -d ' ')
+[ "${EXPIRED_STALE:-0}" -gt 0 ] && log "Phase 0: hard-expired $EXPIRED_STALE pending rows older than ${FRESHNESS_HOURS}h"
+
+SALVAGED=$(psql "$DATABASE_URL" -t -A -c "
+    UPDATE twitter_candidates
+    SET batch_id='$BATCH_ID'
+    WHERE status='pending' AND batch_id != '$BATCH_ID'
+    AND tweet_posted_at >= NOW() - INTERVAL '$FRESHNESS_HOURS hours'
+    RETURNING id
+" 2>/dev/null | wc -l | tr -d ' ')
+[ "${SALVAGED:-0}" -gt 0 ] && log "Phase 0: salvaged $SALVAGED orphaned pending rows from prior cycles into $BATCH_ID"
 
 # --- Weighted project sample -------------------------------------------------
 PROJECTS_JSON=$(python3 - <<'PY'
@@ -347,9 +377,13 @@ CRITICAL:
 - At most 3 replies this run
 - If a browser tool call is blocked or times out, wait 30 seconds and retry (up to 3 times)" 2>&1 | tee -a "$LOG_FILE"
 
-# --- Cleanup: mark remaining pending batch rows as expired ------------------
-log "Marking remaining batch rows as expired..."
-psql "$DATABASE_URL" -c "UPDATE twitter_candidates SET status='expired' WHERE batch_id='$BATCH_ID' AND status='pending'" 2>&1 | tee -a "$LOG_FILE"
+# --- No end-of-cycle expire ------------------------------------------------
+# Pending rows are intentionally left alone. They are either:
+#   - candidates Phase 2b never reached (e.g., org quota, browser crash, or
+#     simply ran out of POST_LIMIT before reviewing the long tail), and the
+#     next cycle's Phase 0 will salvage them while still fresh
+#   - hard-expired by the next cycle's Phase 0 once they cross FRESHNESS_HOURS
+# This avoids losing work to transient infra failures.
 
 # --- Summary ---------------------------------------------------------------
 SUMMARY=$(psql "$DATABASE_URL" -t -A -F '|' -c "
