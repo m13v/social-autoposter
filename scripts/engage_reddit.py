@@ -337,7 +337,7 @@ Read ~/social-autoposter/config.json for project details and content_angle.
 {recent_context}{top_context}{voice_block}{history_block}{callout_block}
 ## Content rules
 {get_content_rules("reddit")}
-- First person, specific details from content_angle in config.json.
+- First person is preferred ONLY when the specifics are grounded in content_angle / voice / messaging in config.json. If they're not, swap to observation framing per the GROUNDING RULE below. Do not invent personal anecdotes.
 - Vary openings. Don't always start with credentials.
 
 {get_styles_prompt("reddit", context="replying")}
