@@ -192,9 +192,13 @@ For each DM row, BEFORE you compose or send, do this in order:
 
 ## After each DM:
 
-Success (BOTH steps required):
+Success (ALL THREE steps required):
   psql "\$DATABASE_URL" -c "UPDATE dms SET status='sent', our_dm_content='DM_TEXT', sent_at=NOW(), claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
   python3 $REPO_DIR/scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "DM_TEXT"
+
+  After the DM lands, capture the current page URL with mcp__twitter-agent__browser_evaluate (return window.location.href) and stamp it onto the DM row so the dashboard's "open chat" button works:
+  python3 $REPO_DIR/scripts/dm_conversation.py set-url --dm-id DM_ID --url "CHAT_URL"
+  The validator only accepts /i/chat/<id> or /messages/<id>; if the URL is something else (you got bounced to a profile or inbox), skip this step.
 
 Failed (rate limit, blocked, error):
   psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='REASON', claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
