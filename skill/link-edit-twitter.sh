@@ -140,6 +140,12 @@ For each post:
    no em dashes. Match the parent tweet's language. Do NOT include the URL
    in FOLLOW_UP_TEXT; the tool appends it automatically and will reject
    anything that starts with http/https.
+   ALWAYS frame as our own creation, never as a third-party tool we just
+   discovered. We built / made / shipped this. Good: "built a tool for this",
+   "made this for exactly that case", "shipped a small thing that handles it".
+   NEVER write: "I found this", "there's a tool", "came across this",
+   "saw this manual", "found this guide". That phrasing pretends we are a
+   neutral commenter pointing at someone else's project. We are the authors.
 4. Post the self-reply via the CDP script:
      python3 $REPO_DIR/scripts/twitter_browser.py self-reply \\
        "POST_OUR_URL" "FOLLOW_UP_TEXT" "PROJECT_URL"
