@@ -168,7 +168,7 @@ Run the **Workflow: Post** section for **LinkedIn ONLY**. Follow every step:
    3c. Remember the activityId returned by the JS. You'll need it in
        step 6 to construct a canonical our_url.
 
-4. Draft the comment using the engagement style that best fits the post. Professional but casual tone, NEVER use em dashes.
+4. Draft the comment using the engagement style that best fits the post. Professional but casual tone, NEVER use em dashes. Apply the matched project's \`voice\` block from ALL_PROJECTS_JSON above: follow \`voice.tone\`, never violate any item in \`voice.never\`, and mirror \`voice.examples\` / \`voice.examples_good\` when present.
 5. Post it using the linkedin-agent browser (mcp__linkedin-agent__* tools).
 5b. **POST-SUBMIT VERIFICATION (MANDATORY).** LinkedIn often silently
    rejects comments via a soft-block that looks like success (editor
