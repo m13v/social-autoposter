@@ -408,21 +408,25 @@ def reply_to_comment(comment_permalink, text, dm_id=None):
     """
     from playwright.sync_api import sync_playwright
 
-    # Tool-level campaign suffix injection (mirrors send_dm). The LLM never
-    # sees campaign IDs; we append the literal suffix here so the actual
-    # posted text carries the tag and downstream auto-attribution catches it.
-    # Defensive: engage_reddit.py runs its OWN pre-append for the standalone
-    # reply pipeline. If the suffix is already at the tail, do not re-append
-    # (and surface the cid so callers can bump). Without this guard,
-    # engage_reddit-driven replies would get the suffix twice.
+    # Tool-level campaign suffix injection (mirrors send_dm), gated on dm_id.
+    # The DM-replies pipeline passes dm_id and relies on this layer to
+    # guarantee the suffix is delivered. The standalone reply pipeline
+    # (engage_reddit.py) runs its OWN pre-append at the engage_reddit layer
+    # and does NOT pass dm_id, so we skip injection here to avoid a second
+    # coin flip stacking on top of the first (which would push the effective
+    # tag rate to ~1-(1-r)^2 and burn the campaign budget faster than
+    # intended). The endsWith guard is still useful when engage_reddit's
+    # gate fired: surface the cid so the caller can bump if desired.
     applied_campaigns = []
-    for cid, suffix, sample_rate in _load_active_reddit_campaigns_for_dm():
-        if text.endswith(suffix):
-            applied_campaigns.append(cid)
-            continue
-        if random.random() < sample_rate:
-            text = text + suffix
-            applied_campaigns.append(cid)
+    if dm_id is not None:
+        for cid, suffix, sample_rate in _load_active_reddit_campaigns_for_dm():
+            if random.random() < sample_rate:
+                text = text + suffix
+                applied_campaigns.append(cid)
+    else:
+        for cid, suffix, _ in _load_active_reddit_campaigns_for_dm():
+            if suffix and text.endswith(suffix):
+                applied_campaigns.append(cid)
     print(f"[reply_to_comment] applied_campaigns={applied_campaigns} text_len={len(text)} dm_id={dm_id}",
           file=sys.stderr)
 
