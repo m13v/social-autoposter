@@ -27,6 +27,25 @@ MAX_AGE_SEC = 45 * 60
 PER_SCRIPT_CAP_SEC = {
     ("github-engage.sh", None): 120 * 60,
     ("stats.sh", "reddit"): 120 * 60,
+    # 2026-04-27: extend 120 min cap to remaining stats / audit / link-edit jobs.
+    # 45 min was killing audit-twitter mid-run and starving link-edit-* of time
+    # to actually post replies + verify SEO deploys.
+    ("stats.sh", "twitter"): 120 * 60,
+    ("stats.sh", "linkedin"): 120 * 60,
+    ("stats.sh", "moltbook"): 120 * 60,
+    ("audit.sh", None): 120 * 60,
+    ("audit-twitter.sh", None): 120 * 60,
+    ("audit-reddit.sh", None): 120 * 60,
+    ("audit-moltbook.sh", None): 120 * 60,
+    ("audit-linkedin.sh", None): 120 * 60,
+    ("audit-reddit-resurrect.sh", None): 120 * 60,
+    ("audit-dm-staleness.sh", None): 120 * 60,
+    ("link-edit-twitter.sh", None): 120 * 60,
+    ("link-edit-reddit.sh", None): 120 * 60,
+    ("link-edit-linkedin.sh", None): 120 * 60,
+    ("link-edit-moltbook.sh", None): 120 * 60,
+    ("link-edit-github.sh", None): 120 * 60,
+    ("precompute-stats.sh", None): 120 * 60,
 }
 WATCHDOG_LOG = REPO / "skill" / "logs" / "watchdog.log"
 RUN_MONITOR_LOG = REPO / "skill" / "logs" / "run_monitor.log"
