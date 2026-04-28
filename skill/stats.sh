@@ -376,7 +376,10 @@ STEP4_EOF
     sed -i.bak "s|LINKEDIN_NAME_JS_PLACEHOLDER|$LINKEDIN_NAME|g" "$STEP4_PROMPT"
     rm -f "${STEP4_PROMPT}.bak"
 
-    gtimeout 1800 "$REPO_DIR/scripts/run_claude.sh" "stats-step4" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/no-agents-mcp.json" -p "$(cat "$STEP4_PROMPT")" >> "$LOGFILE" 2>&1
+    # Step 4 (LinkedIn) requires the linkedin-agent MCP for browser scraping.
+    # Regression fixed 2026-04-27: was pointing at no-agents-mcp.json which is
+    # an empty server set, so every run failed for ~8 days with "tools not available".
+    gtimeout 1800 "$REPO_DIR/scripts/run_claude.sh" "stats-step4" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "$(cat "$STEP4_PROMPT")" >> "$LOGFILE" 2>&1
     STEP4_EXIT=$?
     rm -f "$STEP4_PROMPT"
     if [ "$STEP4_EXIT" -eq 124 ]; then
