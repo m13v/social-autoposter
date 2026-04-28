@@ -660,7 +660,7 @@ def get_styles_prompt(platform, context="posting"):
         if not style:
             continue
         best = style.get("best_in", {}).get(platform, [])
-        tag = " [NEW — model-invented candidate]" if t.get("is_candidate") else ""
+        tag = " [NEW, model-invented candidate]" if t.get("is_candidate") else ""
         lines.append(f"**{t['style']}**{tag}: {style['description']}")
         lines.append(f'  "{style["example"]}"')
         if best:
