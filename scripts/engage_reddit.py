@@ -103,7 +103,7 @@ def get_next_pending(conn, platform):
                LEFT(p.thread_title, 100) as thread_title,
                p.thread_url, LEFT(p.our_content, 200) as our_content, p.our_url,
                CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post,
-               p.project_name
+               p.project_name, r.post_id
         FROM replies r
         JOIN posts p ON r.post_id = p.id
         WHERE r.status='pending' AND r.platform = %s
@@ -123,7 +123,108 @@ def get_next_pending(conn, platform):
         "our_content": row[9], "our_url": row[10],
         "is_our_original_post": row[11],
         "project_name": row[12],
+        "post_id": row[13],
     }
+
+
+def check_cross_pipeline_history(conn, platform, author, post_id):
+    """Cross-pipeline check before posting a comment-reply.
+
+    Returns (same_post_disengage, prior_history_block).
+
+    same_post_disengage: dict {dm_id, interest_level, conversation_status,
+        qualification_status, last_message_at} if there is an existing dms
+        row on the SAME post for this author with a hard disengage signal
+        (declined / not_our_prospect / stale). Caller hard-skips. None means
+        proceed.
+
+    prior_history_block: human-readable text summarizing other-thread dms
+    history for this author (different post_id, last 5, message_count > 0,
+    plus the latest message direction + first 80 chars). Empty string if no
+    prior history. Soft-surface for the LLM, never blocks.
+
+    Both are best-effort: any DB failure returns (None, "") rather than
+    aborting the reply, since this is enrichment and a soft loss-of-context
+    is preferable to dropping a pending reply because of a bad query.
+    """
+    if not author or not post_id:
+        return None, ""
+    try:
+        same_post = conn.execute(
+            """
+            SELECT id, interest_level, conversation_status, qualification_status,
+                   last_message_at
+            FROM dms
+            WHERE platform = %s AND their_author = %s AND post_id = %s
+              AND (
+                interest_level IN ('declined', 'not_our_prospect')
+                OR conversation_status = 'stale'
+              )
+            ORDER BY last_message_at DESC NULLS LAST
+            LIMIT 1
+            """,
+            (platform, author, post_id),
+        ).fetchone()
+        if same_post:
+            same_post_disengage = {
+                "dm_id": same_post["id"],
+                "interest_level": same_post["interest_level"],
+                "conversation_status": same_post["conversation_status"],
+                "qualification_status": same_post["qualification_status"],
+                "last_message_at": same_post["last_message_at"].isoformat()
+                                   if same_post["last_message_at"] else None,
+            }
+        else:
+            same_post_disengage = None
+
+        other = conn.execute(
+            """
+            SELECT d.id, d.post_id, d.interest_level, d.mode, d.tier,
+                   d.conversation_status, d.target_project, d.message_count,
+                   d.last_message_at,
+                   (SELECT direction || ': ' || LEFT(content, 80)
+                    FROM dm_messages WHERE dm_id = d.id
+                    ORDER BY message_at DESC LIMIT 1) AS last_msg
+            FROM dms d
+            WHERE d.platform = %s AND d.their_author = %s
+              AND COALESCE(d.post_id, -1) <> %s
+              AND COALESCE(d.message_count, 0) > 0
+            ORDER BY d.last_message_at DESC NULLS LAST
+            LIMIT 5
+            """,
+            (platform, author, post_id),
+        ).fetchall()
+        if not other:
+            return same_post_disengage, ""
+
+        lines = []
+        for r in other:
+            ts = r["last_message_at"].strftime("%Y-%m-%d") if r["last_message_at"] else "unknown"
+            interest = r["interest_level"] or "unset"
+            mode = r["mode"] or "unset"
+            status = r["conversation_status"] or "unset"
+            tier = r["tier"] if r["tier"] is not None else "?"
+            msgs = r["message_count"] or 0
+            target = r["target_project"] or "-"
+            last = (r["last_msg"] or "").replace("\n", " ").strip()
+            lines.append(
+                f"- dm #{r['id']} on post #{r['post_id']} (last activity {ts}): "
+                f"interest={interest}, mode={mode}, status={status}, "
+                f"tier={tier}, messages={msgs}, target_project={target}\n"
+                f"    last: {last}"
+            )
+        block = (
+            "## Prior history with this person on OTHER threads\n"
+            "Soft context from the dms tracker (different post_id). "
+            "Use this to gauge tone, fit, and whether they have already "
+            "declined or pitched us elsewhere. Does NOT auto-block; you "
+            "still decide reply or skip based on the current thread.\n"
+            + "\n".join(lines)
+        )
+        return same_post_disengage, block
+    except Exception as e:
+        print(f"[engage_reddit] cross-pipeline check failed for {platform}/@{author} post={post_id}: {e}")
+        return None, ""
 
 
 def get_recent_archetypes(conn, platform, limit=3):
@@ -139,7 +240,7 @@ def get_recent_archetypes(conn, platform, limit=3):
     return [row[0] for row in cur.fetchall()]
 
 
-def build_prompt(reply, recent_replies, config, excluded_authors, top_report=""):
+def build_prompt(reply, recent_replies, config, excluded_authors, top_report="", prior_history_block=""):
     """Build a minimal prompt for one reply."""
     reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "Deep_Ad1959")
     reply_json = json.dumps(reply, indent=2)
@@ -180,7 +281,7 @@ Apply this voice when drafting: follow `tone`, never violate any item in `never`
 
 ## Context
 Read ~/social-autoposter/config.json for project details and content_angle.
-{recent_context}{top_context}{voice_block}
+{recent_context}{top_context}{voice_block}{('\n' + prior_history_block + '\n') if prior_history_block else ''}
 ## Content rules
 {get_content_rules("reddit")}
 - First person, specific details from content_angle in config.json.
@@ -386,11 +487,32 @@ def main():
             processed += 1
             continue
 
+        # Cross-pipeline disengage check. Hard-skip if the engage-dm-replies
+        # pipeline already classified this person as declined / not_our_prospect
+        # / stale on THIS post. Soft-surface other-thread history into the
+        # prompt so the LLM can adjust tone without being auto-blocked.
+        same_post_disengage, prior_history_block = check_cross_pipeline_history(
+            conn, reply["platform"], reply["their_author"], reply.get("post_id")
+        )
+        if same_post_disengage:
+            reason = (
+                f"cross_pipeline_disengage:dm#{same_post_disengage['dm_id']}"
+                f":interest={same_post_disengage['interest_level']}"
+                f":status={same_post_disengage['conversation_status']}"
+            )
+            subprocess.run(["python3", REPLY_DB, "skipped", str(reply["id"]), reason])
+            print(f"[engage_reddit] #{reply['id']} skipped ({reason})")
+            skipped += 1
+            processed += 1
+            continue
+
         # Get recent replies for archetype rotation
         recent = get_recent_archetypes(conn, args.platform, limit=3)
 
         # Build prompt
-        prompt = build_prompt(reply, recent, config, excluded_authors, top_report=top_report)
+        prompt = build_prompt(reply, recent, config, excluded_authors,
+                              top_report=top_report,
+                              prior_history_block=prior_history_block)
         if prompt is None:
             skipped += 1
             processed += 1
@@ -551,6 +673,25 @@ def main():
                         subprocess.run(cmd_args)
                         # Attribute reply to any campaigns that applied a suffix
                         bump_campaigns("replies", reply["id"], applied_campaign_ids)
+                        # Cross-pipeline linkage: ensure a dms row exists for
+                        # this person on this thread so engage-dm-replies'
+                        # next cycle picks up any inbound on this chain
+                        # immediately, instead of waiting for the unread-dms
+                        # scan (which can lag up to 30 min). ensure-dm is
+                        # idempotent and auto-links to the most recent
+                        # replies row for this author within lookback.
+                        if reply["platform"] == "reddit":
+                            try:
+                                subprocess.run(
+                                    ["python3",
+                                     os.path.join(REPO_DIR, "scripts", "dm_conversation.py"),
+                                     "ensure-dm",
+                                     "--platform", "reddit",
+                                     "--author", reply["their_author"]],
+                                    capture_output=True, text=True, timeout=20,
+                                )
+                            except Exception as e:
+                                print(f"[engage_reddit] #{reply['id']} ensure-dm failed: {e}")
                         # Update project if recommended
                         if project:
                             dbmod.load_env()
