@@ -200,7 +200,8 @@ else
                    r.their_comment_url, r.their_comment_id, r.depth,
                    LEFT(p.thread_title, 100) as thread_title,
                    p.thread_url, LEFT(p.our_content, 200) as our_content, p.our_url,
-                   CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post
+                   CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post,
+                   p.project_name
             FROM replies r
             JOIN posts p ON r.post_id = p.id
             WHERE r.platform='linkedin' AND r.status='pending'
@@ -209,6 +210,13 @@ else
                 r.discovered_at ASC
             LIMIT $BATCH_SIZE
         ) q;")
+
+    # Per-project voice map (so each reply can be drafted in the matched project's voice)
+    PROJECTS_VOICE_JSON=$(python3 -c "
+import json
+c = json.load(open('$REPO_DIR/config.json'))
+print(json.dumps({p['name']: p.get('voice', {}) for p in c.get('projects', []) if p.get('voice')}, indent=2))
+" 2>/dev/null || echo "{}")
 
     # Generate engagement style and content rules from shared module
     source "$REPO_DIR/skill/styles.sh"
@@ -247,6 +255,10 @@ CRITICAL: Do NOT call /voyager/api/ endpoints. Posting goes through linkedin_api
 $TOP_REPORT
 
 $STYLES_BLOCK
+
+## Per-project voice map
+Each reply has a \`project_name\` field (the project of the post we originally made). For each reply you draft, look up that project's voice block below and apply it: follow \`voice.tone\`, never violate any item in \`voice.never\`, mirror \`voice.examples\` / \`voice.examples_good\` when present. If \`project_name\` is null, just follow the global content rules.
+$PROJECTS_VOICE_JSON
 
 Here are the replies to process:
 $PENDING_DATA
