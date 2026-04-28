@@ -95,6 +95,27 @@ c = json.load(open('$REPO_DIR/config.json'))
 print(json.dumps({p['name']: p.get('voice', {}) for p in c.get('projects', []) if p.get('voice')}, indent=2))
 " 2>/dev/null || echo "{}")
 
+    # Index of our recent active posts: tweet_id -> {project, our_content, posted_at}.
+    # Used by the engage step to resolve the *real* parent post when navigating
+    # the thread (notifications don't expose conversation_id, so the scanner's
+    # project_name guess is best-effort; this lets the engage step correct it).
+    OUR_POSTS_INDEX=$(psql "$DATABASE_URL" -t -A -c "
+        SELECT COALESCE(json_object_agg(
+            (regexp_match(our_url, '/status/(\d+)'))[1],
+            json_build_object(
+                'project', project_name,
+                'our_content', LEFT(our_content, 500),
+                'thread_url', thread_url,
+                'posted_at', posted_at
+            )
+        ), '{}'::json)
+        FROM posts
+        WHERE platform='twitter' AND status='active'
+          AND our_url ~ '/status/[0-9]+'
+          AND posted_at > NOW() - INTERVAL '30 days'
+          AND our_content <> '(mention - no original post)'
+    " 2>/dev/null || echo "{}")
+
     # Generate engagement style and content rules from shared module
     source "$REPO_DIR/skill/styles.sh"
     STYLES_BLOCK=$(generate_styles_block twitter replying)
@@ -133,8 +154,12 @@ $TOP_REPORT
 $STYLES_BLOCK
 
 ## Per-project voice map
-Each reply has a \`project_name\` field (the project of the post we originally made). For each reply you draft, look up that project's voice block below and apply it: follow \`voice.tone\`, never violate any item in \`voice.never\`, mirror \`voice.examples\` / \`voice.examples_good\` when present. If \`project_name\` is null, just follow the global content rules.
+For each reply you draft, look up the matched project's voice block below and apply it: follow \`voice.tone\`, never violate any item in \`voice.never\`, mirror \`voice.examples\` / \`voice.examples_good\` when present.
 $PROJECTS_VOICE_JSON
+
+## Our recent active posts (tweet_id -> {project, our_content, thread_url, posted_at})
+Notification feeds don't expose conversation_id, so each pending row's \`project_name\` is a best-effort guess made at scan time. After navigating the thread (Step 2 below), use this index to resolve the *real* parent post and override the project before drafting. Match by parent tweet ID extracted from the page URL or DOM.
+$OUR_POSTS_INDEX
 
 Here are the replies to process:
 $PENDING_DATA
