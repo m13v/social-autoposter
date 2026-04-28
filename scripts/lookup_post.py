@@ -28,9 +28,9 @@ import db as dbmod
 
 
 PLATFORM_PATTERNS = {
-    "twitter": r"/status/{id}\b",
-    "x": r"/status/{id}\b",
-    "linkedin": r"urn:li:activity:{id}\b",
+    "twitter": r"/status/{id}([^0-9]|$)",
+    "x": r"/status/{id}([^0-9]|$)",
+    "linkedin": r"urn:li:activity:{id}([^0-9]|$)",
 }
 
 
