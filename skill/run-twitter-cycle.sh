@@ -375,7 +375,8 @@ CRITICAL:
 - Use twitter_browser.py for posting; mcp__twitter-agent__* ONLY for reading
 - our_url must always be our reply permalink (x.com/m13v_/status/...)
 - At most 3 replies this run
-- If a browser tool call is blocked or times out, wait 30 seconds and retry (up to 3 times)" 2>&1 | tee -a "$LOG_FILE"
+- If a browser tool call is blocked or times out, wait 30 seconds and retry (up to 3 times)
+- EXCEPTION to the retry rule: if twitter_browser.py returns {ok:false} with error in {rate_limited, tweet_not_found, reply_box_not_found}, do NOT retry. Mark the candidate 'skipped' (reason=that error) and move on. Retrying a rate_limited burns more X-side budget; the next cycle handles its own backoff." 2>&1 | tee -a "$LOG_FILE"
 
 # --- No end-of-cycle expire ------------------------------------------------
 # Pending rows are intentionally left alone. They are either:
