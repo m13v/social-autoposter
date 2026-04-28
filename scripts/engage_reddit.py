@@ -20,6 +20,7 @@ import subprocess
 import sys
 import time
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -509,6 +510,8 @@ def main():
     succeeded = 0
     skipped = 0
     failed = 0
+    skip_reasons = Counter()
+    meta_callouts_detected = 0
     total_usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_create": 0, "cost_usd": 0.0}
 
     print(f"[engage_reddit] Starting. platform={args.platform} limit={args.limit or 'unlimited'}, timeout={args.timeout}s")
@@ -536,6 +539,7 @@ def main():
             subprocess.run(["python3", REPLY_DB, "skipped", str(reply["id"]), "excluded_author"])
             print(f"[engage_reddit] #{reply['id']} skipped (excluded_author: {reply['their_author']})")
             skipped += 1
+            skip_reasons["excluded_author"] += 1
             processed += 1
             continue
 
@@ -555,6 +559,7 @@ def main():
             subprocess.run(["python3", REPLY_DB, "skipped", str(reply["id"]), reason])
             print(f"[engage_reddit] #{reply['id']} skipped ({reason})")
             skipped += 1
+            skip_reasons["cross_pipeline_disengage"] += 1
             processed += 1
             continue
 
@@ -565,6 +570,7 @@ def main():
         # calls out our AI disclosure or asks if they're talking to a bot.
         meta_callout = detect_meta_callout(reply.get("their_content"))
         if meta_callout:
+            meta_callouts_detected += 1
             print(f"[engage_reddit] #{reply['id']} meta-callout detected: keyword={meta_callout['keyword']!r}")
 
         # Get recent replies for archetype rotation
@@ -631,6 +637,7 @@ def main():
                 reason = decision.get("reason", "unknown")
                 subprocess.run(["python3", REPLY_DB, "skipped", str(reply["id"]), reason])
                 skipped += 1
+                skip_reasons[f"llm:{reason[:48]}"] += 1
                 print(f"[engage_reddit] #{reply['id']} skipped: {reason} ({reply_elapsed:.0f}s) "
                       f"[${usage['cost_usd']:.4f}]")
             elif decision.get("action") == "reply":
@@ -770,6 +777,7 @@ def main():
                     else:
                         err = post_result.get("error", "unknown") if post_result else "no_response"
                         subprocess.run(["python3", REPLY_DB, "skipped", str(reply["id"]), f"CDP_ERROR: {err}"])
+                        skip_reasons[f"cdp_error:{(err or 'unknown')[:32]}"] += 1
                         failed += 1
                         print(f"[engage_reddit] #{reply['id']} CDP FAILED: {err} ({reply_elapsed:.0f}s)")
             else:
@@ -789,6 +797,11 @@ def main():
     print(f"\n[engage_reddit] === SUMMARY ===")
     print(f"[engage_reddit] processed={processed} succeeded={succeeded} "
           f"skipped={skipped} failed={failed} elapsed={total_elapsed:.0f}s")
+    print(f"[engage_reddit] meta_callouts_detected={meta_callouts_detected}")
+    if skip_reasons:
+        print(f"[engage_reddit] skip_reasons:")
+        for reason, n in skip_reasons.most_common():
+            print(f"[engage_reddit]   {n:>3}  {reason}")
     print(f"[engage_reddit] Total tokens: input={total_usage['input_tokens']} "
           f"output={total_usage['output_tokens']} "
           f"cache_read={total_usage['cache_read']} cache_create={total_usage['cache_create']}")
