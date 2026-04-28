@@ -856,7 +856,7 @@ def get_content_rules(platform):
 def get_anti_patterns():
     """Content anti-patterns shared across all platforms."""
     return """## Anti-patterns
-- NEVER present an undisclosed fabricated specific as a personal first-hand claim — invented durations ("for 8 months", "last semester"), counts ("22 cameras", "380 baselines"), places ("Dhammamanda", "north fork"), course/program names ("two anatomy blocks"), brand/tool names not in config. See GROUNDING RULE: pick Lane 1 (open with a disclosure phrase, then invent freely) or Lane 2 (no invented specifics; ground from config.json or pattern-frame).
+- NEVER present an undisclosed fabricated specific as a personal first-hand claim. Examples of the forbidden pattern: invented durations ("for 8 months", "last semester"), counts ("22 cameras", "380 baselines"), places ("Dhammamanda", "north fork"), course/program names ("two anatomy blocks"), brand/tool names not in config. See GROUNDING RULE: pick Lane 1 (open with a disclosure phrase, then invent freely) or Lane 2 (no invented specifics; ground from config.json or pattern-frame).
 - NEVER start with "exactly", "yeah totally", "100%", "that's smart". Vary first words.
 - NEVER say "I built" / "we built" / "I'm working on". Frame products as recommendations, not self-promotion.
 - NEVER suggest calls, meetings, demos.
