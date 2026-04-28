@@ -393,7 +393,10 @@ function getLaunchAgentPath(unitFile) {
 const RUN_MONITOR_PATH = path.join(LOG_DIR, 'run_monitor.log');
 // Optional `replies_refreshed=N` segment (added 2026-04-28) sits between
 // `failed=` and `cost=`. Old log lines still match because the group is `?`.
-const RUN_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*posted=(\d+)\s+skipped=(\d+)\s+failed=(\d+)(?:\s+replies_refreshed=(\d+))?\s+cost=\$([\d.]+)\s+elapsed=(\d+)s/;
+// Optional `checked=N updated=N removed=N` segment (added 2026-04-28) follows
+// replies_refreshed. Stats jobs use this to surface real per-run counters
+// instead of the misleading "total active posts" number we used to log.
+const RUN_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*posted=(\d+)\s+skipped=(\d+)\s+failed=(\d+)(?:\s+replies_refreshed=(\d+))?(?:\s+checked=(\d+)\s+updated=(\d+)\s+removed=(\d+))?\s+cost=\$([\d.]+)\s+elapsed=(\d+)s/;
 
 // posts.platform is lowercase; UI labels are capitalized.
 const PLATFORM_LABELS = {
@@ -464,7 +467,7 @@ function parseRunMonitorLog(maxLines) {
   for (const line of tail) {
     const m = line.match(RUN_LINE_RE);
     if (!m) continue;
-    const [, ts, script, posted, skipped, failed, repliesRefreshed, cost, elapsed] = m;
+    const [, ts, script, posted, skipped, failed, repliesRefreshed, checked, updated, removed, cost, elapsed] = m;
     // log_run.py writes naive local-wallclock time (strftime without tz), so
     // `new Date(ts)` in node interprets it as local on the server. That is
     // correct since the dashboard server runs on the same host.
@@ -489,6 +492,9 @@ function parseRunMonitorLog(maxLines) {
         skipped: parseInt(skipped, 10),
         failed: parseInt(failed, 10),
         replies_refreshed: repliesRefreshed ? parseInt(repliesRefreshed, 10) : 0,
+        checked: checked ? parseInt(checked, 10) : 0,
+        updated: updated ? parseInt(updated, 10) : 0,
+        removed: removed ? parseInt(removed, 10) : 0,
         cost_usd: parseFloat(cost),
       },
     });
@@ -4431,6 +4437,29 @@ function renderResult(run) {
       (errored ? pill('errored', errored, '#ef4444') : '') +
       (pending ? pill('queue', pending, 'var(--muted)') : '') +
       (cost ? '<span style="font-size:12px;color:var(--muted);">$' + cost.toFixed(2) + '</span>' : '')
+    );
+  }
+  // Stats jobs (stats_reddit, stats_twitter, stats_linkedin, stats_moltbook):
+  // the old "posted=18216" pill was the total active-posts count from the
+  // DB, which had nothing to do with what the run did. Render the real
+  // per-run counters parsed out of the stats log instead.
+  if (run.job_type === 'stats') {
+    const checked = r.checked || 0;
+    const updated = r.updated || 0;
+    const removed = r.removed || 0;
+    const skipped = r.skipped || 0;
+    const failed = r.failed || 0;
+    const repliesRefreshed = r.replies_refreshed || 0;
+    if (!checked && !updated && !removed && !skipped && !failed && !repliesRefreshed) {
+      return '<span style="color:var(--muted);font-size:12px;">—</span>';
+    }
+    return (
+      pill('checked', checked, 'var(--text)') +
+      pill('updated', updated, '#22c55e') +
+      (removed ? pill('removed', removed, '#eab308') : '') +
+      (skipped ? pill('skipped', skipped, 'var(--muted)') : '') +
+      (repliesRefreshed ? pill('replies', repliesRefreshed, '#3b82f6') : '') +
+      (failed ? pill('failed', failed, '#ef4444') : '')
     );
   }
   // Generic fallback: posted/skipped/failed/replies_refreshed from run_monitor.log
