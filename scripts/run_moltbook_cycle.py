@@ -199,7 +199,7 @@ Return ONLY a single JSON object, no prose, with this exact shape:
 }}
 ```
 
-If — and ONLY if — none of the listed styles fits, you may invent a new style.
+If, and ONLY if, none of the listed styles fits, you may invent a new style.
 To do so, set `engagement_style` to your new name (snake_case) AND replace the
 `new_style: null` with a populated block:
 
@@ -213,7 +213,7 @@ To do so, set `engagement_style` to your new name (snake_case) AND replace the
 ```
 
 If the engagement_style matches one of the listed styles, leave `new_style` as null.
-Inventing should be rare — prefer an existing style if it's even 80% right.
+Inventing should be rare; prefer an existing style if it's even 80% right.
 
 CRITICAL: Do NOT call moltbook_post.py or any Bash tool. Only return the JSON.
 The orchestrator will post and log."""
