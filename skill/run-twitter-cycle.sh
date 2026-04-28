@@ -210,6 +210,14 @@ if [ "$BATCH_COUNT" = "0" ]; then
     exit 0
 fi
 
+# Release the twitter-browser lock during the 5-min T1 wait + HTTP-only Phase 2a.
+# Other pipelines (engage-twitter, dm-outreach-twitter, link-edit-twitter,
+# stats.sh) can run their browser steps in this window instead of waiting for us
+# to finish. We re-acquire just before Phase 2b posts, blocking up to the
+# acquire_lock timeout if another pipeline is mid-run.
+log "Releasing twitter-browser lock for the T1 wait window (5min sleep + HTTP fxtwitter poll)..."
+release_lock "twitter-browser"
+
 # --- Sleep 5 min before T1 measurement --------------------------------------
 log "Sleeping 300s before T1 re-measurement..."
 sleep 300
@@ -275,6 +283,14 @@ TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter 2>
 
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block twitter posting)
+
+# Re-acquire the browser lock before Phase 2b posting. Blocks (up to the
+# acquire_lock timeout) if another twitter-agent consumer is mid-run; that is
+# the desired behavior, not a bug — we yield while they work and resume when
+# they're done. T1 measurements were already captured above via HTTP, so a
+# brief wait here doesn't invalidate the candidate scoring.
+log "Re-acquiring twitter-browser lock for Phase 2b posting..."
+acquire_lock "twitter-browser" 3600
 
 log "Phase 2b: Claude reviewing top candidates and posting up to $POST_LIMIT..."
 
