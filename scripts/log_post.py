@@ -53,11 +53,30 @@ Output (JSON):
 import argparse
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
 import linkedin_url as li_url
+
+URN_ID_RE = re.compile(r"\b(\d{16,19})\b")
+
+
+def parse_urn_ids(*sources):
+    """Extract all 16-19-digit URN IDs from the given strings, dedupe,
+    preserve insertion order. Used to merge --urns CLI input with IDs
+    found in thread_url / our_url so we always store the full URN set
+    we know about for a LinkedIn post."""
+    seen = []
+    for s in sources:
+        if not s:
+            continue
+        for m in URN_ID_RE.finditer(s):
+            v = m.group(1)
+            if v not in seen:
+                seen.append(v)
+    return seen
 
 VALID_PLATFORMS = ("reddit", "twitter", "linkedin", "github_issues", "moltbook")
 
@@ -216,6 +235,14 @@ def main():
                              "independent dimensions.")
     parser.add_argument("--language", default=None,
                         help="ISO 639-1 language code (e.g. en, ja, zh, es)")
+    parser.add_argument("--urns", default=None,
+                        help="LinkedIn-only: comma- or whitespace-separated list "
+                             "of 16-19 digit URN IDs that identify this post "
+                             "(activity, ugcPost, share). Pass everything you "
+                             "captured from the createComment network response. "
+                             "log_post.py merges these with IDs extracted from "
+                             "thread_url and our_url before INSERT, so dedup "
+                             "via posts.urns catches future cross-URN collisions.")
     args = parser.parse_args()
 
     if args.mark_self_reply:
@@ -250,8 +277,17 @@ def main():
     # vs /posts/...-share-...) with different numeric URNs. Canonicalize
     # our_url to /feed/update/urn:li:activity:<id>/ so the comment-permalink
     # captured after posting drops its commentUrn query string.
+    urn_ids = []
     if args.platform == "linkedin":
         args.our_url = li_url.canonicalize(args.our_url)
+        # Build the full URN-ID set for this post: --urns input plus
+        # everything we can extract from thread_url and our_url. Stored in
+        # posts.urns so future dedup queries catch any URN form (activity,
+        # ugcPost, share) regardless of which one the candidate-page DOM
+        # renders. Without this, the search-page only exposes the ugcPost
+        # URN while we stored only the activity URN, so the cross-URN
+        # collision check missed and we double-posted.
+        urn_ids = parse_urn_ids(args.urns, args.thread_url, args.our_url)
 
     dbmod.load_env()
     conn = dbmod.get_conn()
