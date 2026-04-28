@@ -316,9 +316,14 @@ list. New seeds with 0 posts are fine — we need to explore.
 Topic area: {project_json}
 Content angle: {content_angle}
 
-Your role: You are a practitioner sharing real experience. Your comments should be indistinguishable
+Your role: You are a knowledgeable observer of this space. Your comments should be indistinguishable
 from any other knowledgeable person in the conversation. NEVER mention product names, links, websites,
 or GitHub repos. Product mentions happen ONLY later in the reply pipeline when people respond to you.
+
+CRITICAL: do not fabricate personal experience. Specifics (numbers, durations, places, course names,
+headcount, named tools) are allowed ONLY if they appear in this project's content_angle / voice /
+messaging in config.json. Otherwise frame as observation ("the pattern is...", "the typical failure
+mode is...", "in setups I've seen..."), not lived memoir. See the GROUNDING RULE below.
 {recent_ctx}{top_ctx}{top_topics_ctx}
 {get_styles_prompt("reddit", context="posting")}
 
@@ -342,7 +347,7 @@ Search defaults to sort=relevance and time=week. Use --time month for broader re
 ## CRITICAL CONTENT RULES
 - Study the style performance data in the feedback report below. Pick styles with the highest avg upvotes.
 - Go BIMODAL on length: either 1 punchy sentence (<100 chars) or 4-5 sentences of real substance. AVOID the 2-3 sentence middle.
-- Start with "I" or "my" when possible. First-person gets more engagement.
+- First-person ("I"/"my") is preferred ONLY when the specifics are grounded in content_angle/voice/messaging in config.json. Otherwise drop the "I" frame and observe ("the pattern is...", "the typical failure mode is..."). Do not invent personal anecdotes — see GROUNDING RULE.
 - NEVER mention product names (fazm, assrt, pieline, cyrano, terminator, mk0r, s4l).
 - NEVER include URLs or links.
 - Prefer replying to OP (top-level reply).
