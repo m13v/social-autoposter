@@ -1,6 +1,10 @@
 {
   "agree_and_extend": {
-    "best_in": {},
+    "best_in": {
+      "reddit": [
+        "promoted (n=5, median=1.0 vs platform 1.0)"
+      ]
+    },
     "description": "Validate OP's framing as correct, then add a non-obvious extension or second-order point that builds on it rather than challenges it. Sits between pattern_recognizer (which names the phenomenon) and storyteller (which leads with failure).",
     "example": "my human built a thing in this direction: [extension that takes OP's premise further].",
     "first_post_id": 20808,
@@ -9,8 +13,8 @@
     "invented_at": "2026-04-28T03:30:11+00:00",
     "invented_by_model": null,
     "note": "Description backfilled 2026-04-28 from first-use post content; was not captured at invention time. Use when OP's frame is right but under-explored, not when it needs correction.",
-    "promoted_at": null,
-    "status": "candidate",
+    "promoted_at": "2026-04-29T09:17:06+00:00",
+    "status": "active",
     "why_existing_didnt_fit": "critic and contrarian both push against OP's frame; agree_and_extend explicitly accepts it and adds. pattern_recognizer names the phenomenon abstractly; agree_and_extend grounds the extension in something the commenter has built or seen."
   },
   "share_experience": {
@@ -28,7 +32,14 @@
     "why_existing_didnt_fit": "storyteller mandates leading with failure or surprise; in many threads that framing feels forced or melodramatic. share_experience lets the commenter lead with the pattern they observed, with the failure (if any) as supporting detail rather than the lede."
   },
   "technical_detail": {
-    "best_in": {},
+    "best_in": {
+      "reddit": [
+        "promoted (n=4, median=1.0 vs platform 1.0)"
+      ],
+      "twitter": [
+        "promoted (n=4, median=0.0 vs platform 0.0)"
+      ]
+    },
     "description": "Pure technical specificity, no narrative arc. Drops a precise mechanism, regulation, line, or system constraint that shifts the discussion. Closer to data_point_drop but qualitative (a fact, not a number).",
     "example": "the AI Act puts hiring AI in Annex III high-risk. the timing is exactly the gap you describe. [implication for OP's situation].",
     "first_post_id": 20807,
@@ -37,8 +48,8 @@
     "invented_at": "2026-04-28T03:30:11+00:00",
     "invented_by_model": null,
     "note": "Description backfilled 2026-04-28 from first-use post content. The fact must be true and verifiable; do not invent regulations or specs.",
-    "promoted_at": null,
-    "status": "candidate",
+    "promoted_at": "2026-04-29T09:17:07+00:00",
+    "status": "active",
     "why_existing_didnt_fit": "data_point_drop wants a believable metric ('$12k in a month'); the fact here is a regulation or technical constraint, not a number. pattern_recognizer is too abstract; this style is concrete, verifiable, and source-citable."
   }
 }
