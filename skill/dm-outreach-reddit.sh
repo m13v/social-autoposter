@@ -184,18 +184,30 @@ For each DM row, BEFORE you compose or send, do this in order:
 ## How to send DMs on Reddit (use mcp__reddit-agent__* tools):
 1. Navigate to https://www.reddit.com/message/compose/?to=THEIR_AUTHOR
 2. Reddit uses Chat now. Fill in subject (2-4 casual words) and body.
-3. Submit and verify (form clears or chat appears).
+3. Submit. The send_dm / compose_dm tool returns a JSON object with an
+   "ok" field and a "verified" field. The send only counts if BOTH are true.
 
 ## After each DM:
 
-Success (BOTH steps required):
-  psql "\$DATABASE_URL" -c "UPDATE dms SET status='sent', our_dm_content='DM_TEXT', sent_at=NOW(), claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
-  python3 $REPO_DIR/scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "DM_TEXT"
+Inspect the tool's return value. There are exactly three outcomes:
 
-Failed (rate limit, blocked, error):
+(A) ok=true AND verified=true  ->  success, mark sent:
+  CLAUDE_SESSION_ID=$CLAUDE_SESSION_ID python3 $REPO_DIR/scripts/dm_send_log.py \\
+      --dm-id DM_ID --message "DM_TEXT" --verified
+
+  Do NOT issue a raw "UPDATE dms SET status='sent'" psql command. The
+  dm_send_log.py script is the only path that may flip status to 'sent';
+  it requires --verified, and refuses without it. This is intentional:
+  prior phantom-DM bugs (~700 rows in 4/2026) came from prose-driven
+  status flips that ignored the verification result.
+
+(B) ok=false OR verified=false  ->  send did not land, mark error:
+  psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='send_unverified', claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
+
+(C) Rate limit, account blocked, or any other thrown exception:
   psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='REASON', claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
 
-DMs/Chat disabled:
+DMs/Chat disabled (recipient setting, not a send failure):
   psql "\$DATABASE_URL" -c "UPDATE dms SET status='skipped', skip_reason='chat_disabled', claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
 
 CRITICAL: ALL browser calls MUST use mcp__reddit-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools. If a reddit-agent tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
