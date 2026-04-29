@@ -753,7 +753,19 @@ Branch on \`qualification_status\` of the DM row:
 2. \`asked\` → we already asked on a prior turn. The inbound we're processing now is (usually) their answer. Evaluate:
    - Read their latest inbound message plus the prospect profile fields (headline, bio, company, role, recent_activity, notes) that are attached to the DM row.
    - Cross-check against the project's \`must_have\` and \`disqualify\` lists from \$PROJECTS.
-   - If their answer + profile plainly satisfy at least one must_have and trigger NO disqualify: set status to \`qualified\` with a one-line rationale.
+   - Set status to \`qualified\` ONLY if EITHER (A) OR (B) holds, AND no disqualify item is triggered:
+
+     **(A) Role/persona fit + soft engagement co-signal**
+     - must_have role/persona is satisfied: they ARE the target persona, OR they explicitly know/work with someone who is, OR their stated role plausibly maps to the use case.
+     - AND they are meaningfully engaged in the conversation: substantive replies, asking technical questions, sharing setup details, comparing approaches. NOT one-word acks ("cool", "thanks", "will check it out") or polite brush-offs.
+
+     **(B) Explicit try/buy intent (regardless of role)**
+     - "how do I install / get access / sign up"
+     - "what does it cost / pricing"
+     - "I want to try this" / "send me a link"
+     - "can you demo this on my stack"
+
+     Neither path is satisfied by interest signals alone ("looks cool", "starred", "dope stuff", "wanna take this to the DMs" while already in DMs, "I'll check it out"). Those are interest, not qualification. If the prospect fits role-wise but shows only soft interest without substantive engagement, leave status at \`asked\` and stay in rapport.
    - If they trigger ANY disqualify item: set status to \`disqualified\` with the rationale.
    - If the answer is ambiguous, vague, or off-topic: set status to \`answered\` and compose ONE follow-up clarifier in Step 2. Do not keep grinding; 1 follow-up max before letting it rest.
      \`\`\`bash
