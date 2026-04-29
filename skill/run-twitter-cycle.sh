@@ -437,39 +437,37 @@ _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scrip
 FAILED_CT=0
 FAILURE_REASONS=""
 if [ "${POSTED_CT:-0}" = "0" ] && [ "${CANDIDATE_COUNT:-0}" -gt 0 ]; then
-    # Look at the cycle log lines emitted after Phase 2b kicked off. Anchor on
-    # the "Phase 2b: Claude reviewing" marker so we don't false-positive on
-    # Phase 1 prose.
+    # Anchor on the Phase 2b marker so we don't false-positive on Phase 1
+    # prose. macOS bash 3.2 has no associative arrays, so build the
+    # comma-separated reasons string directly with positional appends.
     PHASE2B_LOG=$(awk '/Phase 2b: Claude reviewing/,EOF' "$LOG_FILE" 2>/dev/null || echo "")
-    declare -A REASONS
-    # Anthropic 429 / monthly cap. Same key engage_reddit.py uses.
+    add_reason() {
+        # $1 = reason key, $2 = count
+        FAILURE_REASONS="${FAILURE_REASONS:+$FAILURE_REASONS,}${1}:${2}"
+        FAILED_CT=$(( FAILED_CT + $2 ))
+    }
+    # Anthropic 429 / monthly cap. Reason key matches engage_reddit.py.
     if echo "$PHASE2B_LOG" | grep -qiE '"api_error_status":429|hit your limit|monthly usage limit'; then
-        REASONS[monthly_limit]=$(( ${REASONS[monthly_limit]:-0} + 1 ))
+        add_reason monthly_limit 1
     fi
     # twitter-agent Playwright profile served auth redirect (the 14:45 case).
     if echo "$PHASE2B_LOG" | grep -qiE 'auth redirect|re-authenticat|browser profile.*auth|profile.*needs.*re-auth'; then
-        REASONS[auth_redirect]=$(( ${REASONS[auth_redirect]:-0} + 1 ))
+        add_reason auth_redirect 1
     fi
-    # X side hard signals from twitter_browser.py.
+    # X-side hard signals from twitter_browser.py.
     if echo "$PHASE2B_LOG" | grep -qiE '"error":"rate_limited"|RATE_LIMITED_TWITTER'; then
-        REASONS[rate_limited]=$(( ${REASONS[rate_limited]:-0} + 1 ))
+        add_reason rate_limited 1
     fi
     if echo "$PHASE2B_LOG" | grep -qiE 'page.load.timeout|navigation timeout|timed out|Timeout exceeded'; then
-        REASONS[timeout]=$(( ${REASONS[timeout]:-0} + 1 ))
+        add_reason timeout 1
     fi
     if echo "$PHASE2B_LOG" | grep -qiE 'reply_box_not_found|tweet_not_found'; then
-        REASONS[posting_blocked]=$(( ${REASONS[posting_blocked]:-0} + 1 ))
+        add_reason posting_blocked 1
     fi
-    # Build comma-separated key:N pairs. If we found nothing specific but
-    # POSTED_CT=0 with real candidates, fall back to a generic marker so the
-    # row still surfaces a reason instead of "—".
-    for k in "${!REASONS[@]}"; do
-        FAILURE_REASONS="${FAILURE_REASONS:+$FAILURE_REASONS,}${k}:${REASONS[$k]}"
-        FAILED_CT=$(( FAILED_CT + REASONS[$k] ))
-    done
+    # Fallback: candidates existed but nothing posted and no specific marker
+    # surfaced. Better to render a generic reason than a silent "—".
     if [ -z "$FAILURE_REASONS" ]; then
-        FAILURE_REASONS="phase2b_silent:1"
-        FAILED_CT=1
+        add_reason phase2b_silent 1
     fi
 fi
 
