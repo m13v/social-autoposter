@@ -127,10 +127,11 @@ echo "=== Done (${LOG_TAG}): $(date) ===" | tee -a "$LOG_FILE"
 
 # Log run to persistent monitor
 RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+_COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "octolens" 2>/dev/null || echo "0.0000")
 POSTED=$(grep -c "INSERT INTO posts" "$LOG_FILE" 2>/dev/null) || true
 SKIPPED=$(grep -ci "skipped\|skip" "$LOG_FILE" 2>/dev/null) || true
 FAILED=$(grep -ci "error\|failed\|FAILED" "$LOG_FILE" 2>/dev/null) || true
-python3 "$REPO_DIR/scripts/log_run.py" --script "$LOG_RUN_SCRIPT" --posted "$POSTED" --skipped "$SKIPPED" --failed "$FAILED" --cost 0 --elapsed "$RUN_ELAPSED"
+python3 "$REPO_DIR/scripts/log_run.py" --script "$LOG_RUN_SCRIPT" --posted "$POSTED" --skipped "$SKIPPED" --failed "$FAILED" --cost "$_COST" --elapsed "$RUN_ELAPSED"
 
 # Clean up old logs (keep last 7 days)
 find "$LOG_DIR" -name "octolens-*.log" -mtime +7 -delete 2>/dev/null || true
