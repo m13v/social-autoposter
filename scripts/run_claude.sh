@@ -34,7 +34,12 @@ export CLAUDE_SESSION_ID="$SESSION_ID"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 START=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
 
-claude --session-id "$SESSION_ID" "$@"
+# Allow one-off model override without touching locked scripts.
+MODEL_ARGS=()
+if [ -n "${MODEL_OVERRIDE:-}" ]; then
+    MODEL_ARGS=(--model "$MODEL_OVERRIDE")
+fi
+claude --session-id "$SESSION_ID" "${MODEL_ARGS[@]}" "$@"
 RC=$?
 
 END=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
