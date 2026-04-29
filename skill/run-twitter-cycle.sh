@@ -221,7 +221,20 @@ EXTRACT_EXIT=${PIPESTATUS[0]:-1}
 if [ "$EXTRACT_EXIT" -ne 0 ] || [ ! -f "$RAW_FILE" ]; then
     log "No tweets extracted in Phase 1. Aborting cycle."
     _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "run-twitter-cycle-scan" "run-twitter-cycle-post" 2>/dev/null || echo "0.0000")
-    python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped 0 --failed 1 --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
+    # Detect Anthropic usage-limit hits in the scan envelope so the dashboard
+    # surfaces "failed: monthly_limit" instead of a silent failed=1 row. The
+    # 429 marker comes from the JSON envelope ("api_error_status":429), the
+    # plain-text fallback covers Anthropic's ratelimit prose ("You've hit your
+    # limit"). Reason key is consistent with engage_reddit.py for unified
+    # rendering.
+    PHASE1_REASON="phase1_no_tweets"
+    if echo "$SCAN_OUTPUT" | grep -qiE '"api_error_status":429|"hit your limit"|usage limit'; then
+        PHASE1_REASON="monthly_limit"
+    fi
+    python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped 0 --failed 1 \
+        --salvaged "${SALVAGED:-0}" \
+        --failure-reasons "${PHASE1_REASON}:1" \
+        --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
     exit 0
 fi
 
@@ -238,6 +251,15 @@ log "Phase 1 complete. Batch has $BATCH_COUNT candidates with T0 snapshot."
 
 if [ "$BATCH_COUNT" = "0" ]; then
     log "Empty batch. Nothing to re-score. Exiting."
+    _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "run-twitter-cycle-scan" "run-twitter-cycle-post" 2>/dev/null || echo "0.0000")
+    # Surface as failed=1 with reason so the dashboard doesn't render this as a
+    # silent "—". Distinct reason from phase1_no_tweets so the operator can tell
+    # "Claude returned tweets but enrichment dropped them all" from "Claude
+    # returned no tweets at all".
+    python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped 0 --failed 1 \
+        --salvaged "${SALVAGED:-0}" \
+        --failure-reasons "empty_batch:1" \
+        --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
     exit 0
 fi
 
@@ -274,6 +296,14 @@ CANDIDATES=$(psql "$DATABASE_URL" -t -A -F '|' -c "
 if [ -z "$CANDIDATES" ]; then
     log "No candidates with delta scores. Marking batch expired."
     psql "$DATABASE_URL" -c "UPDATE twitter_candidates SET status='expired' WHERE batch_id='$BATCH_ID' AND status='pending'" 2>&1 | tee -a "$LOG_FILE"
+    _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "run-twitter-cycle-scan" "run-twitter-cycle-post" 2>/dev/null || echo "0.0000")
+    EXPIRED_BATCH=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM twitter_candidates WHERE batch_id='$BATCH_ID' AND status='expired'" 2>/dev/null || echo 0)
+    # Not a hard error — batch had candidates but none cleared the Δ≥1 floor.
+    # Report as skipped (not failed) so the row reads "skipped: N" rather than
+    # the silent "—" we used to render. failure_reasons stays empty.
+    python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped "${EXPIRED_BATCH:-0}" --failed 0 \
+        --salvaged "${SALVAGED:-0}" \
+        --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
     exit 0
 fi
 
@@ -397,7 +427,55 @@ log "Batch summary: $SUMMARY"
 POSTED_CT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM twitter_candidates WHERE batch_id='$BATCH_ID' AND status='posted'" 2>/dev/null || echo 0)
 SKIPPED_CT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM twitter_candidates WHERE batch_id='$BATCH_ID' AND status IN ('skipped','expired')" 2>/dev/null || echo 0)
 _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "run-twitter-cycle-scan" "run-twitter-cycle-post" 2>/dev/null || echo "0.0000")
-python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted "${POSTED_CT:-0}" --skipped "${SKIPPED_CT:-0}" --failed 0 --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
+
+# --- Phase 2b failure-reason detection -------------------------------------
+# When POSTED_CT=0 but Phase 2b had candidates to work with, scan the cycle
+# log for known error markers so the dashboard renders an actual reason
+# instead of a silent "—". Reason keys are kept consistent with the unified
+# failure_reasons schema (engage_reddit.py, engage_github, etc.) so a single
+# rendering pass in bin/server.js works across all jobs.
+FAILED_CT=0
+FAILURE_REASONS=""
+if [ "${POSTED_CT:-0}" = "0" ] && [ "${CANDIDATE_COUNT:-0}" -gt 0 ]; then
+    # Look at the cycle log lines emitted after Phase 2b kicked off. Anchor on
+    # the "Phase 2b: Claude reviewing" marker so we don't false-positive on
+    # Phase 1 prose.
+    PHASE2B_LOG=$(awk '/Phase 2b: Claude reviewing/,EOF' "$LOG_FILE" 2>/dev/null || echo "")
+    declare -A REASONS
+    # Anthropic 429 / monthly cap. Same key engage_reddit.py uses.
+    if echo "$PHASE2B_LOG" | grep -qiE '"api_error_status":429|hit your limit|monthly usage limit'; then
+        REASONS[monthly_limit]=$(( ${REASONS[monthly_limit]:-0} + 1 ))
+    fi
+    # twitter-agent Playwright profile served auth redirect (the 14:45 case).
+    if echo "$PHASE2B_LOG" | grep -qiE 'auth redirect|re-authenticat|browser profile.*auth|profile.*needs.*re-auth'; then
+        REASONS[auth_redirect]=$(( ${REASONS[auth_redirect]:-0} + 1 ))
+    fi
+    # X side hard signals from twitter_browser.py.
+    if echo "$PHASE2B_LOG" | grep -qiE '"error":"rate_limited"|RATE_LIMITED_TWITTER'; then
+        REASONS[rate_limited]=$(( ${REASONS[rate_limited]:-0} + 1 ))
+    fi
+    if echo "$PHASE2B_LOG" | grep -qiE 'page.load.timeout|navigation timeout|timed out|Timeout exceeded'; then
+        REASONS[timeout]=$(( ${REASONS[timeout]:-0} + 1 ))
+    fi
+    if echo "$PHASE2B_LOG" | grep -qiE 'reply_box_not_found|tweet_not_found'; then
+        REASONS[posting_blocked]=$(( ${REASONS[posting_blocked]:-0} + 1 ))
+    fi
+    # Build comma-separated key:N pairs. If we found nothing specific but
+    # POSTED_CT=0 with real candidates, fall back to a generic marker so the
+    # row still surfaces a reason instead of "—".
+    for k in "${!REASONS[@]}"; do
+        FAILURE_REASONS="${FAILURE_REASONS:+$FAILURE_REASONS,}${k}:${REASONS[$k]}"
+        FAILED_CT=$(( FAILED_CT + REASONS[$k] ))
+    done
+    if [ -z "$FAILURE_REASONS" ]; then
+        FAILURE_REASONS="phase2b_silent:1"
+        FAILED_CT=1
+    fi
+fi
+
+LOG_ARGS=(--script "post_twitter" --posted "${POSTED_CT:-0}" --skipped "${SKIPPED_CT:-0}" --failed "$FAILED_CT" --salvaged "${SALVAGED:-0}" --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START )))
+[ -n "$FAILURE_REASONS" ] && LOG_ARGS+=(--failure-reasons "$FAILURE_REASONS")
+python3 "$REPO_DIR/scripts/log_run.py" "${LOG_ARGS[@]}"
 
 log "=== Cycle complete: $(date) ==="
 find "$LOG_DIR" -name "twitter-cycle-*.log" -mtime +7 -delete 2>/dev/null || true
