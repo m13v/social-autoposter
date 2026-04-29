@@ -4920,13 +4920,14 @@ const PROJECT_LABELS = { tenxats: '10xats' };
 const ACTIVITY_PROJECT_NONE = '(none)';
 let _activitySeen = new Set();
 let _activityFirstLoad = true;
-let _activityTypeFilter = new Set(EVENT_TYPES);
-let _activityPlatformFilter = new Set(ACTIVITY_PLATFORMS);
-let _activityProjectFilter = new Set();
-let _activityKnownProjects = [];
-let _activitySearch = '';
-let _activitySortField = 'occurred_at';
-let _activitySortDir = 'desc';
+// Activity-tab filters/sort/search are persisted across reloads.
+let _activityTypeFilter = saLoadSet('sa.activity.typeFilter.v1', EVENT_TYPES);
+let _activityPlatformFilter = saLoadSet('sa.activity.platformFilter.v1', ACTIVITY_PLATFORMS);
+let _activityProjectFilter = saLoadSet('sa.activity.projectFilter.v1', []);
+let _activityKnownProjects = saLoad('sa.activity.knownProjects.v1', []);
+let _activitySearch = saLoad('sa.activity.search.v1', '');
+let _activitySortField = saLoad('sa.activity.sortField.v1', 'occurred_at');
+let _activitySortDir = saLoad('sa.activity.sortDir.v1', 'desc');
 let _activityPage = 0;
 let _activityPageSize = (() => {
   try {
@@ -4980,6 +4981,7 @@ function buildActivityFilters() {
     const t = el.dataset.type;
     if (_activityTypeFilter.has(t)) { _activityTypeFilter.delete(t); el.classList.remove('active'); }
     else { _activityTypeFilter.add(t); el.classList.add('active'); }
+    saSaveSet('sa.activity.typeFilter.v1', _activityTypeFilter);
     _activityPage = 0;
     renderActivity(_lastActivityEvents || []);
   });
@@ -4989,6 +4991,7 @@ function buildActivityFilters() {
     const p = el.dataset.platform;
     if (_activityPlatformFilter.has(p)) { _activityPlatformFilter.delete(p); el.classList.remove('active'); }
     else { _activityPlatformFilter.add(p); el.classList.add('active'); }
+    saSaveSet('sa.activity.platformFilter.v1', _activityPlatformFilter);
     _activityPage = 0;
     renderActivity(_lastActivityEvents || []);
   });
@@ -4999,6 +5002,7 @@ function buildActivityFilters() {
       const p = el.dataset.project;
       if (_activityProjectFilter.has(p)) { _activityProjectFilter.delete(p); el.classList.remove('active'); }
       else { _activityProjectFilter.add(p); el.classList.add('active'); }
+      saSaveSet('sa.activity.projectFilter.v1', _activityProjectFilter);
       _activityPage = 0;
       renderActivity(_lastActivityEvents || []);
     });
@@ -5145,6 +5149,39 @@ const STATS_WINDOWS = {
   '14d': { hours: 336, days: 14, labelLong: 'last 14 days',  labelShort: '14d' },
   '30d': { hours: 720, days: 30, labelLong: 'last 30 days',  labelShort: '30d' },
 };
+// Centralized localStorage helpers for ALL dashboard UI state.
+// Every tab/section/subtab/filter/sort/search input is round-tripped through
+// here so a reload restores the user to exactly the view they left. Keep keys
+// namespaced under sa.* and versioned (e.g. .v1) so we can bump shapes safely.
+function saLoad(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw == null) return fallback;
+    const v = JSON.parse(raw);
+    return v == null ? fallback : v;
+  } catch (e) { return fallback; }
+}
+function saSave(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+}
+function saLoadSet(key, fallbackArr) {
+  const arr = saLoad(key, null);
+  if (Array.isArray(arr)) return new Set(arr);
+  return new Set(fallbackArr || []);
+}
+function saSaveSet(key, set) { saSave(key, Array.from(set || [])); }
+// Per-known-list filter: if user has a saved set, intersect with current
+// list of known values so stale entries get pruned and brand-new ones default
+// to "active" (i.e. not filtered out). Used for activity project filter.
+function saLoadSetIntersect(key, known) {
+  const saved = saLoad(key, null);
+  if (!Array.isArray(saved)) return null;
+  const set = new Set(saved.filter(x => known.includes(x)));
+  // Add any newly-discovered values so they aren't silently hidden.
+  for (const k of known) if (!set.has(k) && !saved.includes(k)) set.add(k);
+  return set;
+}
+
 // Persist the user's window selection so picking 7d on Stats also applies to
 // Status and Top on next visit (and survives reloads). Default is 7d.
 const DASHBOARD_WINDOW_KEY = 'sa_dashboard_window';
@@ -5924,6 +5961,7 @@ function renderStyleStats(payload) {
     containerId: 'style-stats-body',
     rows: normalized,
     state: _styleStatsTableState,
+    storageKey: 'sa.styleStatsTable.v1',
     showTotals: true,
     columns: [
       { key: 'style',    label: 'Style',    type: 'text',    align: 'left',  formatter: v => escapeHtml(v), helpText: STYLE_STATS_HELP.style },
@@ -6305,6 +6343,7 @@ function renderDmStats(payload) {
     containerId: 'dm-stats-body',
     rows: normalized,
     state: _dmStatsTableState,
+    storageKey: 'sa.dmStatsTable.v1',
     showTotals: true,
     columns: [
       { key: 'name',               label: 'Project',      type: 'text',    align: 'left',  formatter: v => escapeHtml(PROJECT_LABELS[v] || v) },
@@ -6647,6 +6686,7 @@ function renderTopPosts(payload) {
     containerId: 'top-table-container',
     rows: normalized,
     state: _topTableState,
+    storageKey: 'sa.topTable.v1',
     inlineFilters: true,
     columns: [
       { key: 'platform',       label: 'Platform', type: 'text',    align: 'left',  widthPct: 6,
@@ -7026,6 +7066,7 @@ function renderTopPages(payload) {
       containerId: 'top-pages-container',
       rows: mainRows,
       state: _topPagesTableState,
+      storageKey: 'sa.topPagesTable.v1',
       columns,
     });
   }
@@ -7046,6 +7087,7 @@ function renderTopPages(payload) {
         containerId: 'top-pages-unknown-table',
         rows: unknownRows,
         state: { sortField: 'pageviews', sortDir: 'desc', filters: {} },
+        storageKey: 'sa.topPagesUnknownTable.v1',
         columns,
       });
     }
@@ -7392,6 +7434,7 @@ function renderTopDms(payload) {
     containerId: 'top-dms-container',
     rows: normalized,
     state: _topDmsTableState,
+    storageKey: 'sa.topDmsTable.v1',
     rowId: r => r.id,
     onAfterRender: tbody => {
       if (!window.__dmExpandedIds) window.__dmExpandedIds = Object.create(null);
