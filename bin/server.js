@@ -2505,7 +2505,11 @@ async function handleApi(req, res) {
       "posts.status = 'active'",
       "our_content IS NOT NULL AND LENGTH(our_content) >= 30",
       "posts.platform NOT IN ('github_issues')",
-      "(upvotes IS NOT NULL OR comments_count IS NOT NULL OR views IS NOT NULL)",
+      // Note: do NOT filter on engagement metrics being non-NULL.
+      // Fresh posts come in with upvotes/comments/views = NULL until the
+      // engagement scrape runs (stats.sh). We want them visible immediately
+      // so the operator can confirm a posting run actually landed; the UI
+      // renders a "pending" badge for rows where engagement_updated_at IS NULL.
     ];
     if (windowHours != null) {
       whereParts.push("posted_at >= NOW() - INTERVAL '" + windowHours + " hours'");
@@ -3250,6 +3254,7 @@ const HTML = `<!DOCTYPE html>
   .top-stats-cell { display: flex; flex-direction: column; gap: 2px; font-variant-numeric: tabular-nums; font-size: 12px; }
   .top-stats-bit { color: var(--text); white-space: nowrap; }
   .top-stats-k { color: var(--text-muted); font-weight: 600; margin-right: 4px; }
+  .top-stats-pending { color: var(--text-muted); font-style: italic; }
   /* Top tab table: fixed layout so Content gets 50% and small columns truncate their headers */
   #top-table-container .style-stats-table { table-layout: fixed; }
   #top-table-container .style-stats-table th,
@@ -6874,7 +6879,7 @@ function renderTopPosts(payload) {
     : projectFiltered;
   if (totalEl) totalEl.textContent = posts.length + ' post' + (posts.length === 1 ? '' : 's');
   if (!posts.length) {
-    container.innerHTML = '<div class="style-stats-empty">No posts with engagement yet.</div>';
+    container.innerHTML = '<div class="style-stats-empty">No posts in this window.</div>';
     _topTableHandle = null;
     return;
   }
@@ -6927,6 +6932,21 @@ function renderTopPosts(payload) {
         filterPredicate: filterPredicateExact },
       { key: 'score',          label: 'Stats',    type: 'numeric', align: 'left',  widthPct: 18,
         formatter: (_v, r) => {
+          // engagement_ts === 0 means engagement_updated_at IS NULL: the
+          // post landed in the DB but the engagement scrape (stats.sh)
+          // hasn't run against it yet. Render a "pending" pill instead of
+          // a misleading row of zeros, with em-dashes for the individual
+          // metrics. Once stats.sh fires, real numbers replace this.
+          if (!r.engagement_ts) {
+            const pendingTitle = 'Engagement scrape has not run yet for this post. Numbers will fill in once stats.sh fires.';
+            const parts = [
+              '<span class="top-stats-bit" title="' + escapeHtml(pendingTitle) + '"><span class="top-stats-k">score</span><span class="top-stats-pending">pending</span></span>',
+              '<span class="top-stats-bit"><span class="top-stats-k">upvotes</span>\u2014</span>',
+              '<span class="top-stats-bit"><span class="top-stats-k">comments</span>\u2014</span>',
+              '<span class="top-stats-bit"><span class="top-stats-k">views</span>\u2014</span>',
+            ];
+            return '<div class="top-stats-cell">' + parts.join('') + '</div>';
+          }
           const parts = [
             '<span class="top-stats-bit"><span class="top-stats-k">score</span>' + fmt(r.score) + '</span>',
             '<span class="top-stats-bit"><span class="top-stats-k">upvotes</span>' + fmt(r.upvotes) + '</span>',
