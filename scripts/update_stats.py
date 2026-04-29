@@ -1560,7 +1560,10 @@ def main():
                   f"empty={r.get('errors_empty',0)} malformed={r.get('errors_malformed',0)} "
                   f"other={r.get('errors_other',0)})")
 
-        if moltbook_stats is not None and not moltbook_stats.get("skipped"):
+        # `skipped: True` is the no-API-key sentinel (don't print); any
+        # integer value means we ran and counted some skipped rows, in which
+        # case we DO want the summary line (the dashboard needs it).
+        if moltbook_stats is not None and moltbook_stats.get("skipped") is not True:
             m = moltbook_stats
             print(f"\nMoltbook: {m['total']} checked, {m['updated']} updated, "
                   f"{m['deleted']} deleted, {m['errors']} errors")
