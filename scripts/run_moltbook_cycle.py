@@ -41,8 +41,8 @@ HISTORICAL = os.path.join(SCRIPTS, "historical_engagement.py")
 # --- Momentum + cap thresholds (single source of truth, tune here) ----------
 DELTA_THRESHOLD = 5.0          # candidate counts as "high momentum" if delta_score >= this
 HIGH_DELTA_BUMP = 3            # need this many high-momentum candidates to bump cap
-CAP_DEFAULT = 2
-CAP_BUMPED = 5
+CAP_DEFAULT = 1
+CAP_BUMPED = 1
 CLAUDE_CANDIDATE_LIMIT = 15    # show at most this many candidates to Claude
 
 
