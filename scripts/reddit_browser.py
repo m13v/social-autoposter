@@ -1280,11 +1280,12 @@ def send_dm(chat_url, message, dm_id=None):
                     _log_dm_outbound(chat_url, message, dm_id=dm_id)
 
                 return {
-                    "ok": True,
+                    "ok": verified,
                     "thread_url": page.url,
                     "verified": verified,
                     "message_sent": message,
                     "applied_campaigns": applied_campaigns,
+                    "error": None if verified else "send_unverified_no_dom_confirmation",
                 }
 
             else:
@@ -1407,7 +1408,20 @@ def compose_dm(recipient, subject, body):
                     page.keyboard.press("Enter")
 
                 page.wait_for_timeout(3000)
-                return {"ok": True, "thread_url": page.url}
+
+                # Verify message appeared in conversation DOM
+                msg_start = full_msg[:50]
+                verified = page.evaluate("""(msgStart) => {
+                    const body = document.body.textContent || '';
+                    return body.includes(msgStart);
+                }""", msg_start)
+
+                return {
+                    "ok": verified,
+                    "thread_url": page.url,
+                    "verified": verified,
+                    "error": None if verified else "compose_unverified_no_dom_confirmation",
+                }
 
             elif "old.reddit.com" in page.url:
                 # Old reddit compose form
