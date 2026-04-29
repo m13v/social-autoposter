@@ -80,7 +80,7 @@ Process ALL of them. For each post:
    b. Derive a URL slug from the keyword: lowercase, kebab-case, alphanumeric and hyphens only, max 50 chars. Examples: "local-ai-agent", "macos-accessibility-automation".
    c. Run the unified SEO page generator (it loads the @m13v/seo-components palette, picks content type, builds the page, commits, pushes, verifies the live URL, and writes the seo_keywords row that surfaces in the dashboard activity feed). Use the Bash tool:
         python3 ~/social-autoposter/seo/generate_page.py --product PROJECT_NAME --keyword "KEYWORD_PHRASE" --slug "url-slug" --trigger reddit
-      This call can take 10-20 minutes per page. The final stdout is a JSON object; parse it. On success it contains "success": true and "page_url": "https://...". On failure it contains "success": false and "error": "...".
+      This call can take 10-40 minutes per page (Cloud Run staging-then-tag deploys on mk0r are the slow end). The final stdout is a JSON object; parse it. On success it contains "success": true and "page_url": "https://...". On failure it contains "success": false and "error": "...".
    d. If success, use \`page_url\` from the JSON output for the Reddit link edit.
    e. If failure, DO NOT fall back to a bare project website or github URL. DO NOT edit the Reddit comment. DO NOT update link_edited_at on the post. Log the error in your output and move to the next post. The post will stay eligible and be retried on the next scheduled run (every 6h). A custom landing page per thread is a hard requirement; a bare homepage link is never acceptable.
    If the matched project has NO landing_pages config at all (not a generation failure, genuinely unconfigured), then and only then use the project's website URL.
