@@ -106,6 +106,7 @@ def main():
             str(args.dm_id),
             "--content",
             args.message,
+            "--verified",
         ],
         check=True,
     )
