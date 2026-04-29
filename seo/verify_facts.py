@@ -449,23 +449,149 @@ def extract_and_verify_factual_claims(repo_path: str,
     }
 
 
+def verify_keyword_directly_answered(repo_path: str,
+                                     file_paths: list[str],
+                                     keyword: str) -> dict:
+    """Gate #4: the page must literally answer the keyword query, or
+    transparently document why no answer exists with an authoritative
+    verification trail.
+
+    Catches the failure mode where a page ranks for a lookup-shaped keyword
+    (e.g. "anthropic pbc vat number", "github copilot pricing", "openai
+    headquarters address", "anthropic founded year") but the page punts on
+    the exact datum the user came for ("ask them directly", "may or may
+    not", "varies"). A real user commented "gbvat number?" on a fazm page
+    that did this. Don't be a dead end.
+
+    Logic:
+      1. Classify the keyword shape (lookup vs explanatory) via Claude.
+      2. For lookup-shaped keywords, scan the page for the literal datum
+         in a prominent position (top ~30% of the page or in a clearly
+         labelled "answer" / "TLDR" / "verified" callout).
+      3. For explanatory-shaped keywords, scan for a 1-3 sentence direct
+         answer near the top.
+      4. If the answer is genuinely not publicly available, the page must
+         either render a "Direct answer (verified <date>)" callout
+         documenting an authoritative source check (HMRC, SEC, Companies
+         House, Anthropic support docs, etc.) or include the literal
+         non-answer with a verification timestamp.
+
+    Skipped failures (no keyword passed, verifier exception, claude
+    unreachable) return ok=True with a 'skipped' field so a transient web
+    outage never blocks a page.
+    """
+    if not keyword or not keyword.strip():
+        return {"ok": True, "skipped": "no keyword provided"}
+
+    files = _read_existing(repo_path, file_paths)
+    if not files:
+        return {"ok": True, "skipped": "no files on disk"}
+
+    snippets = "\n\n".join(
+        f"=== {rel} ===\n{text}" for rel, text in files.items()
+    )
+    if len(snippets) > 60000:
+        snippets = snippets[:60000] + "\n\n[truncated]"
+
+    prompt = (
+        "You are checking whether an SEO page literally answers the keyword "
+        "query a user typed into Google. The page is below.\n\n"
+        f"Target keyword: {keyword!r}\n\n"
+        "Step 1. Classify the keyword shape:\n"
+        "  - 'lookup': the user wants ONE specific datum (a number, ID, "
+        "code, exact name, address, price, date, version, count). "
+        "Examples: 'anthropic pbc vat number', 'github copilot pricing', "
+        "'openai headquarters address', 'tesla cik number', 'docker "
+        "version latest'.\n"
+        "  - 'explanatory': the user wants a concept explained in prose. "
+        "Examples: 'how does docker work', 'what is rag', 'why is claude "
+        "slow', 'best ai agent for mac'.\n\n"
+        "Step 2. Decide if the page answers it. The rules differ by shape.\n"
+        "  - lookup: the literal datum (or a clearly-labelled "
+        "'verified-not-available' callout naming the authoritative source "
+        "and date checked) MUST appear in roughly the first 30% of the "
+        "page or in a section explicitly labelled 'answer', 'tldr', "
+        "'direct answer', or 'verified <date>'. Burying it on row 18 of a "
+        "table at the bottom does NOT count.\n"
+        "  - explanatory: a 1-3 sentence direct answer MUST appear in "
+        "roughly the first 30% of the page (hero, TLDR, lede, or first "
+        "section).\n\n"
+        "Step 3. If the literal answer does not exist publicly (e.g. "
+        "Anthropic does not publish a UK VAT number), the page is still "
+        "OK iff it contains a transparent 'verified <date>' callout that "
+        "names the authoritative source it checked (HMRC, SEC EDGAR, "
+        "Companies House, GitHub, vendor pricing page, etc.) and the "
+        "result. A page that just says 'ask them directly' or 'this may "
+        "vary' or 'depends' is a dead end and FAILS.\n\n"
+        "Reply with EXACTLY ONE JSON object on a line by itself:\n"
+        '{"shape": "lookup"|"explanatory", '
+        '"answered": true|false, '
+        '"answer_excerpt": "<verbatim 1-3 sentence quote from the page '
+        'that delivers the answer, or null if not answered>", '
+        '"position": "top"|"middle"|"bottom"|"missing", '
+        '"verdict": "answered"|"dead_end"|"buried", '
+        '"recommendation": "<one short sentence on what to add or '
+        'change>"}\n\n'
+        "Only verdict='dead_end' fails the build. 'buried' is a warning "
+        "(the answer exists but is not prominent). 'answered' is a pass.\n\n"
+        "Page:\n" + snippets
+    )
+    reply = _claude_oneshot(
+        prompt, cwd=repo_path,
+        allowed_tools=["WebSearch", "WebFetch"], max_turns=8,
+    )
+    if "error" in reply:
+        return {"ok": True, "skipped": f"verifier error: {reply['error']}"}
+
+    verdict = reply.get("verdict")
+    if verdict in ("answered", "buried"):
+        return {"ok": True,
+                "verdict": verdict,
+                "shape": reply.get("shape"),
+                "position": reply.get("position"),
+                "answer_excerpt": reply.get("answer_excerpt"),
+                "recommendation": reply.get("recommendation")}
+
+    if verdict != "dead_end":
+        return {"ok": True,
+                "skipped": f"unrecognized verdict: {verdict!r}",
+                "raw": reply}
+
+    cleaned = _cleanup_files(repo_path, file_paths)
+    return {
+        "ok": False,
+        "error": (f"keyword dead-end: page does not answer {keyword!r}. "
+                  f"Recommendation: "
+                  f"{(reply.get('recommendation') or '')[:300]}"),
+        "shape": reply.get("shape"),
+        "verdict": verdict,
+        "recommendation": reply.get("recommendation"),
+        "cleaned": cleaned,
+    }
+
+
 def main() -> int:
     """CLI for ad-hoc use:
         python3 verify_facts.py <repo_path> <relative_file> [...]
-            [--gate=urls|time|claims|all] [--no-cleanup]
+            [--gate=urls|time|claims|answer|all]
+            [--keyword=<keyword>] [--no-cleanup]
 
-    Gates default to ALL three. Pass --no-cleanup to keep the file on disk
+    Gates default to ALL four. Pass --no-cleanup to keep the file on disk
     on failure (useful for ad-hoc audits; the in-pipeline gates always
     cleanup so the auto-commit cron has nothing to push).
+    The 'answer' gate requires --keyword; without it the gate is skipped.
     """
     args = sys.argv[1:]
     gate = "all"
     no_cleanup = False
+    keyword = ""
     files: list[str] = []
     repo_path = ""
     for a in args:
         if a.startswith("--gate="):
             gate = a.split("=", 1)[1]
+        elif a.startswith("--keyword="):
+            keyword = a.split("=", 1)[1]
         elif a == "--no-cleanup":
             no_cleanup = True
         elif not repo_path:
@@ -473,7 +599,9 @@ def main() -> int:
         else:
             files.append(a)
     if not repo_path or not files:
-        print("usage: verify_facts.py <repo_path> <rel_file> [...] [--gate=urls|time|claims|all] [--no-cleanup]",
+        print("usage: verify_facts.py <repo_path> <rel_file> [...] "
+              "[--gate=urls|time|claims|answer|all] [--keyword=<kw>] "
+              "[--no-cleanup]",
               file=sys.stderr)
         return 2
 
@@ -488,6 +616,9 @@ def main() -> int:
         results["time_sensitive"] = verify_time_sensitive_claims(repo_path, files)
     if gate in ("claims", "all"):
         results["claims"] = extract_and_verify_factual_claims(repo_path, files)
+    if gate in ("answer", "all"):
+        results["keyword_answer"] = verify_keyword_directly_answered(
+            repo_path, files, keyword)
 
     print(json.dumps(results, indent=2, default=str))
     return 0 if all(r.get("ok") for r in results.values()) else 1
