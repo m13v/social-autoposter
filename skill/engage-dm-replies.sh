@@ -1162,17 +1162,18 @@ dm_counts_for() {
     " 2>/dev/null | tr '|' ' '
 }
 RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+_COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "engage-dm-replies" 2>/dev/null || echo "0.0000")
 if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ]; then
     read -r R_POSTED R_STALE <<< "$(dm_counts_for reddit)"
-    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_reddit" --posted "${R_POSTED:-0}" --skipped "${R_STALE:-0}" --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_reddit" --posted "${R_POSTED:-0}" --skipped "${R_STALE:-0}" --failed 0 --cost "$_COST" --elapsed "$RUN_ELAPSED"
 fi
 if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ]; then
     read -r L_POSTED L_STALE <<< "$(dm_counts_for linkedin)"
-    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_linkedin" --posted "${L_POSTED:-0}" --skipped "${L_STALE:-0}" --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_linkedin" --posted "${L_POSTED:-0}" --skipped "${L_STALE:-0}" --failed 0 --cost "$_COST" --elapsed "$RUN_ELAPSED"
 fi
 if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ]; then
     read -r T_POSTED T_STALE <<< "$(dm_counts_for twitter)"
-    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_twitter" --posted "${T_POSTED:-0}" --skipped "${T_STALE:-0}" --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
+    python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_twitter" --posted "${T_POSTED:-0}" --skipped "${T_STALE:-0}" --failed 0 --cost "$_COST" --elapsed "$RUN_ELAPSED"
 fi
 
 # Report flagged conversations needing human attention (emails already sent per-DM during flagging)
