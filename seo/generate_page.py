@@ -2450,176 +2450,53 @@ def update_state(trigger: str, product: str, keyword: str, status: str,
         pass  # caller manages state
 
 
-def update_blog_manifest(repo_path: str, page_path: str) -> dict:
-    """Append/replace a blog post entry in src/app/blog/_manifest.ts.
+def update_blog_manifest(repo_path: str, content_module_path: str) -> dict:
+    """Verify the model added a manifest entry for the new blog post.
 
-    Parses the metadata constants out of the generated page.tsx (SLUG, TITLE,
-    DESCRIPTION, DATE, LAST_MODIFIED, AUTHOR, TAGS, IMAGE), reads the existing
-    manifest, removes any prior entry for the same slug, inserts the new entry,
-    sorts the array by date (newest first), and writes it back. Then commits +
-    pushes the manifest change so /blog/, RSS, and tag pages pick it up.
+    The model writes both `src/app/blog/_content/<slug>.ts` (the content
+    module) and an entry in `src/app/blog/_manifest.ts` in the same commit.
+    This helper double-checks: it reads the manifest after the commit lands
+    and confirms an entry exists for the slug. If not, the row goes back to
+    pending so the next cron tick retries.
 
-    Returns {"ok": bool, "error"?: str, "commit_sha"?: str, "skipped"?: bool}.
+    Returns {"ok": bool, "error"?: str, "skipped"?: bool, "slug"?: str}.
 
-    No-op (skipped=True) when the consumer has no manifest at the expected
-    path — keeps non-fazm sites from breaking until they adopt the same shape.
+    Skipped silently on consumers that don't have a manifest yet (i.e. they
+    haven't adopted the BlogPostLayout pattern).
     """
-    full_page_path = os.path.join(repo_path, page_path)
     manifest_path = os.path.join(repo_path, "src", "app", "blog", "_manifest.ts")
     if not os.path.exists(manifest_path):
         return {"ok": True, "skipped": True,
                 "reason": "no _manifest.ts on this consumer"}
-    if not os.path.exists(full_page_path):
-        return {"ok": False, "error": f"page.tsx missing at {full_page_path}"}
 
-    try:
-        page_text = Path(full_page_path).read_text(encoding="utf-8")
-    except Exception as e:
-        return {"ok": False, "error": f"read page.tsx: {e}"}
-
-    def _grab(name: str, default: str | None = None) -> str | None:
-        # Match: const NAME = "...";  (double-quoted only — that's what the
-        # migration script and the build_prompt template both emit)
-        m = re.search(
-            rf'^const {re.escape(name)} = "((?:[^"\\]|\\.)*)";',
-            page_text, re.MULTILINE)
-        if m:
-            # Unescape \" and \\
-            return m.group(1).replace('\\"', '"').replace('\\\\', '\\')
-        return default
-
-    slug = _grab("SLUG")
-    title = _grab("TITLE")
-    description = _grab("DESCRIPTION")
-    date = _grab("DATE")
-    last_modified = _grab("LAST_MODIFIED")
-    author = _grab("AUTHOR", "Matthew Diakonov")
-    image = _grab("IMAGE")
-
-    if not (slug and title and date):
+    # Derive slug from the content module path: src/app/blog/_content/<slug>.ts
+    rel = content_module_path
+    slug_match = re.match(
+        r"^(?:src/)?app/blog/_content/([^/]+)\.ts$", rel)
+    if not slug_match:
         return {"ok": False,
-                "error": f"could not parse SLUG/TITLE/DATE from {page_path}"}
+                "error": f"unexpected content module path: {rel}"}
+    slug = slug_match.group(1)
 
-    # TAGS is a string[] literal: const TAGS: string[] = ["a", "b"];
-    tags: list[str] = []
-    tags_match = re.search(
-        r'^const TAGS(?::\s*string\[\])?\s*=\s*\[([^\]]*)\]\s*;',
-        page_text, re.MULTILINE)
-    if tags_match:
-        for m in re.finditer(r'"((?:[^"\\]|\\.)*)"', tags_match.group(1)):
-            tags.append(m.group(1).replace('\\"', '"'))
-
-    # Reading-time estimate: count words in the HTML_CONTENT body.
-    rt_match = re.search(
-        r'^const HTML_CONTENT = `(.*?)`;\s*$',
-        page_text, re.MULTILINE | re.DOTALL)
-    if rt_match:
-        # Strip tags for a rough word count.
-        text_only = re.sub(r'<[^>]+>', ' ', rt_match.group(1))
-        words = len(text_only.split())
-        minutes = max(1, (words + 199) // 200)
-        reading_time = f"{minutes} min read"
-    else:
-        reading_time = "5 min read"
-
-    # Build the new manifest entry as a single-line TS object literal that
-    # matches the formatting the migration script writes.
-    def _json_str(s: str) -> str:
-        return json.dumps(s)
-
-    tags_ts = "[" + ", ".join(_json_str(t) for t in tags) + "]"
-    lm_ts = _json_str(last_modified) if last_modified else "undefined"
-    img_ts = _json_str(image) if image else "undefined"
-    new_entry = (
-        f'  {{ slug: {_json_str(slug)}, title: {_json_str(title)}, '
-        f'description: {_json_str(description or "")}, date: {_json_str(date)}, '
-        f'lastModified: {lm_ts}, author: {_json_str(author or "Matthew Diakonov")}, '
-        f'tags: {tags_ts}, image: {img_ts}, '
-        f'readingTime: {_json_str(reading_time)} }},'
-    )
+    if not os.path.exists(os.path.join(repo_path, rel)):
+        return {"ok": False,
+                "error": f"content module missing at {rel}"}
 
     try:
         manifest_text = Path(manifest_path).read_text(encoding="utf-8")
     except Exception as e:
         return {"ok": False, "error": f"read manifest: {e}"}
 
-    # Remove any prior line for this slug (idempotent re-runs).
-    slug_re = re.compile(
-        rf'^\s*\{{\s*slug:\s*"{re.escape(slug)}"\s*,.*?\}},\s*$',
-        re.MULTILINE)
-    cleaned_text = slug_re.sub("", manifest_text)
-    # Squash the empty line that sub() leaves behind so the file stays tidy.
-    cleaned_text = re.sub(r'\n\n+', '\n', cleaned_text)
+    # Look for a slug: "<slug>" entry on a single manifest line.
+    if not re.search(
+        rf'\{{\s*slug:\s*"{re.escape(slug)}"\s*,',
+        manifest_text):
+        return {"ok": False,
+                "error": (f"manifest missing entry for slug={slug}; "
+                          "model wrote the content module but skipped "
+                          "_manifest.ts. Re-run will retry.")}
 
-    # Insert the new entry. Strategy: keep the entries in date-desc order by
-    # walking the existing entries and inserting before the first entry whose
-    # date is <= new date. If we can't find one, append before the closing ];
-    entry_re = re.compile(
-        r'^(\s*)\{\s*slug:\s*"([^"]+)"\s*,.*?date:\s*"([^"]+)".*?\},\s*$',
-        re.MULTILINE | re.DOTALL)
-    inserted = False
-    out_lines: list[str] = []
-    for line in cleaned_text.splitlines(keepends=True):
-        if not inserted:
-            m = entry_re.match(line)
-            if m and m.group(3) <= date:
-                out_lines.append(new_entry + "\n")
-                inserted = True
-        out_lines.append(line)
-    new_manifest_text = "".join(out_lines)
-    if not inserted:
-        # Fallback: insert before the closing `];`
-        new_manifest_text = re.sub(
-            r'(\n)(\s*\];\s*\n?)$',
-            r'\1' + new_entry + r'\n\2',
-            new_manifest_text, count=1)
-
-    if new_manifest_text == manifest_text:
-        return {"ok": True, "noop": True,
-                "reason": "manifest already up to date"}
-
-    try:
-        Path(manifest_path).write_text(new_manifest_text, encoding="utf-8")
-    except Exception as e:
-        return {"ok": False, "error": f"write manifest: {e}"}
-
-    # Commit + push so the live site picks the new entry up. Best-effort: a
-    # push race is fine because the auto-commit cron will retry within a
-    # minute. Use --quiet flags so we don't spam the lane log.
-    rel = os.path.relpath(manifest_path, repo_path)
-    try:
-        subprocess.run(["git", "add", rel], cwd=repo_path,
-                       check=True, timeout=30)
-        commit_msg = f"chore(blog): add {slug} to manifest"
-        subprocess.run(
-            ["git", "commit", "-m", commit_msg, "--", rel],
-            cwd=repo_path, check=True, timeout=30,
-            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
-        # rev-parse the just-made commit for return value
-        sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo_path,
-            capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-        # Pull-rebase + push to handle any concurrent manifest writes; if the
-        # rebase fails, abort and let the next cron tick retry.
-        rebase = subprocess.run(
-            ["git", "pull", "--rebase", "--autostash"],
-            cwd=repo_path, capture_output=True, text=True, timeout=60)
-        if rebase.returncode != 0:
-            subprocess.run(["git", "rebase", "--abort"], cwd=repo_path,
-                           check=False, timeout=30)
-            return {"ok": False,
-                    "error": f"rebase failed: {rebase.stderr[:300]}"}
-        push = subprocess.run(["git", "push"], cwd=repo_path,
-                              capture_output=True, text=True, timeout=60)
-        if push.returncode != 0:
-            return {"ok": False,
-                    "error": f"push failed: {push.stderr[:300]}"}
-        return {"ok": True, "commit_sha": sha, "slug": slug}
-    except subprocess.CalledProcessError as e:
-        return {"ok": False, "error": f"git: {e.stderr or e}"}
-    except Exception as e:
-        return {"ok": False, "error": f"git: {e}"}
+    return {"ok": True, "slug": slug}
 
 
 def find_existing_target_path(repo_path: str, content_type: str,
