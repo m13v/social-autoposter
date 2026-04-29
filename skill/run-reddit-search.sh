@@ -34,19 +34,13 @@ TOTAL_FAILED=0
 TOTAL_SKIPPED=0
 RUN_START=$(date +%s)
 
-# Acquire once at the top so the EXIT trap leaves a clean state and any
-# already-running peer is queued behind us. The plan loop releases for the
-# Claude/HTTP phase and re-acquires before posting.
-acquire_lock "reddit-browser" 3600
-
+# Lock is acquired only around the post phase of each iteration. Plan runs
+# unlocked so peers can use the browser during our HTTP/Claude work.
 for i in $(seq 1 "$ITERATIONS"); do
     log "--- Iteration $i/$ITERATIONS ---"
     PLAN_FILE=$(mktemp -t post_reddit_plan.XXXXXX.json)
 
-    # Plan phase: no browser. Release the lock so peers can run.
-    log "Releasing reddit-browser lock for plan phase..."
-    release_lock "reddit-browser"
-
+    # Plan phase: no browser, no lock.
     set +e
     python3 "$REPO_DIR/scripts/post_reddit.py" \
         --phase plan \
@@ -63,20 +57,17 @@ for i in $(seq 1 "$ITERATIONS"); do
         3)
             log "Plan phase: rate-limited; ending run."
             rm -f "$PLAN_FILE"
-            acquire_lock "reddit-browser" 3600
             break
             ;;
         4)
             log "Plan phase: no eligible project left; ending run."
             rm -f "$PLAN_FILE"
-            acquire_lock "reddit-browser" 3600
             break
             ;;
         5)
             log "Plan phase: Claude failed; counting as failed and continuing."
             TOTAL_FAILED=$((TOTAL_FAILED + 1))
             rm -f "$PLAN_FILE"
-            acquire_lock "reddit-browser" 3600
             continue
             ;;
         6)
@@ -85,14 +76,12 @@ for i in $(seq 1 "$ITERATIONS"); do
             PICKED=$(python3 -c "import json,sys;print(json.load(open('$PLAN_FILE')).get('project_name',''))" 2>/dev/null || echo "")
             [ -n "$PICKED" ] && EXCLUDE="${EXCLUDE:+$EXCLUDE,}$PICKED"
             rm -f "$PLAN_FILE"
-            acquire_lock "reddit-browser" 3600
             continue
             ;;
         *)
             log "Plan phase: unexpected exit code $PLAN_RC; aborting iteration."
             TOTAL_FAILED=$((TOTAL_FAILED + 1))
             rm -f "$PLAN_FILE"
-            acquire_lock "reddit-browser" 3600
             continue
             ;;
     esac
@@ -100,14 +89,17 @@ for i in $(seq 1 "$ITERATIONS"); do
     PICKED=$(python3 -c "import json,sys;print(json.load(open('$PLAN_FILE')).get('project_name',''))" 2>/dev/null || echo "")
     [ -n "$PICKED" ] && EXCLUDE="${EXCLUDE:+$EXCLUDE,}$PICKED"
 
-    # Post phase: needs browser. Re-acquire (blocks if a peer is mid-run).
-    log "Re-acquiring reddit-browser lock for post phase..."
+    # Post phase: needs browser. Acquire (blocks if a peer is mid-run), do the
+    # post, release immediately so the next iteration's plan runs unlocked.
+    log "Acquiring reddit-browser lock for post phase..."
     acquire_lock "reddit-browser" 3600
 
     set +e
     POST_OUT=$(python3 "$REPO_DIR/scripts/post_reddit.py" --phase post --in "$PLAN_FILE" 2>&1 | tee -a "$LOG_FILE")
     POST_RC=${PIPESTATUS[0]}
     set -e
+
+    release_lock "reddit-browser"
 
     if [ "$POST_RC" = "0" ]; then
         ITER_POSTED=$(echo "$POST_OUT" | grep -oE 'posted=[0-9]+' | tail -1 | cut -d= -f2 || echo 0)
