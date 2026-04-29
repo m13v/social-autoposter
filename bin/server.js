@@ -399,7 +399,11 @@ const RUN_MONITOR_PATH = path.join(LOG_DIR, 'run_monitor.log');
 // Optional `unavailable=N` and `not_found=N` (LinkedIn-specific, added
 // 2026-04-28) tail the base segment as their own optional captures so older
 // stats rows that only have checked/updated/removed still parse cleanly.
-const RUN_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*posted=(\d+)\s+skipped=(\d+)\s+failed=(\d+)(?:\s+replies_refreshed=(\d+))?(?:\s+checked=(\d+)\s+updated=(\d+)\s+removed=(\d+))?(?:\s+unavailable=(\d+))?(?:\s+not_found=(\d+))?\s+cost=\$([\d.]+)\s+elapsed=(\d+)s/;
+// Optional `failure_reasons=key:N,key:N` (added 2026-04-29) tail the line so
+// the dashboard can surface why a run reported failed>0 (monthly_limit,
+// timeout, bad_output, cdp_error, ...). Old lines still match because the
+// group is optional.
+const RUN_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*posted=(\d+)\s+skipped=(\d+)\s+failed=(\d+)(?:\s+replies_refreshed=(\d+))?(?:\s+checked=(\d+)\s+updated=(\d+)\s+removed=(\d+))?(?:\s+unavailable=(\d+))?(?:\s+not_found=(\d+))?\s+cost=\$([\d.]+)\s+elapsed=(\d+)s(?:\s+failure_reasons=([^\s|]+))?/;
 
 // posts.platform is lowercase; UI labels are capitalized.
 const PLATFORM_LABELS = {
@@ -523,17 +527,18 @@ async function enrichLinkEditRuns(runs) {
     [since]
   );
   if (!rows) return;
-  // pg parses `timestamp without time zone` columns as local time, but
-  // Neon stores these rows in UTC (session tz=UTC). The Date we get back has
-  // epoch = UTC-for-local-at-those-digits, 7h ahead of true UTC in PDT. Subtract
-  // the local offset to recover the true UTC epoch so the bucket comparison
-  // against run.started_at (true UTC epoch from log_run.py local-time ISO) is
-  // apples-to-apples.
+  // posts.link_edited_at is `timestamp with time zone` (verified 2026-04-29
+  // against information_schema). pg-node returns timestamptz as a Date pinned
+  // to the correct UTC instant, so getTime() already gives the true UTC epoch.
+  // The previous code applied a getTimezoneOffset() correction assuming the
+  // column was `timestamp without time zone`, which shifted every DB timestamp
+  // 7h into the past and made the run-window bucket count zero. Bug surfaced
+  // as productive engage runs being labeled "queue empty" in the dashboard.
   const normRows = rows.map(r => {
     const d = r.link_edited_at instanceof Date ? r.link_edited_at : new Date(r.link_edited_at);
     return {
       platform: (r.platform || '').toLowerCase(),
-      editedMs: d.getTime() - d.getTimezoneOffset() * 60 * 1000,
+      editedMs: d.getTime(),
       skip: !!r.is_skip,
     };
   });
@@ -575,10 +580,15 @@ async function enrichEngageRuns(runs) {
   // Same UTC/local correction as enrichLinkEditRuns: pg parses `timestamp
   // without time zone` as local, but rows are stored UTC.
   const normRows = rows.map(r => {
+    // replies.replied_at and replies.processing_at are `timestamp with time zone`
+    // (verified 2026-04-29). Date.getTime() already returns the correct UTC
+    // epoch for timestamptz columns; no offset correction needed. The previous
+    // version subtracted the local tz offset, shifting every reply 7h back and
+    // making productive engage runs render as "queue empty".
     const toMs = (d) => {
       if (!d) return null;
       const dt = d instanceof Date ? d : new Date(d);
-      return dt.getTime() - dt.getTimezoneOffset() * 60 * 1000;
+      return dt.getTime();
     };
     // platform_key for engage_reddit is 'reddit'; DB platforms are
     // 'reddit', 'x', 'linkedin', 'github', 'moltbook'. Map twitter->x.
@@ -643,10 +653,12 @@ async function enrichCheckRepliesRuns(runs) {
   );
   if (!rows) return;
   const normRows = rows.map(r => {
+    // replies.discovered_at is `timestamp with time zone` (verified 2026-04-29).
+    // No tz offset correction needed; getTime() already returns true UTC epoch.
     const d = r.discovered_at instanceof Date ? r.discovered_at : new Date(r.discovered_at);
     return {
       platform: (r.platform || '').toLowerCase(),
-      discoveredMs: d.getTime() - d.getTimezoneOffset() * 60 * 1000,
+      discoveredMs: d.getTime(),
     };
   });
   const pendingRows = await pq(
