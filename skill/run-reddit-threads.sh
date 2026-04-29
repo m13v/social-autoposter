@@ -263,7 +263,7 @@ ${TOP_POSTS}
    PERMANENT_BLOCK DECISION (always set this field):
    - permanent_block = TRUE if the sub has a STANDING rule that rejects every post we could ever make from this account: bans all software/website/AI posts (mod-pinned), link-only sub, approved-submitters-only, account is banned from this sub, no-self-promo with zero exceptions for our category. ALSO set TRUE on submit-time forbidden / 403.
    - permanent_block = FALSE if the issue is specific to THIS post (recent topic was already covered, this title is too promotional, you chose to abort to be safe but the sub itself does accept posts of this type, transient browser/network error, repetition concern).
-   - When in doubt, FALSE. False positives are cheap (we just retry the sub later); false negatives waste a Claude run cost ($1.50-3.50) every time we re-pick the same dead-end sub.
+   - When in doubt, FALSE. False positives are cheap (we just retry the sub later); false negatives waste a Claude run cost (\$1.50-3.50 USD) every time we re-pick the same dead-end sub.
 
 6. POST via mcp__reddit-agent__*:
    - Navigate to https://old.reddit.com/${SUBREDDIT}/submit?selftext=true
