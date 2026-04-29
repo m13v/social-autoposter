@@ -272,13 +272,10 @@ ${TOP_POSTS}
    - Click the submit button. Wait 3 seconds. Capture the permalink (document.location.href after submission).
    - Close the tab.
 
-7. LOG to database. IMPORTANT: The source_summary in your JSON output IS what gets logged. Make it rich:
-   INSERT INTO posts (platform, thread_url, thread_author, thread_author_handle,
-     thread_title, thread_content, our_url, our_content, our_account,
-     source_summary, project_name, engagement_style, feedback_report_used, status, posted_at, claude_session_id)
-   VALUES ('reddit', PERMALINK, '${POST_ACCOUNT}', '${POST_ACCOUNT}',
-     TITLE, BODY, PERMALINK, BODY, '${POST_ACCOUNT}',
-     SOURCE_SUMMARY, '${PROJECT}', 'STYLE_YOU_CHOSE', TRUE, 'active', NOW(), '${CLAUDE_SESSION_ID}'::uuid);
+7. DO NOT touch the database. The shell wrapper handles the INSERT after you return.
+   IMPORTANT: source_summary, title, body, permalink, engagement_style in your
+   JSON output ARE what get logged. Make source_summary rich and grounded in
+   the specific files/details you read in step 1.
 
 8. Return your structured JSON output. Every field in the schema is required. Fill permalink with the actual URL if posted, or null if aborted.
 
@@ -333,6 +330,70 @@ else:
 
 if [ "$PERMALINK" != "null" ] && [ "$PERMALINK" != "PARSE_ERROR" ]; then
   echo "POSTED: $PERMALINK | $TITLE" | tee -a "$LOG_FILE"
+
+  # Authoritative DB INSERT.
+  # Historical bug: step 7 of the prompt asked Claude to run psql via Bash to
+  # log the post. Claude sometimes did, sometimes didn't (e.g. mk0r run id
+  # 21486 on 2026-04-29 was orphaned and had to be backfilled by hand).  The
+  # shell already has every required value parsed out of structured_output, so
+  # do the INSERT here and stop trusting the model with a database step.
+  PARSED="$PARSED" \
+  CLAUDE_SESSION_ID="$CLAUDE_SESSION_ID" \
+  PROJECT_ENV="$PROJECT" \
+  POST_ACCOUNT="$POST_ACCOUNT" \
+  REPO_DIR="$REPO_DIR" \
+  /usr/bin/python3 <<'PYEOF' 2>&1 | tee -a "$LOG_FILE" || true
+import json, os, sys
+sys.path.insert(0, os.path.join(os.environ["REPO_DIR"], "scripts"))
+import db as dbmod
+
+parsed = json.loads(os.environ.get("PARSED") or "{}")
+permalink = parsed.get("permalink") or ""
+title     = parsed.get("title", "")
+body      = parsed.get("body", "")
+summary   = parsed.get("source_summary", "")
+style     = parsed.get("engagement_style", "") or None
+session   = os.environ.get("CLAUDE_SESSION_ID") or None
+project   = os.environ.get("PROJECT_ENV", "")
+account   = os.environ.get("POST_ACCOUNT", "")
+
+if not permalink or not title:
+    print("[db-insert] SKIP — empty permalink or title in structured_output")
+    sys.exit(0)
+
+conn = dbmod.get_conn()
+# Idempotency guard: never log the same Reddit URL twice.
+existing = conn.execute(
+    "SELECT id FROM posts WHERE platform='reddit' AND our_url=%s LIMIT 1",
+    (permalink,),
+).fetchone()
+if existing:
+    print(f"[db-insert] SKIP — post {permalink} already in DB as id={existing[0]}")
+    sys.exit(0)
+
+row = conn.execute(
+    """
+    INSERT INTO posts
+      (platform, thread_url, thread_author, thread_author_handle,
+       thread_title, thread_content, our_url, our_content, our_account,
+       source_summary, project_name, engagement_style,
+       feedback_report_used, status, posted_at, claude_session_id)
+    VALUES
+      ('reddit', %s, %s, %s,
+       %s, %s, %s, %s, %s,
+       %s, %s, %s,
+       TRUE, 'active', NOW(), %s::uuid)
+    RETURNING id
+    """,
+    (permalink, account, account,
+     title, body, permalink, body, account,
+     summary, project, style,
+     session),
+).fetchone()
+conn.commit()
+print(f"[db-insert] OK — inserted posts.id={row[0]} for {permalink}")
+PYEOF
+
 elif [ -n "$ABORT_REASON" ] && [ "$ABORT_REASON" != "PARSE_ERROR" ]; then
   echo "ABORTED: $ABORT_REASON" | tee -a "$LOG_FILE"
   # Auto-block subreddit if Claude detected a permanent ban or posting restriction.
