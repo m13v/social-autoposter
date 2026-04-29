@@ -125,7 +125,8 @@ For each post:
            verifies the live URL, and writes the seo_keywords row that surfaces
            in the dashboard activity feed). Use the Bash tool:
                 python3 $REPO_DIR/seo/generate_page.py --product PROJECT_NAME --keyword "KEYWORD_PHRASE" --slug "url-slug" --trigger twitter
-           This call can take 10-20 minutes per page. The final stdout is a
+           This call can take 10-40 minutes per page (Cloud Run staging-then-
+           tag deploys on mk0r are the slow end). The final stdout is a
            JSON object; parse it. On success it contains "success": true and
            "page_url": "https://...". On failure it contains "success": false
            and "error": "...".
