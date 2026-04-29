@@ -5014,21 +5014,27 @@ function buildActivityFilters() {
       if (a === 'type-all') {
         _activityTypeFilter = new Set(EVENT_TYPES);
         tEl.querySelectorAll('[data-type]').forEach(c => c.classList.add('active'));
+        saSaveSet('sa.activity.typeFilter.v1', _activityTypeFilter);
       } else if (a === 'type-none') {
         _activityTypeFilter = new Set();
         tEl.querySelectorAll('[data-type]').forEach(c => c.classList.remove('active'));
+        saSaveSet('sa.activity.typeFilter.v1', _activityTypeFilter);
       } else if (a === 'platform-all') {
         _activityPlatformFilter = new Set(ACTIVITY_PLATFORMS);
         pEl.querySelectorAll('[data-platform]').forEach(c => c.classList.add('active'));
+        saSaveSet('sa.activity.platformFilter.v1', _activityPlatformFilter);
       } else if (a === 'platform-none') {
         _activityPlatformFilter = new Set();
         pEl.querySelectorAll('[data-platform]').forEach(c => c.classList.remove('active'));
+        saSaveSet('sa.activity.platformFilter.v1', _activityPlatformFilter);
       } else if (a === 'project-all') {
         _activityProjectFilter = new Set(_activityKnownProjects);
         if (projEl) projEl.querySelectorAll('[data-project]').forEach(c => c.classList.add('active'));
+        saSaveSet('sa.activity.projectFilter.v1', _activityProjectFilter);
       } else if (a === 'project-none') {
         _activityProjectFilter = new Set();
         if (projEl) projEl.querySelectorAll('[data-project]').forEach(c => c.classList.remove('active'));
+        saSaveSet('sa.activity.projectFilter.v1', _activityProjectFilter);
       }
       _activityPage = 0;
       renderActivity(_lastActivityEvents || []);
@@ -5037,12 +5043,24 @@ function buildActivityFilters() {
   if (!_activityControlsWired) {
     _activityControlsWired = true;
     const search = document.getElementById('activity-search');
-    if (search) search.addEventListener('input', () => { _activitySearch = search.value.trim().toLowerCase(); _activityPage = 0; renderActivity(_lastActivityEvents || []); });
+    if (search) {
+      // Hydrate the visible input with the persisted query so the user sees
+      // the same filter state the table is already applying.
+      if (_activitySearch && search.value !== _activitySearch) search.value = _activitySearch;
+      search.addEventListener('input', () => {
+        _activitySearch = search.value.trim().toLowerCase();
+        saSave('sa.activity.search.v1', _activitySearch);
+        _activityPage = 0;
+        renderActivity(_lastActivityEvents || []);
+      });
+    }
     document.querySelectorAll('.activity-sortable').forEach(el => {
       el.addEventListener('click', () => {
         const field = el.dataset.sort;
         if (_activitySortField === field) _activitySortDir = _activitySortDir === 'asc' ? 'desc' : 'asc';
         else { _activitySortField = field; _activitySortDir = field === 'occurred_at' ? 'desc' : 'asc'; }
+        saSave('sa.activity.sortField.v1', _activitySortField);
+        saSave('sa.activity.sortDir.v1', _activitySortDir);
         _activityPage = 0;
         renderActivity(_lastActivityEvents || []);
       });
