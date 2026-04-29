@@ -186,7 +186,12 @@ export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
 # Acquire the browser lock now, immediately before the Claude/MCP step.
 acquire_lock "reddit-browser" 3600
 
-CLAUDE_OUTPUT=$("$REPO_DIR/scripts/run_claude.sh" "run-reddit-threads" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" -p --output-format json --json-schema "$RESULT_SCHEMA" "You are posting an ORIGINAL thread to ${SUBREDDIT} for the ${PROJECT} project as u/${POST_ACCOUNT}.
+# Capture Claude output to a temp file so a non-zero exit doesn't swallow stderr
+# before we get a chance to log it. Without this, run_claude.sh failures look
+# like "SCRIPT DIED line=283 exit=1" with zero context.
+CLAUDE_TMP=$(mktemp)
+set +e
+"$REPO_DIR/scripts/run_claude.sh" "run-reddit-threads" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" -p --output-format json --json-schema "$RESULT_SCHEMA" "You are posting an ORIGINAL thread to ${SUBREDDIT} for the ${PROJECT} project as u/${POST_ACCOUNT}.
 
 ## Config & Rules
 Read $SKILL_FILE for content rules and anti-AI-detection checklist.
@@ -280,10 +285,17 @@ ${TOP_POSTS}
 CRITICAL: NEVER use em dashes.
 CRITICAL: Use ONLY mcp__reddit-agent__* tools.
 CRITICAL: Close browser tabs after each navigation (browser_tabs action 'close').
-CRITICAL: If a browser call times out, wait 30s and retry up to 3 times." 2>&1)
+CRITICAL: If a browser call times out, wait 30s and retry up to 3 times." > "$CLAUDE_TMP" 2>&1
+CLAUDE_RC=$?
+set -e
+CLAUDE_OUTPUT=$(cat "$CLAUDE_TMP")
+rm -f "$CLAUDE_TMP"
 
 # Parse structured output and log results
 echo "$CLAUDE_OUTPUT" | tee -a "$LOG_FILE"
+if [ "$CLAUDE_RC" -ne 0 ]; then
+  echo "RUN_CLAUDE_NONZERO_EXIT rc=$CLAUDE_RC (output above is full stderr+stdout)" | tee -a "$LOG_FILE"
+fi
 
 # Extract structured_output from the JSON envelope.
 # claude -p --output-format json wraps results as: {"structured_output": {...}, "result": "...", ...}
