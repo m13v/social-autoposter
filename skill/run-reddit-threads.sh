@@ -178,7 +178,7 @@ fi
 
 # JSON schema: forces the model to return structured output with all required fields.
 # This is how we enforce step compliance programmatically.
-RESULT_SCHEMA='{"type":"object","properties":{"research_files_read":{"type":"array","items":{"type":"string"},"description":"Absolute paths of source files actually read during research step"},"subreddit_browsed":{"type":"boolean","description":"Whether you navigated to the subreddit hot page and read threads"},"hot_threads_seen":{"type":"array","items":{"type":"string"},"description":"Titles of 3-5 hot threads you read on the subreddit"},"topic_angle":{"type":"string","description":"The topic angle chosen from the list"},"engagement_style":{"type":"string","description":"The engagement style chosen"},"title":{"type":"string","description":"The exact post title submitted"},"body":{"type":"string","description":"The exact post body submitted"},"permalink":{"type":["string","null"],"description":"The Reddit permalink after successful submission, or null if aborted"},"rules_checked":{"type":"boolean","description":"Whether you checked subreddit rules"},"flair_applied":{"type":["string","null"],"description":"Flair text applied, or null if none"},"abort_reason":{"type":["string","null"],"description":"Reason for aborting, or null if posted successfully"},"source_summary":{"type":"string","description":"Rich source summary: (a) topic angle and why, (b) source files read, (c) specific details used"}},"required":["research_files_read","subreddit_browsed","hot_threads_seen","topic_angle","engagement_style","title","body","permalink","rules_checked","flair_applied","abort_reason","source_summary"]}'
+RESULT_SCHEMA='{"type":"object","properties":{"research_files_read":{"type":"array","items":{"type":"string"},"description":"Absolute paths of source files actually read during research step"},"subreddit_browsed":{"type":"boolean","description":"Whether you navigated to the subreddit hot page and read threads"},"hot_threads_seen":{"type":"array","items":{"type":"string"},"description":"Titles of 3-5 hot threads you read on the subreddit"},"topic_angle":{"type":"string","description":"The topic angle chosen from the list"},"engagement_style":{"type":"string","description":"The engagement style chosen"},"title":{"type":"string","description":"The exact post title submitted"},"body":{"type":"string","description":"The exact post body submitted"},"permalink":{"type":["string","null"],"description":"The Reddit permalink after successful submission, or null if aborted"},"rules_checked":{"type":"boolean","description":"Whether you checked subreddit rules"},"flair_applied":{"type":["string","null"],"description":"Flair text applied, or null if none"},"abort_reason":{"type":["string","null"],"description":"Reason for aborting, or null if posted successfully"},"permanent_block":{"type":"boolean","description":"Set TRUE only if this subreddit will reject EVERY future post from this account: account-banned, link-only sub, mod rule banning our entire category (e.g. all software/website posts), approved-submitters-only, or any standing rule that makes future thread posts impossible. Set FALSE for one-off issues (this specific topic violates a rule, repetition, transient errors). When TRUE, the sub is added to thread_blocked permanently and never picked again. Default FALSE."},"source_summary":{"type":"string","description":"Rich source summary: (a) topic angle and why, (b) source files read, (c) specific details used"}},"required":["research_files_read","subreddit_browsed","hot_threads_seen","topic_angle","engagement_style","title","body","permalink","rules_checked","flair_applied","abort_reason","permanent_block","source_summary"]}'
 
 # Pre-generate session id so the prompt's inline INSERT can stamp it.
 export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
@@ -260,6 +260,11 @@ ${TOP_POSTS}
    - Note whether flair is required.
    - Close the tab.
 
+   PERMANENT_BLOCK DECISION (always set this field):
+   - permanent_block = TRUE if the sub has a STANDING rule that rejects every post we could ever make from this account: bans all software/website/AI posts (mod-pinned), link-only sub, approved-submitters-only, account is banned from this sub, no-self-promo with zero exceptions for our category. ALSO set TRUE on submit-time forbidden / 403.
+   - permanent_block = FALSE if the issue is specific to THIS post (recent topic was already covered, this title is too promotional, you chose to abort to be safe but the sub itself does accept posts of this type, transient browser/network error, repetition concern).
+   - When in doubt, FALSE. False positives are cheap (we just retry the sub later); false negatives waste a Claude run cost ($1.50-3.50) every time we re-pick the same dead-end sub.
+
 6. POST via mcp__reddit-agent__*:
    - Navigate to https://old.reddit.com/${SUBREDDIT}/submit?selftext=true
    - Fill title and body. If Playwright locator hits the md-container wrapper div, fall back to:
@@ -312,6 +317,9 @@ except Exception as e:
 PERMALINK=$(/usr/bin/python3 -c "import json,sys; r=json.loads(sys.stdin.read()); print(r.get('permalink') or 'null')" <<< "$PARSED" 2>/dev/null)
 TITLE=$(/usr/bin/python3 -c "import json,sys; r=json.loads(sys.stdin.read()); print(r.get('title',''))" <<< "$PARSED" 2>/dev/null)
 ABORT_REASON=$(/usr/bin/python3 -c "import json,sys; r=json.loads(sys.stdin.read()); print(r.get('abort_reason') or '')" <<< "$PARSED" 2>/dev/null)
+# Explicit permanent-block signal from the model. Trusted when present;
+# regex fallback in mark_thread_blocked still runs if Claude omits it.
+PERMANENT_BLOCK=$(/usr/bin/python3 -c "import json,sys; r=json.loads(sys.stdin.read()); print('1' if r.get('permanent_block') is True else '0')" <<< "$PARSED" 2>/dev/null)
 
 # Log step compliance summary
 /usr/bin/python3 -c "
