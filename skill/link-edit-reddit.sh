@@ -6,9 +6,10 @@
 
 set -euo pipefail
 
-# Browser-profile lock first (shared with other reddit pipelines), then pipeline lock.
+# Pipeline lock at top. The reddit-browser lock is acquired later, just
+# before the Claude/MCP step that drives the browser, so peers can use the
+# profile during our DB queries and prompt build.
 source "$(dirname "$0")/lock.sh"
-acquire_lock "reddit-browser" 3600
 acquire_lock "link-edit-reddit" 5400
 
 # Load secrets
@@ -98,6 +99,10 @@ Process ALL of them. For each post:
 9. If a post is SKIPPED (no project match, comment not found, removed by moderation, bad URL), ALWAYS mark it so it won't be retried:
    psql "\$DATABASE_URL" -c "UPDATE posts SET link_edited_at=NOW(), link_edit_content='SKIPPED: REASON' WHERE id=POST_ID"
 PROMPT_EOF
+
+# Acquire the browser lock now, immediately before the Claude/MCP step.
+log "Acquiring reddit-browser lock for Claude/MCP step..."
+acquire_lock "reddit-browser" 3600
 
 gtimeout 5400 "$REPO_DIR/scripts/run_claude.sh" "link-edit-reddit" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" --disallowed-tools "ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,EnterWorktree" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Reddit link-edit claude exited with code $?"
 rm -f "$PROMPT_FILE"
