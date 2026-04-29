@@ -12,15 +12,16 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/platform.sh"
 # Stack of currently-held lock directories, cleaned up on exit.
 # Declared at source time so it survives across acquire_lock calls.
 if [ -z "${_SA_LOCK_DIRS+x}" ]; then
-  _SA_LOCK_DIRS=()
+  declare -a _SA_LOCK_DIRS=()
   _sa_release_locks() {
     local d
-    # Guard against set -u + empty-array expansion (bash 3.2 macOS default).
-    if [ "${#_SA_LOCK_DIRS[@]}" -gt 0 ]; then
-      for d in "${_SA_LOCK_DIRS[@]}"; do
-        rm -rf "$d"
-      done
-    fi
+    # Safe for bash 3.2: ${arr[@]+"${arr[@]}"} expands to nothing when arr is
+    # unset or empty, avoiding the "unbound variable" error with set -u.
+    # The earlier if+for guard was insufficient because bash 3.2 treats even
+    # ${#unset_arr[@]} as an "unbound variable" error in some exit-trap contexts.
+    for d in ${_SA_LOCK_DIRS[@]+"${_SA_LOCK_DIRS[@]}"}; do
+      rm -rf "$d"
+    done
   }
   trap _sa_release_locks EXIT INT TERM HUP
 fi
@@ -141,16 +142,10 @@ release_lock() {
   # Rebuild the lock stack without this entry so the EXIT trap doesn't try to
   # rm it again (harmless, but keeps the stack honest if release_lock is paired
   # with a later re-acquire of the same name).
-  if [ "${#_SA_LOCK_DIRS[@]}" -gt 0 ]; then
-    local new_stack=()
-    local d
-    for d in "${_SA_LOCK_DIRS[@]}"; do
-      [ "$d" != "$lock_dir" ] && new_stack+=("$d")
-    done
-    if [ "${#new_stack[@]}" -gt 0 ]; then
-      _SA_LOCK_DIRS=("${new_stack[@]}")
-    else
-      _SA_LOCK_DIRS=()
-    fi
-  fi
+  local new_stack=()
+  local d
+  for d in ${_SA_LOCK_DIRS[@]+"${_SA_LOCK_DIRS[@]}"}; do
+    [ "$d" != "$lock_dir" ] && new_stack+=("$d")
+  done
+  _SA_LOCK_DIRS=(${new_stack[@]+"${new_stack[@]}"})
 }
