@@ -61,6 +61,7 @@ from verify_facts import (  # noqa: E402
     verify_dead_urls,
     verify_time_sensitive_claims,
     extract_and_verify_factual_claims,
+    verify_keyword_directly_answered,
 )
 
 
@@ -1440,8 +1441,12 @@ CONCEPT
   source: <the exact file path or script command you verified this from>
   anchor_fact: <one concrete, checkable thing — a file name, a number, a specific behavior — that makes the page uncopyable>
   competitor_gap: <what the top-ranking pages miss that your angle fills>
+  direct_answer_shape: lookup | explanatory
+  literal_question: <the one specific question a user types into Google when they search this keyword, in 8 words or fewer>
+  literal_answer: <the actual datum, OR "no public answer; verified via <source> on <YYYY-MM-DD>"; this MUST appear prominently on the page>
+  authoritative_source: <URL of the service you checked the literal_answer against>
 
-If you cannot fill in all four lines with specific non-generic answers, stop and do more research. Do not proceed to Step 3 with a generic concept.
+If you cannot fill in all eight lines with specific non-generic answers, stop and do more research. Do not proceed to Step 3 with a generic concept. The Direct-answer block (see below) is mandatory — pages that punt on the literal question fail the post-generation gate.
 
 ### SEO jargon must not appear in the rendered page
 
@@ -1501,11 +1506,16 @@ Stay inside the `{neutral}` family for all neutral classes on this page. Do NOT 
 
 NEVER emit on a dark consumer: bg-white (solid), bg-{neutral}-50, bg-{neutral}-100, text-{neutral}-900, text-{neutral}-700, text-{neutral}-600, text-{accent_name}-700, text-{accent_name}-600, border-{neutral}-200, bg-{accent_name}-50. Translucent overlays like `bg-white/5` and `bg-black/30` are fine.
 
-NEVER use violet, indigo, or purple anywhere. NEVER use teal unless the brand accent family IS teal.''' if consumer_theme == 'dark' else f'''LIGHT theme palette. BRAND ACCENT FAMILY: `{accent_name}` (do NOT substitute teal or any other color — this is the consumer's brand color):
+NEVER use violet, indigo, or purple anywhere. NEVER use teal unless the brand accent family IS teal.''' if consumer_theme == 'dark' else f'''LIGHT theme palette. BRAND ACCENT FAMILY: `{accent_name}` (do NOT substitute teal or any other color, this is the consumer's brand color):
 
-bg-white base, text-zinc-900 for headings, text-zinc-500/text-gray-600 for secondary text. Accent colors: `from-{accent_gradient_from}-500 to-{accent_name}-500` gradient for CTAs, `text-{accent_name}-600` for links, `bg-{accent_name}-50 text-{accent_name}-700` for badges/pills, `bg-{accent_name}-50 border-{accent_name}-200` for tinted boxes. NEVER use violet, indigo, or purple anywhere. NEVER use teal unless the brand accent family IS teal.
+- Article wrapper: `<article className="min-h-screen">` (no explicit bg; let the site-wide light root show through). NEVER `bg-white` on the `<article>` wrapper or top-level full-width section wrappers. Consumer body bg may be `#fff`, `#fafafa`, `#FAFAF7`, or any tinted off-white; hardcoding `bg-white` paints over it and produces a visible mismatch. Section bands that intentionally contrast with the body bg are fine (e.g. `bg-zinc-50` or `bg-{accent_name}-50` for an alternating band), and inline `bg-white` on small tiles/cards inside a tinted band is also fine. The outermost wrapper must stay transparent.
+- Headings: `text-zinc-900`. Body text: `text-zinc-700` for primary copy, `text-zinc-500` or `text-gray-600` for secondary/lede.
+- Accents: `from-{accent_gradient_from}-500 to-{accent_name}-500` gradient for CTAs, `text-{accent_name}-600` for links, `bg-{accent_name}-50 text-{accent_name}-700` for badges/pills, `bg-{accent_name}-50 border-{accent_name}-200` for tinted boxes.
+- NEVER use violet, indigo, or purple anywhere. NEVER use teal unless the brand accent family IS teal.
 
-Do NOT use Tailwind semantic theme tokens like `text-foreground`, `text-muted`, `bg-card`, `bg-background`, `bg-surface-light`, `border-border`, `border-white/5`. Those tokens are not wired for light pages and will render invisibly. Use explicit classes like `text-zinc-900`, `text-zinc-500`, `bg-white`, `bg-zinc-50`, `border-zinc-200`.'''}
+NEVER emit on a light consumer: `bg-white` on the `<article>` wrapper or any top-level full-width section wrapper. Inline `bg-white` on small cards/tiles nested inside a tinted band is acceptable.
+
+Do NOT use Tailwind semantic theme tokens like `text-foreground`, `text-muted`, `bg-card`, `bg-background`, `bg-surface-light`, `border-border`, `border-white/5`. Those tokens are not wired for light pages and will render invisibly. Use explicit classes like `text-zinc-900`, `text-zinc-500`, `bg-zinc-50`, `border-zinc-200`.'''}
 
 {"" if not accent_hex else f'''### Product accent color override
 
@@ -1558,12 +1568,34 @@ Also check that the repo has `transpilePackages: ["@seo/components"]` in its `ne
 - At least one section must surface the anchor_fact from your concept, with enough specificity that a reader could verify it (file name, command, number, behavior description). This is the uncopyable part of the page.
 - Do not invent statistics. Do not fabricate quotes. If you use numbers, they come from something you read or ran.
 
+### Direct-answer block (mandatory — do not be a dead end)
+
+Before you start writing the page, take 60 seconds to articulate the user's literal question and the literal answer. Write a `DIRECT_ANSWER` section into your CONCEPT block from Step 2:
+
+```
+DIRECT_ANSWER
+  shape: lookup | explanatory
+  literal_question: <the one specific question this user typed into Google, in 8 words or fewer>
+  literal_answer: <the one-sentence answer with the actual datum, OR "no public answer; verified via <authoritative_source> on <date> that no such datum exists">
+  authoritative_source: <the URL or service that confirms the answer (e.g. https://www.tax.service.gov.uk/check-vat-number/enter-vat-details, https://www.sec.gov/edgar/searchedgar/companysearch, vendor pricing page, GitHub releases page)>
+  verified_on: <YYYY-MM-DD you actually re-verified it>
+```
+
+Lookup-shaped keywords (the user wants ONE specific datum: a number, ID, code, exact name, address, price, date, version, count) MUST get the literal datum rendered prominently in the first 30% of the page, in a callout clearly labelled "Direct answer", "Verified <date>", or equivalent.
+
+If the literal datum genuinely does not exist publicly (e.g. Anthropic does not publish a UK VAT number), the page MUST still render the same callout, but with the verified-not-available answer plus a link to the authoritative source you checked. Saying "ask them directly", "may or may not", "varies", "depends" is a dead end and FAILS. A real Fazm visitor commented "gbvat number?" on a page that did exactly this. Don't repeat that.
+
+Explanatory-shaped keywords ("how", "what is", "why", "vs", "best") MUST get a 1-3 sentence direct answer in the first 30% of the page (hero subhead, TLDR block, lede) before any tangential build-up.
+
+Use WebSearch + WebFetch + the relevant authoritative service (HMRC, SEC EDGAR, Companies House, vendor pricing page, GitHub releases, etc.) to actually verify the answer right now. Do not write the literal answer from memory. Re-verify it.
+
 ### Claim discipline (post-generation gates will check this)
 
-After you finish, three automated gates run before this page can ship:
+After you finish, four automated gates run before this page can ship:
 1. Every external URL on the page is DNS-resolved and HEAD-fetched. If any URL returns ENOTFOUND or 404, the page is removed and the row goes back to pending. Treat any concrete URL you write as a load-bearing fact, not a placeholder. If you do not have a real URL, write `<placeholder>` or omit the link.
 2. Every sentence matching shapes like "<Vendor> shipped X in <Month> <Year>", "<Vendor> raised $X", or "<Person> named CEO of <Vendor>" is re-verified via WebSearch. Wrong dates and amounts fail the page. Use WebSearch yourself before writing any time-stamped vendor event; do not write from recall.
 3. A claims-extractor pass reads the rendered page and re-checks every name, date, dollar amount, customer logo, license name, and product feature against a fresh search. Mis-named products ("X with Y AI" when the real name is just "X Y"), invented metric precision ("172 customers, one third Fortune 500"), and wrong open-source licenses all fail.
+4. A keyword-answer pass classifies the keyword as lookup or explanatory and verifies the page contains the literal answer (or a verified-not-available callout) in a prominent position. Pages that punt on the user's actual question fail this gate. The remediation is a `Direct answer (verified <date>)` section near the top, naming the authoritative source.
 
 A useful working pattern: as you draft, keep a private list of `(claim, source_url, evidence_quote)` tuples. Every concrete number, date, customer name, integration, and feature you write about a real third-party entity should trace to one of those tuples. If you cannot fill the source_url, replace the assertion with a more general phrasing or drop it.
 
@@ -2772,10 +2804,22 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
     # Skipped failures (verifier exception, claude unreachable) return ok=True
     # with a 'skipped' field so a transient web outage never blocks a page.
     # Only verdicts the verifier returned with confidence trip the gate.
+    # Gates run in cheap-to-expensive order. The keyword_answer gate is a
+    # mandatory anti-dead-end check: the page must literally answer the
+    # search query (or transparently document why the answer is unavailable
+    # with an authoritative verification trail). A real Fazm visitor
+    # commented "gbvat number?" on a page that ranked for the keyword but
+    # punted on the actual datum. Don't be a dead end.
+    keyword_for_gate = (keyword or "").strip()
     for gate_name, gate_fn in (
-        ("dead_urls", verify_dead_urls),
-        ("time_sensitive", verify_time_sensitive_claims),
-        ("factual_claims", extract_and_verify_factual_claims),
+        ("dead_urls", lambda repo, files: verify_dead_urls(repo, files)),
+        ("time_sensitive",
+         lambda repo, files: verify_time_sensitive_claims(repo, files)),
+        ("factual_claims",
+         lambda repo, files: extract_and_verify_factual_claims(repo, files)),
+        ("keyword_answer",
+         lambda repo, files: verify_keyword_directly_answered(
+             repo, files, keyword_for_gate)),
     ):
         gate_result = gate_fn(repo_path, expected_file_candidates)
         if gate_result.get("ok"):
