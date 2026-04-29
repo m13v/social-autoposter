@@ -4443,10 +4443,38 @@ function renderResult(run) {
     const replied = r.replied || 0;
     const skipped = r.skipped || 0;
     const errored = r.errored || 0;
+    const failed = r.failed || 0;
     const pending = r.pending_now || 0;
     const cost = r.cost_usd || 0;
-    if (!processed && !pending) {
+    const reasons = Array.isArray(r.failure_reasons) ? r.failure_reasons : [];
+    // Compose a short failure summary like "monthly_limit ×5". Only shown
+    // when the run reported failed>0 from the log line. Tooltip surfaces
+    // the full breakdown so the operator can tell, e.g., a monthly cap from
+    // a one-off timeout without expanding the row.
+    const renderFailedPill = () => {
+      if (!failed) return '';
+      const top = reasons[0];
+      const tooltip = reasons.length
+        ? reasons.map(x => `${x.reason} ×${x.count}`).join(', ')
+        : 'failed (no reason logged)';
+      const label = top
+        ? `failed: ${top.reason}${reasons.length > 1 ? ' +' + (reasons.length - 1) : ''}`
+        : 'failed';
+      return '<span title="' + tooltip.replace(/"/g, '&quot;') + '" ' +
+        'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
+        label + ' <span style="color:#ef4444;font-weight:600;">' + failed + '</span></span>';
+    };
+    if (!processed && !pending && !failed) {
       return '<span style="color:var(--muted);font-size:12px;">queue empty</span>';
+    }
+    if (!processed && failed) {
+      // Hard-failure run with no DB-side work landed (e.g. monthly_limit,
+      // AUP refusal). Surface failed pill with reason; suppress "queue empty"
+      // so the operator can tell broken runs from no-ops at a glance.
+      return (
+        renderFailedPill() +
+        (pending ? pill('queue', pending, 'var(--muted)') : '')
+      );
     }
     if (!processed) {
       return pill('queue', pending, 'var(--text)') +
@@ -4456,6 +4484,7 @@ function renderResult(run) {
       pill('replied', replied, '#22c55e') +
       (skipped ? pill('skipped', skipped, '#eab308') : '') +
       (errored ? pill('errored', errored, '#ef4444') : '') +
+      renderFailedPill() +
       (pending ? pill('queue', pending, 'var(--muted)') : '') +
       (cost ? '<span style="font-size:12px;color:var(--muted);">$' + cost.toFixed(2) + '</span>' : '')
     );
