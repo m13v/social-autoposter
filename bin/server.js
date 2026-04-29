@@ -2614,6 +2614,8 @@ async function handleApi(req, res) {
       "SELECT json_agg(row_to_json(r)) FROM (" +
         "SELECT COALESCE(p_direct.project_name, p_via_reply.project_name, d.target_project) AS name, " +
           "COUNT(*)::int AS dms, " +
+          "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'outbound' AND m.message_at >= NOW() - INTERVAL '" + windowHours + " hours'))::int AS sent, " +
+          "COALESCE(SUM((SELECT COUNT(*) FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'outbound' AND m.message_at >= NOW() - INTERVAL '" + windowHours + " hours')), 0)::int AS sent_messages, " +
           "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'inbound'))::int AS replied, " +
           "COUNT(*) FILTER (WHERE d.interest_level = 'hot')::int AS hot, " +
           "COUNT(*) FILTER (WHERE d.interest_level = 'warm')::int AS warm, " +
@@ -2639,7 +2641,7 @@ async function handleApi(req, res) {
         "LEFT JOIN posts   p_via_reply ON p_via_reply.id = r_link.post_id " +
         whereSql + " " +
         "GROUP BY name " +
-        "ORDER BY dms DESC, replied DESC" +
+        "ORDER BY sent DESC, dms DESC, replied DESC" +
       ") r";
     return (async () => {
       const rows = await pq(q);
