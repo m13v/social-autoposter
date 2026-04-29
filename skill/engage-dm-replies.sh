@@ -293,9 +293,9 @@ The \`public_target_url\` field is THEIR public comment that originally led to t
    - **LinkedIn Messages** (mcp__linkedin-agent__* tools)
    - **X/Twitter DMs** (mcp__twitter-agent__* tools), if encrypted DM passcode dialog appears, enter: $TWITTER_DM_PASSCODE
 3. Type and send the crafted DM.
-4. Log the outbound message (log what you ACTUALLY SENT, not the human's instructions):
+4. Log the outbound message (log what you ACTUALLY SENT, not the human's instructions). Pass --verified ONLY when the browser tool returned verified=true. If verification failed, log nothing and let the next cycle retry; never pass --verified speculatively:
    \`\`\`bash
-   cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "THE_CRAFTED_DM_YOU_SENT"
+   cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "THE_CRAFTED_DM_YOU_SENT" --verified
    \`\`\`
 
 ### Step D. Always finalize after the channel work succeeds
@@ -902,9 +902,9 @@ On {ok:false}, treat these errors as TERMINAL for this run: \`rate_limited\`, \`
 
 ### Step 5: Log the reply
 \`\`\`bash
-cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "YOUR_REPLY_TEXT"
+cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "YOUR_REPLY_TEXT" --verified
 \`\`\`
-The log-outbound command has a dedup guard. If it says "DEDUP BLOCKED", the message was NOT logged. Do not retry.
+Pass --verified ONLY when the browser tool returned verified=true (or you visually confirmed the message in the thread). The flag is a hard gate: log-outbound refuses to insert without it. If verification failed, log nothing and let the next cycle retry; never pass --verified speculatively. The log-outbound command also has a dedup guard. If it says "DEDUP BLOCKED" or "VERIFY BLOCKED", the message was NOT logged. Do not retry.
 
 ### Step 5b: Classify interest level AND mode (REQUIRED on every reply)
 
