@@ -177,7 +177,10 @@ REPLY_SUMMARY_FILE=$(mktemp -t fazm-reply-summary.XXXXXX)
 # --summary "$LINKEDIN_SUMMARY_FILE", so the file is populated only if Step 4
 # ran end-to-end. Empty file means LinkedIn contributed 0 to every counter.
 LINKEDIN_SUMMARY_FILE=$(mktemp -t fazm-linkedin-summary.XXXXXX)
-trap 'rm -f "$REPLY_SUMMARY_FILE" "$LINKEDIN_SUMMARY_FILE"' EXIT
+# Chain lock cleanup. A plain `trap '...' EXIT` would REPLACE lock.sh's
+# `trap _sa_release_locks EXIT INT TERM HUP`, orphaning the platform-browser
+# lock across runs. Cover all four signals so watchdog SIGTERM also frees it.
+trap 'rm -f "$REPLY_SUMMARY_FILE" "$LINKEDIN_SUMMARY_FILE"; _sa_release_locks' EXIT INT TERM HUP
 
 if [ "$RUN_STEP2" -eq 1 ]; then
     # Narrow the Python call per platform. Without --platform we run the
