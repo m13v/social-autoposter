@@ -320,6 +320,15 @@ if [ "$PERMALINK" != "null" ] && [ "$PERMALINK" != "PARSE_ERROR" ]; then
   echo "POSTED: $PERMALINK | $TITLE" | tee -a "$LOG_FILE"
 elif [ -n "$ABORT_REASON" ] && [ "$ABORT_REASON" != "PARSE_ERROR" ]; then
   echo "ABORTED: $ABORT_REASON" | tee -a "$LOG_FILE"
+  # Auto-block subreddit if Claude detected a permanent ban or posting restriction.
+  # mark_thread_blocked checks the abort_reason for keywords (banned, 403, link-only,
+  # text-disabled, etc.) and only writes to config.json if it matches.
+  /usr/bin/python3 -c "
+import sys, os
+sys.path.insert(0, '$REPO_DIR/scripts')
+from post_reddit import mark_thread_blocked
+mark_thread_blocked('$SUB_SLUG', sys.stdin.read().strip())
+" <<< "$ABORT_REASON" 2>&1 | tee -a "$LOG_FILE" || true
 else
   echo "UNKNOWN OUTCOME (check JSON output above)" | tee -a "$LOG_FILE"
 fi
