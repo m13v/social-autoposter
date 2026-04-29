@@ -444,8 +444,14 @@ extract_field() {
     # Pulls the integer that precedes <field> in a comma-separated counter
     # line such as "Reddit: 4346 total, 1696 skipped, ..."  Echoes 0 when the
     # field isn't present.
+    #
+    # Strips the leading "Platform:" prefix before splitting on commas so the
+    # first segment ("Moltbook: 50 checked") doesn't break the leading-integer
+    # match. Without this, fields living in the first comma-segment always
+    # return 0 (the leading prefix is not numeric).
     local line="$1" field="$2"
     echo "$line" | awk -v f=" $field" '{
+        sub(/^[A-Za-z][A-Za-z ]*:[[:space:]]*/, "", $0)
         n = split($0, parts, ",")
         for (i = 1; i <= n; i++) {
             if (index(parts[i], f) > 0) {
