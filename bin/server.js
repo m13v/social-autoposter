@@ -6231,7 +6231,7 @@ function renderFunnelStats(payload) {
     '</div>');
 }
 
-let _dmStatsTableState = { sortField: 'dms', sortDir: 'desc', filters: {} };
+let _dmStatsTableState = { sortField: 'sent', sortDir: 'desc', filters: {} };
 function renderDmStats(payload) {
   const body = document.getElementById('dm-stats-body');
   const totalEl = document.getElementById('dm-stats-total');
@@ -6275,11 +6275,9 @@ function renderDmStats(payload) {
   if (totalEl) totalEl.textContent = projects.length + ' project' + (projects.length === 1 ? '' : 's');
   const normalized = projects.map(p => ({
     name:               p.name || '',
-    dms:                Number(p.dms)                || 0,
     sent:               Number(p.sent)               || 0,
-    sent_messages:      Number(p.sent_messages)      || 0,
     replied:            Number(p.replied)            || 0,
-    reply_rate:         (Number(p.dms) || 0) > 0 ? (Number(p.replied) || 0) / Number(p.dms) : 0,
+    reply_rate:         (Number(p.sent) || 0) > 0 ? (Number(p.replied) || 0) / Number(p.sent) : 0,
     hot:                Number(p.hot)                || 0,
     warm:               Number(p.warm)               || 0,
     general_discussion: Number(p.general_discussion) || 0,
@@ -6301,8 +6299,8 @@ function renderDmStats(payload) {
   }));
   const pct = v => (Number(v) * 100).toFixed(0) + '%';
   // Reply % must not sum per-row rates (that would produce nonsense like
-  // 380%). Recompute from the summed dms/replied in the synthetic totals row.
-  const replyRateFooter = (_rows, synth) => pct((synth.dms || 0) > 0 ? (synth.replied || 0) / synth.dms : 0);
+  // 380%). Recompute from the summed sent/replied in the synthetic totals row.
+  const replyRateFooter = (_rows, synth) => pct((synth.sent || 0) > 0 ? (synth.replied || 0) / synth.sent : 0);
   mountSortableTable({
     containerId: 'dm-stats-body',
     rows: normalized,
@@ -6311,26 +6309,11 @@ function renderDmStats(payload) {
     columns: [
       { key: 'name',               label: 'Project',      type: 'text',    align: 'left',  formatter: v => escapeHtml(PROJECT_LABELS[v] || v) },
       { key: 'sent',               label: 'Sent',         type: 'numeric', align: 'right',
-        formatter: (v, r) => {
-          const n = Number(v) || 0;
-          const msgs = Number(r && r.sent_messages) || 0;
-          if (!n) return '<span style="color:var(--text-faint);">—</span>';
-          const tip = n + ' unique conversation' + (n === 1 ? '' : 's') + ' received an outbound DM in this window' +
-                      (msgs > n ? ' (' + msgs + ' total outbound messages incl. follow-ups)' : '');
-          return '<span data-tooltip="' + escapeHtml(tip) + '" style="color:var(--success);font-weight:600;font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
-        } },
-      { key: 'sent_messages',      label: 'Sent Msgs',    type: 'numeric', align: 'right',
-        formatter: (v, r) => {
-          const n = Number(v) || 0;
-          if (!n) return '<span style="color:var(--text-faint);">—</span>';
-          const tip = 'Total outbound DM messages sent in this window (counts follow-ups). Sent column counts unique conversations.';
-          return '<span data-tooltip="' + escapeHtml(tip) + '" style="font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
-        } },
-      { key: 'dms',                label: 'In Funnel',    type: 'numeric', align: 'right',
         formatter: (v) => {
           const n = Number(v) || 0;
-          const tip = 'DM rows touched in this window (discovered, replied, or sent). Includes prospect stubs created when we comment under a post, NOT just DMs we transmitted. See Sent column for actual outbound DMs.';
-          return '<span data-tooltip="' + escapeHtml(tip) + '" style="font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
+          if (!n) return '<span style="color:var(--text-faint);">—</span>';
+          const tip = n + ' unique conversation' + (n === 1 ? '' : 's') + ' received an outbound DM in this window';
+          return '<span data-tooltip="' + escapeHtml(tip) + '" style="color:var(--success);font-weight:600;font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
         } },
       { key: 'replied',            label: 'Replied',      type: 'numeric', align: 'right', formatter: fmt },
       { key: 'reply_rate',         label: 'Reply %',      type: 'numeric', align: 'right', formatter: pct, footer: replyRateFooter },
