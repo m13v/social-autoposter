@@ -496,13 +496,38 @@ def main():
     elapsed = int(time.time() - run_start)
     log(f"=== Cycle complete: posted={posted}, failed={failed}, elapsed={elapsed}s ===")
 
+    # Fetch real Claude cost from the session we ran.
+    cycle_cost = 0.0
+    try:
+        import psycopg2
+        _env_path = os.path.join(REPO_DIR, '.env')
+        if os.path.exists(_env_path):
+            with open(_env_path) as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if _line and not _line.startswith('#') and '=' in _line:
+                        _k, _v = _line.split('=', 1)
+                        os.environ.setdefault(_k.strip(), _v.strip())
+        _conn = psycopg2.connect(os.environ['DATABASE_URL'])
+        _cur = _conn.cursor()
+        _cur.execute(
+            "SELECT COALESCE(total_cost_usd, 0) FROM claude_sessions WHERE session_id = %s",
+            (claude_session_id,),
+        )
+        _row = _cur.fetchone()
+        cycle_cost = float(_row[0]) if _row else 0.0
+        _cur.close()
+        _conn.close()
+    except Exception as _e:
+        log(f"WARNING: could not fetch session cost: {_e}")
+
     # Log cycle summary to the run tracking table
     try:
         subprocess.run(
             ["python3", os.path.join(SCRIPTS, "log_run.py"),
              "--script", "run-moltbook-cycle",
              "--posted", str(posted), "--skipped", str(len(decisions.get("skipped", []))),
-             "--failed", str(failed), "--cost", "0", "--elapsed", str(elapsed)],
+             "--failed", str(failed), "--cost", f"{cycle_cost:.4f}", "--elapsed", str(elapsed)],
             timeout=15,
         )
     except Exception:
