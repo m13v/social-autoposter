@@ -138,6 +138,63 @@ def mark_comment_blocked(thread_url: str) -> None:
         print(f"[post_reddit] WARNING: could not persist blocked sub r/{sub}: {e}")
 
 
+# Keywords that indicate a permanent account/subreddit block rather than a
+# transient failure.  Case-insensitive match against Claude's abort_reason.
+_THREAD_BLOCK_PATTERNS = [
+    r"\bbanned\b",
+    r"access was denied",
+    r"\b403\b",
+    r"link[- ]only",
+    r"text posts? (are )?disabled",
+    r"text (tab|option) (is )?disabled",
+    r"does not allow text",
+    r"not allowed to post",
+    r"posting.*restricted",
+]
+
+def _abort_is_permanent_block(abort_reason: str) -> bool:
+    """Return True if abort_reason signals a permanent account/sub block."""
+    lower = abort_reason.lower()
+    for pat in _THREAD_BLOCK_PATTERNS:
+        if re.search(pat, lower):
+            return True
+    return False
+
+
+def mark_thread_blocked(subreddit: str, abort_reason: str = "") -> None:
+    """Add a subreddit to config.json subreddit_bans.thread_blocked at runtime.
+
+    Called when a thread-post attempt is permanently blocked (account banned,
+    link-only sub, text posts disabled, 403). The sub is skipped by
+    pick_thread_target.py on all future runs.  Comment eligibility is tracked
+    separately in subreddit_bans.comment_blocked.
+
+    subreddit may be bare ('programming') or prefixed ('r/programming').
+    """
+    sub = re.sub(r"^r/", "", subreddit, flags=re.IGNORECASE).strip().lower()
+    if not sub:
+        return
+    if abort_reason and not _abort_is_permanent_block(abort_reason):
+        return
+    try:
+        with open(CONFIG_PATH) as f:
+            config = json.load(f)
+        bans = config.setdefault("subreddit_bans", {})
+        blocked = bans.setdefault("thread_blocked", [])
+        existing = {s.lower() for s in blocked}
+        if sub not in existing:
+            blocked.append(sub)
+            blocked.sort(key=str.lower)
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(config, f, indent=2)
+                f.write("\n")
+            print(f"[post_reddit] Auto-blocked r/{sub} from future thread posts (permanent block detected)")
+        else:
+            print(f"[post_reddit] r/{sub} already in thread_blocked, skipping")
+    except Exception as e:
+        print(f"[post_reddit] WARNING: could not persist thread-blocked sub r/{sub}: {e}")
+
+
 def load_config():
     with open(CONFIG_PATH) as f:
         return json.load(f)
