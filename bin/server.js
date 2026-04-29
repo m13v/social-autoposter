@@ -5540,6 +5540,38 @@ function mountSortableTable(opts) {
   }
   const state = opts.state;
   state.filters = state.filters || {};
+  // Per-column extra sort keys: clicking a header cycles through every
+  // (key, direction) pair before resetting. Lets one column header sort by
+  // sibling fields like domain_pageviews without adding a new column.
+  function sortKeysFor(col) {
+    return (col && Array.isArray(col.sortKeys) && col.sortKeys.length) ? col.sortKeys : [col && col.key];
+  }
+  // Optional localStorage persistence. When opts.storageKey is set, we
+  // hydrate sortField/sortDir/filters from storage on mount and write them
+  // back on every user interaction so the table looks the same on reload.
+  const storageKey = opts.storageKey || null;
+  if (storageKey) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+      if (saved && typeof saved === 'object') {
+        if (typeof saved.sortField === 'string') state.sortField = saved.sortField;
+        if (saved.sortDir === 'asc' || saved.sortDir === 'desc') state.sortDir = saved.sortDir;
+        if (saved.filters && typeof saved.filters === 'object') {
+          state.filters = Object.assign({}, state.filters, saved.filters);
+        }
+      }
+    } catch {}
+  }
+  function persistState() {
+    if (!storageKey) return;
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({
+        sortField: state.sortField,
+        sortDir: state.sortDir,
+        filters: state.filters || {},
+      }));
+    } catch {}
+  }
   const inlineFilters = !!opts.inlineFilters;
   const alignAttr = c => (c.align === 'right' ? ' style="text-align:right;"' : (c.align === 'left' ? ' style="text-align:left;"' : ''));
   const hasWidths = cols.some(c => c.widthPct != null);
@@ -5633,11 +5665,21 @@ function mountSortableTable(opts) {
         return false;
       });
     }
-    const sortCol = cols.find(c => c.key === state.sortField) || cols[0];
+    // Resolve the active column: state.sortField may be a column's primary
+    // key OR one of its declared sortKeys (e.g. "domain_pageviews" under the
+    // "Pageviews" column). For secondary keys we sort by the raw row field
+    // directly rather than going through the column accessor.
+    let sortCol = cols.find(c => c.key === state.sortField);
+    let sortFieldKey = state.sortField;
+    if (!sortCol) {
+      sortCol = cols.find(c => Array.isArray(c.sortKeys) && c.sortKeys.indexOf(state.sortField) !== -1);
+    }
+    if (!sortCol) { sortCol = cols[0]; sortFieldKey = sortCol.key; }
+    const isSecondary = sortFieldKey !== sortCol.key;
     const dir = state.sortDir === 'asc' ? 1 : -1;
     const sorted = filtered.slice().sort((a, b) => {
-      const va = cellValue(sortCol, a);
-      const vb = cellValue(sortCol, b);
+      const va = isSecondary ? a[sortFieldKey] : cellValue(sortCol, a);
+      const vb = isSecondary ? b[sortFieldKey] : cellValue(sortCol, b);
       if (sortCol.type === 'numeric') {
         const na = Number(va); const nb = Number(vb);
         const aMissing = !Number.isFinite(na); const bMissing = !Number.isFinite(nb);
@@ -5693,12 +5735,31 @@ function mountSortableTable(opts) {
     if (opts.onAfterRender) opts.onAfterRender(tbody, sorted);
     container.querySelectorAll('[data-sort-arrow-key]').forEach(el => {
       const k = el.getAttribute('data-sort-arrow-key');
-      if (k === state.sortField) {
-        el.textContent = state.sortDir === 'asc' ? '\u25B2' : '\u25BC';
+      const col = cols.find(c => c.key === k);
+      const keys = sortKeysFor(col);
+      const idx = keys.indexOf(state.sortField);
+      if (idx !== -1) {
+        const arrow = state.sortDir === 'asc' ? '\u25B2' : '\u25BC';
+        // Append a small superscript when sorting by a secondary key
+        // (e.g. domain_pageviews under the "Pageviews" header) so the
+        // user can tell which field is active inside the cycle.
+        const suffix = idx === 0 ? '' : String.fromCharCode(0x00B9 + (idx === 1 ? 1 : idx)); // \u00B2, \u00B3, ...
+        el.textContent = arrow + suffix;
         el.classList.add('active');
+        if (idx === 0) el.classList.remove('secondary');
+        else el.classList.add('secondary');
+        if (keys.length > 1) {
+          const activeLabel = state.sortField;
+          const dirLabel = state.sortDir === 'asc' ? 'ascending' : 'descending';
+          el.setAttribute('data-tooltip', 'Sorting by ' + activeLabel + ' (' + dirLabel + '). Click to cycle through ' + keys.join(' \u2192 ') + '.');
+        } else {
+          el.removeAttribute('data-tooltip');
+        }
       } else {
         el.textContent = '';
         el.classList.remove('active');
+        el.classList.remove('secondary');
+        el.removeAttribute('data-tooltip');
       }
     });
   }
@@ -5708,14 +5769,25 @@ function mountSortableTable(opts) {
       // Clicks on the per-column info icon must not trigger sort.
       if (e.target && e.target.closest && e.target.closest('.col-info')) return;
       const key = el.getAttribute('data-sort-key');
-      if (state.sortField === key) {
-        state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+      const col = cols.find(c => c.key === key);
+      const keys = sortKeysFor(col);
+      const startDir = (col && col.type === 'numeric') ? 'desc' : 'asc';
+      const flipDir = startDir === 'desc' ? 'asc' : 'desc';
+      const curIdx = keys.indexOf(state.sortField);
+      if (curIdx === -1) {
+        // Not currently sorting by any key in this column's cycle.
+        state.sortField = keys[0];
+        state.sortDir = startDir;
+      } else if (state.sortDir === startDir) {
+        // First half of this key's cycle; flip direction in place.
+        state.sortDir = flipDir;
       } else {
-        state.sortField = key;
-        const col = cols.find(c => c.key === key);
-        state.sortDir = (col && col.type === 'numeric') ? 'desc' : 'asc';
+        // Second half; advance to the next key in the cycle (wrapping).
+        state.sortField = keys[(curIdx + 1) % keys.length];
+        state.sortDir = startDir;
       }
       apply();
+      persistState();
     });
   });
   container.querySelectorAll('.activity-col-filter').forEach(el => {
@@ -5725,6 +5797,7 @@ function mountSortableTable(opts) {
     el.addEventListener(evt, () => {
       state.filters[k] = el.value;
       apply();
+      persistState();
     });
     el.addEventListener('click', e => e.stopPropagation());
     el.addEventListener('mousedown', e => e.stopPropagation());
@@ -6085,8 +6158,9 @@ function renderFunnelStats(payload) {
   };
   mountSortableTable({
     containerId: 'funnel-stats-body',
-    rows: normalized,
     state: _funnelStatsTableState,
+    storageKey: 'sa.funnelStatsTable.v1',
+    rows: normalized,
     showTotals: true,
     columns: [
       { key: 'name',             label: 'Project',         type: 'text',    align: 'left',  formatter: fmtProjectName },
@@ -6098,7 +6172,12 @@ function renderFunnelStats(payload) {
       // Funnel cells use makeFunnelFmt, which reads a sibling "domain_*"
       // field off the row. The synthetic footer row carries summed
       // domain_* totals too, so the same formatter renders "<scoped> (<domain>)".
-      { key: 'pageviews',        label: 'Pageviews',       type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_pageviews') },
+      // Header click cycles through scoped \u2192 domain pageviews so users can
+      // sort by either side of the "<scoped> (<domain>)" cell.
+      { key: 'pageviews',        label: 'Pageviews',       type: 'numeric', align: 'right',
+        formatter: makeFunnelFmt('domain_pageviews'),
+        sortKeys: ['pageviews', 'domain_pageviews'],
+        helpText: 'Click cycles: scoped pageviews \u25bc/\u25b2 \u2192 domain pageviews \u25bc/\u25b2. The cell shows scoped (domain) in the same order.' },
       { key: 'email_signups',    label: 'Email Signups',   type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_email_signups') },
       { key: 'schedule_clicks',  label: 'Schedule Clicks', type: 'numeric', align: 'right', formatter: makeFunnelFmt('domain_schedule_clicks') },
       // Get Started: prefer Amplitude-attributed end-product signups
