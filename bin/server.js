@@ -805,6 +805,11 @@ function pauseAll() {
     if (isJobLoaded(job.label)) {
       try { driver.unload(job.label, agentLink); } catch {}
     }
+    // Make pause sticky: remove the installed unit so nothing (including a
+    // dashboard restart or a stray re-discovery pass) can silently reload
+    // it. Re-enabling a single job goes through the per-job toggle, which
+    // reinstalls from the repo launchd/ source.
+    try { if (fs.existsSync(agentLink)) fs.unlinkSync(agentLink); } catch {}
     if (job.scriptPath) {
       try {
         const out = execSync(`pgrep -f "${job.scriptPath}"`, { stdio: 'pipe' }).toString().trim();
@@ -825,28 +830,6 @@ function pauseAll() {
   try { execSync('pkill -f "social-autoposter/scripts/" 2>/dev/null', { stdio: 'pipe' }); } catch {}
   try { execSync('pkill -f "social-autoposter/seo/" 2>/dev/null', { stdio: 'pipe' }); } catch {}
   return killed;
-}
-
-function resumeAll() {
-  fs.mkdirSync(AGENT_DIR, { recursive: true });
-  const all = discoverLaunchdJobs();
-  for (const job of all) {
-    if (isJobLoaded(job.label)) continue;
-    const agentLink = getLaunchAgentPath(job.plist);
-    const unitSrc = path.join(UNIT_DIR, driver.unitFileName(job.plist));
-    let loadPath = null;
-    if (fs.existsSync(agentLink)) {
-      // Already installed (real file or symlink) — load as-is so in-place
-      // edits to the installed unit are preserved.
-      loadPath = agentLink;
-    } else if (fs.existsSync(unitSrc)) {
-      const linked = driver.install(unitSrc, AGENT_DIR);
-      if (linked) loadPath = agentLink;
-    }
-    if (loadPath) {
-      try { driver.load(loadPath); } catch {}
-    }
-  }
 }
 
 function deriveName(label) {
@@ -1135,12 +1118,11 @@ async function handleApi(req, res) {
     return json(res, { paused: true, killedPids: killed });
   }
 
-  // POST /api/resume
-  if (p === '/api/resume' && req.method === 'POST') {
-    resumeAll();
-    invalidateStatusCache();
-    return json(res, { paused: false });
-  }
+  // /api/resume was intentionally removed. "Resume All" reloaded every
+  // installed plist (including ones the user had explicitly turned off) and
+  // was the documented cause of octolens jobs reappearing after pause. To
+  // bring a single job back, use POST /api/jobs/:label/toggle, which
+  // reinstalls that unit from the repo launchd/ source.
 
   // POST /api/jobs/:label/toggle
   const toggleMatch = p.match(/^\/api\/jobs\/([^/]+)\/toggle$/);
@@ -1157,12 +1139,13 @@ async function handleApi(req, res) {
       if (wasLoaded) {
         const r = driver.unload(label, agentLink);
         stderr = r.stderr;
-        // Only unlink symlinks. Real-file installed units (e.g. daily-report)
-        // must be preserved so the job can be toggled back on.
-        try {
-          const st = fs.lstatSync(agentLink);
-          if (st.isSymbolicLink()) fs.unlinkSync(agentLink);
-        } catch {}
+        // Make unload sticky. Always remove the installed unit, regardless
+        // of whether it's a symlink or a real-file copy. The toggle's load
+        // branch below reinstalls from the repo launchd/ source on the way
+        // back on, so this is round-trip safe and prevents stray
+        // re-discovery (e.g. by other "load every plist in LaunchAgents"
+        // logic) from silently bringing the job back.
+        try { if (fs.existsSync(agentLink)) fs.unlinkSync(agentLink); } catch {}
       } else {
         fs.mkdirSync(path.dirname(agentLink), { recursive: true });
         if (!fs.existsSync(agentLink)) {
@@ -4671,13 +4654,16 @@ let _paused = false;
 
 function updatePauseBtn() {
   const btn = document.getElementById('pause-btn');
-  if (_paused) {
-    btn.textContent = '\\u25B6 Resume All';
-    btn.className = 'btn primary sa-local-only';
-  } else {
-    btn.textContent = '\\u23F8 Pause All';
-    btn.className = 'btn danger sa-local-only';
-  }
+  // Resume All was removed because it reloaded every installed plist —
+  // including ones the user had deliberately unloaded. Button is now a
+  // one-way kill switch. To bring a single job back, use its per-row toggle.
+  btn.textContent = '\\u23F8 Pause All';
+  btn.className = 'btn danger sa-local-only';
+  btn.disabled = !!_paused;
+  btn.style.opacity = _paused ? '0.5' : '';
+  btn.title = _paused
+    ? 'All pipelines paused. Re-enable individual jobs from their row toggles.'
+    : 'Pause all pipelines (kills running processes and removes installed units).';
 }
 
 function toggleTheme() {
@@ -4690,13 +4676,17 @@ function toggleTheme() {
 }
 
 async function togglePause() {
+  // One-way: pauses everything. There is no Resume All anymore — bring jobs
+  // back individually via their row toggles so you don't accidentally
+  // re-enable pipelines you'd deliberately turned off.
+  if (_paused) return;
+  if (!confirm('Pause ALL pipelines? This unloads every job and removes installed units. Re-enable individual jobs from their row toggles.')) return;
   try {
-    const endpoint = _paused ? '/api/resume' : '/api/pause';
-    const res = await fetch(endpoint, { method: 'POST' });
+    const res = await fetch('/api/pause', { method: 'POST' });
     const data = await res.json();
-    _paused = data.paused;
+    _paused = !!data.paused;
     updatePauseBtn();
-    toast(_paused ? 'All pipelines paused & processes killed' : 'Pipelines resumed');
+    toast('All pipelines paused & processes killed');
     loadStatus();
   } catch(e) { toast('Error: ' + e.message, true); }
 }
