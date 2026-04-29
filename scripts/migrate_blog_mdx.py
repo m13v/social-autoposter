@@ -34,17 +34,8 @@ SITE_NAME = "Fazm"
 PUBLISHER_LOGO = "https://fazm.ai/logo-112.png"
 DEFAULT_AUTHOR = "Matthew Diakonov"
 
-# mistune renderer that wraps tables in a scroll div
-class BlogRenderer(mistune.HTMLRenderer):
-    def table(self, header, body):
-        return (
-            '<div class="table-wrapper">'
-            f'<table><thead>{header}</thead><tbody>{body}</tbody></table>'
-            '</div>'
-        )
-
 md = mistune.create_markdown(
-    renderer=BlogRenderer(escape=False),
+    renderer=mistune.HTMLRenderer(escape=False),
     plugins=["table", "strikethrough", "url"],
 )
 
@@ -59,9 +50,12 @@ def parse_frontmatter(raw: str) -> tuple[dict, str]:
 
 def md_to_html(body: str) -> str:
     """Convert markdown body to HTML. Handles inline SVG/HTML passthrough."""
-    # className= in inline SVG is JSX, not HTML. Replace with class= for dangerouslySetInnerHTML.
     html = md(body)
+    # className= is JSX syntax; replace with class= for dangerouslySetInnerHTML HTML rendering.
     html = re.sub(r'\bclassName=', 'class=', html)
+    # Wrap bare <table> tags in a scroll container.
+    html = re.sub(r'<table>', '<div class="table-wrapper"><table>', html)
+    html = re.sub(r'</table>', '</table></div>', html)
     return html
 
 def estimate_reading_time(text: str) -> str:
