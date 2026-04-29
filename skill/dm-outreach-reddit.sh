@@ -7,10 +7,11 @@
 
 set -euo pipefail
 
-# Browser-profile lock first (shared with other reddit pipelines), then pipeline lock.
-# Canonical order: platform-browser locks before pipeline-specific locks to avoid deadlock.
+# Pipeline lock at top (only-one-of-us guard). The reddit-browser lock is
+# acquired later, just before the Claude/MCP step that actually drives the
+# browser, so peers can use the profile during our Phase 0 (DB scan, prompt
+# build) and DB queries.
 source "$(dirname "$0")/lock.sh"
-acquire_lock "reddit-browser" 3600
 acquire_lock "dm-outreach-reddit" 2700
 
 # Load secrets
@@ -212,6 +213,11 @@ DMs/Chat disabled (recipient setting, not a send failure):
 
 CRITICAL: ALL browser calls MUST use mcp__reddit-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools. If a reddit-agent tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
 PROMPT_EOF
+
+# Acquire the browser lock now, immediately before the only step that needs
+# Chrome (the Claude/reddit-agent MCP session). Blocks if a peer is mid-run.
+log "Acquiring reddit-browser lock for Claude/MCP step..."
+acquire_lock "reddit-browser" 3600
 
 gtimeout 2700 "$REPO_DIR/scripts/run_claude.sh" "dm-outreach-reddit" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Reddit DM outreach claude exited with code $?"
 rm -f "$PROMPT_FILE"
