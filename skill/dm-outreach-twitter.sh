@@ -192,18 +192,29 @@ For each DM row, BEFORE you compose or send, do this in order:
 
 ## After each DM:
 
-Success (ALL THREE steps required):
-  psql "\$DATABASE_URL" -c "UPDATE dms SET status='sent', our_dm_content='DM_TEXT', sent_at=NOW(), claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
-  python3 $REPO_DIR/scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "DM_TEXT"
+Inspect the send_dm tool's return value. There are exactly three outcomes:
+
+(A) ok=true AND verified=true  ->  success, mark sent:
+  CLAUDE_SESSION_ID=$CLAUDE_SESSION_ID python3 $REPO_DIR/scripts/dm_send_log.py \\
+      --dm-id DM_ID --message "DM_TEXT" --verified
+
+  Do NOT issue a raw "UPDATE dms SET status='sent'" psql command. The
+  dm_send_log.py script is the only path that may flip status to 'sent';
+  it requires --verified, and refuses without it. This is intentional:
+  prior phantom-DM bugs (~700 rows in 4/2026) came from prose-driven
+  status flips that ignored the verification result.
 
   After the DM lands, capture the current page URL with mcp__twitter-agent__browser_evaluate (return window.location.href) and stamp it onto the DM row so the dashboard's "open chat" button works:
   python3 $REPO_DIR/scripts/dm_conversation.py set-url --dm-id DM_ID --url "CHAT_URL"
   The validator only accepts /i/chat/<id> or /messages/<id>; if the URL is something else (you got bounced to a profile or inbox), skip this step.
 
-Failed (rate limit, blocked, error):
+(B) ok=false OR verified=false  ->  send did not land, mark error:
+  psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='send_unverified', claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
+
+(C) Rate limit, account blocked, or any other thrown exception:
   psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='REASON', claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
 
-DMs disabled:
+DMs disabled (recipient setting, not a send failure):
   psql "\$DATABASE_URL" -c "UPDATE dms SET status='skipped', skip_reason='chat_disabled', claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
 
 CRITICAL: ALL browser calls MUST use mcp__twitter-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools. If a twitter-agent tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
