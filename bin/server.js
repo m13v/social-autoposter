@@ -474,7 +474,7 @@ function parseRunMonitorLog(maxLines) {
   for (const line of tail) {
     const m = line.match(RUN_LINE_RE);
     if (!m) continue;
-    const [, ts, script, posted, skipped, failed, repliesRefreshed, checked, updated, removed, unavailable, notFound, cost, elapsed] = m;
+    const [, ts, script, posted, skipped, failed, repliesRefreshed, checked, updated, removed, unavailable, notFound, cost, elapsed, failureReasonsStr] = m;
     // log_run.py writes naive local-wallclock time (strftime without tz), so
     // `new Date(ts)` in node interprets it as local on the server. That is
     // correct since the dashboard server runs on the same host.
@@ -483,6 +483,17 @@ function parseRunMonitorLog(maxLines) {
     const elapsedSec = parseInt(elapsed, 10);
     const startedMs = finishedMs - elapsedSec * 1000;
     const cls = classifyScript(script);
+    // Parse "monthly_limit:5,timeout:1" -> [{reason, count}, ...] sorted desc.
+    let failureReasons = [];
+    if (failureReasonsStr) {
+      failureReasons = failureReasonsStr.split(',')
+        .map(p => {
+          const [reason, n] = p.split(':');
+          return { reason: (reason || '').trim(), count: parseInt(n, 10) || 0 };
+        })
+        .filter(x => x.reason && x.count > 0)
+        .sort((a, b) => b.count - a.count);
+    }
     runs.push({
       script,
       job_type: cls.job_type,
@@ -505,6 +516,7 @@ function parseRunMonitorLog(maxLines) {
         unavailable: unavailable ? parseInt(unavailable, 10) : 0,
         not_found: notFound ? parseInt(notFound, 10) : 0,
         cost_usd: parseFloat(cost),
+        failure_reasons: failureReasons,
       },
     });
   }
@@ -621,14 +633,22 @@ async function enrichEngageRuns(runs) {
       else if (p.status === 'skipped') skipped++;
       else if (p.status === 'error') errored++;
     }
+    // Preserve `failed` count and `failure_reasons` from the original log
+    // line. enrichEngageRuns derives processed/replied/skipped/errored from DB
+    // rows, but Claude-side hard failures (monthly_limit, AUP refusal,
+    // timeout, unparseable output) never produce a row update, so the only
+    // signal we have for them is whatever engage_reddit.py wrote to log_run.
+    const prior = run.result || {};
     run.result = {
       type: 'engage',
       processed,
       replied,
       skipped,
       errored,
+      failed: prior.failed || 0,
+      failure_reasons: Array.isArray(prior.failure_reasons) ? prior.failure_reasons : [],
       pending_now: pendingByPlatform[dbPlatform] || 0,
-      cost_usd: run.result && run.result.cost_usd ? run.result.cost_usd : 0,
+      cost_usd: prior.cost_usd || 0,
     };
   }
 }
