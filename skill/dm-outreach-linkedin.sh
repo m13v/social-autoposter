@@ -188,15 +188,28 @@ For each DM row, BEFORE you compose or send, do this in order. USE mcp__linkedin
 
 ## After each DM:
 
-Success (BOTH steps required):
-  psql "\$DATABASE_URL" -c "UPDATE dms SET status='sent', our_dm_content='DM_TEXT', sent_at=NOW(), claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
-  python3 $REPO_DIR/scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "DM_TEXT"
+Inspect the linkedin-agent send result. There are exactly three outcomes:
 
-Failed (rate limit, blocked, error):
-  psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='REASON', claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
+(A) The message was actually delivered (you saw it appear in the thread, no error toast)  ->  mark sent via the verified gateway:
+  CLAUDE_SESSION_ID=$CLAUDE_SESSION_ID python3 $REPO_DIR/scripts/dm_send_log.py \\
+      --dm-id DM_ID --message "DM_TEXT" --verified
 
-DMs disabled:
+  Do NOT issue a raw "UPDATE dms SET status='sent'" psql command and do NOT call
+  dm_conversation.py log-outbound directly. dm_send_log.py is the ONLY path that
+  may flip status to 'sent'; it requires --verified, and refuses without it. It
+  also forwards to log-outbound internally with --verified, so dm_messages stays
+  in sync. This is intentional: prior phantom-DM bugs (April 2026 LinkedIn Haiku
+  cycle inserted 5 phantom outbound rows because the prompt let the LLM call
+  log-outbound without a verified send) came from bypassing this gateway.
+
+(B) The send did not land (no toast, message did not appear in thread)  ->  mark error:
+  psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='send_unverified', claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
+
+(C) DMs disabled / chat blocked  ->  mark skipped:
   psql "\$DATABASE_URL" -c "UPDATE dms SET status='skipped', skip_reason='chat_disabled', claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
+
+(D) Rate limit, account checkpoint, or any other thrown exception  ->  mark error and STOP the run:
+  psql "\$DATABASE_URL" -c "UPDATE dms SET status='error', skip_reason='REASON', claude_session_id='$CLAUDE_SESSION_ID'::uuid WHERE id=DM_ID;"
 
 CRITICAL: ALL browser calls MUST use mcp__linkedin-agent__* tools. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools. If a linkedin-agent tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
 PROMPT_EOF
