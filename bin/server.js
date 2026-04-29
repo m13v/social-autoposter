@@ -6172,6 +6172,8 @@ function renderDmStats(payload) {
   const fmt = n => (Number(n) || 0).toLocaleString();
   const totals = projects.reduce((a, p) => {
     a.dms                += Number(p.dms)                || 0;
+    a.sent               += Number(p.sent)               || 0;
+    a.sent_messages      += Number(p.sent_messages)      || 0;
     a.replied            += Number(p.replied)            || 0;
     a.hot                += Number(p.hot)                || 0;
     a.warm               += Number(p.warm)               || 0;
@@ -6192,11 +6194,13 @@ function renderDmStats(payload) {
     a.converted          += Number(p.converted)          || 0;
     a.needs_human        += Number(p.needs_human)        || 0;
     return a;
-  }, { dms: 0, replied: 0, hot: 0, warm: 0, general_discussion: 0, cold: 0, not_our_prospect: 0, declined: 0, no_response: 0, icp_match: 0, icp_miss: 0, icp_disqualified: 0, icp_unknown: 0, asked: 0, answered: 0, qualified: 0, q_disqualified: 0, booking_sent: 0, converted: 0, needs_human: 0 });
+  }, { dms: 0, sent: 0, sent_messages: 0, replied: 0, hot: 0, warm: 0, general_discussion: 0, cold: 0, not_our_prospect: 0, declined: 0, no_response: 0, icp_match: 0, icp_miss: 0, icp_disqualified: 0, icp_unknown: 0, asked: 0, answered: 0, qualified: 0, q_disqualified: 0, booking_sent: 0, converted: 0, needs_human: 0 });
   if (totalEl) totalEl.textContent = projects.length + ' project' + (projects.length === 1 ? '' : 's');
   const normalized = projects.map(p => ({
     name:               p.name || '',
     dms:                Number(p.dms)                || 0,
+    sent:               Number(p.sent)               || 0,
+    sent_messages:      Number(p.sent_messages)      || 0,
     replied:            Number(p.replied)            || 0,
     reply_rate:         (Number(p.dms) || 0) > 0 ? (Number(p.replied) || 0) / Number(p.dms) : 0,
     hot:                Number(p.hot)                || 0,
@@ -6229,7 +6233,28 @@ function renderDmStats(payload) {
     showTotals: true,
     columns: [
       { key: 'name',               label: 'Project',      type: 'text',    align: 'left',  formatter: v => escapeHtml(PROJECT_LABELS[v] || v) },
-      { key: 'dms',                label: 'DMs',          type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'sent',               label: 'Sent',         type: 'numeric', align: 'right',
+        formatter: (v, r) => {
+          const n = Number(v) || 0;
+          const msgs = Number(r && r.sent_messages) || 0;
+          if (!n) return '<span style="color:var(--text-faint);">—</span>';
+          const tip = n + ' unique conversation' + (n === 1 ? '' : 's') + ' received an outbound DM in this window' +
+                      (msgs > n ? ' (' + msgs + ' total outbound messages incl. follow-ups)' : '');
+          return '<span data-tooltip="' + escapeHtml(tip) + '" style="color:var(--success);font-weight:600;font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
+        } },
+      { key: 'sent_messages',      label: 'Sent Msgs',    type: 'numeric', align: 'right',
+        formatter: (v, r) => {
+          const n = Number(v) || 0;
+          if (!n) return '<span style="color:var(--text-faint);">—</span>';
+          const tip = 'Total outbound DM messages sent in this window (counts follow-ups). Sent column counts unique conversations.';
+          return '<span data-tooltip="' + escapeHtml(tip) + '" style="font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
+        } },
+      { key: 'dms',                label: 'In Funnel',    type: 'numeric', align: 'right',
+        formatter: (v) => {
+          const n = Number(v) || 0;
+          const tip = 'DM rows touched in this window (discovered, replied, or sent). Includes prospect stubs created when we comment under a post, NOT just DMs we transmitted. See Sent column for actual outbound DMs.';
+          return '<span data-tooltip="' + escapeHtml(tip) + '" style="font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
+        } },
       { key: 'replied',            label: 'Replied',      type: 'numeric', align: 'right', formatter: fmt },
       { key: 'reply_rate',         label: 'Reply %',      type: 'numeric', align: 'right', formatter: pct, footer: replyRateFooter },
       { key: 'hot',                label: 'Hot',          type: 'numeric', align: 'right', formatter: fmt },
