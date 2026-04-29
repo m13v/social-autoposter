@@ -290,7 +290,10 @@ echo "$CLAUDE_OUTPUT" | tee -a "$LOG_FILE"
 PARSED=$(/usr/bin/python3 -c "
 import json,sys
 try:
-    d = json.loads(sys.stdin.read())
+    raw = sys.stdin.read()
+    # run_claude.sh appends a log line to stderr but 2>&1 captures it here too,
+    # giving us two concatenated JSON objects. raw_decode stops after the first.
+    d, _ = json.JSONDecoder().raw_decode(raw)
     so = d.get('structured_output') or d
     print(json.dumps(so))
 except Exception as e:
