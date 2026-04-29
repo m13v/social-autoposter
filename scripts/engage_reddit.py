@@ -629,12 +629,41 @@ def main():
                   f"to avoid wasted spend on continued refusals. Reword the prompt "
                   f"and try again. Cost on this refusal: ${usage['cost_usd']:.4f}")
             failed += 1
+            skip_reasons["aup_refusal"] += 1
             for k in total_usage:
                 total_usage[k] += 0  # already accumulated above
             break
 
-        if not ok:
+        # Monthly cap short-circuit. Mirrors the AUP guard above. When the
+        # Claude Code OAuth account hits its monthly usage cap, every call
+        # returns "You've hit your org's monthly usage limit" with cost=0, and
+        # the per-reply queue would otherwise loop on the same row up to
+        # --limit times because the row is never marked processing/skipped.
+        # Surfaced in run_monitor as failure_reasons=monthly_limit:1 so the
+        # dashboard Result column reads "failed: monthly_limit ×1" instead of
+        # the previous silent "queue empty $0.00".
+        if "monthly usage limit" in output.lower():
+            print(f"[engage_reddit] #{reply['id']} MONTHLY USAGE LIMIT hit — "
+                  f"aborting run. Cost on this attempt: ${usage['cost_usd']:.4f}")
             failed += 1
+            skip_reasons["monthly_limit"] += 1
+            break
+
+        if not ok:
+            # Generic Claude failure (timeout, transport error, non-zero exit).
+            # Mark the reply as `processing` so the next iteration of the
+            # while-loop doesn't fetch the SAME pending row again and burn
+            # another Claude session on it. reset_stuck_processing brings it
+            # back to pending after 2h, which gives the partner thread time
+            # to settle (and us, time to fix whatever broke).
+            failed += 1
+            reason_key = "timeout" if output == "TIMEOUT" else "claude_failed"
+            skip_reasons[reason_key] += 1
+            try:
+                subprocess.run(["python3", REPLY_DB, "processing", str(reply["id"])],
+                               capture_output=True, timeout=10)
+            except Exception:
+                pass
             print(f"[engage_reddit] #{reply['id']} CLAUDE FAILED ({reply_elapsed:.0f}s): {output[:200]}")
         else:
             # Parse Claude's JSON decision
@@ -651,6 +680,14 @@ def main():
             if not decision:
                 # Fallback: check if output looks like a skip/reply
                 failed += 1
+                skip_reasons["bad_output"] += 1
+                # Same loop-prevention as the not-ok branch: mark processing
+                # so the next iteration moves to a different pending row.
+                try:
+                    subprocess.run(["python3", REPLY_DB, "processing", str(reply["id"])],
+                                   capture_output=True, timeout=10)
+                except Exception:
+                    pass
                 print(f"[engage_reddit] #{reply['id']} BAD OUTPUT ({reply_elapsed:.0f}s): {output[:200]}")
             elif decision.get("action") == "skip":
                 reason = decision.get("reason", "unknown")
@@ -839,8 +876,25 @@ def main():
     if succeeded > 0:
         print(f"[engage_reddit] Avg cost per reply: ${total_usage['cost_usd'] / succeeded:.4f}")
 
+    # Build the failure-reasons string for the dashboard Result column. We
+    # only count *hard* failure categories here (monthly_limit, aup_refusal,
+    # timeout, claude_failed, bad_output) so that recoverable LLM-driven
+    # skips (`llm:not_directed`, `llm:troll`, ...) don't get surfaced as
+    # failures. Missing keys map to 0 via Counter, so this is safe even
+    # when the run had zero failures.
+    HARD_FAILURE_KEYS = ("monthly_limit", "aup_refusal", "timeout",
+                         "claude_failed", "bad_output")
+    fr_pairs = [f"{k}:{skip_reasons[k]}" for k in HARD_FAILURE_KEYS
+                if skip_reasons.get(k, 0) > 0]
+    # Also surface CDP_ERROR rollups so a Reddit posting outage shows up as
+    # "failed: cdp_error ×N" instead of dropping into the generic skip pile.
+    cdp_total = sum(n for r, n in skip_reasons.items() if r.startswith("cdp_error:"))
+    if cdp_total > 0:
+        fr_pairs.append(f"cdp_error:{cdp_total}")
+    failure_reasons_arg = ",".join(fr_pairs)
+
     # Log run summary for monitoring
-    subprocess.run([
+    log_run_cmd = [
         "python3", os.path.join(REPO_DIR, "scripts", "log_run.py"),
         "--script", "engage_reddit",
         "--posted", str(succeeded),
@@ -848,7 +902,10 @@ def main():
         "--failed", str(failed),
         "--cost", f"{total_usage['cost_usd']:.4f}",
         "--elapsed", f"{total_elapsed:.0f}",
-    ])
+    ]
+    if failure_reasons_arg:
+        log_run_cmd += ["--failure-reasons", failure_reasons_arg]
+    subprocess.run(log_run_cmd)
 
     # Print final status
     subprocess.run(["python3", REPLY_DB, "status"])
