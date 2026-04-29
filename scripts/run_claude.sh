@@ -39,7 +39,7 @@ MODEL_ARGS=()
 if [ -n "${MODEL_OVERRIDE:-}" ]; then
     MODEL_ARGS=(--model "$MODEL_OVERRIDE")
 fi
-claude --session-id "$SESSION_ID" "${MODEL_ARGS[@]}" "$@"
+claude --session-id "$SESSION_ID" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} "$@"
 RC=$?
 
 END=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
