@@ -39,6 +39,51 @@ MAX_AGE_DAYS = 7
 DEFAULT_MAX_CANDIDATES = 100
 PLATFORMS = ["reddit", "linkedin", "x"]
 
+# Skip reasons that mean "this person can never receive a DM from us, ever".
+# These are recipient-side blocks (DMs disabled, suspended, company page,
+# inmail credits exhausted) or competitor disqualifications. Stored as ILIKE
+# patterns; matched against the dms.skip_reason column to permanently exclude
+# an author from future rescans (no 30-day window). Anything not matched here
+# (low_value, hostile, thin_conversation, etc.) is treated as transient and
+# the user can be re-promoted later.
+PERMANENT_SKIP_REASON_PATTERNS = (
+    "chat_disabled%",
+    "dms_closed%",
+    "cannot_send_dms_disabled%",
+    "%DMs disabled%",
+    "%has DMs closed%",
+    "%user has DMs disabled%",
+    "%DMs not open%",
+    "not_following_no_dm_access%",
+    "x_requires_premium_to_dm_non_followers%",
+    "%requires verified/premium%",
+    "%requires X verification/premium%",
+    "%only verified users can send DM%",
+    "not_connected_cannot_dm%",
+    "not_connected_3rd_degree_cant_message%",
+    "not_connected_inmail_credits_exhausted%",
+    "requires_inmail_credit%",
+    "requires_inmail_no_credits%",
+    "no_inmail_credits%",
+    "not_1st_connection_no_inmail_credits%",
+    "3rd_plus_connection_cannot_dm%",
+    "messaging_restricted%",
+    "%InMail credits exhausted%",
+    "%InMail credits are depleted%",
+    "company_page%",
+    "company page%",
+    "%company page, cannot DM%",
+    "account_suspended%",
+    "%account is suspended%",
+    "cannot_identify_correct_profile%",
+    "encrypted_dm_passcode_required%",
+    "x_encrypted_dm_passcode_required%",
+    "disqualified:%",
+    "unable to send a message request%",
+    "%unable to send a message request%",
+    "send_button_disabled%",
+)
+
 # config project topic fields to check per scan platform.
 TOPIC_FIELDS_BY_PLATFORM = {
     "reddit": ["topics"],
@@ -146,6 +191,11 @@ def get_excluded_authors(config, platform):
 
 def scan_platform(conn, config, platform, max_candidates, dry_run, max_age_days=None):
     """Scan for DM candidates on a single platform."""
+    # Canonicalize Twitter as 'x' (the dms/replies/posts tables use 'x'; some
+    # callers historically passed 'twitter'). Without this, dedupe leaks across
+    # the two names and the same person can be re-queued.
+    if platform == "twitter":
+        platform = "x"
     excluded = get_excluded_authors(config, platform)
     topic_index = build_project_topic_index(config, platform)
     age_days = max_age_days if max_age_days is not None else MAX_AGE_DAYS
@@ -193,16 +243,29 @@ def scan_platform(conn, config, platform, max_candidates, dry_run, max_age_days=
             skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
             continue
 
-        # Skip if we've already DM'd this user in the last 30 days (any reply, any platform)
+        # Dedupe: don't re-promote a candidate if either
+        #   (a) we sent/queued a DM to them in the last 30 days, OR
+        #   (b) we permanently can't (or shouldn't) DM them based on a prior
+        #       skip/error (chat_disabled, account_suspended, disqualified,
+        #       inmail credits exhausted, etc. — see PERMANENT_SKIP_REASON_PATTERNS)
         recent_dm = conn.execute("""
-            SELECT COUNT(*) FROM dms
+            SELECT
+              SUM(CASE WHEN status IN ('sent','pending')
+                        AND discovered_at >= NOW() - INTERVAL '30 days'
+                       THEN 1 ELSE 0 END) AS recent_active,
+              SUM(CASE WHEN status IN ('skipped','error')
+                        AND COALESCE(skip_reason,'') ILIKE ANY(%s)
+                       THEN 1 ELSE 0 END) AS permanent_block
+            FROM dms
             WHERE their_author = %s AND platform = %s
-              AND (status = 'sent' OR status = 'pending')
-              AND discovered_at >= NOW() - INTERVAL '30 days'
-        """, (author, platform)).fetchone()
+        """, (list(PERMANENT_SKIP_REASON_PATTERNS), author, platform)).fetchone()
 
-        if recent_dm[0] > 0:
+        if recent_dm and (recent_dm["recent_active"] or 0) > 0:
             reason = "already_dmd_recently"
+            skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
+            continue
+        if recent_dm and (recent_dm["permanent_block"] or 0) > 0:
+            reason = "permanently_unreachable_or_disqualified"
             skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
             continue
 
