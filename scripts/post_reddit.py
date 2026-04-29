@@ -716,7 +716,27 @@ def _post_iteration(plan, reddit_username):
         if i < len(decisions) - 1:
             time.sleep(180)  # 3 min gap between posts within a single Claude session
 
-    return posted, failed, usage["cost_usd"], project_name
+    return posted, failed
+
+
+def run_one_iteration(args, config, reddit_username, already_picked):
+    """Backwards-compatible wrapper: plan + post in one call.
+
+    Holds the browser lock continuously across the no-browser plan phase. New
+    callers should drive plan/post separately at the shell level so the
+    reddit-browser lock can be released around `_plan_iteration`'s Claude run.
+    """
+    plan = _plan_iteration(args, config, reddit_username, already_picked)
+    if plan is None:
+        return 0, 0, 0.0, None
+    project_name = plan["project_name"]
+    cost = plan.get("cost", 0.0)
+    if plan.get("dry_run"):
+        return 0, 0, cost, project_name
+    if plan.get("error"):
+        return 0, 1, cost, project_name
+    posted, failed = _post_iteration(plan, reddit_username)
+    return posted, failed, cost, project_name
 
 
 def main():
@@ -728,6 +748,12 @@ def main():
                              "Each iteration picks a different project.")
     parser.add_argument("--timeout", type=int, default=3600, help="Timeout for Claude session")
     parser.add_argument("--project", default=None, help="Override project selection (forces iterations=1)")
+    parser.add_argument("--phase", choices=["plan", "post", "all"], default="all",
+                        help="plan: pick project + Claude (no browser), writes JSON to --out. "
+                             "post: read JSON from --in and post via CDP. all: legacy single-call.")
+    parser.add_argument("--out", default=None, help="Plan output JSON path (--phase plan)")
+    parser.add_argument("--in", dest="in_path", default=None, help="Plan input JSON path (--phase post)")
+    parser.add_argument("--exclude", default="", help="Comma-separated project names to exclude (--phase plan)")
     args = parser.parse_args()
 
     if args.project and args.iterations > 1:
@@ -737,6 +763,38 @@ def main():
     config = load_config()
     reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "Deep_Ad1959")
 
+    if args.phase == "plan":
+        if not args.out:
+            print("[post_reddit] ERROR: --phase plan requires --out PATH", file=sys.stderr)
+            sys.exit(2)
+        if not preflight_rate_limit():
+            print("[post_reddit] rate-limited, plan skipped")
+            sys.exit(3)
+        excluded = [x.strip() for x in args.exclude.split(",") if x.strip()]
+        plan = _plan_iteration(args, config, reddit_username, excluded)
+        if plan is None:
+            sys.exit(4)  # no eligible project
+        with open(args.out, "w") as f:
+            json.dump(plan, f)
+        if plan.get("dry_run"):
+            sys.exit(0)
+        if plan.get("error"):
+            sys.exit(5)
+        if not plan.get("decisions"):
+            sys.exit(6)  # no decisions to post
+        return
+
+    if args.phase == "post":
+        if not args.in_path or not os.path.exists(args.in_path):
+            print(f"[post_reddit] ERROR: --phase post requires --in PATH (got {args.in_path!r})", file=sys.stderr)
+            sys.exit(2)
+        with open(args.in_path) as f:
+            plan = json.load(f)
+        posted, failed = _post_iteration(plan, reddit_username)
+        print(f"[post_reddit] phase=post project={plan.get('project_name')} posted={posted} failed={failed}")
+        return
+
+    # phase == "all": legacy single-call path
     run_start = time.time()
     total_posted = 0
     total_failed = 0
