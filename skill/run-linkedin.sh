@@ -89,32 +89,60 @@ $PROJECT_DIST
    - Posts we already engaged on (DOM walk for ALL URNs)
    - Vendor/spam/recycled content
 
-5. Extract every URN from the candidate post's DOM (activity, share, ugcPost
-   forms) via mcp__linkedin-agent__browser_run_code:
+5. Extract every URN. LinkedIn search results often hydrate post URNs via
+   React state / network responses, NOT static DOM attrs — so use BOTH paths
+   and merge. (Phase B uses the same dual-walk; Phase A used to be DOM-only
+   and was failing ~80% of the time on static search pages.)
+
+   5a. DOM walk via mcp__linkedin-agent__browser_run_code (attributes AND
+       textContent — some URNs land in inline JSON inside <code> blocks):
 \`\`\`javascript
 async (page) => {
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(3000);
   return await page.evaluate(() => {
     const all = new Set();
     let activity = null;
     const re = /(activity|share|ugcPost)[:_-](\d{16,19})/gi;
+    const seen = (m) => {
+      while ((m = re.exec(m.input)) !== null) {
+        all.add(m[2]);
+        if (m[1].toLowerCase() === 'activity' && !activity) activity = m[2];
+      }
+    };
+    // attribute walk
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
     let node, scanned = 0;
     while ((node = walker.nextNode()) && scanned++ < 8000) {
       for (const a of node.attributes || []) {
         const v = a.value || '';
-        let m;
-        re.lastIndex = 0;
+        let m; re.lastIndex = 0;
         while ((m = re.exec(v))) {
           all.add(m[2]);
           if (m[1].toLowerCase() === 'activity' && !activity) activity = m[2];
         }
       }
     }
+    // inline JSON / <code> blocks (LinkedIn sometimes ships URNs here)
+    document.querySelectorAll('code, script[type="application/json"]').forEach(el => {
+      const t = el.textContent || ''; let m; re.lastIndex = 0;
+      while ((m = re.exec(t))) {
+        all.add(m[2]);
+        if (m[1].toLowerCase() === 'activity' && !activity) activity = m[2];
+      }
+    });
     return { allIds: Array.from(all), activityId: activity };
   });
 }
 \`\`\`
+   5b. Network-response walk via mcp__linkedin-agent__browser_network_requests:
+         filter: 'voyager|graphql|search|feed-update|updates'
+         requestBody: false
+         responseBody: true
+         static: false
+       Walk every response body for /(activity|share|ugcPost)[:_-](\d{16,19})/g
+       matches. Merge with 5a's allIds.
+   5c. If after both walks you have no activityId, pick a different candidate
+       OR exit cleanly with '## No good post found'. Do NOT fabricate URNs.
 
 6. Run engaged-id check:
      python3 $REPO_DIR/scripts/linkedin_url.py --check-engaged-ids 'ID1,ID2,...'
@@ -186,8 +214,11 @@ PA_EXCERPT=$(python3 -c "import json; print(json.load(open('$PHASE_A_OUT')).get(
 PA_TITLE_HINT=$(python3 -c "import json; print(json.load(open('$PHASE_A_OUT')).get('post_title_hint',''))" 2>/dev/null || echo "")
 PA_LANG=$(python3 -c "import json; print(json.load(open('$PHASE_A_OUT')).get('language','en'))" 2>/dev/null || echo "en")
 
-if [ -z "$PA_PROJECT" ] || [ -z "$PA_URL" ] || [ -z "$PA_ACTIVITY_ID" ]; then
-  echo "Phase A output missing required fields (project='$PA_PROJECT' url='$PA_URL' activity_id='$PA_ACTIVITY_ID'). Skipping." | tee -a "$LOG_FILE"
+# Required fields: project + activity_id (numeric URN). thread_url is now
+# rebuilt from activity_id below, so we don't trust whatever shape the model
+# wrote (was rejecting valid ugcPost candidates on 2026-04-29).
+if [ -z "$PA_PROJECT" ] || [ -z "$PA_ACTIVITY_ID" ]; then
+  echo "Phase A output missing required fields (project='$PA_PROJECT' activity_id='$PA_ACTIVITY_ID'). Skipping." | tee -a "$LOG_FILE"
   rm -f "$PHASE_A_OUT"
   ELAPSED=$(( $(date +%s) - RUN_START_EPOCH ))
   _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START_EPOCH" --scripts "run-linkedin-phaseA" "run-linkedin-phaseB" 2>/dev/null || echo "0.0000")
@@ -196,11 +227,10 @@ python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted 0 --skipp
   exit 0
 fi
 
-# Sanity: thread_url must be a real LinkedIn activity URL
-case "$PA_URL" in
-  https://www.linkedin.com/feed/update/urn:li:activity:*) ;;
-  *)
-    echo "Phase A returned invalid thread_url '$PA_URL'. Skipping Phase B." | tee -a "$LOG_FILE"
+# activity_id must be a 16-19 digit numeric URN. Anything else is malformed.
+case "$PA_ACTIVITY_ID" in
+  ''|*[!0-9]*)
+    echo "Phase A returned non-numeric activity_id '$PA_ACTIVITY_ID'. Skipping Phase B." | tee -a "$LOG_FILE"
     rm -f "$PHASE_A_OUT"
     ELAPSED=$(( $(date +%s) - RUN_START_EPOCH ))
     _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START_EPOCH" --scripts "run-linkedin-phaseA" "run-linkedin-phaseB" 2>/dev/null || echo "0.0000")
@@ -209,6 +239,12 @@ python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted 0 --skipp
     exit 0
     ;;
 esac
+
+# Rebuild canonical thread_url from activity_id. LinkedIn redirects
+# ugcPost-form URNs to the activity feed view, so this works for both. Was a
+# bug 2026-04-29: model wrote ugcPost-form thread_url and the strict regex
+# validator rejected the whole candidate.
+PA_URL="https://www.linkedin.com/feed/update/urn:li:activity:${PA_ACTIVITY_ID}/"
 
 echo "Phase A: candidate ready — project=$PA_PROJECT activity=$PA_ACTIVITY_ID" | tee -a "$LOG_FILE"
 
