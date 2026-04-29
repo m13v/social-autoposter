@@ -171,8 +171,13 @@ fi
 HR_PLATFORM_FILTER="1=1"
 if [ -n "$PLATFORM" ]; then
     _HR_P="$PLATFORM"
-    [ "$_HR_P" = "x" ] && _HR_P="twitter"
-    HR_PLATFORM_FILTER="h.platform = '$_HR_P'"
+    # Twitter rows are inconsistently labeled 'x' vs 'twitter' across legacy
+    # ingestions; treat them as one platform for the queue filter.
+    if [ "$_HR_P" = "x" ] || [ "$_HR_P" = "twitter" ]; then
+        HR_PLATFORM_FILTER="h.platform IN ('x','twitter')"
+    else
+        HR_PLATFORM_FILTER="h.platform = '$_HR_P'"
+    fi
 fi
 
 # Ingest any human replies that have landed in the i@m13v.com inbox since the
