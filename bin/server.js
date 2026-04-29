@@ -6249,9 +6249,7 @@ function renderDmStats(payload) {
   }
   const fmt = n => (Number(n) || 0).toLocaleString();
   const totals = projects.reduce((a, p) => {
-    a.dms                += Number(p.dms)                || 0;
     a.sent               += Number(p.sent)               || 0;
-    a.sent_messages      += Number(p.sent_messages)      || 0;
     a.replied            += Number(p.replied)            || 0;
     a.replied_messages   += Number(p.replied_messages)   || 0;
     a.hot                += Number(p.hot)                || 0;
@@ -6273,7 +6271,7 @@ function renderDmStats(payload) {
     a.converted          += Number(p.converted)          || 0;
     a.needs_human        += Number(p.needs_human)        || 0;
     return a;
-  }, { dms: 0, sent: 0, sent_messages: 0, replied: 0, hot: 0, warm: 0, general_discussion: 0, cold: 0, not_our_prospect: 0, declined: 0, no_response: 0, icp_match: 0, icp_miss: 0, icp_disqualified: 0, icp_unknown: 0, asked: 0, answered: 0, qualified: 0, q_disqualified: 0, booking_sent: 0, converted: 0, needs_human: 0 });
+  }, { sent: 0, replied: 0, replied_messages: 0, hot: 0, warm: 0, general_discussion: 0, cold: 0, not_our_prospect: 0, declined: 0, no_response: 0, icp_match: 0, icp_miss: 0, icp_disqualified: 0, icp_unknown: 0, asked: 0, answered: 0, qualified: 0, q_disqualified: 0, booking_sent: 0, converted: 0, needs_human: 0 });
   if (totalEl) totalEl.textContent = projects.length + ' project' + (projects.length === 1 ? '' : 's');
   const normalized = projects.map(p => ({
     name:               p.name || '',
