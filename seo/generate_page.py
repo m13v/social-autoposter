@@ -2426,6 +2426,178 @@ def update_state(trigger: str, product: str, keyword: str, status: str,
         pass  # caller manages state
 
 
+def update_blog_manifest(repo_path: str, page_path: str) -> dict:
+    """Append/replace a blog post entry in src/app/blog/_manifest.ts.
+
+    Parses the metadata constants out of the generated page.tsx (SLUG, TITLE,
+    DESCRIPTION, DATE, LAST_MODIFIED, AUTHOR, TAGS, IMAGE), reads the existing
+    manifest, removes any prior entry for the same slug, inserts the new entry,
+    sorts the array by date (newest first), and writes it back. Then commits +
+    pushes the manifest change so /blog/, RSS, and tag pages pick it up.
+
+    Returns {"ok": bool, "error"?: str, "commit_sha"?: str, "skipped"?: bool}.
+
+    No-op (skipped=True) when the consumer has no manifest at the expected
+    path — keeps non-fazm sites from breaking until they adopt the same shape.
+    """
+    full_page_path = os.path.join(repo_path, page_path)
+    manifest_path = os.path.join(repo_path, "src", "app", "blog", "_manifest.ts")
+    if not os.path.exists(manifest_path):
+        return {"ok": True, "skipped": True,
+                "reason": "no _manifest.ts on this consumer"}
+    if not os.path.exists(full_page_path):
+        return {"ok": False, "error": f"page.tsx missing at {full_page_path}"}
+
+    try:
+        page_text = Path(full_page_path).read_text(encoding="utf-8")
+    except Exception as e:
+        return {"ok": False, "error": f"read page.tsx: {e}"}
+
+    def _grab(name: str, default: str | None = None) -> str | None:
+        # Match: const NAME = "...";  (double-quoted only — that's what the
+        # migration script and the build_prompt template both emit)
+        m = re.search(
+            rf'^const {re.escape(name)} = "((?:[^"\\]|\\.)*)";',
+            page_text, re.MULTILINE)
+        if m:
+            # Unescape \" and \\
+            return m.group(1).replace('\\"', '"').replace('\\\\', '\\')
+        return default
+
+    slug = _grab("SLUG")
+    title = _grab("TITLE")
+    description = _grab("DESCRIPTION")
+    date = _grab("DATE")
+    last_modified = _grab("LAST_MODIFIED")
+    author = _grab("AUTHOR", "Matthew Diakonov")
+    image = _grab("IMAGE")
+
+    if not (slug and title and date):
+        return {"ok": False,
+                "error": f"could not parse SLUG/TITLE/DATE from {page_path}"}
+
+    # TAGS is a string[] literal: const TAGS: string[] = ["a", "b"];
+    tags: list[str] = []
+    tags_match = re.search(
+        r'^const TAGS(?::\s*string\[\])?\s*=\s*\[([^\]]*)\]\s*;',
+        page_text, re.MULTILINE)
+    if tags_match:
+        for m in re.finditer(r'"((?:[^"\\]|\\.)*)"', tags_match.group(1)):
+            tags.append(m.group(1).replace('\\"', '"'))
+
+    # Reading-time estimate: count words in the HTML_CONTENT body.
+    rt_match = re.search(
+        r'^const HTML_CONTENT = `(.*?)`;\s*$',
+        page_text, re.MULTILINE | re.DOTALL)
+    if rt_match:
+        # Strip tags for a rough word count.
+        text_only = re.sub(r'<[^>]+>', ' ', rt_match.group(1))
+        words = len(text_only.split())
+        minutes = max(1, (words + 199) // 200)
+        reading_time = f"{minutes} min read"
+    else:
+        reading_time = "5 min read"
+
+    # Build the new manifest entry as a single-line TS object literal that
+    # matches the formatting the migration script writes.
+    def _json_str(s: str) -> str:
+        return json.dumps(s)
+
+    tags_ts = "[" + ", ".join(_json_str(t) for t in tags) + "]"
+    lm_ts = _json_str(last_modified) if last_modified else "undefined"
+    img_ts = _json_str(image) if image else "undefined"
+    new_entry = (
+        f'  {{ slug: {_json_str(slug)}, title: {_json_str(title)}, '
+        f'description: {_json_str(description or "")}, date: {_json_str(date)}, '
+        f'lastModified: {lm_ts}, author: {_json_str(author or "Matthew Diakonov")}, '
+        f'tags: {tags_ts}, image: {img_ts}, '
+        f'readingTime: {_json_str(reading_time)} }},'
+    )
+
+    try:
+        manifest_text = Path(manifest_path).read_text(encoding="utf-8")
+    except Exception as e:
+        return {"ok": False, "error": f"read manifest: {e}"}
+
+    # Remove any prior line for this slug (idempotent re-runs).
+    slug_re = re.compile(
+        rf'^\s*\{{\s*slug:\s*"{re.escape(slug)}"\s*,.*?\}},\s*$',
+        re.MULTILINE)
+    cleaned_text = slug_re.sub("", manifest_text)
+    # Squash the empty line that sub() leaves behind so the file stays tidy.
+    cleaned_text = re.sub(r'\n\n+', '\n', cleaned_text)
+
+    # Insert the new entry. Strategy: keep the entries in date-desc order by
+    # walking the existing entries and inserting before the first entry whose
+    # date is <= new date. If we can't find one, append before the closing ];
+    entry_re = re.compile(
+        r'^(\s*)\{\s*slug:\s*"([^"]+)"\s*,.*?date:\s*"([^"]+)".*?\},\s*$',
+        re.MULTILINE | re.DOTALL)
+    inserted = False
+    out_lines: list[str] = []
+    for line in cleaned_text.splitlines(keepends=True):
+        if not inserted:
+            m = entry_re.match(line)
+            if m and m.group(3) <= date:
+                out_lines.append(new_entry + "\n")
+                inserted = True
+        out_lines.append(line)
+    new_manifest_text = "".join(out_lines)
+    if not inserted:
+        # Fallback: insert before the closing `];`
+        new_manifest_text = re.sub(
+            r'(\n)(\s*\];\s*\n?)$',
+            r'\1' + new_entry + r'\n\2',
+            new_manifest_text, count=1)
+
+    if new_manifest_text == manifest_text:
+        return {"ok": True, "noop": True,
+                "reason": "manifest already up to date"}
+
+    try:
+        Path(manifest_path).write_text(new_manifest_text, encoding="utf-8")
+    except Exception as e:
+        return {"ok": False, "error": f"write manifest: {e}"}
+
+    # Commit + push so the live site picks the new entry up. Best-effort: a
+    # push race is fine because the auto-commit cron will retry within a
+    # minute. Use --quiet flags so we don't spam the lane log.
+    rel = os.path.relpath(manifest_path, repo_path)
+    try:
+        subprocess.run(["git", "add", rel], cwd=repo_path,
+                       check=True, timeout=30)
+        commit_msg = f"chore(blog): add {slug} to manifest"
+        subprocess.run(
+            ["git", "commit", "-m", commit_msg, "--", rel],
+            cwd=repo_path, check=True, timeout=30,
+            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
+        # rev-parse the just-made commit for return value
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo_path,
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        # Pull-rebase + push to handle any concurrent manifest writes; if the
+        # rebase fails, abort and let the next cron tick retry.
+        rebase = subprocess.run(
+            ["git", "pull", "--rebase", "--autostash"],
+            cwd=repo_path, capture_output=True, text=True, timeout=60)
+        if rebase.returncode != 0:
+            subprocess.run(["git", "rebase", "--abort"], cwd=repo_path,
+                           check=False, timeout=30)
+            return {"ok": False,
+                    "error": f"rebase failed: {rebase.stderr[:300]}"}
+        push = subprocess.run(["git", "push"], cwd=repo_path,
+                              capture_output=True, text=True, timeout=60)
+        if push.returncode != 0:
+            return {"ok": False,
+                    "error": f"push failed: {push.stderr[:300]}"}
+        return {"ok": True, "commit_sha": sha, "slug": slug}
+    except subprocess.CalledProcessError as e:
+        return {"ok": False, "error": f"git: {e.stderr or e}"}
+    except Exception as e:
+        return {"ok": False, "error": f"git: {e}"}
+
+
 def find_existing_target_path(repo_path: str, content_type: str,
                               slug: str) -> str | None:
     """Return first existing candidate page path for this slug, or None.
@@ -2751,6 +2923,28 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
                 "content_type": content_type,
                 "stream_log": stream["stream_log_path"],
                 "tool_summary": stream["tool_summary"]}
+
+    # Blog-post manifest update. Only fires after the page commit landed; we
+    # parse the just-written page.tsx for metadata and append/replace the entry
+    # in src/app/blog/_manifest.ts, then commit + push so the index, RSS, and
+    # tag pages pick it up. Skipped silently on consumers without a manifest
+    # file (they're not on the BlogPostLayout pattern yet). A failure here
+    # marks the row pending so the cron retries; the page itself is already
+    # live, so this is purely about the listing surfaces catching up.
+    if content_type == "blog_post":
+        landed_path = verify.get("file") or expected_file_candidates[0]
+        manifest_result = update_blog_manifest(repo_path, landed_path)
+        if not manifest_result.get("ok"):
+            mfst_err = manifest_result.get("error", "")[:400]
+            update_state(trigger, product, keyword, "pending",
+                         notes=f"manifest_update_failed: {mfst_err}"[:500],
+                         slug=slug, content_type=content_type,
+                         claude_session_id=session_id)
+            return {"success": False,
+                    "error": f"manifest update failed: {mfst_err}",
+                    "content_type": content_type,
+                    "stream_log": stream["stream_log_path"],
+                    "tool_summary": stream["tool_summary"]}
 
     base_url = (product_cfg.get("landing_pages", {}).get("base_url")
                 or product_cfg.get("website", "")).rstrip("/")
