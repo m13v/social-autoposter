@@ -156,11 +156,15 @@ def list_done_pages(product, limit=400):
     """
     conn = get_conn()
     cur = conn.cursor()
+    # Case-insensitive product match. Historical writes for some projects
+    # (notably fazm) used lowercase product names while config.json now has
+    # them title-cased. Comparing on LOWER(product) keeps the inventory
+    # surfaced regardless of which casing the caller passes in.
     cur.execute(
         """
         SELECT slug, keyword, page_url, content_type, completed_at
         FROM seo_keywords
-        WHERE product = %s AND status = 'done' AND slug IS NOT NULL
+        WHERE LOWER(product) = LOWER(%s) AND status = 'done' AND slug IS NOT NULL
         ORDER BY completed_at DESC NULLS LAST, updated_at DESC NULLS LAST
         LIMIT %s
         """,
