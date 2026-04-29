@@ -104,8 +104,18 @@ acquire_lock() {
   # because launchd treats the slot as still in flight.
   if $is_browser_lock; then
     local platform="${name%-browser}"
-    if pkill -f "user-data-dir=.*browser-profiles/${platform}" 2>/dev/null; then
-      echo "Killed orphan Chrome holding ${platform} profile"
+    # Chrome sweep: only kill Chromes whose top-level Chromium has been
+    # reparented to launchd (ppid==1), i.e. true orphans whose parent
+    # playwright-mcp died without cleanup. A LIVE peer's Chromium is parented
+    # to its mcp wrapper (alive), so this filter skips it. Without the
+    # ppid==1 guard, a peer that managed to acquire the lock concurrently
+    # would SIGTERM the legitimate holder's Chrome and trigger crashes like
+    # the GPU exit_code=15 we saw on 2026-04-28 14:12 PT.
+    local chrome_pids
+    chrome_pids=$(ps -A -o pid=,ppid=,command= | awk -v plat="browser-profiles/${platform}" '$2 == "1" && index($0, "user-data-dir=") > 0 && index($0, plat) > 0 {print $1}')
+    if [ -n "$chrome_pids" ]; then
+      echo "$chrome_pids" | xargs kill -TERM 2>/dev/null || true
+      echo "Killed orphan Chrome (ppid=1) holding ${platform} profile: $(echo $chrome_pids | tr '\n' ' ')"
       sleep 1
     fi
     local mcp_pids
