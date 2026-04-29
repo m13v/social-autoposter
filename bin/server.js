@@ -2515,10 +2515,10 @@ async function handleApi(req, res) {
     // render a dash instead of a misleading 0. Score still uses COALESCE so they
     // rank alongside other platforms based on upvotes + comments only.
     const q = "SELECT json_agg(row_to_json(r)) FROM (" +
-      "SELECT id, platform, " +
+      "SELECT posts.id, posts.platform, " +
         "COALESCE(upvotes, 0)::int AS upvotes, " +
         "COALESCE(comments_count, 0)::int AS comments_count, " +
-        "CASE WHEN LOWER(platform) IN ('moltbook', 'github', 'github_issues') " +
+        "CASE WHEN LOWER(posts.platform) IN ('moltbook', 'github', 'github_issues') " +
           "THEN NULL ELSE COALESCE(views, 0)::int END AS views, " +
         // Score weights comments and upvotes equally (5 each); views are 1/100.
         // Reddit bakes the OP's self-upvote into the API's `score` field, and our
@@ -2526,15 +2526,16 @@ async function handleApi(req, res) {
         // post on either platform shows upvotes=1; discount 1, clamped at 0 so
         // downvoted posts don't go negative.
         "(COALESCE(comments_count,0) * 5 " +
-          "+ CASE WHEN LOWER(platform) IN ('reddit', 'moltbook') " +
+          "+ CASE WHEN LOWER(posts.platform) IN ('reddit', 'moltbook') " +
             "THEN GREATEST(0, COALESCE(upvotes,0) - 1) * 5 " +
             "ELSE COALESCE(upvotes,0) * 5 END " +
           "+ COALESCE(views,0) / 100)::int AS score, " +
         "(our_url IS NOT NULL AND thread_url = our_url) AS is_thread, " +
         "posted_at, engagement_updated_at, our_content, our_url, thread_url, thread_title, " +
         "LEFT(COALESCE(thread_content, ''), 400) AS thread_content, " +
-        "our_account, project_name, engagement_style, is_recommendation " +
-      "FROM posts " +
+        "our_account, project_name, engagement_style, is_recommendation, " +
+        "c.name AS campaign_name " +
+      "FROM posts LEFT JOIN campaigns c ON c.id = posts.campaign_id " +
       "WHERE " + whereParts.join(' AND ') + " " +
       "ORDER BY upvotes DESC NULLS LAST, comments_count DESC NULLS LAST, views DESC NULLS LAST " +
       "LIMIT " + limit +
