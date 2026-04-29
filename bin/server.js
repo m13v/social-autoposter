@@ -1621,19 +1621,19 @@ async function handleApi(req, res) {
         "FROM claude_sessions cs JOIN session_counts sc ON sc.claude_session_id = cs.session_id" +
       ") " +
       "SELECT json_agg(row_to_json(r)) FROM (" +
-      "SELECT * FROM (SELECT posted_at AS occurred_at, 'posted' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, engagement_style AS detail, our_url AS link, ('p' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id WHERE posted_at IS NOT NULL AND our_content <> '(mention - no original post)' ORDER BY posted_at DESC LIMIT 150) x1 " +
-      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 140), LEFT(r2.their_content, 140)), CASE WHEN r2.is_recommendation THEN 'rec · ' || COALESCE(r2.engagement_style, '') ELSE r2.engagement_style END, r2.our_reply_url, ('r' || r2.id), p.project_name, sc.per_row_cost FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id LEFT JOIN session_cost sc ON sc.session_id = r2.claude_session_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 150) x2 " +
-      "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name, sc.per_row_cost FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id LEFT JOIN session_cost sc ON sc.session_id = r3.claude_session_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 150) x3 " +
-      "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text, NULL::numeric FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
-      "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || dms.id), NULL::text, sc.per_row_cost FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
-      "UNION ALL SELECT * FROM (SELECT m.message_at, 'dm_reply_sent', d.platform, d.their_author, LEFT(m.content, 140), NULL::text, d.chat_url, ('dr' || m.id), NULL::text, sc.per_row_cost FROM dm_messages m JOIN dms d ON d.id = m.dm_id LEFT JOIN session_cost sc ON sc.session_id = m.claude_session_id WHERE m.direction = 'outbound' AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction = 'inbound' AND m2.message_at < m.message_at) ORDER BY m.message_at DESC LIMIT 150) x5b " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || sk.id), product, sc.per_row_cost FROM seo_keywords sk LEFT JOIN session_cost sc ON sc.session_id = sk.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page', 'roundup') ORDER BY completed_at DESC LIMIT 150) x6 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || gq.id), product, sc.per_row_cost FROM gsc_queries gq LEFT JOIN session_cost sc ON sc.session_id = gq.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || sk2.id), product, sc.per_row_cost FROM seo_keywords sk2 LEFT JOIN session_cost sc ON sc.session_id = sk2.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_top', 'seo', product, keyword, slug, page_url, ('kt' || sk3.id), product, sc.per_row_cost FROM seo_keywords sk3 LEFT JOIN session_cost sc ON sc.session_id = sk3.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'top_page' ORDER BY completed_at DESC LIMIT 150) x8b " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_roundup', 'seo', product, keyword, slug, page_url, ('kru' || sk4.id), product, sc.per_row_cost FROM seo_keywords sk4 LEFT JOIN session_cost sc ON sc.session_id = sk4.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'roundup' ORDER BY completed_at DESC LIMIT 150) x8r " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_improved', 'seo', product, LEFT(COALESCE(rationale, diff_summary, page_path), 140), page_path, page_url, ('pi' || spi.id), product, sc.per_row_cost FROM seo_page_improvements spi LEFT JOIN session_cost sc ON sc.session_id = spi.claude_session_id WHERE completed_at IS NOT NULL AND status = 'committed' ORDER BY completed_at DESC LIMIT 150) x8c " +
-      "UNION ALL SELECT * FROM (SELECT resurrected_at AS occurred_at, 'resurrected' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, NULL::text AS detail, our_url AS link, ('rr' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id WHERE resurrected_at IS NOT NULL AND our_content <> '(mention - no original post)' ORDER BY resurrected_at DESC LIMIT 150) x9 " +
+      "SELECT * FROM (SELECT posted_at AS occurred_at, 'posted' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, engagement_style AS detail, our_url AS link, ('p' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd, c.name AS campaign_name FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id LEFT JOIN campaigns c ON c.id = posts.campaign_id WHERE posted_at IS NOT NULL AND our_content <> '(mention - no original post)' ORDER BY posted_at DESC LIMIT 150) x1 " +
+      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 140), LEFT(r2.their_content, 140)), CASE WHEN r2.is_recommendation THEN 'rec · ' || COALESCE(r2.engagement_style, '') ELSE r2.engagement_style END, r2.our_reply_url, ('r' || r2.id), p.project_name, sc.per_row_cost, c2.name FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id LEFT JOIN session_cost sc ON sc.session_id = r2.claude_session_id LEFT JOIN campaigns c2 ON c2.id = r2.campaign_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 150) x2 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name, sc.per_row_cost, c3.name FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id LEFT JOIN session_cost sc ON sc.session_id = r3.claude_session_id LEFT JOIN campaigns c3 ON c3.id = r3.campaign_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 150) x3 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text, NULL::numeric, NULL::text FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
+      "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || dms.id), NULL::text, sc.per_row_cost, NULL::text FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
+      "UNION ALL SELECT * FROM (SELECT m.message_at, 'dm_reply_sent', d.platform, d.their_author, LEFT(m.content, 140), NULL::text, d.chat_url, ('dr' || m.id), NULL::text, sc.per_row_cost, c5.name FROM dm_messages m JOIN dms d ON d.id = m.dm_id LEFT JOIN session_cost sc ON sc.session_id = m.claude_session_id LEFT JOIN campaigns c5 ON c5.id = m.campaign_id WHERE m.direction = 'outbound' AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction = 'inbound' AND m2.message_at < m.message_at) ORDER BY m.message_at DESC LIMIT 150) x5b " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || sk.id), product, sc.per_row_cost, NULL::text FROM seo_keywords sk LEFT JOIN session_cost sc ON sc.session_id = sk.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page', 'roundup') ORDER BY completed_at DESC LIMIT 150) x6 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || gq.id), product, sc.per_row_cost, NULL::text FROM gsc_queries gq LEFT JOIN session_cost sc ON sc.session_id = gq.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || sk2.id), product, sc.per_row_cost, NULL::text FROM seo_keywords sk2 LEFT JOIN session_cost sc ON sc.session_id = sk2.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_top', 'seo', product, keyword, slug, page_url, ('kt' || sk3.id), product, sc.per_row_cost, NULL::text FROM seo_keywords sk3 LEFT JOIN session_cost sc ON sc.session_id = sk3.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'top_page' ORDER BY completed_at DESC LIMIT 150) x8b " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_roundup', 'seo', product, keyword, slug, page_url, ('kru' || sk4.id), product, sc.per_row_cost, NULL::text FROM seo_keywords sk4 LEFT JOIN session_cost sc ON sc.session_id = sk4.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'roundup' ORDER BY completed_at DESC LIMIT 150) x8r " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_improved', 'seo', product, LEFT(COALESCE(rationale, diff_summary, page_path), 140), page_path, page_url, ('pi' || spi.id), product, sc.per_row_cost, NULL::text FROM seo_page_improvements spi LEFT JOIN session_cost sc ON sc.session_id = spi.claude_session_id WHERE completed_at IS NOT NULL AND status = 'committed' ORDER BY completed_at DESC LIMIT 150) x8c " +
+      "UNION ALL SELECT * FROM (SELECT resurrected_at AS occurred_at, 'resurrected' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, NULL::text AS detail, our_url AS link, ('rr' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd, c9.name AS campaign_name FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id LEFT JOIN campaigns c9 ON c9.id = posts.campaign_id WHERE resurrected_at IS NOT NULL AND our_content <> '(mention - no original post)' ORDER BY resurrected_at DESC LIMIT 150) x9 " +
       "ORDER BY 1 DESC LIMIT 500) r";
     return (async () => {
       const rows = await pq(q);
@@ -3796,6 +3796,12 @@ const HTML = `<!DOCTYPE html>
       <button type="button" class="activity-filter-menu-btn" data-filter-action="project-none">None</button>
       <span class="activity-filter-group" id="activity-project-filters"></span>
     </div>
+    <div class="style-stats-pill-row" id="activity-campaign-pills">
+      <span class="label">Campaign</span>
+      <button type="button" class="activity-filter-menu-btn" data-filter-action="campaign-all">All</button>
+      <button type="button" class="activity-filter-menu-btn" data-filter-action="campaign-none">None</button>
+      <span class="activity-filter-group" id="activity-campaign-filters"></span>
+    </div>
   </div>
   <div class="activity-wrapper">
     <table class="activity-table">
@@ -4991,6 +4997,7 @@ const EVENT_DESCRIPTIONS = {
 const ACTIVITY_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github', 'seo'];
 const PROJECT_LABELS = { tenxats: '10xats' };
 const ACTIVITY_PROJECT_NONE = '(none)';
+const ACTIVITY_CAMPAIGN_ORGANIC = '(organic)';
 let _activitySeen = new Set();
 let _activityFirstLoad = true;
 // Activity-tab filters/sort/search are persisted across reloads.
@@ -4998,6 +5005,8 @@ let _activityTypeFilter = saLoadSet('sa.activity.typeFilter.v1', EVENT_TYPES);
 let _activityPlatformFilter = saLoadSet('sa.activity.platformFilter.v1', ACTIVITY_PLATFORMS);
 let _activityProjectFilter = saLoadSet('sa.activity.projectFilter.v1', []);
 let _activityKnownProjects = saLoad('sa.activity.knownProjects.v1', []);
+let _activityCampaignFilter = saLoadSet('sa.activity.campaignFilter.v1', []);
+let _activityKnownCampaigns = saLoad('sa.activity.knownCampaigns.v1', []);
 let _activitySearch = saLoad('sa.activity.search.v1', '');
 let _activitySortField = saLoad('sa.activity.sortField.v1', 'occurred_at');
 let _activitySortDir = saLoad('sa.activity.sortDir.v1', 'desc');
@@ -5014,6 +5023,11 @@ let _activityControlsWired = false;
 function activityProjectKey(e) {
   const p = String((e && e.project) || '').trim();
   return p || ACTIVITY_PROJECT_NONE;
+}
+
+function activityCampaignKey(e) {
+  const c = String((e && e.campaign_name) || '').trim();
+  return c || ACTIVITY_CAMPAIGN_ORGANIC;
 }
 
 function refreshActivityProjectPills(events) {
@@ -5039,10 +5053,38 @@ function refreshActivityProjectPills(events) {
   ).join('');
 }
 
+function refreshActivityCampaignPills(events) {
+  const campEl = document.getElementById('activity-campaign-filters');
+  if (!campEl) return;
+  const seen = new Set(_activityKnownCampaigns);
+  let added = false;
+  for (const e of events || []) {
+    const c = activityCampaignKey(e);
+    if (!seen.has(c)) { seen.add(c); _activityKnownCampaigns.push(c); _activityCampaignFilter.add(c); added = true; }
+  }
+  if (!added && campEl.children.length) {
+    campEl.querySelectorAll('[data-campaign]').forEach(el => {
+      el.classList.toggle('active', _activityCampaignFilter.has(el.dataset.campaign));
+    });
+    return;
+  }
+  _activityKnownCampaigns.sort((a, b) => {
+    if (a === ACTIVITY_CAMPAIGN_ORGANIC) return -1;
+    if (b === ACTIVITY_CAMPAIGN_ORGANIC) return 1;
+    return a.localeCompare(b);
+  });
+  saSave('sa.activity.knownCampaigns.v1', _activityKnownCampaigns);
+  saSaveSet('sa.activity.campaignFilter.v1', _activityCampaignFilter);
+  campEl.innerHTML = _activityKnownCampaigns.map(c =>
+    '<span class="activity-chip' + (_activityCampaignFilter.has(c) ? ' active' : '') + '" data-campaign="' + escapeHtml(c) + '" title="' + escapeHtml(c) + '">' + escapeHtml(c === ACTIVITY_CAMPAIGN_ORGANIC ? 'Organic' : c) + '</span>'
+  ).join('');
+}
+
 function buildActivityFilters() {
   const tEl = document.getElementById('activity-type-filters');
   const pEl = document.getElementById('activity-platform-filters');
   const projEl = document.getElementById('activity-project-filters');
+  const campEl = document.getElementById('activity-campaign-filters');
   if (!tEl || tEl.children.length) return;
   tEl.innerHTML = EVENT_TYPES.map(t =>
     '<span class="activity-chip ev-' + t + ' active" data-type="' + t + '">' + EVENT_LABELS[t] + '</span>'
@@ -5082,6 +5124,18 @@ function buildActivityFilters() {
       renderActivity(_lastActivityEvents || []);
     });
   }
+  if (campEl) {
+    campEl.addEventListener('click', (ev) => {
+      const el = ev.target.closest('[data-campaign]');
+      if (!el || !campEl.contains(el)) return;
+      const c = el.dataset.campaign;
+      if (_activityCampaignFilter.has(c)) { _activityCampaignFilter.delete(c); el.classList.remove('active'); }
+      else { _activityCampaignFilter.add(c); el.classList.add('active'); }
+      saSaveSet('sa.activity.campaignFilter.v1', _activityCampaignFilter);
+      _activityPage = 0;
+      renderActivity(_lastActivityEvents || []);
+    });
+  }
   document.querySelectorAll('#tab-activity [data-filter-action]').forEach(btn => {
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
@@ -5110,6 +5164,14 @@ function buildActivityFilters() {
         _activityProjectFilter = new Set();
         if (projEl) projEl.querySelectorAll('[data-project]').forEach(c => c.classList.remove('active'));
         saSaveSet('sa.activity.projectFilter.v1', _activityProjectFilter);
+      } else if (a === 'campaign-all') {
+        _activityCampaignFilter = new Set(_activityKnownCampaigns);
+        if (campEl) campEl.querySelectorAll('[data-campaign]').forEach(c => c.classList.add('active'));
+        saSaveSet('sa.activity.campaignFilter.v1', _activityCampaignFilter);
+      } else if (a === 'campaign-none') {
+        _activityCampaignFilter = new Set();
+        if (campEl) campEl.querySelectorAll('[data-campaign]').forEach(c => c.classList.remove('active'));
+        saSaveSet('sa.activity.campaignFilter.v1', _activityCampaignFilter);
       }
       _activityPage = 0;
       renderActivity(_lastActivityEvents || []);
@@ -6583,6 +6645,7 @@ let _topWindow = coerceTopWindow(loadSavedDashboardWindow());
 let _topPlatform = saLoad('sa.top.platform.v1', 'all');
 let _topSubtab = saLoad('sa.top.subtab.v1', 'threads');
 let _topProject = saLoad('sa.top.project.v1', 'all');
+let _topCampaign = saLoad('sa.top.campaign.v1', 'all');
 let _topPagesTableState = { sortField: 'pageviews', sortDir: 'desc', filters: {} };
 let _topPagesLoaded = false;
 let _topPagesLoading = false;
@@ -6611,6 +6674,7 @@ function topDmPageSize() {
 }
 let _topPostsPayload = null;
 const _topProjectNames = new Set();
+const _topCampaignNames = new Set();
 
 function refreshTopProjectPills(newNames) {
   const projRow = document.getElementById('top-project-pills');
@@ -6637,6 +6701,36 @@ function refreshTopProjectPills(newNames) {
     escapeHtml(v === 'all' ? 'All' : v) + '</button>'
   )).join('');
   projRow.innerHTML = labelHtml + pillsHtml;
+}
+
+function refreshTopCampaignPills(newNames) {
+  const campRow = document.getElementById('top-campaign-pills');
+  if (!campRow) return;
+  const organic = '(organic)';
+  if (Array.isArray(newNames)) {
+    for (const n of newNames) {
+      const key = (n && typeof n === 'string' && n.trim()) ? n.trim() : organic;
+      _topCampaignNames.add(key);
+    }
+  }
+  const sorted = Array.from(_topCampaignNames).filter(n => n !== organic).sort((a, b) => a.localeCompare(b));
+  if (_topCampaignNames.has(organic)) sorted.unshift(organic);
+  const wanted = ['all', ...sorted];
+  const existing = Array.from(campRow.querySelectorAll('.style-stats-pill'))
+    .map(b => b.getAttribute('data-value') || '');
+  const same = wanted.length === existing.length && wanted.every((v, i) => v === existing[i]);
+  if (same) return;
+  const current = campRow.dataset.selected || 'all';
+  const selected = (current === 'all' || sorted.includes(current) || current === organic) ? current : 'all';
+  if (selected !== current) _topCampaign = selected;
+  campRow.dataset.selected = selected;
+  const labelHtml = '<span class="label">Campaign</span>';
+  const pillsHtml = wanted.map(v => (
+    '<button type="button" class="style-stats-pill' + (v === selected ? ' active' : '') +
+    '" data-value="' + escapeHtml(v) + '">' +
+    escapeHtml(v === 'all' ? 'All' : v === organic ? 'Organic' : v) + '</button>'
+  )).join('');
+  campRow.innerHTML = labelHtml + pillsHtml;
 }
 
 function parentLabel(post) {
@@ -6752,9 +6846,17 @@ function renderTopPosts(payload) {
   _topPostsPayload = payload;
   const allPosts = (payload && payload.posts) || [];
   refreshTopProjectPills(allPosts.map(p => p.project_name).filter(Boolean));
-  const posts = (_topProject && _topProject !== 'all')
+  refreshTopCampaignPills(allPosts.map(p => p.campaign_name || null));
+  const projectFiltered = (_topProject && _topProject !== 'all')
     ? allPosts.filter(p => (p.project_name || '') === _topProject)
     : allPosts;
+  const organic = '(organic)';
+  const posts = (_topCampaign && _topCampaign !== 'all')
+    ? projectFiltered.filter(p => {
+        const cn = (p.campaign_name && p.campaign_name.trim()) ? p.campaign_name.trim() : organic;
+        return cn === _topCampaign;
+      })
+    : projectFiltered;
   if (totalEl) totalEl.textContent = posts.length + ' post' + (posts.length === 1 ? '' : 's');
   if (!posts.length) {
     container.innerHTML = '<div class="style-stats-empty">No posts with engagement yet.</div>';
@@ -8295,6 +8397,7 @@ let _lastActivityEvents = [];
 function renderActivity(events) {
   _lastActivityEvents = events;
   refreshActivityProjectPills(events);
+  refreshActivityCampaignPills(events);
   const body = document.getElementById('activity-body');
   if (!body) return;
   renderSortArrows();
@@ -8302,6 +8405,7 @@ function renderActivity(events) {
     if (!_activityTypeFilter.has(e.type)) return false;
     if (!_activityPlatformFilter.has((e.platform || '').toLowerCase())) return false;
     if (!_activityProjectFilter.has(activityProjectKey(e))) return false;
+    if (!_activityCampaignFilter.has(activityCampaignKey(e))) return false;
     if (!activityMatchesSearch(e, _activitySearch)) return false;
     return true;
   });
