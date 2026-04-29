@@ -209,7 +209,8 @@ STILL_PENDING=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM dms WHERE pl
 log "LinkedIn DM outreach summary: sent (all-time)=$SENT, still_pending=$STILL_PENDING"
 
 RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
-python3 "$REPO_DIR/scripts/log_run.py" --script "dm_outreach_linkedin" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
+_COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "dm-outreach-linkedin" 2>/dev/null || echo "0.0000")
+python3 "$REPO_DIR/scripts/log_run.py" --script "dm_outreach_linkedin" --posted 0 --skipped 0 --failed 0 --cost "$_COST" --elapsed "$RUN_ELAPSED"
 
 find "$LOG_DIR" -name "dm-outreach-linkedin-*.log" -mtime +7 -delete 2>/dev/null || true
 
