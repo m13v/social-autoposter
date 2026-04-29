@@ -194,7 +194,7 @@ HUMAN_REPLIES=$(psql "$DATABASE_URL" -t -A -c "
                r.their_comment_id  AS public_target_comment_id,
                r.our_reply_url     AS our_prior_public_reply_url,
                r.post_id           AS public_target_post_id,
-               p.url               AS public_target_post_url
+               p.thread_url        AS public_target_post_url
         FROM human_dm_replies h
         JOIN dms d ON d.id = h.dm_id
         LEFT JOIN replies r ON r.id = d.reply_id
@@ -202,7 +202,13 @@ HUMAN_REPLIES=$(psql "$DATABASE_URL" -t -A -c "
         WHERE (h.status = 'pending' OR (h.status = 'failed' AND h.attempts < 3))
           AND $HR_PLATFORM_FILTER
         ORDER BY h.created_at ASC
-    ) q;" 2>/dev/null || echo "null")
+    ) q;" 2>&1)
+# If psql errored, surface it loudly instead of silently treating as "no replies"
+if echo "$HUMAN_REPLIES" | grep -qE '^(ERROR|FATAL|psql:)'; then
+    log "Phase 0: psql error querying pending human replies:"
+    log "$HUMAN_REPLIES"
+    HUMAN_REPLIES="null"
+fi
 
 if [ "$HUMAN_REPLIES" != "null" ] && [ -n "$HUMAN_REPLIES" ]; then
     HR_COUNT=$(echo "$HUMAN_REPLIES" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
@@ -232,7 +238,31 @@ Each pending reply has a \`reply_channel\` field that selects the delivery surfa
 Pending human replies:
 $HUMAN_REPLIES
 
-For each reply, branch on \`reply_channel\`:
+### Step 0. ESCAPE HATCH — reclassify before delivering
+
+Before drafting any message, check whether the human's instruction is actually a directive ABOUT the escalation rather than a message to send. The human writes these by replying to escalation emails, so they sometimes use the reply field to issue meta-commands. Examples:
+
+- "Remove this escalation", "cancel", "dismiss", "ignore", "false alarm", "no need to reply"
+- "Skip this one", "don't send", "not relevant"
+- "Mark as handled", "I already replied manually"
+- "Disqualify", "block", "spam"
+
+If the instruction text clearly matches one of these intents (use judgment, the human writes casually), DO NOT send anything on any channel. Instead:
+
+\`\`\`bash
+# Mark the human reply row as cancelled so it never retries
+psql "\$DATABASE_URL" -c "UPDATE human_dm_replies SET status = 'cancelled', sent_at = NOW(), last_error = 'human reclassified: <SHORT_REASON>' WHERE id = REPLY_ID"
+
+# Optionally update the underlying conversation if the intent says so:
+#   - "disqualify"/"block"/"spam"  → set-status disqualified
+#   - "mark as handled"/"already replied"  → set-status active
+#   - "skip"/"dismiss"/"remove escalation"  → leave conversation as-is, just clear the flag
+cd ~/social-autoposter && python3 scripts/dm_conversation.py set-status --dm-id DM_ID --status STATUS_OR_OMIT
+\`\`\`
+
+Log clearly in your summary which rows were reclassified and why. Only proceed to Step A-D for instructions that are genuine messages to send.
+
+For each remaining reply, branch on \`reply_channel\`:
 
 ### Step A. Always read context first
 
