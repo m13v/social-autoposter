@@ -61,7 +61,8 @@ def main():
 
         if args.script == 'serp_seo':
             cur.execute(
-                "SELECT COUNT(*) FROM seo_keywords WHERE status='done' AND completed_at >= %s",
+                "SELECT COUNT(*) FROM seo_keywords WHERE status='done' AND completed_at >= %s"
+                " AND COALESCE(source, '') NOT IN ('reddit', 'top_page', 'roundup')",
                 (run_start_ts,),
             )
             pages = int(cur.fetchone()[0] or 0)
@@ -70,9 +71,14 @@ def main():
                 (run_start_ts,),
             )
             skipped = int(cur.fetchone()[0] or 0)
+            # Cost attributed to pages that completed this tick (via session_id join)
+            # so cost and page count are always in the same tick window.
             cur.execute(
-                "SELECT COALESCE(SUM(total_cost_usd), 0) FROM claude_sessions "
-                "WHERE script='seo_generate_page' AND started_at >= %s",
+                "SELECT COALESCE(SUM(cs.total_cost_usd), 0)"
+                " FROM claude_sessions cs"
+                " JOIN seo_keywords sk ON sk.claude_session_id = cs.session_id"
+                " WHERE sk.completed_at >= %s"
+                " AND COALESCE(sk.source, '') NOT IN ('reddit', 'top_page', 'roundup')",
                 (run_start_ts,),
             )
             cost = float(cur.fetchone()[0] or 0)
@@ -83,9 +89,12 @@ def main():
                 (run_start_ts,),
             )
             pages = int(cur.fetchone()[0] or 0)
+            # Cost attributed via session_id join so it lands in the same tick as the page.
             cur.execute(
-                "SELECT COALESCE(SUM(total_cost_usd), 0) FROM claude_sessions "
-                "WHERE script='seo_generate_page' AND started_at >= %s",
+                "SELECT COALESCE(SUM(cs.total_cost_usd), 0)"
+                " FROM claude_sessions cs"
+                " JOIN gsc_queries gq ON gq.claude_session_id = cs.session_id"
+                " WHERE gq.completed_at >= %s",
                 (run_start_ts,),
             )
             cost = float(cur.fetchone()[0] or 0)
@@ -103,9 +112,12 @@ def main():
                     pages = int(count or 0)
                 elif status == 'failed':
                     db_failed = int(count or 0)
+            # Cost attributed via session_id join aligned to completed_at.
             cur.execute(
-                "SELECT COALESCE(SUM(total_cost_usd), 0) FROM claude_sessions "
-                "WHERE script='seo_improve_page' AND started_at >= %s",
+                "SELECT COALESCE(SUM(cs.total_cost_usd), 0)"
+                " FROM claude_sessions cs"
+                " JOIN seo_page_improvements spi ON spi.claude_session_id = cs.session_id"
+                " WHERE spi.completed_at >= %s",
                 (run_start_ts,),
             )
             cost = float(cur.fetchone()[0] or 0)
@@ -135,15 +147,14 @@ def main():
                 (source, run_start_ts),
             )
             db_failed = int(cur.fetchone()[0] or 0)
-            # Attribute cost only to sessions whose seo_keywords row matches
-            # this source — serp_seo, top_pages, and roundup all share
-            # script='seo_generate_page', so we can't filter by script alone.
+            # Cost via session_id join on completed_at — drops the started_at
+            # time filter so overlapping ticks never double-count.
             cur.execute(
-                "SELECT COALESCE(SUM(cs.total_cost_usd), 0) FROM claude_sessions cs "
-                "JOIN seo_keywords sk ON sk.claude_session_id = cs.session_id "
-                "WHERE cs.script='seo_generate_page' AND cs.started_at >= %s "
-                "AND sk.source = %s",
-                (run_start_ts, source),
+                "SELECT COALESCE(SUM(cs.total_cost_usd), 0)"
+                " FROM claude_sessions cs"
+                " JOIN seo_keywords sk ON sk.claude_session_id = cs.session_id"
+                " WHERE sk.source = %s AND sk.completed_at >= %s",
+                (source, run_start_ts),
             )
             cost = float(cur.fetchone()[0] or 0)
 
