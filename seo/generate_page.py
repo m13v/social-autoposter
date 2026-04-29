@@ -2459,9 +2459,14 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
     if existing and not force:
         rel = os.path.relpath(existing, repo_path)
         note = f"overwrite_blocked: target already exists at {rel}"
+        _base_url = (product_cfg.get("landing_pages", {}).get("base_url")
+                     or product_cfg.get("website", "")).rstrip("/")
+        _route_prefix = CONTENT_TYPES.get(content_type, CONTENT_TYPES["guide"])["route_prefix"]
+        existing_page_url = f"{_base_url}{_route_prefix}{slug}" if _base_url else None
         update_state(trigger, product, keyword, "done",
                      notes=note[:500], slug=slug,
-                     content_type=content_type)
+                     content_type=content_type,
+                     page_url=existing_page_url)
         return {"success": False, "error": note,
                 "content_type": content_type,
                 "existing_path": existing}
