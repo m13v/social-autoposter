@@ -99,15 +99,51 @@ def get_our_account(config, platform):
     return "unknown"
 
 
-def log_outbound(conn, dm_id, content, author=None):
-    """Log a message we sent. Includes dedup guard to prevent double-sending."""
+def log_outbound(conn, dm_id, content, author=None, verified=False):
+    """Log a message we sent. Includes dedup guard to prevent double-sending.
+
+    --verified is REQUIRED. Without it the function refuses to insert.
+    This is the gate against the LLM-driven "fabricated send" bug
+    (see April 2026 incident: Haiku-fired LinkedIn DM cycle inserted 5
+    phantom outbound rows into dm_messages while dms.status stayed
+    pending because dm_send_log.py blocked the dms UPDATE). The browser
+    send_dm/compose_dm tool must return verified=true; only then may
+    the caller pass --verified.
+
+    Additional DB-enforced gate: for the FIRST outbound (no prior
+    outbound rows for this dm_id), dms.status must already be 'sent'.
+    Only dm_send_log.py --verified flips that, so this forces the
+    canonical path on first messages even if the LLM tries to skip it.
+    """
     row = conn.execute(
-        "SELECT platform, their_author, message_count, qualification_status, icp_matches "
+        "SELECT platform, their_author, message_count, qualification_status, icp_matches, status "
         "FROM dms WHERE id = %s",
         (dm_id,),
     ).fetchone()
     if not row:
         print(f"ERROR: DM #{dm_id} not found")
+        return False
+
+    if not verified:
+        print(
+            f"  VERIFY BLOCKED: refusing to log outbound to DM #{dm_id} without --verified.\n"
+            "  The browser send_dm/compose_dm tool must return verified=true first.\n"
+            "  Pass --verified only after a real send. If verification failed, "
+            "log nothing and let the next cycle retry."
+        )
+        return False
+
+    prior_outbound = conn.execute(
+        "SELECT 1 FROM dm_messages WHERE dm_id = %s AND direction = 'outbound' LIMIT 1",
+        (dm_id,),
+    ).fetchone()
+    if not prior_outbound and (row.get("status") or "pending") != "sent":
+        print(
+            f"  STATUS BLOCKED: DM #{dm_id} status is '{row.get('status')}', not 'sent', "
+            "and there is no prior outbound row.\n"
+            "  Run scripts/dm_send_log.py --verified first; that script flips "
+            "dms.status to 'sent' and forwards to log-outbound."
+        )
         return False
 
     # Bare-URL guard: real replies contain prose. A content string that is
@@ -969,6 +1005,11 @@ def main():
     p_out.add_argument("--dm-id", type=int, required=True)
     p_out.add_argument("--content", required=True)
     p_out.add_argument("--author")
+    p_out.add_argument(
+        "--verified",
+        action="store_true",
+        help="REQUIRED. Confirms the browser send_dm/compose_dm tool returned verified=true.",
+    )
 
     p_ensure = sub.add_parser("ensure-dm",
         help="Return dm_id for (platform, author), creating the row and auto-linking reply_id/post_id from the most recent matching replies row. Prints DM_ID=<n> on stdout.")
@@ -1074,7 +1115,10 @@ def main():
     conn = dbmod.get_conn()
 
     if args.command == "log-outbound":
-        log_outbound(conn, args.dm_id, args.content, args.author)
+        ok = log_outbound(conn, args.dm_id, args.content, args.author,
+                          verified=args.verified)
+        if not ok:
+            sys.exit(3)
     elif args.command == "ensure-dm":
         dm_id, created, linked_reply_id = ensure_dm(
             conn, args.platform, args.author,
