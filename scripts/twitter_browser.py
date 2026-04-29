@@ -972,9 +972,10 @@ def send_dm(thread_url, message):
             }""", msg_start)
 
             return {
-                "ok": True,
+                "ok": verified,
                 "thread_url": page.url,
                 "verified": verified,
+                "error": None if verified else "send_unverified_no_dom_confirmation",
             }
 
         finally:
