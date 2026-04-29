@@ -171,7 +171,13 @@ fi
 # The Python side writes {reddit, twitter, github} integers (zeros if a
 # platform's reply pass didn't run).
 REPLY_SUMMARY_FILE=$(mktemp -t fazm-reply-summary.XXXXXX)
-trap 'rm -f "$REPLY_SUMMARY_FILE"' EXIT
+# Sidecar JSON written by scrape_linkedin_stats.py --summary so we can forward
+# LinkedIn-specific counters (refreshed/removed/unavailable/not_found) into
+# log_run.py. Step 4's Claude-driven prompt invokes the Python script with
+# --summary "$LINKEDIN_SUMMARY_FILE", so the file is populated only if Step 4
+# ran end-to-end. Empty file means LinkedIn contributed 0 to every counter.
+LINKEDIN_SUMMARY_FILE=$(mktemp -t fazm-linkedin-summary.XXXXXX)
+trap 'rm -f "$REPLY_SUMMARY_FILE" "$LINKEDIN_SUMMARY_FILE"' EXIT
 
 if [ "$RUN_STEP2" -eq 1 ]; then
     # Narrow the Python call per platform. Without --platform we run the
@@ -370,7 +376,9 @@ When the SCRAPE_JS returned `unavailable: true`, propagate that flag into the JS
 
 Process in batches of 10 with 5-second delays between page loads to avoid LinkedIn rate limiting.
 
-Step 4: Run: python3 REPO_DIR_PLACEHOLDER/scripts/scrape_linkedin_stats.py --from-json /tmp/linkedin_stats.json
+Step 4: Run: python3 REPO_DIR_PLACEHOLDER/scripts/scrape_linkedin_stats.py --from-json /tmp/linkedin_stats.json --summary LINKEDIN_SUMMARY_PLACEHOLDER
+
+The --summary flag is REQUIRED. It writes a small JSON ({refreshed, removed, unavailable, not_found}) that the calling shell reads back to populate the dashboard Jobs row pills. Skipping it makes the LinkedIn run show as zero work even when matches were found.
 
 Step 5: Close the browser tab (mcp__linkedin-agent__browser_tabs action 'close', NOT browser_close).
 
@@ -380,6 +388,7 @@ STEP4_EOF
     sed -i.bak "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP4_PROMPT"
     sed -i.bak "s|LINKEDIN_NAME_PLACEHOLDER|$LINKEDIN_NAME|g" "$STEP4_PROMPT"
     sed -i.bak "s|LINKEDIN_NAME_JS_PLACEHOLDER|$LINKEDIN_NAME|g" "$STEP4_PROMPT"
+    sed -i.bak "s|LINKEDIN_SUMMARY_PLACEHOLDER|$LINKEDIN_SUMMARY_FILE|g" "$STEP4_PROMPT"
     rm -f "${STEP4_PROMPT}.bak"
 
     # Step 4 (LinkedIn) requires the linkedin-agent MCP for browser scraping.
@@ -452,6 +461,10 @@ extract_field() {
 REDDIT_VIEWS_LINE=$(grep -E "^Reddit Views:" "$LOGFILE" 2>/dev/null | tail -1)
 REDDIT_DETAIL_LINE=$(grep -E "^Reddit: [0-9]+ total" "$LOGFILE" 2>/dev/null | tail -1)
 TWITTER_LINE=$(grep -E "^Twitter: [0-9]+ total" "$LOGFILE" 2>/dev/null | tail -1)
+# Moltbook prints `Moltbook: N checked, N updated, N deleted, N errors` (no
+# "total" prefix), so it gets its own grep. LinkedIn doesn't print a
+# structured stdout line; its counters come from $LINKEDIN_SUMMARY_FILE.
+MOLTBOOK_LINE=$(grep -E "^Moltbook: [0-9]+ checked" "$LOGFILE" 2>/dev/null | tail -1)
 
 # Reddit views leg: "<M> DB posts updated" — only the "updated" leg matters here.
 REDDIT_VIEWS_UPDATED=0
@@ -479,14 +492,35 @@ TWITTER_DELETED=$(extract_field "$TWITTER_LINE" "deleted")
 TWITTER_SKIPPED=$(extract_field "$TWITTER_LINE" "skipped")
 TWITTER_ERRORS=$(extract_field "$TWITTER_LINE" "errors")
 
-CHECKED=$(( REDDIT_CHECKED + TWITTER_CHECKED ))
-UPDATED=$(( REDDIT_VIEWS_UPDATED + REDDIT_DETAIL_UPDATED + TWITTER_UPDATED ))
-REMOVED=$(( REDDIT_DELETED + REDDIT_REMOVED_FIELD + TWITTER_DELETED ))
+MOLTBOOK_CHECKED=$(extract_field "$MOLTBOOK_LINE" "checked")
+MOLTBOOK_UPDATED=$(extract_field "$MOLTBOOK_LINE" "updated")
+MOLTBOOK_DELETED=$(extract_field "$MOLTBOOK_LINE" "deleted")
+MOLTBOOK_ERRORS=$(extract_field "$MOLTBOOK_LINE" "errors")
+
+# LinkedIn counters live in a JSON sidecar (no structured stdout line). The
+# file is written by scrape_linkedin_stats.py --summary; absent or empty
+# means the LinkedIn leg didn't run or wrote nothing, so all counters are 0.
+LINKEDIN_REFRESHED=0
+LINKEDIN_REMOVED=0
+LINKEDIN_UNAVAILABLE=0
+LINKEDIN_NOT_FOUND=0
+if [ -s "$LINKEDIN_SUMMARY_FILE" ]; then
+    LINKEDIN_REFRESHED=$(python3 -c "import json,sys; d=json.load(open('$LINKEDIN_SUMMARY_FILE')); print(int(d.get('refreshed', 0) or 0))" 2>/dev/null || echo 0)
+    LINKEDIN_REMOVED=$(python3 -c "import json,sys; d=json.load(open('$LINKEDIN_SUMMARY_FILE')); print(int(d.get('removed', 0) or 0))" 2>/dev/null || echo 0)
+    LINKEDIN_UNAVAILABLE=$(python3 -c "import json,sys; d=json.load(open('$LINKEDIN_SUMMARY_FILE')); print(int(d.get('unavailable', 0) or 0))" 2>/dev/null || echo 0)
+    LINKEDIN_NOT_FOUND=$(python3 -c "import json,sys; d=json.load(open('$LINKEDIN_SUMMARY_FILE')); print(int(d.get('not_found', 0) or 0))" 2>/dev/null || echo 0)
+fi
+
+CHECKED=$(( REDDIT_CHECKED + TWITTER_CHECKED + MOLTBOOK_CHECKED + LINKEDIN_REFRESHED ))
+UPDATED=$(( REDDIT_VIEWS_UPDATED + REDDIT_DETAIL_UPDATED + TWITTER_UPDATED + MOLTBOOK_UPDATED + LINKEDIN_REFRESHED ))
+REMOVED=$(( REDDIT_DELETED + REDDIT_REMOVED_FIELD + TWITTER_DELETED + MOLTBOOK_DELETED + LINKEDIN_REMOVED ))
 SKIPPED_REAL=$(( REDDIT_SKIPPED + TWITTER_SKIPPED ))
+UNAVAILABLE=$LINKEDIN_UNAVAILABLE
+NOT_FOUND=$LINKEDIN_NOT_FOUND
 # API errors are surfaced via a per-platform counter but are folded into the
 # "failed" pill alongside step-exit counts. Stays bounded since API errors
 # cap at a few hundred and step exits are 0-4.
-FAILED_REAL=$(( STATS_FAILED + REDDIT_ERRORS + TWITTER_ERRORS ))
+FAILED_REAL=$(( STATS_FAILED + REDDIT_ERRORS + TWITTER_ERRORS + MOLTBOOK_ERRORS ))
 
 # Pull the reply-refresh count for this platform out of the sidecar JSON.
 # Defaults to 0 if the file is missing or the platform's pass didn't run.
