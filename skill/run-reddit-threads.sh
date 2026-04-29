@@ -26,9 +26,10 @@ echo "=== Reddit Threads Run: $(date) ===" | tee "$LOG_FILE"
 # leave only the context block in the log with no clue what killed the run.
 trap 'rc=$?; echo "SCRIPT DIED line=$LINENO cmd=\"$BASH_COMMAND\" exit=$rc" | tee -a "$LOG_FILE" >&2' ERR
 
-# Serialize with other reddit-agent consumers
+# Pipeline lock at top. The reddit-browser lock is acquired later, just
+# before the Claude/MCP step that drives the browser, so peers can use the
+# profile during our pre-Claude research + prompt build.
 source "$REPO_DIR/skill/lock.sh"
-acquire_lock "reddit-browser" 3600
 acquire_lock "reddit-threads" 600
 
 # Load engagement styles
@@ -181,6 +182,9 @@ RESULT_SCHEMA='{"type":"object","properties":{"research_files_read":{"type":"arr
 
 # Pre-generate session id so the prompt's inline INSERT can stamp it.
 export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
+
+# Acquire the browser lock now, immediately before the Claude/MCP step.
+acquire_lock "reddit-browser" 3600
 
 CLAUDE_OUTPUT=$("$REPO_DIR/scripts/run_claude.sh" "run-reddit-threads" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" -p --output-format json --json-schema "$RESULT_SCHEMA" "You are posting an ORIGINAL thread to ${SUBREDDIT} for the ${PROJECT} project as u/${POST_ACCOUNT}.
 
