@@ -220,7 +220,8 @@ print(f'Extracted {len(tweets)} tweets to $RAW_FILE', file=sys.stderr)
 EXTRACT_EXIT=${PIPESTATUS[0]:-1}
 if [ "$EXTRACT_EXIT" -ne 0 ] || [ ! -f "$RAW_FILE" ]; then
     log "No tweets extracted in Phase 1. Aborting cycle."
-    python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped 0 --failed 1 --cost 0 --elapsed $(( $(date +%s) - RUN_START ))
+    _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "run-twitter-cycle-scan" "run-twitter-cycle-post" 2>/dev/null || echo "0.0000")
+    python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped 0 --failed 1 --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
     exit 0
 fi
 
@@ -395,7 +396,8 @@ log "Batch summary: $SUMMARY"
 # --- Persist to run_monitor.log so Job History picks up Twitter Post rows ---
 POSTED_CT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM twitter_candidates WHERE batch_id='$BATCH_ID' AND status='posted'" 2>/dev/null || echo 0)
 SKIPPED_CT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM twitter_candidates WHERE batch_id='$BATCH_ID' AND status IN ('skipped','expired')" 2>/dev/null || echo 0)
-python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted "${POSTED_CT:-0}" --skipped "${SKIPPED_CT:-0}" --failed 0 --cost 0 --elapsed $(( $(date +%s) - RUN_START ))
+_COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "run-twitter-cycle-scan" "run-twitter-cycle-post" 2>/dev/null || echo "0.0000")
+python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted "${POSTED_CT:-0}" --skipped "${SKIPPED_CT:-0}" --failed 0 --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
 
 log "=== Cycle complete: $(date) ==="
 find "$LOG_DIR" -name "twitter-cycle-*.log" -mtime +7 -delete 2>/dev/null || true
