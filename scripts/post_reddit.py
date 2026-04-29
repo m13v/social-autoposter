@@ -584,8 +584,12 @@ def parse_post_decisions(output):
     return decisions
 
 
-def run_one_iteration(args, config, reddit_username, already_picked):
-    """Run one pick->draft->post cycle. Returns (posted, failed, cost, project_name or None)."""
+def _plan_iteration(args, config, reddit_username, already_picked):
+    """Pick project → build prompt → run Claude → parse decisions. No browser.
+
+    Returns a dict {project_name, decisions, cost, error?} or None if no project
+    was eligible. Decisions list may be empty when Claude returns nothing usable.
+    """
     if args.project:
         project = None
         for p in config.get("projects", []):
@@ -594,12 +598,12 @@ def run_one_iteration(args, config, reddit_username, already_picked):
                 break
         if not project:
             print(f"[post_reddit] ERROR: project '{args.project}' not found")
-            return 0, 0, 0.0, None
+            return None
     else:
         project = pick_project("reddit", exclude=already_picked)
         if not project:
             print(f"[post_reddit] No eligible project left (already picked: {already_picked})")
-            return 0, 0, 0.0, None
+            return None
 
     project_name = project.get("name", "general")
     print(f"[post_reddit] Project: {project_name}")
@@ -615,7 +619,7 @@ def run_one_iteration(args, config, reddit_username, already_picked):
         print(f"Prompt length: {len(prompt)} chars")
         print(prompt)
         print("=== END DRY RUN ===")
-        return 0, 0, 0.0, project_name
+        return {"project_name": project_name, "decisions": [], "cost": 0.0, "dry_run": True}
 
     print(f"[post_reddit] Starting Claude session (limit={args.limit}, timeout={args.timeout}s)")
     start = time.time()
@@ -625,7 +629,7 @@ def run_one_iteration(args, config, reddit_username, already_picked):
 
     if not ok:
         print(f"[post_reddit] Claude FAILED: {output[:300]}")
-        return 0, 1, usage["cost_usd"], project_name
+        return {"project_name": project_name, "decisions": [], "cost": usage["cost_usd"], "error": "claude_failed"}
 
     decisions = parse_post_decisions(output)
     print(f"[post_reddit] Claude drafted {len(decisions)} post(s)")
@@ -633,6 +637,17 @@ def run_one_iteration(args, config, reddit_username, already_picked):
         print(f"[post_reddit] No valid post decisions found in output:")
         for line in output.strip().split("\n")[-10:]:
             print(f"  {line}")
+
+    return {"project_name": project_name, "decisions": decisions, "cost": usage["cost_usd"]}
+
+
+def _post_iteration(plan, reddit_username):
+    """Execute browser CDP posts for the decisions in plan. Returns (posted, failed)."""
+    project_name = plan["project_name"]
+    decisions = plan.get("decisions") or []
+
+    if not decisions:
+        return 0, 0
 
     active_campaigns = load_active_reddit_campaigns()
     if active_campaigns:
