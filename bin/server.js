@@ -2616,7 +2616,8 @@ async function handleApi(req, res) {
           "COUNT(*)::int AS dms, " +
           "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'outbound' AND m.message_at >= NOW() - INTERVAL '" + windowHours + " hours'))::int AS sent, " +
           "COALESCE(SUM((SELECT COUNT(*) FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'outbound' AND m.message_at >= NOW() - INTERVAL '" + windowHours + " hours')), 0)::int AS sent_messages, " +
-          "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'inbound'))::int AS replied, " +
+          "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'inbound' AND m.message_at >= NOW() - INTERVAL '" + windowHours + " hours'))::int AS replied, " +
+          "COALESCE(SUM((SELECT COUNT(*) FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'inbound' AND m.message_at >= NOW() - INTERVAL '" + windowHours + " hours')), 0)::int AS replied_messages, " +
           "COUNT(*) FILTER (WHERE d.interest_level = 'hot')::int AS hot, " +
           "COUNT(*) FILTER (WHERE d.interest_level = 'warm')::int AS warm, " +
           "COUNT(*) FILTER (WHERE d.interest_level = 'general_discussion')::int AS general_discussion, " +
@@ -6254,6 +6255,7 @@ function renderDmStats(payload) {
     a.sent               += Number(p.sent)               || 0;
     a.sent_messages      += Number(p.sent_messages)      || 0;
     a.replied            += Number(p.replied)            || 0;
+    a.replied_messages   += Number(p.replied_messages)   || 0;
     a.hot                += Number(p.hot)                || 0;
     a.warm               += Number(p.warm)               || 0;
     a.general_discussion += Number(p.general_discussion) || 0;
