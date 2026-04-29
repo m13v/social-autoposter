@@ -105,7 +105,8 @@ EDITED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE platfor
 log "LinkedIn link-edit complete. Total linkedin posts edited (all-time): $EDITED"
 
 RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
-python3 "$REPO_DIR/scripts/log_run.py" --script "link_edit_linkedin" --posted 0 --skipped 0 --failed 0 --cost 0 --elapsed "$RUN_ELAPSED"
+_COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "link-edit-linkedin" 2>/dev/null || echo "0.0000")
+python3 "$REPO_DIR/scripts/log_run.py" --script "link_edit_linkedin" --posted 0 --skipped 0 --failed 0 --cost "$_COST" --elapsed "$RUN_ELAPSED"
 
 find "$LOG_DIR" -name "link-edit-linkedin-*.log" -mtime +7 -delete 2>/dev/null || true
 
