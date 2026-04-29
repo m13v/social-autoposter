@@ -140,8 +140,13 @@ def mark_comment_blocked(thread_url: str) -> None:
 
 # Keywords that indicate a permanent account/subreddit block rather than a
 # transient failure.  Case-insensitive match against Claude's abort_reason.
+# Tuned 2026-04-29: broaden to catch mod-rule bans expressed in present tense
+# ("the sub bans software", "no software allowed") in addition to account-level
+# bans ("u/X has been banned"). Each new pattern observed from real abort logs.
 _THREAD_BLOCK_PATTERNS = [
     r"\bbanned\b",
+    r"\bbans\b\s+(all|any|every|every kind|posts?|comments?|software|websites?|self[- ]promo|advertising|promotional)",
+    r"\bban\b.*\b(software|posts?|websites?|self[- ]promo|advertising)\b",
     r"access was denied",
     r"\b403\b",
     r"link[- ]only",
@@ -150,6 +155,13 @@ _THREAD_BLOCK_PATTERNS = [
     r"does not allow text",
     r"not allowed to post",
     r"posting.*restricted",
+    r"no (software|self[- ]promo|promotional|advertising|ads)",
+    r"\bprohibit(ed|s)?\b",
+    r"\bremoved\b.*\b(rule|mod)\b",   # "would be removed per rule X"
+    r"would (get )?removed",
+    r"\bnot permitted\b",
+    r"approved (submitter|user)s? only",
+    r"forbidden",
 ]
 
 def _abort_is_permanent_block(abort_reason: str) -> bool:
