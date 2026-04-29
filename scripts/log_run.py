@@ -34,6 +34,13 @@ def main():
     parser.add_argument("--removed", type=int, default=0,
                         help="Stats jobs only: posts newly flagged deleted/removed in this run. "
                              "Renders as 'removed'.")
+    parser.add_argument("--unavailable", type=int, default=0,
+                        help="Stats jobs (LinkedIn): posts where the platform "
+                             "explicitly returned a 'post unavailable' string. "
+                             "Subset of removed; rendered as a separate pill.")
+    parser.add_argument("--not-found", dest="not_found", type=int, default=0,
+                        help="Stats jobs (LinkedIn): posts still active but our "
+                             "comment couldn't be located. Renders as 'not_found'.")
     args = parser.parse_args()
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -44,12 +51,19 @@ def main():
         f" replies_refreshed={args.replies_refreshed}"
         if args.replies_refreshed else ""
     )
-    # Stats-job per-run counters. Emitted as a single optional segment so the
-    # regex in bin/server.js can keep them as one optional capture group.
+    # Stats-job per-run counters. The base segment (checked/updated/removed)
+    # stays as a single optional capture group for the bin/server.js regex.
+    # The LinkedIn-specific extras (unavailable/not_found) tail the base
+    # segment as their own optional groups so older lines still parse.
     stats_segment = (
         f" checked={args.checked} updated={args.updated} removed={args.removed}"
-        if (args.checked or args.updated or args.removed) else ""
+        if (args.checked or args.updated or args.removed
+            or args.unavailable or args.not_found) else ""
     )
+    if args.unavailable:
+        stats_segment += f" unavailable={args.unavailable}"
+    if args.not_found:
+        stats_segment += f" not_found={args.not_found}"
     line = (
         f"{timestamp} | {args.script} | "
         f"posted={args.posted} skipped={args.skipped} failed={args.failed}"
