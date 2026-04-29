@@ -32,20 +32,12 @@ fi
 LOCK_NAME="dm-replies"
 [ -n "$PLATFORM" ] && LOCK_NAME="dm-replies-$PLATFORM"
 
-# Lock order: platform-browser lock(s) first (shared across pipelines that use the
-# same browser profile), then the pipeline-specific lock. Alphabetical order for
-# multi-platform runs to prevent deadlock.
+# Pipeline lock at top. Platform-browser locks are acquired later, just
+# before the Claude/MCP step that drives the browser, so peers can use the
+# profile during our Phase 0 (Gmail + matrix-js-sdk IndexedDB ingest), DB
+# scans, and prompt build. Alphabetical order is preserved at acquire time
+# below for multi-platform runs to prevent deadlock.
 source "$(dirname "$0")/lock.sh"
-case "${PLATFORM:-all}" in
-    linkedin) acquire_lock "linkedin-browser" 3600 ;;
-    reddit)   acquire_lock "reddit-browser" 3600 ;;
-    twitter|x) acquire_lock "twitter-browser" 3600 ;;
-    all)
-        acquire_lock "linkedin-browser" 3600
-        acquire_lock "reddit-browser" 3600
-        acquire_lock "twitter-browser" 3600
-        ;;
-esac
 acquire_lock "$LOCK_NAME" 3600
 
 # Load secrets
@@ -1119,6 +1111,21 @@ if [ -n "$PLATFORM" ]; then
         twitter|x) DM_MCP_CONFIG="$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" ;;
     esac
 fi
+
+# Acquire platform-browser lock(s) now, immediately before the Claude/MCP
+# step. Alphabetical order in the multi-platform branch prevents deadlock
+# with other pipelines that also acquire multiple browser locks.
+log "Acquiring platform-browser lock(s) for Claude/MCP step..."
+case "${PLATFORM:-all}" in
+    linkedin) acquire_lock "linkedin-browser" 3600 ;;
+    reddit)   acquire_lock "reddit-browser" 3600 ;;
+    twitter|x) acquire_lock "twitter-browser" 3600 ;;
+    all)
+        acquire_lock "linkedin-browser" 3600
+        acquire_lock "reddit-browser" 3600
+        acquire_lock "twitter-browser" 3600
+        ;;
+esac
 
 gtimeout 5400 "$REPO_DIR/scripts/run_claude.sh" "engage-dm-replies" --strict-mcp-config --mcp-config "$DM_MCP_CONFIG" -p "$(cat "$PHASE_A_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: DM reply claude exited with code $?"
 rm -f "$PHASE_A_PROMPT"
