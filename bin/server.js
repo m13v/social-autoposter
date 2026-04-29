@@ -4360,8 +4360,8 @@ function updateFreqCells(jobs) {
 
 // Job history state ---------------------------------------------------------
 let _jobHistoryRuns = [];
-let _jobHistoryPlatformFilter = 'all';
-let _jobHistoryTypeFilter = 'all';
+let _jobHistoryPlatformFilter = saLoad('sa.jobHistory.platform.v1', 'all');
+let _jobHistoryTypeFilter = saLoad('sa.jobHistory.type.v1', 'all');
 
 function fmtRelTime(iso) {
   if (!iso) return '—';
@@ -4549,12 +4549,30 @@ function wirePillRow(rowId, onSelect) {
 }
 
 function initJobsHistoryPills() {
+  // Hydrate visual selection from the persisted filter so the active pill
+  // matches the filter actually being applied to the list.
+  const platRow = document.getElementById('jobs-history-platform-pills');
+  const typeRow = document.getElementById('jobs-history-type-pills');
+  if (platRow) {
+    platRow.querySelectorAll('.style-stats-pill').forEach(b => {
+      b.classList.toggle('active', b.getAttribute('data-value') === _jobHistoryPlatformFilter);
+    });
+    platRow.setAttribute('data-selected', _jobHistoryPlatformFilter);
+  }
+  if (typeRow) {
+    typeRow.querySelectorAll('.style-stats-pill').forEach(b => {
+      b.classList.toggle('active', b.getAttribute('data-value') === _jobHistoryTypeFilter);
+    });
+    typeRow.setAttribute('data-selected', _jobHistoryTypeFilter);
+  }
   wirePillRow('jobs-history-platform-pills', (v) => {
     _jobHistoryPlatformFilter = v;
+    saSave('sa.jobHistory.platform.v1', v);
     applyJobsHistoryFilter();
   });
   wirePillRow('jobs-history-type-pills', (v) => {
     _jobHistoryTypeFilter = v;
+    saSave('sa.jobHistory.type.v1', v);
     applyJobsHistoryFilter();
   });
 }
@@ -6914,6 +6932,10 @@ function initTopFilters() {
     searchEl._wired = true;
   }
   syncTopSubtabHelp();
+  // Hydrate the visible subtab to match the persisted _topSubtab. The HTML
+  // markup hard-codes "threads" as the active subtab on first paint, so a
+  // reload with a saved subtab of "pages"/"dms" needs the DOM applied here.
+  applyTopSubtabState(_topSubtab, /*loadData=*/false);
   document.querySelectorAll('.top-subtab').forEach(el => {
     if (el._wired) return;
     el.addEventListener('click', () => {
@@ -6921,73 +6943,80 @@ function initTopFilters() {
       if (sub === _topSubtab) return;
       _topSubtab = sub;
       saSave('sa.top.subtab.v1', _topSubtab);
-      document.querySelectorAll('.top-subtab').forEach(s => {
-        const isActive = s.dataset.subtab === sub;
-        s.classList.toggle('active', isActive);
-        s.setAttribute('aria-selected', isActive ? 'true' : 'false');
-      });
-      syncTopSubtabHelp();
-      const postsC = document.getElementById('top-table-container');
-      const pagesC = document.getElementById('top-pages-container');
-      const pagesUnknownC = document.getElementById('top-pages-unknown-container');
-      const dmsC   = document.getElementById('top-dms-container');
-      const platRowEl = document.getElementById('top-platform-pills');
-      const projRowEl = document.getElementById('top-project-pills');
-      const srcRowEl  = document.getElementById('top-pages-source-pills');
-      const dirRowEl  = document.getElementById('top-dm-dir-pills');
-      const dmOnlyRowIds = ['top-dm-dir-pills', 'top-dm-interest-pills', 'top-dm-mode-pills', 'top-dm-tier-pills', 'top-dm-qual-pills', 'top-dm-status-pills'];
-      const setDmRowsHidden = (hidden) => {
-        dmOnlyRowIds.forEach(id => {
-          const el = document.getElementById(id);
-          if (el) el.classList.toggle('hidden', hidden);
-        });
-      };
-      const totalEl = document.getElementById('top-total');
-      if (projRowEl) projRowEl.classList.remove('hidden');
-      if (sub === 'pages') {
-        postsC.classList.add('hidden');
-        if (dmsC) dmsC.classList.add('hidden');
-        pagesC.classList.remove('hidden');
-        if (pagesUnknownC) pagesUnknownC.classList.remove('hidden');
-        if (platRowEl) platRowEl.classList.add('hidden');
-        if (srcRowEl) srcRowEl.classList.remove('hidden');
-        setDmRowsHidden(true);
-        if (totalEl) totalEl.textContent = '';
-        loadTopPages();
-      } else if (sub === 'dms') {
-        postsC.classList.add('hidden');
-        pagesC.classList.add('hidden');
-        if (pagesUnknownC) pagesUnknownC.classList.add('hidden');
-        if (dmsC) dmsC.classList.remove('hidden');
-        if (platRowEl) platRowEl.classList.remove('hidden');
-        if (srcRowEl) srcRowEl.classList.add('hidden');
-        setDmRowsHidden(false);
-        if (totalEl) totalEl.textContent = '';
-        const searchElDm = document.getElementById('top-search');
-        if (searchElDm) {
-          searchElDm.placeholder = 'Search DMs by author or message…';
-          searchElDm.value = _topDmSearch || '';
-        }
-        loadTopDms(true);
-      } else {
-        pagesC.classList.add('hidden');
-        if (pagesUnknownC) pagesUnknownC.classList.add('hidden');
-        if (dmsC) dmsC.classList.add('hidden');
-        postsC.classList.remove('hidden');
-        if (platRowEl) platRowEl.classList.remove('hidden');
-        if (srcRowEl) srcRowEl.classList.add('hidden');
-        setDmRowsHidden(true);
-        if (totalEl) totalEl.textContent = '';
-        const searchElPosts = document.getElementById('top-search');
-        if (searchElPosts) {
-          searchElPosts.placeholder = 'Search posts…';
-          searchElPosts.value = _topTableState.globalQuery || '';
-        }
-        loadTopPosts(true);
-      }
+      applyTopSubtabState(sub, /*loadData=*/true);
     });
     el._wired = true;
   });
+}
+
+// Shared body of the subtab switch so both initTopFilters and the click
+// handler take the same code path. When loadData is true we kick off the
+// network fetch for the new subtab; on first paint we skip it because the
+// outer "Top" tab handler already drives the initial load.
+function applyTopSubtabState(sub, loadData) {
+  document.querySelectorAll('.top-subtab').forEach(s => {
+    const isActive = s.dataset.subtab === sub;
+    s.classList.toggle('active', isActive);
+    s.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+  syncTopSubtabHelp();
+  const postsC = document.getElementById('top-table-container');
+  const pagesC = document.getElementById('top-pages-container');
+  const pagesUnknownC = document.getElementById('top-pages-unknown-container');
+  const dmsC   = document.getElementById('top-dms-container');
+  const platRowEl = document.getElementById('top-platform-pills');
+  const projRowEl = document.getElementById('top-project-pills');
+  const srcRowEl  = document.getElementById('top-pages-source-pills');
+  const dmOnlyRowIds = ['top-dm-dir-pills', 'top-dm-interest-pills', 'top-dm-mode-pills', 'top-dm-tier-pills', 'top-dm-qual-pills', 'top-dm-status-pills'];
+  const setDmRowsHidden = (hidden) => {
+    dmOnlyRowIds.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle('hidden', hidden);
+    });
+  };
+  const totalEl = document.getElementById('top-total');
+  if (projRowEl) projRowEl.classList.remove('hidden');
+  if (sub === 'pages') {
+    if (postsC) postsC.classList.add('hidden');
+    if (dmsC) dmsC.classList.add('hidden');
+    if (pagesC) pagesC.classList.remove('hidden');
+    if (pagesUnknownC) pagesUnknownC.classList.remove('hidden');
+    if (platRowEl) platRowEl.classList.add('hidden');
+    if (srcRowEl) srcRowEl.classList.remove('hidden');
+    setDmRowsHidden(true);
+    if (totalEl) totalEl.textContent = '';
+    if (loadData) loadTopPages();
+  } else if (sub === 'dms') {
+    if (postsC) postsC.classList.add('hidden');
+    if (pagesC) pagesC.classList.add('hidden');
+    if (pagesUnknownC) pagesUnknownC.classList.add('hidden');
+    if (dmsC) dmsC.classList.remove('hidden');
+    if (platRowEl) platRowEl.classList.remove('hidden');
+    if (srcRowEl) srcRowEl.classList.add('hidden');
+    setDmRowsHidden(false);
+    if (totalEl) totalEl.textContent = '';
+    const searchElDm = document.getElementById('top-search');
+    if (searchElDm) {
+      searchElDm.placeholder = 'Search DMs by author or message\u2026';
+      searchElDm.value = _topDmSearch || '';
+    }
+    if (loadData) loadTopDms(true);
+  } else {
+    if (pagesC) pagesC.classList.add('hidden');
+    if (pagesUnknownC) pagesUnknownC.classList.add('hidden');
+    if (dmsC) dmsC.classList.add('hidden');
+    if (postsC) postsC.classList.remove('hidden');
+    if (platRowEl) platRowEl.classList.remove('hidden');
+    if (srcRowEl) srcRowEl.classList.add('hidden');
+    setDmRowsHidden(true);
+    if (totalEl) totalEl.textContent = '';
+    const searchElPosts = document.getElementById('top-search');
+    if (searchElPosts) {
+      searchElPosts.placeholder = 'Search posts\u2026';
+      searchElPosts.value = _topTableState.globalQuery || '';
+    }
+    if (loadData) loadTopPosts(true);
+  }
 }
 
 const _TOP_PAGES_WINDOW_DAYS = { '24h': 1, '7d': 7, '14d': 14, '30d': 30, '90d': 90, 'all': 90 };
@@ -8286,46 +8315,70 @@ function stopActivityAutoRefresh() {
 // switching back shows cached content immediately while the active tab's
 // timer keeps it fresh.
 const _tabLoaded = { logs: false, activity: false, settings: false, top: false };
+function activateTab(name) {
+  const tab = document.querySelector('.tab[data-tab="' + name + '"]');
+  if (!tab) return false;
+  // Skip admin-only tabs the current user can't see (.sa-admin-only is hidden
+  // for non-admins via CSS), so we don't strand them on a blank panel.
+  const cs = tab.currentStyle || window.getComputedStyle(tab);
+  if (cs && cs.display === 'none') return false;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.content').forEach(c => c.classList.add('hidden'));
+  tab.classList.add('active');
+  const panel = document.getElementById('tab-' + name);
+  if (panel) panel.classList.remove('hidden');
+  if (name === 'logs') {
+    if (!_tabLoaded.logs) { loadLogFiles(); _tabLoaded.logs = true; }
+    startLogAutoRefresh();
+  } else {
+    stopLogAutoRefresh();
+  }
+  if (name === 'activity') {
+    buildActivityFilters();
+    if (!_tabLoaded.activity) _tabLoaded.activity = true;
+    startActivityAutoRefresh();
+  } else {
+    stopActivityAutoRefresh();
+  }
+  if (name === 'stats') { loadActivityStats(); loadStyleStats(); loadDmStats(); loadAllPerDayCharts(); }
+  if (name === 'top') {
+    initTopFilters();
+    if (_topSubtab === 'pages') {
+      loadTopPages();
+    } else if (_topSubtab === 'dms') {
+      loadTopDms(true);
+    } else if (!_tabLoaded.top) {
+      loadTopPosts();
+      _tabLoaded.top = true;
+    } else {
+      loadTopPosts(true);
+    }
+  }
+  if (name === 'settings' && !_tabLoaded.settings) {
+    loadSettings();
+    _tabLoaded.settings = true;
+  }
+  return true;
+}
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.content').forEach(c => c.classList.add('hidden'));
-    tab.classList.add('active');
     const name = tab.dataset.tab;
-    document.getElementById('tab-' + name).classList.remove('hidden');
-    if (name === 'logs') {
-      if (!_tabLoaded.logs) { loadLogFiles(); _tabLoaded.logs = true; }
-      startLogAutoRefresh();
-    } else {
-      stopLogAutoRefresh();
-    }
-    if (name === 'activity') {
-      buildActivityFilters();
-      if (!_tabLoaded.activity) _tabLoaded.activity = true;
-      startActivityAutoRefresh();
-    } else {
-      stopActivityAutoRefresh();
-    }
-    if (name === 'stats') { loadActivityStats(); loadStyleStats(); loadDmStats(); loadAllPerDayCharts(); }
-    if (name === 'top') {
-      initTopFilters();
-      if (_topSubtab === 'pages') {
-        loadTopPages();
-      } else if (_topSubtab === 'dms') {
-        loadTopDms(true);
-      } else if (!_tabLoaded.top) {
-        loadTopPosts();
-        _tabLoaded.top = true;
-      } else {
-        loadTopPosts(true);
-      }
-    }
-    if (name === 'settings' && !_tabLoaded.settings) {
-      loadSettings();
-      _tabLoaded.settings = true;
-    }
+    if (!activateTab(name)) return;
+    // Persist last-active tab so a reload returns to the same view.
+    saSave('sa.activeTab.v1', name);
   });
 });
+// On first paint, restore the persisted main tab. The HTML defaults to
+// "stats" — only override if the saved value is a known tab and is currently
+// visible to the user (some tabs are admin-only).
+(function restoreActiveTab() {
+  const saved = saLoad('sa.activeTab.v1', null);
+  const valid = ['status', 'stats', 'activity', 'top', 'logs', 'settings'];
+  if (!saved || !valid.includes(saved) || saved === 'stats') return;
+  // Defer a tick so admin-only visibility (driven by auth init) settles
+  // before we try to switch.
+  setTimeout(() => { activateTab(saved); }, 0);
+})();
 
 // Top-of-tab window pills (24h / 7d / 14d / 30d). Selection drives all three
 // Stats-tab sections so the user switches them in one click.
