@@ -923,6 +923,229 @@ Do NOT hard-code `href="https://cal.com/..."` in a raw `<a>` tag or copy the boo
 """
 
 
+# Deploy verification blocks — selected per-project from
+# `landing_pages.deploy.target` and `production_trigger` in config.json.
+# Use `__PAGE_URL__`, `__STAGING_URL__`, `__STAGING_PAGE_URL__`, and
+# `__TAG_PATTERN__` placeholders so we can splice them in with `str.replace()`
+# without fighting f-string brace escaping.
+
+VERCEL_DEPLOY_BLOCK = """## Step 5 — Typecheck, commit, deploy, and verify the Vercel build
+
+This step is a strict gate. You may not report success until a Vercel production deploy for your commit reaches state `READY`. Local typecheck passing is not enough. A 200 on the page is not enough. You must confirm the deploy state.
+
+**5a. Typecheck (mandatory, pre-commit).**
+
+- Run `npx tsc --noEmit` in the repo. If it reports ANY error, fix the code you introduced and re-run until clean. Never commit on a failing typecheck.
+- Common trap: `@seo/components` props are strictly typed. Pass primitives where primitives are expected (e.g., `SequenceDiagram.actors: string[]`, `SequenceDiagram.messages[].from: number`, `OrbitingCircles.items: ReactNode[]`). Confirm by reading the component source under `node_modules/@m13v/seo-components/src/components/` or `~/seo-components/src/components/` if the props shape is non-obvious.
+
+**5b. Commit and push.**
+
+- Stage the new page file (and any new shared components you added).
+- Commit on the current branch with a clear message naming the keyword.
+- Push to origin main (or whatever the repo's main branch is).
+- Confirm the commit is on origin. Record the 7-char SHA.
+
+**5c. Poll Vercel for deploy status (mandatory).**
+
+If the repo has `.vercel/project.json`, run this polling loop from bash. Get the token once:
+
+```
+VERCEL_TOKEN=$(python3 -c "import json; print(json.load(open('/Users/matthewdi/Library/Application Support/com.vercel.cli/auth.json'))['token'])")
+PROJECT_ID=$(python3 -c "import json; print(json.load(open('.vercel/project.json'))['projectId'])")
+TEAM_ID=$(python3 -c "import json; print(json.load(open('.vercel/project.json'))['orgId'])")
+SHA=<your 40-char commit SHA from git rev-parse HEAD>
+```
+
+Then poll (up to 30 attempts, 10s apart = ~5 min budget):
+
+```
+curl -s -H "Authorization: Bearer $VERCEL_TOKEN" \\
+  "https://api.vercel.com/v6/deployments?teamId=$TEAM_ID&projectId=$PROJECT_ID&target=production&limit=10" \\
+  | python3 -c "import sys,json; d=json.load(sys.stdin); [print(x['state'], x.get('meta',{}).get('githubCommitSha',''), x['uid'], x.get('inspectorUrl','')) for x in d['deployments']]"
+```
+
+Find the row matching your $SHA. Terminal states are `READY` (good), `ERROR` (failed), `CANCELED` (retry may be needed). `BUILDING`, `QUEUED`, `INITIALIZING` — keep polling.
+
+**5d. If deploy fails, fix and retry (up to 2 times).**
+
+If the state is `ERROR`, fetch the build log and fix the problem:
+
+```
+curl -s -H "Authorization: Bearer $VERCEL_TOKEN" \\
+  "https://api.vercel.com/v3/deployments/<deploy_uid>/events?teamId=$TEAM_ID&builds=1&direction=backward&limit=100" \\
+  | python3 -c "import sys,json; [print(e.get('payload',{}).get('text','')) for e in json.load(sys.stdin) if e.get('type') in ('stdout','stderr','command','build-error')]"
+```
+
+Read the log. The last few error lines usually show the file + line that broke the prerender. Do NOT guess: locate the exact file the build complains about, read it, and fix only what's broken (typically your new page, but occasionally a shared component you added).
+
+After fixing, re-run `npx tsc --noEmit`, commit, push, then poll again with the new SHA. Budget: at most 2 self-heal iterations. If you cannot get a READY state in 2 tries, STOP and report `success: false` with the deploy error message as the reason. Do not paper over the failure with `success: true`; a false success here corrupts the DB and blocks future generations.
+
+**5e. Final live-URL sanity check.**
+
+Only after the Vercel deploy is `READY`, run `curl -sI -o /dev/null -w "%{http_code}\\n" __PAGE_URL__` — you should see 200. If it's still 404 after 30s (Vercel alias propagation), wait 30s more and retry once. If still 404, report the problem instead of silently succeeding.
+"""
+
+
+CLOUDRUN_PUSH_DEPLOY_BLOCK = """## Step 5 — Typecheck, commit, deploy, and verify the Cloud Run build
+
+This product deploys to Cloud Run via GitHub Actions on push to `main`. This step is a strict gate. You may not report success until the Cloud Run deploy run reaches `completed: success`. Local typecheck passing is not enough. A 200 on the page is not enough.
+
+**5a. Typecheck (mandatory, pre-commit).**
+
+- Run `npx tsc --noEmit` in the repo. If it reports ANY error, fix the code you introduced and re-run until clean. Never commit on a failing typecheck.
+- Common trap: `@seo/components` props are strictly typed. Pass primitives where primitives are expected. Confirm by reading the component source under `node_modules/@m13v/seo-components/src/components/` or `~/seo-components/src/components/` if the props shape is non-obvious.
+
+**5b. Commit and push.**
+
+- Stage the new page file (and any new shared components you added).
+- Commit with a clear message naming the keyword.
+- `git push origin main`. Confirm the commit is on origin. Record the 7-char SHA.
+
+**5c. Watch the Cloud Run deploy via GitHub Actions (mandatory).**
+
+The repo has `.github/workflows/deploy-cloudrun.yml` triggered on push to main. Find the run for your commit:
+
+```
+sleep 5  # let GitHub register the push
+gh run list --branch main --limit 5
+```
+
+Match the row whose commit message matches yours (or `git log -1 --format=%s`). Then watch it:
+
+```
+gh run watch <run-id> --exit-status
+```
+
+This blocks until the run completes (~5-7 min typical). Exit 0 means success, non-zero means failure.
+
+**5d. If deploy fails, fix and retry (up to 2 times).**
+
+If `gh run watch` exits non-zero, view the failing log:
+
+```
+gh run view <run-id> --log-failed | tail -120
+```
+
+The last error chunk usually shows the file + line that broke the build (most often your new page). Fix only what's broken. After fixing, re-run `npx tsc --noEmit`, commit, push, watch the new run.
+
+Budget: at most 2 self-heal iterations. If you cannot get a successful run in 2 tries, STOP and report `success: false` with the deploy error message. Do not paper over the failure with `success: true`.
+
+**5e. Final live-URL sanity check.**
+
+Only after the Cloud Run deploy run completes successful, run:
+
+```
+curl -sI -o /dev/null -w "%{http_code}\\n" __PAGE_URL__
+```
+
+You should see 200. If still 404 after 30s, wait 30s and retry once. If still 404, report the problem instead of silently succeeding.
+"""
+
+
+CLOUDRUN_TAG_DEPLOY_BLOCK = """## Step 5 — Typecheck, commit, deploy via tag, and verify the Cloud Run build
+
+This product deploys to Cloud Run with TWO triggers: push to `main` builds STAGING, and pushing a tag matching `__TAG_PATTERN__` builds PRODUCTION. The fast path is to push BOTH refs in a single `git push` so staging and production deploys run in parallel. Doing them sequentially (push, watch, tag, watch) doubles the wall clock and can clip the per-page timeout.
+
+This step is a strict gate. You may not report success until the production tag deploy reaches `completed: success`.
+
+**5a. Typecheck (mandatory, pre-commit).**
+
+- Run `npx tsc --noEmit`. Fix any errors before committing.
+- `@seo/components` props are strictly typed; verify the component source if a prop shape is non-obvious.
+
+**5b. Commit, tag, and push BOTH refs in one operation.**
+
+- Stage the new page file. Commit on `main` with a clear message naming the keyword.
+- Compute the next tag, matching the existing pattern (`__TAG_PATTERN__`):
+  ```
+  latest=$(git tag --list 'v*' --sort=-v:refname | head -1)
+  echo "latest=$latest"
+  # Bump the patch component. e.g. v0.3.42 -> v0.3.43.
+  # If no v* tags exist, start at v0.0.1.
+  next="<computed>"
+  ```
+  Create the tag on the new commit:
+  ```
+  git tag $next
+  ```
+- Push BOTH refs simultaneously (this is the parallelism trick):
+  ```
+  git push origin main $next
+  ```
+- Confirm both refs landed on origin. Record the 7-char commit SHA and the tag name.
+
+**5c. Watch the production deploy via GitHub Actions (mandatory).**
+
+The single push triggers two parallel workflow runs: one for `main` (staging) and one for the tag (production). Find them:
+
+```
+sleep 5
+gh run list --limit 8
+```
+
+Two new runs should be in_progress. Identify them by the commit message and the branch / display name (the production one will reference your new tag). Watch the production run:
+
+```
+gh run watch <prod-run-id> --exit-status
+```
+
+This blocks ~5-7 min. Exit 0 = success, non-zero = failure. You can ignore the staging run; if it failed but production passed, the tag deploy is still good (production is what ships).
+
+**5d. If the production deploy fails, fix and retry (up to 2 times).**
+
+```
+gh run view <prod-run-id> --log-failed | tail -120
+```
+
+Fix the broken file. Then commit, compute the NEXT tag (do not reuse the failing tag), push both refs again, watch the new production run.
+
+Budget: at most 2 self-heal iterations. If you cannot get a successful production run in 2 tries, STOP and report `success: false`.
+
+**5e. Final live-URL sanity check.**
+
+Optional fast pre-check on staging (does not block):
+
+```
+curl -sI -o /dev/null -w "staging:%{http_code}\\n" __STAGING_PAGE_URL__
+```
+
+Mandatory production check after `gh run watch` succeeded:
+
+```
+curl -sI -o /dev/null -w "%{http_code}\\n" __PAGE_URL__
+```
+
+Should be 200. If still 404 after 30s, wait 30s and retry once. If still 404, report the problem.
+"""
+
+
+MANUAL_DEPLOY_BLOCK = """## Step 5 — Typecheck, commit, push, and stop
+
+This product has manual deploy: there is no automated production deploy on push. Commit and push the page; deploy is out-of-band.
+
+**5a. Typecheck (mandatory, pre-commit).**
+
+- Run `npx tsc --noEmit`. Fix any errors before committing.
+
+**5b. Commit and push.**
+
+- Stage the new page file. Commit with a clear message naming the keyword.
+- `git push origin main`. Record the 7-char SHA.
+
+**5c. Live URL probe (best-effort).**
+
+Run:
+
+```
+curl -sI -o /dev/null -w "%{http_code}\\n" __PAGE_URL__
+```
+
+If it already returns 200, great. If not, do not block here — the upstream caller has its own probe budget and will retry. There is no `gh run watch` to perform; skip 5d/5e.
+
+Report `success: true` after the push lands and you have a SHA, even if the URL is not yet 200.
+"""
+
+
 def build_prompt(product: str, keyword: str, slug: str, trigger: str,
                  product_cfg: dict, source_block: str,
                  content_type: str = "guide",
@@ -1078,6 +1301,41 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
     )
 
     cfg_json = json.dumps(product_cfg, indent=2, ensure_ascii=False)
+
+    # Per-project deploy verification block. Selected from
+    # `landing_pages.deploy.target` and `production_trigger`. The result is
+    # a plain string spliced into the outer f-string as `{deploy_block}`.
+    deploy_cfg = (product_cfg.get("landing_pages") or {}).get("deploy") or {}
+    deploy_target = (deploy_cfg.get("target") or "vercel").lower()
+    production_trigger = (deploy_cfg.get("production_trigger") or "push:main").lower()
+    staging_url = (deploy_cfg.get("staging_url") or "").rstrip("/")
+    website_no_slash = website.rstrip("/")
+    staging_page_url = (
+        page_url.replace(website_no_slash, staging_url, 1)
+        if staging_url and website_no_slash and page_url.startswith(website_no_slash)
+        else ""
+    )
+
+    if deploy_target == "vercel":
+        deploy_block = VERCEL_DEPLOY_BLOCK
+    elif deploy_target == "cloudrun" and production_trigger.startswith("tag:"):
+        deploy_block = CLOUDRUN_TAG_DEPLOY_BLOCK
+    elif deploy_target == "cloudrun":
+        deploy_block = CLOUDRUN_PUSH_DEPLOY_BLOCK
+    elif deploy_target == "manual":
+        deploy_block = MANUAL_DEPLOY_BLOCK
+    else:
+        # Unknown target -> safest is the strict Vercel lane; the prompt's
+        # 5c/5d will simply find no .vercel/project.json and the agent will
+        # fall back to the live URL probe.
+        deploy_block = VERCEL_DEPLOY_BLOCK
+
+    deploy_block = (
+        deploy_block.replace("__PAGE_URL__", page_url)
+        .replace("__STAGING_PAGE_URL__", staging_page_url or page_url)
+        .replace("__STAGING_URL__", staging_url)
+        .replace("__TAG_PATTERN__", deploy_cfg.get("production_trigger", "tag:v*"))
+    )
 
     return f"""{guidance_block}{setup_self_heal_block}{escalation_rubric_block}You are building one SEO page for {product}. You decide the angle and the content. Your one job is to find something real about the product that no competitor page mentions, and build a page around that.
 
@@ -1322,60 +1580,7 @@ articleSchema({{
 If the role line `{author_role}` reads as an AI disclosure (e.g. "Written with AI"), keep it visible: it is the public AI-content disclosure for this page and must render in the byline. Do not move it into a hidden comment, an alt attribute, a tooltip, or a footer note.
 
 {book_call_block}
-## Step 5 — Typecheck, commit, deploy, and verify the Vercel build
-
-This step is a strict gate. You may not report success until a Vercel production deploy for your commit reaches state `READY`. Local typecheck passing is not enough. A 200 on the page is not enough. You must confirm the deploy state.
-
-**5a. Typecheck (mandatory, pre-commit).**
-
-- Run `npx tsc --noEmit` in the repo. If it reports ANY error, fix the code you introduced and re-run until clean. Never commit on a failing typecheck.
-- Common trap: `@seo/components` props are strictly typed. Pass primitives where primitives are expected (e.g., `SequenceDiagram.actors: string[]`, `SequenceDiagram.messages[].from: number`, `OrbitingCircles.items: ReactNode[]`). Confirm by reading the component source under `node_modules/@m13v/seo-components/src/components/` or `~/seo-components/src/components/` if the props shape is non-obvious.
-
-**5b. Commit and push.**
-
-- Stage the new page file (and any new shared components you added).
-- Commit on the current branch with a clear message naming the keyword.
-- Push to origin main (or whatever the repo's main branch is).
-- Confirm the commit is on origin. Record the 7-char SHA.
-
-**5c. Poll Vercel for deploy status (mandatory).**
-
-If the repo has `.vercel/project.json`, run this polling loop from bash. Get the token once:
-
-```
-VERCEL_TOKEN=$(python3 -c "import json; print(json.load(open('/Users/matthewdi/Library/Application Support/com.vercel.cli/auth.json'))['token'])")
-PROJECT_ID=$(python3 -c "import json; print(json.load(open('.vercel/project.json'))['projectId'])")
-TEAM_ID=$(python3 -c "import json; print(json.load(open('.vercel/project.json'))['orgId'])")
-SHA=<your 40-char commit SHA from git rev-parse HEAD>
-```
-
-Then poll (up to 30 attempts, 10s apart = ~5 min budget):
-
-```
-curl -s -H "Authorization: Bearer $VERCEL_TOKEN" \
-  "https://api.vercel.com/v6/deployments?teamId=$TEAM_ID&projectId=$PROJECT_ID&target=production&limit=10" \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); [print(x['state'], x.get('meta',{{}}).get('githubCommitSha',''), x['uid'], x.get('inspectorUrl','')) for x in d['deployments']]"
-```
-
-Find the row matching your $SHA. Terminal states are `READY` (good), `ERROR` (failed), `CANCELED` (retry may be needed). `BUILDING`, `QUEUED`, `INITIALIZING` — keep polling.
-
-**5d. If deploy fails, fix and retry (up to 2 times).**
-
-If the state is `ERROR`, fetch the build log and fix the problem:
-
-```
-curl -s -H "Authorization: Bearer $VERCEL_TOKEN" \
-  "https://api.vercel.com/v3/deployments/<deploy_uid>/events?teamId=$TEAM_ID&builds=1&direction=backward&limit=100" \
-  | python3 -c "import sys,json; [print(e.get('payload',{{}}).get('text','')) for e in json.load(sys.stdin) if e.get('type') in ('stdout','stderr','command','build-error')]"
-```
-
-Read the log. The last few error lines usually show the file + line that broke the prerender. Do NOT guess: locate the exact file the build complains about, read it, and fix only what's broken (typically your new page, but occasionally a shared component you added).
-
-After fixing, re-run `npx tsc --noEmit`, commit, push, then poll again with the new SHA. Budget: at most 2 self-heal iterations. If you cannot get a READY state in 2 tries, STOP and report `success: false` with the deploy error message as the reason. Do not paper over the failure with `success: true`; a false success here corrupts the DB and blocks future generations.
-
-**5e. Final live-URL sanity check.**
-
-Only after the Vercel deploy is `READY`, run `curl -sI -o /dev/null -w "%{{http_code}}\\n" {page_url}` — you should see 200. If it's still 404 after 30s (Vercel alias propagation), wait 30s more and retry once. If still 404, report the problem instead of silently succeeding.
+{deploy_block}
 
 ## Step 6 — Report back
 
