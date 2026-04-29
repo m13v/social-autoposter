@@ -432,7 +432,10 @@ SCRIPT_TAG="stats${PLATFORM:+_$PLATFORM}"
 #     Reddit: <T> total, <S> skipped, <C> checked, <U> updated, <D> deleted, <R> removed, <E> errors [...]
 #   Step 3 (Twitter):
 #     Twitter: <T> total, <S> skipped, <C> checked, <U> updated, <D> deleted, <E> errors
-#   Step 4 (LinkedIn) and Moltbook (Step 2 --moltbook-only): no structured summary, count as 0.
+#   Step 2 --moltbook-only:
+#     Moltbook: <C> checked, <U> updated, <D> deleted, <E> errors
+#   Step 4 (LinkedIn): no stdout summary; counters are read from the JSON
+#     sidecar file written by scrape_linkedin_stats.py --summary.
 #
 # Missing platforms simply contribute 0 to each total. awk handles parsing
 # robustly even when commas/brackets vary.
@@ -544,6 +547,8 @@ python3 "$REPO_DIR/scripts/log_run.py" \
     --checked "$CHECKED" \
     --updated "$UPDATED" \
     --removed "$REMOVED" \
+    --unavailable "$UNAVAILABLE" \
+    --not-found "$NOT_FOUND" \
     --cost 0 \
     --elapsed "$RUN_ELAPSED"
 
