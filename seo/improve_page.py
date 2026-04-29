@@ -52,6 +52,7 @@ from psycopg2.extras import Json  # noqa: E402
 
 sys.path.insert(0, str(SCRIPT_DIR))
 from claude_wait import wait_for_claude  # noqa: E402
+from generate_page import render_content_guardrails  # noqa: E402
 
 
 CLAUDE_TIMEOUT_SECONDS = 1800  # 30 minutes; research + multiple edits + commit
@@ -204,7 +205,10 @@ def _render_brief_block(brief: dict) -> str:
     else:
         rotation_block = f"Selection: {sel_reason}\n"
 
-    cfg_json = json.dumps(brief.get("project_config") or {}, indent=2, ensure_ascii=False)
+    project_cfg = brief.get("project_config") or {}
+    cfg_json = json.dumps(project_cfg, indent=2, ensure_ascii=False)
+    guardrails_block = render_content_guardrails(project_cfg)
+    guardrails_section = f"\n{guardrails_block}\n" if guardrails_block else ""
     return (
         f"Product: {brief.get('product')}\n"
         f"Domain: {brief.get('domain')}\n"
@@ -220,6 +224,7 @@ def _render_brief_block(brief: dict) -> str:
         f"  30d avg / day  : {_fmt_metric(m30)}  (totals={json.dumps(m30.get('totals') or {})})\n"
         f"\n"
         f"Prior improvement runs on THIS page:\n{hist}\n"
+        f"{guardrails_section}"
         f"\n"
         f"Full product config (authoritative source for voice, positioning, qualification, proof, pricing):\n"
         f"```json\n{cfg_json}\n```\n"
