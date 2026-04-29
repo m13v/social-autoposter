@@ -128,12 +128,20 @@ CONTENT_TYPES = {
     },
     "blog_post": {
         "route_prefix": "/blog/",
+        # The blog uses a single dynamic route src/app/blog/[slug]/page.tsx
+        # that ships every post via generateStaticParams. Per-post content is
+        # an HTML string in src/app/blog/_content/<slug>.ts (default export);
+        # metadata goes in src/app/blog/_manifest.ts. The model writes the
+        # content module; the pipeline then patches the manifest to add the
+        # entry. We point path_candidates at the content module so the
+        # existence + commit-landed gates fire on the file the model actually
+        # wrote.
         "path_candidates": [
-            "src/app/blog/{slug}/page.tsx",
-            "app/blog/{slug}/page.tsx",
+            "src/app/blog/_content/{slug}.ts",
+            "app/blog/_content/{slug}.ts",
         ],
-        "example_dirs": ["src/app/blog/", "app/blog/"],
-        "description": "a blog post rendered through the BlogPostLayout component from @seo/components. Body is HTML (not markdown) inside an htmlContent template literal; after the page commits, the pipeline appends the metadata to src/app/blog/_manifest.ts so the index, RSS, and tag pages pick it up.",
+        "example_dirs": ["src/app/blog/_content/", "app/blog/_content/"],
+        "description": "a blog post on a single dynamic route. Content lives in src/app/blog/_content/<slug>.ts as an HTML string default export; metadata is patched into src/app/blog/_manifest.ts by the pipeline after the commit lands.",
     },
 }
 
@@ -1221,20 +1229,36 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
         "use_case": f"This is a use-case page describing one concrete job {product} does. Readers want to know whether {product} can handle their specific workflow. Show them, with at least one anchor_fact drawn from real product source. If a UseCasePageShell exists in `{repo}/src/components/seo/`, prefer it; otherwise compose raw sections.",
         "cross_roundup": f"This is a dated best-of listicle hosted on {product}'s domain, covering {product}'s actual niche. Target query: \"best <host niche> <Month Year>\". See the CROSS-ROUNDUP INPUT block below for the niche, mandatory H1/title format, host inclusion rules, the optional sibling appendix, and the trackCrossProductClick wiring (only used if the appendix is included). DO Step 1 research as written below; the spine of this page is real competitor research from the live SERP, plus the additional Step A in the CROSS-ROUNDUP INPUT block. The page must read as a balanced, objective best-of for the niche, not as a portfolio promo.",
         "blog_post": (
-            f"This is a blog post on {product}'s blog at /blog/<slug>. The page MUST use the "
-            f"`BlogPostLayout` component from `@seo/components`. Read any existing post under "
-            f"`{repo}/src/app/blog/<slug>/page.tsx` and copy its exact structure: imports, "
-            f"metadata constants (SLUG, TITLE, DESCRIPTION, DATE, LAST_MODIFIED, AUTHOR, TAGS, IMAGE), "
-            f"the `metadata` export, `HTML_CONTENT` template literal, and the JSX that mounts "
-            f"`<Navbar />`, `<BlogPostLayout htmlContent={{HTML_CONTENT}} ... />`, `<RelatedPosts />`, "
-            f"and `<Footer />`. CRITICAL RULES for the body content: write the body as HTML (not markdown) "
-            f"because BlogPostLayout renders it via dangerouslySetInnerHTML. Use real HTML tags "
-            f"(`<h1>`, `<h2>`, `<h3>`, `<p>`, `<ul>`, `<ol>`, `<li>`, `<a href=\"...\">`, `<strong>`, "
-            f"`<em>`, `<blockquote>`, `<code>`, `<pre>`). For tables emit `<table><thead><tr><th>...</th></tr></thead><tbody><tr><td>...</td></tr></tbody></table>` — DO NOT emit pipe-style markdown tables, "
-            f"they will not render. Inside the template literal, escape any backticks as `\\\\``. After "
-            f"writing the page do NOT touch `src/app/blog/_manifest.ts` — the pipeline updates it for you "
-            f"after your commit lands. Skip the palette/quotas/anti-quota guidance below; those are for "
-            f"`/t/` guide pages and don't apply here. The blog page is just BlogPostLayout + content."
+            f"This is a blog post on {product}'s blog at /blog/<slug>. The blog uses ONE dynamic "
+            f"route, `{repo}/src/app/blog/[slug]/page.tsx`, that pre-renders every post via "
+            f"`generateStaticParams`. You do NOT touch the route file. What you write is the "
+            f"per-post content module:\\n\\n"
+            f"  Path: `{repo}/src/app/blog/_content/{slug}.ts`\\n"
+            f"  Shape: a single TypeScript file that ends with\\n"
+            f"    ```\\n"
+            f"    const HTML_CONTENT = `...your html body...`;\\n"
+            f"    export default HTML_CONTENT;\\n"
+            f"    ```\\n\\n"
+            f"Read any existing module under `{repo}/src/app/blog/_content/` to see the exact "
+            f"shape and the way backticks/${{}} are escaped. CRITICAL RULES for the body: it is "
+            f"HTML (not markdown) because `BlogPostLayout` renders the string via "
+            f"dangerouslySetInnerHTML. Use real HTML tags (`<h1>`, `<h2>`, `<h3>`, `<p>`, `<ul>`, "
+            f"`<ol>`, `<li>`, `<a href=\"...\">`, `<strong>`, `<em>`, `<blockquote>`, `<code>`, "
+            f"`<pre>`). Tables MUST use real `<table><thead><tr><th>...</th></tr></thead>"
+            f"<tbody><tr><td>...</td></tr></tbody></table>` markup — pipe-style markdown tables "
+            f"will NOT render. Inside the template literal, escape backticks as `\\\\`` and "
+            f"escape `${{` interpolation as `\\\\${{`.\\n\\n"
+            f"After writing `{slug}.ts`, ALSO append a metadata entry to "
+            f"`{repo}/src/app/blog/_manifest.ts`. Read the file, find the `BLOG_MANIFEST` array, "
+            f"and insert your new object so the array stays sorted by `date` descending. The "
+            f"object must look exactly like the existing entries (single line, double-quoted "
+            f"strings): "
+            f"`{{ slug: \"<slug>\", title: \"...\", description: \"...\", date: \"YYYY-MM-DD\", "
+            f"lastModified: \"YYYY-MM-DD\" or undefined, author: \"...\", tags: [\"a\", \"b\"], "
+            f"image: \"...\" or undefined, readingTime: \"N min read\" }}`. Without the manifest "
+            f"entry the post will not appear in /blog, RSS, or tag pages.\\n\\n"
+            f"Commit both files in the same commit. Skip the palette/quotas/anti-quota guidance "
+            f"below; those are for `/t/` guide pages and don't apply to the blog."
         ),
     }.get(content_type, "")
 
