@@ -266,10 +266,7 @@ SCRAPE_JS:
 async (page) => {
   await page.waitForTimeout(4000);
 
-  // Early check: is the post itself unavailable? LinkedIn shows specific copy
-  // for removed / restricted / non-existent posts. When matched, emit an
-  // explicit `unavailable: true` flag so Python-side can mark status='removed'
-  // on first detection instead of waiting for the 2-strike ambiguity rule.
+  // Early check: is the post itself unavailable?
   const bodyText = (document.body && document.body.innerText) || '';
   const unavailableSignals = [
     "This post is unavailable",
@@ -286,8 +283,6 @@ async (page) => {
   }
 
   // CRITICAL: Comments don't render until you interact with the page.
-  // Scroll down past the post, then click the "Comment" action button.
-  // Do NOT use commentUrn param in the URL — it breaks comment rendering.
   await page.evaluate(() => window.scrollBy(0, 600));
   await page.waitForTimeout(2000);
   const commentActionBtn = await page.$('button[aria-label="Comment"]');
@@ -295,7 +290,7 @@ async (page) => {
     try { await commentActionBtn.click(); await page.waitForTimeout(5000); } catch(e) {}
   }
 
-  // Try to expand all comments - click "Load more comments" / "See previous replies"
+  // Expand more comments
   const expandBtns = await page.$$('button[aria-label*="Load more comments"], button[aria-label*="load more"], button[aria-label*="See previous replies"], button[aria-label*="Load previous replies"]');
   for (const btn of expandBtns) {
     try { await btn.click(); await page.waitForTimeout(2000); } catch(e) {}
@@ -307,43 +302,50 @@ async (page) => {
   const result = await page.evaluate(({ourName, contentPrefix}) => {
     const res = { reactions: 0, found: false, comment_text_preview: '' };
 
-    // Find all comment containers (current LinkedIn DOM uses article.comments-comment-entity)
-    const commentContainers = document.querySelectorAll(
+    // Strategy 1: known CSS selectors (LinkedIn occasionally obfuscates these)
+    let commentContainers = Array.from(document.querySelectorAll(
       'article.comments-comment-entity, ' +
-      'article.comments-comment-item'
-    );
+      'article.comments-comment-item, ' +
+      '[data-id*="comment"], ' +
+      '.comments-comment-list__comment'
+    ));
+
+    // Strategy 2: fallback - find elements by author name text, walk up to comment root
+    if (commentContainers.length === 0) {
+      const nameEls = Array.from(document.querySelectorAll('*')).filter(el =>
+        el.children.length === 0 && el.textContent.trim() === ourName
+      );
+      for (const el of nameEls) {
+        let node = el.parentElement;
+        for (let i = 0; i < 10; i++) {
+          if (!node) break;
+          const t = node.innerText || '';
+          if (t.match(/\d+\s+reaction/i) || node.tagName === 'ARTICLE' || node.getAttribute('data-id')) {
+            commentContainers.push(node);
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+    }
 
     for (const container of commentContainers) {
-      // Author name: current LinkedIn uses .comments-comment-meta__description-title
-      const authorEl = container.querySelector(
-        '.comments-comment-meta__description-title, ' +
-        '.comments-post-meta__name-text'
-      );
-      const authorText = authorEl ? authorEl.textContent.trim() : '';
+      const containerText = container.innerText || container.textContent || '';
 
-      // Comment content: current LinkedIn uses .update-components-text inside the article
-      const contentEl = container.querySelector(
-        '.update-components-text, ' +
-        '.comments-comment-item__main-content, ' +
-        '.comments-comment-item-content-body'
-      );
-      const commentText = contentEl ? contentEl.textContent.trim() : '';
-
-      // Match by author name OR by content prefix (first 60 chars)
-      const nameMatch = authorText.toLowerCase().includes(ourName.toLowerCase());
+      // Match by author name in container text OR content prefix
+      const nameMatch = containerText.includes(ourName);
       const prefixClean = contentPrefix.replace(/[^a-z0-9 ]/gi, '').substring(0, 60).toLowerCase();
-      const commentClean = commentText.replace(/[^a-z0-9 ]/gi, '').substring(0, 200).toLowerCase();
-      const contentMatch = prefixClean.length > 20 && commentClean.includes(prefixClean);
+      const containerClean = containerText.replace(/[^a-z0-9 ]/gi, '').substring(0, 500).toLowerCase();
+      const contentMatch = prefixClean.length > 20 && containerClean.includes(prefixClean);
 
       if (nameMatch || contentMatch) {
         res.found = true;
-        res.comment_text_preview = commentText.substring(0, 80);
+        res.comment_text_preview = containerText.substring(0, 80);
 
-        // Reaction count: look for button with aria-label "N Reaction(s) on ..."
-        // Current class: comments-comment-social-bar__reactions-count--cr
+        // Try aria-label button first
         const reactionEl = container.querySelector(
-          'button[class*="comments-comment-social-bar__reactions-count"], ' +
-          'button[aria-label*="Reaction"]'
+          'button[aria-label*="reaction"], button[aria-label*="Reaction"], ' +
+          'button[class*="reactions-count"], button[class*="social-bar"]'
         );
         if (reactionEl) {
           const label = reactionEl.getAttribute('aria-label') || '';
@@ -351,13 +353,18 @@ async (page) => {
           if (labelMatch) {
             res.reactions = parseInt(labelMatch[1].replace(/,/g, ''), 10);
           } else {
-            const text = reactionEl.textContent.trim().replace(/,/g, '');
-            const num = parseInt(text, 10);
+            const num = parseInt(reactionEl.textContent.trim().replace(/,/g, ''), 10);
             if (!isNaN(num)) res.reactions = num;
           }
         }
 
-        break; // Found our comment, stop searching
+        // Fallback: parse "N reactions" from container innerText
+        if (!res.reactions) {
+          const reactMatch = containerText.match(/(\d+)\s+reaction/i);
+          if (reactMatch) res.reactions = parseInt(reactMatch[1], 10);
+        }
+
+        break;
       }
     }
 
