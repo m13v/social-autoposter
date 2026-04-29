@@ -126,6 +126,15 @@ CONTENT_TYPES = {
         "example_dirs": ["src/app/best/", "src/app/t/", "app/best/", "app/t/"],
         "description": "a dated best-of listicle for the host's niche, built from real competitor research. The host appears only when it honestly belongs in the top results, and a small sibling appendix is optional (default zero) when sibling projects genuinely fit the audience.",
     },
+    "blog_post": {
+        "route_prefix": "/blog/",
+        "path_candidates": [
+            "src/app/blog/{slug}/page.tsx",
+            "app/blog/{slug}/page.tsx",
+        ],
+        "example_dirs": ["src/app/blog/", "app/blog/"],
+        "description": "a blog post rendered through the BlogPostLayout component from @seo/components. Body is HTML (not markdown) inside an htmlContent template literal; after the page commits, the pipeline appends the metadata to src/app/blog/_manifest.ts so the index, RSS, and tag pages pick it up.",
+    },
 }
 
 
@@ -1211,6 +1220,22 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
         "alternative": f"This is an alternative/comparison page. Readers arrived by searching for a competitor product. Your job is to show them {product} is the better pick for the use case their keyword implies. Read an existing alternative page in `{repo}/src/app/alternative/` to see if a shell component exists (e.g. AlternativePageShell) — if it does, use it and emit only a typed data object. If no shell exists in this repo, compose raw sections using the trust-signal components below.",
         "use_case": f"This is a use-case page describing one concrete job {product} does. Readers want to know whether {product} can handle their specific workflow. Show them, with at least one anchor_fact drawn from real product source. If a UseCasePageShell exists in `{repo}/src/components/seo/`, prefer it; otherwise compose raw sections.",
         "cross_roundup": f"This is a dated best-of listicle hosted on {product}'s domain, covering {product}'s actual niche. Target query: \"best <host niche> <Month Year>\". See the CROSS-ROUNDUP INPUT block below for the niche, mandatory H1/title format, host inclusion rules, the optional sibling appendix, and the trackCrossProductClick wiring (only used if the appendix is included). DO Step 1 research as written below; the spine of this page is real competitor research from the live SERP, plus the additional Step A in the CROSS-ROUNDUP INPUT block. The page must read as a balanced, objective best-of for the niche, not as a portfolio promo.",
+        "blog_post": (
+            f"This is a blog post on {product}'s blog at /blog/<slug>. The page MUST use the "
+            f"`BlogPostLayout` component from `@seo/components`. Read any existing post under "
+            f"`{repo}/src/app/blog/<slug>/page.tsx` and copy its exact structure: imports, "
+            f"metadata constants (SLUG, TITLE, DESCRIPTION, DATE, LAST_MODIFIED, AUTHOR, TAGS, IMAGE), "
+            f"the `metadata` export, `HTML_CONTENT` template literal, and the JSX that mounts "
+            f"`<Navbar />`, `<BlogPostLayout htmlContent={{HTML_CONTENT}} ... />`, `<RelatedPosts />`, "
+            f"and `<Footer />`. CRITICAL RULES for the body content: write the body as HTML (not markdown) "
+            f"because BlogPostLayout renders it via dangerouslySetInnerHTML. Use real HTML tags "
+            f"(`<h1>`, `<h2>`, `<h3>`, `<p>`, `<ul>`, `<ol>`, `<li>`, `<a href=\"...\">`, `<strong>`, "
+            f"`<em>`, `<blockquote>`, `<code>`, `<pre>`). For tables emit `<table><thead><tr><th>...</th></tr></thead><tbody><tr><td>...</td></tr></tbody></table>` — DO NOT emit pipe-style markdown tables, "
+            f"they will not render. Inside the template literal, escape any backticks as `\\\\``. After "
+            f"writing the page do NOT touch `src/app/blog/_manifest.ts` — the pipeline updates it for you "
+            f"after your commit lands. Skip the palette/quotas/anti-quota guidance below; those are for "
+            f"`/t/` guide pages and don't apply here. The blog page is just BlogPostLayout + content."
+        ),
     }.get(content_type, "")
 
     cross_roundup_block = ""
