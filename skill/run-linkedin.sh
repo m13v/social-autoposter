@@ -169,7 +169,8 @@ if [ "$PA_RC" -ne 0 ] || [ ! -s "$PHASE_A_OUT" ]; then
   echo "Phase A: no candidate (rc=$PA_RC, $([ -s "$PHASE_A_OUT" ] && echo 'file non-empty' || echo 'file empty')). Skipping Phase B." | tee -a "$LOG_FILE"
   rm -f "$PHASE_A_OUT"
   ELAPSED=$(( $(date +%s) - RUN_START_EPOCH ))
-  python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted 0 --skipped 1 --failed 0 --cost 0 --elapsed "$ELAPSED" || true
+  _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START_EPOCH" --scripts "run-linkedin-phaseA" "run-linkedin-phaseB" 2>/dev/null || echo "0.0000")
+python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted 0 --skipped 1 --failed 0 --cost "$_COST" --elapsed "$ELAPSED" || true
   echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
   find "$LOG_DIR" -name "run-linkedin-*.log" -mtime +7 -delete 2>/dev/null || true
   exit 0
@@ -189,7 +190,8 @@ if [ -z "$PA_PROJECT" ] || [ -z "$PA_URL" ] || [ -z "$PA_ACTIVITY_ID" ]; then
   echo "Phase A output missing required fields (project='$PA_PROJECT' url='$PA_URL' activity_id='$PA_ACTIVITY_ID'). Skipping." | tee -a "$LOG_FILE"
   rm -f "$PHASE_A_OUT"
   ELAPSED=$(( $(date +%s) - RUN_START_EPOCH ))
-  python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted 0 --skipped 0 --failed 1 --cost 0 --elapsed "$ELAPSED" || true
+  _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START_EPOCH" --scripts "run-linkedin-phaseA" "run-linkedin-phaseB" 2>/dev/null || echo "0.0000")
+python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted 0 --skipped 0 --failed 1 --cost "$_COST" --elapsed "$ELAPSED" || true
   echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
   exit 0
 fi
@@ -201,7 +203,8 @@ case "$PA_URL" in
     echo "Phase A returned invalid thread_url '$PA_URL'. Skipping Phase B." | tee -a "$LOG_FILE"
     rm -f "$PHASE_A_OUT"
     ELAPSED=$(( $(date +%s) - RUN_START_EPOCH ))
-    python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted 0 --skipped 0 --failed 1 --cost 0 --elapsed "$ELAPSED" || true
+    _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START_EPOCH" --scripts "run-linkedin-phaseA" "run-linkedin-phaseB" 2>/dev/null || echo "0.0000")
+python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted 0 --skipped 0 --failed 1 --cost "$_COST" --elapsed "$ELAPSED" || true
     echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
     exit 0
     ;;
@@ -340,7 +343,8 @@ POSTED=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM posts WHERE platfor
 [ -z "$POSTED" ] && POSTED=0
 FAILED=0
 if [ "$PB_RC" -ne 0 ] && [ "$POSTED" = "0" ]; then FAILED=1; fi
-python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted "$POSTED" --skipped 0 --failed "$FAILED" --cost 0 --elapsed "$ELAPSED" || true
+_COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START_EPOCH" --scripts "run-linkedin-phaseA" "run-linkedin-phaseB" 2>/dev/null || echo "0.0000")
+python3 "$REPO_DIR/scripts/log_run.py" --script post_linkedin --posted "$POSTED" --skipped 0 --failed "$FAILED" --cost "$_COST" --elapsed "$ELAPSED" || true
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 find "$LOG_DIR" -name "run-linkedin-*.log" -mtime +7 -delete 2>/dev/null || true
