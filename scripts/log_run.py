@@ -41,6 +41,13 @@ def main():
     parser.add_argument("--not-found", dest="not_found", type=int, default=0,
                         help="Stats jobs (LinkedIn): posts still active but our "
                              "comment couldn't be located. Renders as 'not_found'.")
+    parser.add_argument("--salvaged", type=int, default=0,
+                        help="Twitter cycle: number of pending candidates from "
+                             "prior cycles re-assigned to this batch in Phase 0. "
+                             "Surfaces as a 'salvaged' pill in the dashboard "
+                             "Result column so an operator can tell that work "
+                             "from a previously-failed cycle is being retried "
+                             "rather than lost. Optional; 0 = omit segment.")
     parser.add_argument("--failure-reasons", dest="failure_reasons", default="",
                         help="Optional comma-separated `reason:count` pairs "
                              "describing why a run reported failed>0 "
@@ -73,6 +80,11 @@ def main():
         stats_segment += f" unavailable={args.unavailable}"
     if args.not_found:
         stats_segment += f" not_found={args.not_found}"
+    # `salvaged=N` segment tails the stats segment as its own optional capture
+    # so old log lines (no salvage info) still parse cleanly. Twitter-cycle
+    # specific today, but any pipeline that retries pending work cross-cycle
+    # can emit it.
+    salvaged_segment = f" salvaged={args.salvaged}" if args.salvaged else ""
     # `failure_reasons` segment is appended after elapsed (and after the
     # optional model suffix) so the existing positional regex in bin/server.js
     # still parses old lines. Sanitize: strip whitespace and forbid the pipe
