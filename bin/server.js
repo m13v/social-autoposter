@@ -4451,14 +4451,18 @@ function renderResult(run) {
     // when the run reported failed>0 from the log line. Tooltip surfaces
     // the full breakdown so the operator can tell, e.g., a monthly cap from
     // a one-off timeout without expanding the row.
+    // NOTE: this whole function lives inside an outer HTML backtick template
+    // sent to the browser, so we can't use template literals here. Any
+    // dollar-brace interpolation would be eaten by the outer template. Plain
+    // string concatenation only inside renderResult.
     const renderFailedPill = () => {
       if (!failed) return '';
       const top = reasons[0];
       const tooltip = reasons.length
-        ? reasons.map(x => `${x.reason} ×${x.count}`).join(', ')
+        ? reasons.map(function (x) { return x.reason + ' x' + x.count; }).join(', ')
         : 'failed (no reason logged)';
       const label = top
-        ? `failed: ${top.reason}${reasons.length > 1 ? ' +' + (reasons.length - 1) : ''}`
+        ? ('failed: ' + top.reason + (reasons.length > 1 ? ' +' + (reasons.length - 1) : ''))
         : 'failed';
       return '<span title="' + tooltip.replace(/"/g, '&quot;') + '" ' +
         'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
