@@ -64,7 +64,10 @@ from verify_facts import (  # noqa: E402
 )
 
 
-CLAUDE_TIMEOUT_SECONDS = 1200  # 20 minutes, generous for research + generation
+CLAUDE_TIMEOUT_SECONDS = 2400  # 40 minutes. Cloud Run staging+prod chains
+                               # (mk0r) sit at ~13 min each; Vercel deploys sit
+                               # at ~30-90s. 1200s used to clip tag-trigger
+                               # products mid-prod-deploy.
 
 
 # Content-type routing. Each entry owns the route prefix, the candidate file
