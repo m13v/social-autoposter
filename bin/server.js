@@ -3884,6 +3884,10 @@ const HTML = `<!DOCTYPE html>
       <span class="label">Project</span>
       <button type="button" class="style-stats-pill active" data-value="all">All</button>
     </div>
+    <div class="style-stats-pill-row" id="top-campaign-pills" data-selected="all">
+      <span class="label">Campaign</span>
+      <button type="button" class="style-stats-pill active" data-value="all">All</button>
+    </div>
     <div class="style-stats-pill-row hidden" id="top-pages-source-pills" data-selected="seo">
       <span class="label">Source</span>
       <button type="button" class="style-stats-pill active" data-value="seo">SEO only</button>
@@ -6998,6 +7002,7 @@ function initTopFilters() {
   const winRow  = document.getElementById('top-window-pills');
   const platRow = document.getElementById('top-platform-pills');
   const projRow = document.getElementById('top-project-pills');
+  const campRow = document.getElementById('top-campaign-pills');
   const srcRow  = document.getElementById('top-pages-source-pills');
   const dirRow  = document.getElementById('top-dm-dir-pills');
   const intRow  = document.getElementById('top-dm-interest-pills');
@@ -7008,6 +7013,7 @@ function initTopFilters() {
   if (winRow) setTopPillActive(winRow, _topWindow);
   if (platRow) setTopPillActive(platRow, _topPlatform);
   if (projRow) setTopPillActive(projRow, _topProject);
+  if (campRow) setTopPillActive(campRow, _topCampaign);
   if (srcRow) setTopPillActive(srcRow, _topPagesSource);
   if (dirRow) setTopPillActive(dirRow, _topDmDir);
   if (intRow) setTopPillActive(intRow, _topDmInterest);
@@ -7034,6 +7040,11 @@ function initTopFilters() {
     if (_topSubtab === 'pages') renderTopPagesFromCache();
     else if (_topSubtab === 'dms') { if (_topDmsPayload) renderTopDms(_topDmsPayload); }
     else { if (_topPostsPayload) renderTopPosts(_topPostsPayload); }
+  });
+  wireTopPillRow('top-campaign-pills', (v) => {
+    _topCampaign = v || 'all';
+    saSave('sa.top.campaign.v1', _topCampaign);
+    if (_topPostsPayload) renderTopPosts(_topPostsPayload);
   });
   wireTopPillRow('top-pages-source-pills', (v) => {
     _topPagesSource = v || 'seo';
@@ -7128,6 +7139,7 @@ function applyTopSubtabState(sub, loadData) {
   const dmsC   = document.getElementById('top-dms-container');
   const platRowEl = document.getElementById('top-platform-pills');
   const projRowEl = document.getElementById('top-project-pills');
+  const campRowEl = document.getElementById('top-campaign-pills');
   const srcRowEl  = document.getElementById('top-pages-source-pills');
   const dmOnlyRowIds = ['top-dm-dir-pills', 'top-dm-interest-pills', 'top-dm-mode-pills', 'top-dm-tier-pills', 'top-dm-qual-pills', 'top-dm-status-pills'];
   const setDmRowsHidden = (hidden) => {
@@ -7145,6 +7157,7 @@ function applyTopSubtabState(sub, loadData) {
     if (pagesUnknownC) pagesUnknownC.classList.remove('hidden');
     if (platRowEl) platRowEl.classList.add('hidden');
     if (srcRowEl) srcRowEl.classList.remove('hidden');
+    if (campRowEl) campRowEl.classList.add('hidden');
     setDmRowsHidden(true);
     if (totalEl) totalEl.textContent = '';
     if (loadData) loadTopPages();
@@ -7155,6 +7168,7 @@ function applyTopSubtabState(sub, loadData) {
     if (dmsC) dmsC.classList.remove('hidden');
     if (platRowEl) platRowEl.classList.remove('hidden');
     if (srcRowEl) srcRowEl.classList.add('hidden');
+    if (campRowEl) campRowEl.classList.add('hidden');
     setDmRowsHidden(false);
     if (totalEl) totalEl.textContent = '';
     const searchElDm = document.getElementById('top-search');
@@ -7170,6 +7184,7 @@ function applyTopSubtabState(sub, loadData) {
     if (postsC) postsC.classList.remove('hidden');
     if (platRowEl) platRowEl.classList.remove('hidden');
     if (srcRowEl) srcRowEl.classList.add('hidden');
+    if (campRowEl) campRowEl.classList.remove('hidden');
     setDmRowsHidden(true);
     if (totalEl) totalEl.textContent = '';
     const searchElPosts = document.getElementById('top-search');
