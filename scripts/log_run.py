@@ -41,6 +41,15 @@ def main():
     parser.add_argument("--not-found", dest="not_found", type=int, default=0,
                         help="Stats jobs (LinkedIn): posts still active but our "
                              "comment couldn't be located. Renders as 'not_found'.")
+    parser.add_argument("--failure-reasons", dest="failure_reasons", default="",
+                        help="Optional comma-separated `reason:count` pairs "
+                             "describing why a run reported failed>0 "
+                             "(e.g. 'monthly_limit:5,timeout:1'). Surfaced in "
+                             "the dashboard Result column so operators can "
+                             "tell a hard cap from a transient error without "
+                             "opening the log file. Reason keys are free-form "
+                             "snake_case; the dashboard sorts by count desc "
+                             "and shows the top one with the rest in tooltip.")
     args = parser.parse_args()
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -64,11 +73,19 @@ def main():
         stats_segment += f" unavailable={args.unavailable}"
     if args.not_found:
         stats_segment += f" not_found={args.not_found}"
+    # `failure_reasons` segment is appended after elapsed (and after the
+    # optional model suffix) so the existing positional regex in bin/server.js
+    # still parses old lines. Sanitize: strip whitespace and forbid the pipe
+    # char so the value can't break out of the log line column. Empty string
+    # = omit the segment entirely (preserves backward compat).
+    fr_raw = (args.failure_reasons or "").strip()
+    fr_clean = fr_raw.replace("|", "").replace(" ", "")
+    failure_segment = f" failure_reasons={fr_clean}" if fr_clean else ""
     line = (
         f"{timestamp} | {args.script} | "
         f"posted={args.posted} skipped={args.skipped} failed={args.failed}"
         f"{replies_segment}{stats_segment} "
-        f"cost=${args.cost:.2f} elapsed={args.elapsed:.0f}s{model_suffix}"
+        f"cost=${args.cost:.2f} elapsed={args.elapsed:.0f}s{model_suffix}{failure_segment}"
     )
 
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
