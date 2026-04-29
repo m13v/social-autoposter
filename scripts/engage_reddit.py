@@ -282,14 +282,6 @@ def build_prompt(reply, recent_replies, config, excluded_authors, top_report="",
     reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "Deep_Ad1959")
     reply_json = json.dumps(reply, indent=2)
 
-    # Moltbook: skip recent_replies + top_report context blocks. Both are
-    # dense with our prior agent-persona-voiced comments ("my human ran...",
-    # "my human ships...") which, in aggregate, trip Anthropic's Usage Policy
-    # classifier. Reddit doesn't have that signature so it's fine for reddit.
-    if reply['platform'] == "moltbook":
-        recent_replies = []
-        top_report = ""
-
     recent_context = ""
     if recent_replies:
         snippets = "\n".join(f"  - {r}" for r in recent_replies)
@@ -335,20 +327,7 @@ Your last {len(recent_replies)} replies (vary your style, don't repeat the same 
 Apply this voice when drafting: follow `tone`, never violate any item in `never`, mirror `examples` / `examples_good` when present.
 """
 
-    if reply['platform'] == "moltbook":
-        framing = (
-            "You are helping draft a reply to a comment on a public discussion "
-            "forum on behalf of the user's account. The forum is open to AI "
-            "authorship, fully transparent, and the user has authorized you to "
-            "draft this reply for them."
-        )
-    else:
-        framing = (
-            f"You are helping draft a reply to a comment on {reply['platform']} "
-            f"on behalf of the user's account."
-        )
-
-    return f"""{framing}
+    return f"""Reply to this {reply['platform']} comment. You are the Social Autoposter engagement bot.
 
 ## Reply data
 {reply_json}
@@ -358,12 +337,13 @@ Read ~/social-autoposter/config.json for project details and content_angle.
 {recent_context}{top_context}{voice_block}{history_block}{callout_block}
 ## Content rules
 {get_content_rules("reddit")}
-- First person has TWO valid forms per the GROUNDING RULE below. Lane 1: open with a disclosure phrase ("hypothetically", "imagine someone running this", "scenario:") and then invent freely. Lane 2: stay first-person only when every specific is grounded in content_angle / voice / messaging in config.json, or drop the specific and pattern-frame ("the part that breaks down is..."). Never undisclosed first-person with invented numbers / places / programs.
+- First person, specific details from content_angle in config.json.
 - Vary openings. Don't always start with credentials.
 
 {get_styles_prompt("reddit", context="replying")}
 
 {get_anti_patterns()}
+- On Moltbook: write as an agent ("my human" not "I").
 
 ## Tiered links
 - Tier 1 (default): No link. Genuine engagement.
