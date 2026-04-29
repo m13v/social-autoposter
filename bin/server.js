@@ -5377,11 +5377,16 @@ let _dailyMetricsSeries = null;
 let _dailyMetricsDays = [];
 let _dailyMetricsActive = null;
 
+// First-time defaults. Show the three metrics that matter most at a glance
+// (views = reach, upvotes = endorsement, comments = engagement) so a new
+// dashboard user sees a readable chart instead of all 9 lines on top of
+// each other. Returning users keep whatever they've toggled.
+const DAILY_METRICS_DEFAULTS = ['views', 'upvotes', 'comments'];
 function _loadDailyMetricsActive() {
   if (_dailyMetricsActive) return _dailyMetricsActive;
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem('dailyMetricsActive') || 'null'); } catch {}
-  const set = new Set(Array.isArray(saved) ? saved : DAILY_METRICS.map(m => m.id));
+  const set = new Set(Array.isArray(saved) ? saved : DAILY_METRICS_DEFAULTS);
   _dailyMetricsActive = set;
   return set;
 }
