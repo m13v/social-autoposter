@@ -1171,7 +1171,7 @@ def _log_dm_outbound(chat_url, content, dm_id=None):
             dm_id = row["id"] if hasattr(row, "__getitem__") else row[0]
         subprocess.run(
             ["python3", os.path.join(os.path.dirname(os.path.abspath(__file__)), "dm_conversation.py"),
-             "log-outbound", "--dm-id", str(dm_id), "--content", content],
+             "log-outbound", "--dm-id", str(dm_id), "--content", content, "--verified"],
             capture_output=True, text=True, timeout=20,
         )
         return True
