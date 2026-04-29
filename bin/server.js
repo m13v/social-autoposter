@@ -2291,6 +2291,16 @@ async function handleApi(req, res) {
               ")" +
             ") ORDER BY hr.created_at ASC), '[]'::json) " +
             "FROM human_dm_replies hr WHERE hr.dm_id = d.id) AS human_instructions, " +
+          // Distinct campaigns attached to any dm_messages row in this thread.
+          // Used by the dashboard to filter threads where at least one outbound
+          // DM was tagged with a given campaign (e.g. ai_disclosure_100).
+          // Threads with zero campaign-tagged messages get [] => "Organic".
+          "COALESCE(" +
+            "(SELECT json_agg(DISTINCT cdm.name) FROM dm_messages mm " +
+              "JOIN campaigns cdm ON cdm.id = mm.campaign_id " +
+              "WHERE mm.dm_id = d.id), " +
+            "'[]'::json" +
+          ") AS campaign_names, " +
           "CASE WHEN d.conversation_status = 'needs_human' THEN 0 " +
                "WHEN d.conversation_status IN ('converted','closed') THEN 90 " +
                "WHEN d.interest_level = 'hot' THEN 10 " +
@@ -7045,7 +7055,8 @@ function initTopFilters() {
   wireTopPillRow('top-campaign-pills', (v) => {
     _topCampaign = v || 'all';
     saSave('sa.top.campaign.v1', _topCampaign);
-    if (_topPostsPayload) renderTopPosts(_topPostsPayload);
+    if (_topSubtab === 'dms') { if (_topDmsPayload) renderTopDms(_topDmsPayload); }
+    else if (_topPostsPayload) renderTopPosts(_topPostsPayload);
   });
   wireTopPillRow('top-pages-source-pills', (v) => {
     _topPagesSource = v || 'seo';
@@ -7169,7 +7180,7 @@ function applyTopSubtabState(sub, loadData) {
     if (dmsC) dmsC.classList.remove('hidden');
     if (platRowEl) platRowEl.classList.remove('hidden');
     if (srcRowEl) srcRowEl.classList.add('hidden');
-    if (campRowEl) campRowEl.classList.add('hidden');
+    if (campRowEl) campRowEl.classList.remove('hidden');
     setDmRowsHidden(false);
     if (totalEl) totalEl.textContent = '';
     const searchElDm = document.getElementById('top-search');
@@ -7538,14 +7549,35 @@ function renderTopDms(payload) {
   const allDms = (payload && payload.dms) || [];
   const dmProjectName = d => d.target_project || d.project_name || '';
   refreshTopProjectPills(allDms.map(dmProjectName).filter(Boolean));
+  // Feed every distinct campaign name we see into the campaign pill row,
+  // plus 'Organic' (rendered as a placeholder for threads where no message
+  // was tagged with a campaign). Same UX as the threads/comments subtabs.
+  const dmCampaignNamesAll = [];
+  let dmHasOrganic = false;
+  for (const d of allDms) {
+    const arr = Array.isArray(d.campaign_names) ? d.campaign_names : [];
+    if (arr.length === 0) dmHasOrganic = true;
+    for (const n of arr) {
+      if (n && typeof n === 'string') dmCampaignNamesAll.push(n);
+    }
+  }
+  if (dmHasOrganic) dmCampaignNamesAll.push('');
+  refreshTopCampaignPills(dmCampaignNamesAll);
   const projectScoped = (_topProject && _topProject !== 'all')
     ? allDms.filter(d => dmProjectName(d) === _topProject)
     : allDms;
+  const campaignScoped = (_topCampaign && _topCampaign !== 'all')
+    ? projectScoped.filter(d => {
+        const arr = Array.isArray(d.campaign_names) ? d.campaign_names : [];
+        if (_topCampaign === '(organic)') return arr.length === 0;
+        return arr.includes(_topCampaign);
+      })
+    : projectScoped;
   const dirScoped = _topDmDir === 'in'
-    ? projectScoped.filter(d => d.last_dir === 'inbound')
+    ? campaignScoped.filter(d => d.last_dir === 'inbound')
     : (_topDmDir === 'out'
-      ? projectScoped.filter(d => d.last_dir === 'outbound')
-      : projectScoped);
+      ? campaignScoped.filter(d => d.last_dir === 'outbound')
+      : campaignScoped);
   const dms = dirScoped.filter(d => {
     if (_topDmInterest !== 'all' && (d.interest_level || '') !== _topDmInterest) return false;
     if (_topDmMode !== 'all' && (d.mode || 'rapport') !== _topDmMode) return false;
