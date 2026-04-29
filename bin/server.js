@@ -396,7 +396,10 @@ const RUN_MONITOR_PATH = path.join(LOG_DIR, 'run_monitor.log');
 // Optional `checked=N updated=N removed=N` segment (added 2026-04-28) follows
 // replies_refreshed. Stats jobs use this to surface real per-run counters
 // instead of the misleading "total active posts" number we used to log.
-const RUN_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*posted=(\d+)\s+skipped=(\d+)\s+failed=(\d+)(?:\s+replies_refreshed=(\d+))?(?:\s+checked=(\d+)\s+updated=(\d+)\s+removed=(\d+))?\s+cost=\$([\d.]+)\s+elapsed=(\d+)s/;
+// Optional `unavailable=N` and `not_found=N` (LinkedIn-specific, added
+// 2026-04-28) tail the base segment as their own optional captures so older
+// stats rows that only have checked/updated/removed still parse cleanly.
+const RUN_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*posted=(\d+)\s+skipped=(\d+)\s+failed=(\d+)(?:\s+replies_refreshed=(\d+))?(?:\s+checked=(\d+)\s+updated=(\d+)\s+removed=(\d+))?(?:\s+unavailable=(\d+))?(?:\s+not_found=(\d+))?\s+cost=\$([\d.]+)\s+elapsed=(\d+)s/;
 
 // posts.platform is lowercase; UI labels are capitalized.
 const PLATFORM_LABELS = {
@@ -467,7 +470,7 @@ function parseRunMonitorLog(maxLines) {
   for (const line of tail) {
     const m = line.match(RUN_LINE_RE);
     if (!m) continue;
-    const [, ts, script, posted, skipped, failed, repliesRefreshed, checked, updated, removed, cost, elapsed] = m;
+    const [, ts, script, posted, skipped, failed, repliesRefreshed, checked, updated, removed, unavailable, notFound, cost, elapsed] = m;
     // log_run.py writes naive local-wallclock time (strftime without tz), so
     // `new Date(ts)` in node interprets it as local on the server. That is
     // correct since the dashboard server runs on the same host.
@@ -495,6 +498,8 @@ function parseRunMonitorLog(maxLines) {
         checked: checked ? parseInt(checked, 10) : 0,
         updated: updated ? parseInt(updated, 10) : 0,
         removed: removed ? parseInt(removed, 10) : 0,
+        unavailable: unavailable ? parseInt(unavailable, 10) : 0,
+        not_found: notFound ? parseInt(notFound, 10) : 0,
         cost_usd: parseFloat(cost),
       },
     });
@@ -4447,16 +4452,21 @@ function renderResult(run) {
     const checked = r.checked || 0;
     const updated = r.updated || 0;
     const removed = r.removed || 0;
+    const unavailable = r.unavailable || 0;
+    const notFound = r.not_found || 0;
     const skipped = r.skipped || 0;
     const failed = r.failed || 0;
     const repliesRefreshed = r.replies_refreshed || 0;
-    if (!checked && !updated && !removed && !skipped && !failed && !repliesRefreshed) {
+    if (!checked && !updated && !removed && !unavailable && !notFound &&
+        !skipped && !failed && !repliesRefreshed) {
       return '<span style="color:var(--muted);font-size:12px;">—</span>';
     }
     return (
       pill('checked', checked, 'var(--text)') +
       pill('updated', updated, '#22c55e') +
       (removed ? pill('removed', removed, '#eab308') : '') +
+      (unavailable ? pill('unavail', unavailable, '#eab308') : '') +
+      (notFound ? pill('not found', notFound, 'var(--muted)') : '') +
       (skipped ? pill('skipped', skipped, 'var(--muted)') : '') +
       (repliesRefreshed ? pill('replies', repliesRefreshed, '#3b82f6') : '') +
       (failed ? pill('failed', failed, '#ef4444') : '')
