@@ -48,7 +48,12 @@ log "Phase A.5: Updating github engagement stats (reactions + reply counts)..."
 # Phase B reply handling. Subshell scopes the set-flags, `|| true` absorbs rc.
 PHASE_A5_START=$(date +%s)
 GH_REPLY_SUMMARY=$(mktemp -t fazm-gh-reply-summary.XXXXXX)
-trap 'rm -f "$GH_REPLY_SUMMARY"' EXIT
+# Chain lock cleanup into our cleanup. A plain `trap '...' EXIT` here would
+# REPLACE lock.sh's `trap _sa_release_locks EXIT INT TERM HUP`, orphaning
+# /tmp/social-autoposter-github.lock across runs (root cause of the stale
+# github-lock orphans seen 2026-04-29). All four signals must be covered so
+# watchdog SIGTERM also frees the lock.
+trap 'rm -f "$GH_REPLY_SUMMARY"; _sa_release_locks' EXIT INT TERM HUP
 ( set +e +o pipefail
   python3 "$REPO_DIR/scripts/update_stats.py" --github-only --reply-summary "$GH_REPLY_SUMMARY" 2>&1 | tee -a "$LOG_FILE"
 ) || true
