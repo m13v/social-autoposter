@@ -4959,6 +4959,8 @@ function refreshActivityProjectPills(events) {
     return;
   }
   _activityKnownProjects.sort((a, b) => a.localeCompare(b));
+  saSave('sa.activity.knownProjects.v1', _activityKnownProjects);
+  saSaveSet('sa.activity.projectFilter.v1', _activityProjectFilter);
   projEl.innerHTML = _activityKnownProjects.map(p =>
     '<span class="activity-chip' + (_activityProjectFilter.has(p) ? ' active' : '') + '" data-project="' + escapeHtml(p) + '" title="' + escapeHtml(p) + '">' + escapeHtml(PROJECT_LABELS[p] || p) + '</span>'
   ).join('');
@@ -6492,32 +6494,35 @@ async function loadCostStats(force) {
   }
 }
 
-let _topTableState = { sortField: 'score', sortDir: 'desc', filters: {}, globalQuery: '' };
+let _topTableState = { sortField: 'score', sortDir: 'desc', filters: {}, globalQuery: saLoad('sa.top.tableQuery.v1', '') };
 let _topTableHandle = null;
 let _topLoaded = false;
 let _topLoading = false;
 let _topWindow = coerceTopWindow(loadSavedDashboardWindow());
-let _topPlatform = 'all';
-let _topSubtab = 'threads';
-let _topProject = 'all';
+// Top-tab subtab + pill-row filters are persisted across reloads. Each pill
+// row reads its current value from the corresponding sa.top.*.v1 key on init
+// and writes back on every click via wireTopPillRow's callback.
+let _topPlatform = saLoad('sa.top.platform.v1', 'all');
+let _topSubtab = saLoad('sa.top.subtab.v1', 'threads');
+let _topProject = saLoad('sa.top.project.v1', 'all');
 let _topPagesTableState = { sortField: 'pageviews', sortDir: 'desc', filters: {} };
 let _topPagesLoaded = false;
 let _topPagesLoading = false;
-let _topPagesSource = 'seo';
+let _topPagesSource = saLoad('sa.top.pagesSource.v1', 'seo');
 let _topDmsTableState = { sortField: 'rank', sortDir: 'asc', filters: {} };
 let _topDmsLoaded = false;
 let _topDmsLoading = false;
 let _topDmsPayload = null;
-let _topDmDir = 'all';
-let _topDmInterest = 'all';
-let _topDmMode = 'all';
-let _topDmTier = 'all';
-let _topDmQual = 'all';
-let _topDmStatus = 'all';
+let _topDmDir = saLoad('sa.top.dmDir.v1', 'all');
+let _topDmInterest = saLoad('sa.top.dmInterest.v1', 'all');
+let _topDmMode = saLoad('sa.top.dmMode.v1', 'all');
+let _topDmTier = saLoad('sa.top.dmTier.v1', 'all');
+let _topDmQual = saLoad('sa.top.dmQual.v1', 'all');
+let _topDmStatus = saLoad('sa.top.dmStatus.v1', 'all');
 // Server-side filtering for DMs sub-tab. When _topDmSearch is non-empty the
 // API drops its time-window filter so old threads can be located by author or
 // message text. _topDmOffset drives the "Load more" button.
-let _topDmSearch = '';
+let _topDmSearch = saLoad('sa.top.dmSearch.v1', '');
 let _topDmOffset = 0;
 let _topDmSearchTimer = null;
 const TOP_DM_PAGE_SIZE = 200;
@@ -6839,41 +6844,50 @@ function initTopFilters() {
   });
   wireTopPillRow('top-platform-pills', (v) => {
     _topPlatform = v || 'all';
+    saSave('sa.top.platform.v1', _topPlatform);
     if (_topSubtab === 'dms') { _topDmOffset = 0; loadTopDms(true); }
     else loadTopPosts(true);
   });
   wireTopPillRow('top-project-pills', (v) => {
     _topProject = v || 'all';
+    saSave('sa.top.project.v1', _topProject);
     if (_topSubtab === 'pages') renderTopPagesFromCache();
     else if (_topSubtab === 'dms') { if (_topDmsPayload) renderTopDms(_topDmsPayload); }
     else { if (_topPostsPayload) renderTopPosts(_topPostsPayload); }
   });
   wireTopPillRow('top-pages-source-pills', (v) => {
     _topPagesSource = v || 'seo';
+    saSave('sa.top.pagesSource.v1', _topPagesSource);
     renderTopPagesFromCache();
   });
   wireTopPillRow('top-dm-dir-pills', (v) => {
     _topDmDir = v || 'all';
+    saSave('sa.top.dmDir.v1', _topDmDir);
     if (_topDmsPayload) renderTopDms(_topDmsPayload);
   });
   wireTopPillRow('top-dm-interest-pills', (v) => {
     _topDmInterest = v || 'all';
+    saSave('sa.top.dmInterest.v1', _topDmInterest);
     if (_topDmsPayload) renderTopDms(_topDmsPayload);
   });
   wireTopPillRow('top-dm-mode-pills', (v) => {
     _topDmMode = v || 'all';
+    saSave('sa.top.dmMode.v1', _topDmMode);
     if (_topDmsPayload) renderTopDms(_topDmsPayload);
   });
   wireTopPillRow('top-dm-tier-pills', (v) => {
     _topDmTier = v || 'all';
+    saSave('sa.top.dmTier.v1', _topDmTier);
     if (_topDmsPayload) renderTopDms(_topDmsPayload);
   });
   wireTopPillRow('top-dm-qual-pills', (v) => {
     _topDmQual = v || 'all';
+    saSave('sa.top.dmQual.v1', _topDmQual);
     if (_topDmsPayload) renderTopDms(_topDmsPayload);
   });
   wireTopPillRow('top-dm-status-pills', (v) => {
     _topDmStatus = v || 'all';
+    saSave('sa.top.dmStatus.v1', _topDmStatus);
     if (_topDmsPayload) renderTopDms(_topDmsPayload);
   });
   const searchEl = document.getElementById('top-search');
@@ -6884,11 +6898,16 @@ function initTopFilters() {
         // Server-side search across all DMs (drops the time-window filter on
         // the API). Debounce so we don't fire a query on every keystroke.
         _topDmSearch = searchEl.value || '';
+        saSave('sa.top.dmSearch.v1', _topDmSearch);
         _topDmOffset = 0;
         if (_topDmSearchTimer) clearTimeout(_topDmSearchTimer);
         _topDmSearchTimer = setTimeout(() => loadTopDms(true), 300);
       } else {
         _topTableState.globalQuery = searchEl.value;
+        // mountSortableTable persists sortField/sortDir/filters (per-column),
+        // but globalQuery is owned by the surrounding handler — track it
+        // separately under a sibling key.
+        saSave('sa.top.tableQuery.v1', _topTableState.globalQuery);
         if (_topTableHandle && _topTableHandle.apply) _topTableHandle.apply();
       }
     });
@@ -6901,6 +6920,7 @@ function initTopFilters() {
       const sub = el.dataset.subtab || 'threads';
       if (sub === _topSubtab) return;
       _topSubtab = sub;
+      saSave('sa.top.subtab.v1', _topSubtab);
       document.querySelectorAll('.top-subtab').forEach(s => {
         const isActive = s.dataset.subtab === sub;
         s.classList.toggle('active', isActive);
