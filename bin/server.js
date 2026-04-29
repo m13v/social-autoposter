@@ -2492,16 +2492,16 @@ async function handleApi(req, res) {
     const rawKind = String(url.searchParams.get('kind') || 'all').toLowerCase().trim();
     const kindFilter = (rawKind === 'threads' || rawKind === 'comments') ? rawKind : 'all';
     const whereParts = [
-      "status = 'active'",
+      "posts.status = 'active'",
       "our_content IS NOT NULL AND LENGTH(our_content) >= 30",
-      "platform NOT IN ('github_issues')",
+      "posts.platform NOT IN ('github_issues')",
       "(upvotes IS NOT NULL OR comments_count IS NOT NULL OR views IS NOT NULL)",
     ];
     if (windowHours != null) {
       whereParts.push("posted_at >= NOW() - INTERVAL '" + windowHours + " hours'");
     }
     if (platformFilter) {
-      whereParts.push("LOWER(platform) = '" + platformFilter + "'");
+      whereParts.push("LOWER(posts.platform) = '" + platformFilter + "'");
     }
     if (kindFilter === 'threads') {
       whereParts.push("thread_url = our_url");
