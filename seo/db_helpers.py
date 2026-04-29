@@ -141,6 +141,46 @@ def check_slug_exists(product, slug):
     return exists
 
 
+def list_done_pages(product, limit=400):
+    """Return the inventory of completed pages for this product.
+
+    Used by generate_page.py's build_prompt to give the model the choice
+    between writing a new page or consolidating into an existing one.
+    Returns a list of dicts ordered by completion recency (newest first):
+        [{"slug": str, "keyword": str, "page_url": str|None,
+          "content_type": str|None, "completed_at": str|None}, ...]
+
+    Cap at `limit` so the prompt does not blow past context on a site with
+    1000+ pages. The caller can further filter by token overlap with the
+    new keyword to keep the inventory relevant.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT slug, keyword, page_url, content_type, completed_at
+        FROM seo_keywords
+        WHERE product = %s AND status = 'done' AND slug IS NOT NULL
+        ORDER BY completed_at DESC NULLS LAST, updated_at DESC NULLS LAST
+        LIMIT %s
+        """,
+        (product, int(limit)),
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [
+        {
+            "slug": r[0],
+            "keyword": r[1],
+            "page_url": r[2],
+            "content_type": r[3],
+            "completed_at": r[4].isoformat() if r[4] else None,
+        }
+        for r in rows
+    ]
+
+
 def has_work(product):
     """Check if there's any work to do for a product."""
     conn = get_conn()
