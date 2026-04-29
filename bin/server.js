@@ -403,7 +403,10 @@ const RUN_MONITOR_PATH = path.join(LOG_DIR, 'run_monitor.log');
 // the dashboard can surface why a run reported failed>0 (monthly_limit,
 // timeout, bad_output, cdp_error, ...). Old lines still match because the
 // group is optional.
-const RUN_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*posted=(\d+)\s+skipped=(\d+)\s+failed=(\d+)(?:\s+replies_refreshed=(\d+))?(?:\s+checked=(\d+)\s+updated=(\d+)\s+removed=(\d+))?(?:\s+unavailable=(\d+))?(?:\s+not_found=(\d+))?\s+cost=\$([\d.]+)\s+elapsed=(\d+)s(?:\s+failure_reasons=([^\s|]+))?/;
+// Optional `salvaged=N` (added 2026-04-29) tails the not_found segment as its
+// own optional capture so older lines still parse. Used by the twitter cycle
+// (Phase 0 salvage) to surface pending work re-assigned from prior batches.
+const RUN_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*posted=(\d+)\s+skipped=(\d+)\s+failed=(\d+)(?:\s+replies_refreshed=(\d+))?(?:\s+checked=(\d+)\s+updated=(\d+)\s+removed=(\d+))?(?:\s+unavailable=(\d+))?(?:\s+not_found=(\d+))?(?:\s+salvaged=(\d+))?\s+cost=\$([\d.]+)\s+elapsed=(\d+)s(?:\s+failure_reasons=([^\s|]+))?/;
 
 // posts.platform is lowercase; UI labels are capitalized.
 const PLATFORM_LABELS = {
@@ -474,7 +477,7 @@ function parseRunMonitorLog(maxLines) {
   for (const line of tail) {
     const m = line.match(RUN_LINE_RE);
     if (!m) continue;
-    const [, ts, script, posted, skipped, failed, repliesRefreshed, checked, updated, removed, unavailable, notFound, cost, elapsed, failureReasonsStr] = m;
+    const [, ts, script, posted, skipped, failed, repliesRefreshed, checked, updated, removed, unavailable, notFound, salvaged, cost, elapsed, failureReasonsStr] = m;
     // log_run.py writes naive local-wallclock time (strftime without tz), so
     // `new Date(ts)` in node interprets it as local on the server. That is
     // correct since the dashboard server runs on the same host.
@@ -515,6 +518,7 @@ function parseRunMonitorLog(maxLines) {
         removed: removed ? parseInt(removed, 10) : 0,
         unavailable: unavailable ? parseInt(unavailable, 10) : 0,
         not_found: notFound ? parseInt(notFound, 10) : 0,
+        salvaged: salvaged ? parseInt(salvaged, 10) : 0,
         cost_usd: parseFloat(cost),
         failure_reasons: failureReasons,
       },
@@ -4547,16 +4551,38 @@ function renderResult(run) {
       (failed ? pill('failed', failed, '#ef4444') : '')
     );
   }
-  // Generic fallback: posted/skipped/failed/replies_refreshed from run_monitor.log
+  // Generic fallback: posted/skipped/failed/replies_refreshed from run_monitor.log.
+  // Also surfaces salvaged (Twitter cycle Phase 0) and failure_reasons so a
+  // run that posted=0 due to auth/rate/usage limit doesn't render as "—".
   const posted = r.posted || 0, skipped = r.skipped || 0, failed = r.failed || 0;
   const repliesRefreshed = r.replies_refreshed || 0;
-  if (!posted && !skipped && !failed && !repliesRefreshed) {
+  const salvaged = r.salvaged || 0;
+  const reasons = Array.isArray(r.failure_reasons) ? r.failure_reasons : [];
+  // Compose a unified "failed: <top_reason> +N" pill with full breakdown in
+  // tooltip. Same shape as the engage branch above so operators see one
+  // consistent error format across every job type.
+  const renderFailedPill = () => {
+    if (!failed && !reasons.length) return '';
+    const top = reasons[0];
+    const tooltip = reasons.length
+      ? reasons.map(function (x) { return x.reason + ' x' + x.count; }).join(', ')
+      : 'failed (no reason logged)';
+    const label = top
+      ? ('failed: ' + top.reason + (reasons.length > 1 ? ' +' + (reasons.length - 1) : ''))
+      : 'failed';
+    const count = failed || (reasons[0] ? reasons[0].count : 0);
+    return '<span title="' + tooltip.replace(/"/g, '&quot;') + '" ' +
+      'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
+      label + (count ? ' <span style="color:#ef4444;font-weight:600;">' + count + '</span>' : '') + '</span>';
+  };
+  if (!posted && !skipped && !failed && !repliesRefreshed && !salvaged && !reasons.length) {
     return '<span style="color:var(--muted);font-size:12px;">—</span>';
   }
   return (
-    pill('posted', posted, '#22c55e') +
-    pill('skipped', skipped, '#eab308') +
-    (failed ? pill('failed', failed, '#ef4444') : '') +
+    (posted ? pill('posted', posted, '#22c55e') : '') +
+    (skipped ? pill('skipped', skipped, '#eab308') : '') +
+    renderFailedPill() +
+    (salvaged ? pill('salvaged', salvaged, '#3b82f6') : '') +
     (repliesRefreshed ? pill('replies refreshed', repliesRefreshed, '#3b82f6') : '')
   );
 }
