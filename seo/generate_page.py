@@ -893,6 +893,267 @@ def render_content_guardrails(product_cfg: dict) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "but", "of", "in", "on", "for", "to",
+    "with", "by", "as", "is", "are", "was", "were", "be", "been", "being",
+    "do", "does", "did", "have", "has", "had", "this", "that", "these",
+    "those", "it", "its", "you", "your", "i", "we", "our", "us", "they",
+    "them", "their", "from", "at", "into", "than", "then", "so", "if",
+    "what", "how", "why", "when", "where", "who", "vs", "vs.", "best",
+}
+
+
+def _keyword_tokens(text: str) -> set[str]:
+    """Return the lowercased non-stopword tokens of a keyword/title."""
+    if not text:
+        return set()
+    raw = re.split(r"[^a-z0-9]+", text.lower())
+    return {t for t in raw if t and len(t) > 2 and t not in _STOPWORDS}
+
+
+def render_existing_pages_inventory(product: str, keyword: str,
+                                    new_slug: str,
+                                    pages: list[dict] | None = None,
+                                    max_show: int = 60) -> str:
+    """Render the inventory of already-built pages for the model to choose from.
+
+    Output is a fenced-code-block-shaped table; the model uses it inside
+    "Step 0 — Reuse, redirect, or build new" to decide whether to write a
+    new page or consolidate into an existing one.
+
+    Inventory is filtered by token overlap with the incoming keyword/slug so
+    a 400-page site does not flood the prompt. We always include the most
+    recent ~10 done pages too, so the model sees the current cadence of work.
+
+    Returns the empty string if there is nothing to show (a brand-new
+    product), in which case Step 0 simply tells the model "no inventory yet,
+    build new" and proceeds.
+    """
+    if pages is None:
+        try:
+            pages = db_helpers.list_done_pages(product, limit=400)
+        except Exception as e:
+            # Don't block page generation on a DB read; fall through to "no
+            # inventory" so the model still gets Step 0 instructions.
+            print(f"  inventory lookup failed (continuing without): {e}",
+                  file=sys.stderr)
+            pages = []
+
+    if not pages:
+        return ""
+
+    new_tokens = _keyword_tokens(keyword) | _keyword_tokens(new_slug)
+
+    scored: list[tuple[int, dict]] = []
+    for p in pages:
+        if not p.get("slug") or p["slug"] == new_slug:
+            continue
+        ptokens = _keyword_tokens(p.get("keyword") or "") | _keyword_tokens(p["slug"])
+        overlap = len(new_tokens & ptokens)
+        scored.append((overlap, p))
+
+    # Sort by overlap desc, then by completed_at desc (already pre-sorted).
+    scored.sort(key=lambda r: r[0], reverse=True)
+
+    selected: list[dict] = []
+    seen_slugs: set[str] = set()
+
+    # First: relevant siblings (overlap >= 1).
+    for overlap, p in scored:
+        if overlap < 1:
+            break
+        if p["slug"] in seen_slugs:
+            continue
+        selected.append({**p, "_overlap": overlap})
+        seen_slugs.add(p["slug"])
+        if len(selected) >= max_show:
+            break
+
+    # Then: pad with most-recent pages (regardless of overlap) so the model
+    # sees the current shape/cadence even when the new keyword is genuinely
+    # off-axis from anything we've shipped.
+    if len(selected) < max_show:
+        for p in pages[:20]:
+            if p["slug"] in seen_slugs:
+                continue
+            selected.append({**p, "_overlap": 0})
+            seen_slugs.add(p["slug"])
+            if len(selected) >= max_show:
+                break
+
+    if not selected:
+        return ""
+
+    lines = [
+        "## EXISTING PAGES INVENTORY",
+        "",
+        f"There are {len(pages)} pages already shipped on this site. The "
+        f"{len(selected)} most relevant to the new keyword `{keyword}` are "
+        "below (top of the list = highest token overlap with this keyword; "
+        "the bottom rows are the most-recent pages so you also see the "
+        "cadence of recent work). `overlap` is the count of shared "
+        "non-stopword tokens.",
+        "",
+        "```",
+        f"{'overlap':<8} {'slug':<60} keyword",
+    ]
+    for p in selected:
+        slug = (p["slug"] or "")[:60]
+        kw = (p.get("keyword") or "")[:80]
+        lines.append(f"{p['_overlap']:<8} {slug:<60} {kw}")
+    lines.append("```")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_reuse_or_new_decision(product: str, keyword: str, slug: str,
+                                 page_url: str,
+                                 has_inventory: bool) -> str:
+    """Step 0 block: tell the model to choose new vs consolidate vs improve.
+
+    This is the load-bearing block. It defines the three exit shapes and
+    walks through bad/good examples so the model has concrete patterns to
+    match on. Inserted before Step 1 so the decision happens before any
+    research budget is spent.
+    """
+    if not has_inventory:
+        # Brand-new product or empty DB: skip the decision and just tell the
+        # model to proceed; Step 1 will handle the rest.
+        return (
+            "## Step 0 — New page or update existing?\n\n"
+            "There is no inventory of existing pages on this site yet. "
+            "Proceed to Step 1 and build the page.\n\n"
+        )
+
+    return (
+        "## Step 0 — Reuse, redirect, or build new (decide BEFORE researching)\n"
+        "\n"
+        "Look at the EXISTING PAGES INVENTORY above. The site already has a "
+        "library of pages. Your job is NOT to reflexively add another file. "
+        "It is to decide which of three actions actually serves the reader "
+        "for this keyword.\n"
+        "\n"
+        "### The three options\n"
+        "\n"
+        "**A. Build a new page.** Pick this when no existing page meaningfully "
+        "covers the user's literal question, OR when an existing sibling page "
+        "is on a related but genuinely distinct angle that would be diluted "
+        "by being merged.\n"
+        "\n"
+        "**B. Consolidate (redirect to an existing page).** Pick this when "
+        "an existing page already answers (or is the natural home for) the "
+        "literal question behind this keyword. Don't ship a near-duplicate. "
+        "Instead, redirect this slug to the existing one, and if the existing "
+        "page is missing the specific facet this keyword implies, add a "
+        "small section to it. End-state: ONE page on the topic, two slugs "
+        "pointing to it.\n"
+        "\n"
+        "**C. Escalate (skip).** Pick this when the keyword is a content-"
+        f"guardrail violation, a semantic mismatch with {product}, or "
+        "demands data we cannot honestly produce. Use the ESCALATION RUBRIC "
+        "above.\n"
+        "\n"
+        "### How to choose\n"
+        "\n"
+        "1. From the inventory, identify the top 1-3 candidate slugs whose "
+        f"keyword shares meaningful intent with `{keyword}`. High `overlap` "
+        "is a hint, not a verdict; low overlap can still be a duplicate "
+        "if the topics are synonyms (e.g. 'changelog' / 'release notes' / "
+        "'app updates' / 'what's new').\n"
+        "2. Open the top 1-3 candidate pages with `Read` (path under "
+        "`src/app/(content)/t/<slug>/page.tsx` or `src/app/t/<slug>/page.tsx`). "
+        "Skim the H1, lede, and section headers. Ignore the styling.\n"
+        "3. Ask: *if a user typed this exact keyword into Google and landed "
+        "on the existing page, would they find their literal answer in the "
+        "first 30% of the page?* If YES, you are duplicating. Choose B. If "
+        "NO and no existing page is the natural home, choose A.\n"
+        "\n"
+        "### Bad examples (real, do not repeat)\n"
+        "\n"
+        "- We shipped 15+ separate pages on this site for variants of the "
+        "same Fazm-changelog intent (`fazm-changelog`, `fazm-release-notes`, "
+        "`fazm-app-updates`, `fazm-new-features`, `fazm-version-history`, "
+        "`open-source-ai-released-april-2026`, etc.). Each ranked for nothing, "
+        "fragmented internal links, and produced a maintenance tax. Correct "
+        "choice would have been: ONE canonical changelog page, every other "
+        "variant 308-redirected to it.\n"
+        "- We shipped both `/t/anthropic-vat-number` and "
+        "`/t/anthropic-pbc-vat-number` with substantially the same content. "
+        "Two pages, same answer. Correct choice: keep the one with the "
+        "stronger title (`anthropic-pbc-vat-number`), redirect the other to "
+        "it, and merge any unique facts before deleting.\n"
+        "\n"
+        "### Good examples\n"
+        "\n"
+        "- Keyword `fazm pricing 2026` arrives, inventory already has "
+        "`fazm-pricing`. Open `fazm-pricing/page.tsx`. It already says "
+        "'$20/mo, 7-day trial, updated 2026-04-15'. Choose B: redirect "
+        "`/t/fazm-pricing-2026` -> `/t/fazm-pricing` (308). If the existing "
+        "page does not show the 2026 update, add it as a 'Pricing as of "
+        "2026' section in the same edit.\n"
+        "- Keyword `fazm vs cluely` arrives, inventory has `fazm-vs-rewind` "
+        "and `fazm-vs-granola` but no Cluely page. Different competitor, "
+        "different angle, different proof points. Choose A: build the new "
+        f"page at `/t/{slug}`.\n"
+        "- Keyword `how does fazm capture screen on macos` arrives, inventory "
+        "has `fazm-screen-recording-permission` (a permissions guide). The "
+        "permissions guide answers a different literal question (how to grant "
+        "access). Choose A: build the new page about the capture pipeline. "
+        "Add an internal link from each page to the other.\n"
+        "\n"
+        "### If you choose B (consolidate)\n"
+        "\n"
+        f"1. Pick the target slug from the inventory. Call it `<TARGET_SLUG>`.\n"
+        "2. Edit the consumer repo's `next.config.ts` (or `.mjs`/`.js`). "
+        "Find the `async redirects()` block and append a permanent redirect:\n"
+        "   ```ts\n"
+        f"   {{ source: \"/t/{slug}\", destination: \"/t/<TARGET_SLUG>\", permanent: true }},\n"
+        "   ```\n"
+        "   `permanent: true` emits a 308 so search engines and existing "
+        "links transfer authority to the canonical page.\n"
+        "3. Read the existing target page. If your keyword implies a fact "
+        "or sub-topic the target page does not currently surface, add a "
+        "small section (1-3 paragraphs, or a row in an existing comparison "
+        "table) so the redirect is honest, not a bait-and-switch. Update "
+        "`dateModified` on the target page if you changed it.\n"
+        "4. Do NOT create a `page.tsx` for the new slug. The redirect handles "
+        "the URL. The build will fail on a 'page.tsx exists AND a redirect "
+        "rule for the same path exists' conflict; only one of the two should "
+        "exist.\n"
+        "5. Commit both files (`next.config.ts`, optionally the target page) "
+        "in a single commit with message "
+        f"`fix(seo): consolidate {slug} -> <TARGET_SLUG>`. The auto-commit "
+        "agent will push within ~60s, but you should commit yourself to keep "
+        "the diff coherent.\n"
+        "6. Report this final JSON shape (single line, nothing after it):\n"
+        "   ```\n"
+        "   {\"success\": true, \"action\": \"consolidate\", "
+        f"\"slug\": \"{slug}\", "
+        "\"target_slug\": \"<TARGET_SLUG>\", "
+        f"\"target_url\": \"<absolute URL of /t/<TARGET_SLUG> on "
+        f"{page_url.rsplit('/t/', 1)[0] if '/t/' in page_url else page_url}>\", "
+        "\"rationale\": \"<one sentence: why these are the same intent>\", "
+        "\"target_page_edited\": true|false}\n"
+        "   ```\n"
+        "   When you emit this shape, the post-generation gates that look "
+        "for a new page file are skipped. The pipeline marks the new "
+        "keyword done with notes pointing at the canonical slug.\n"
+        "\n"
+        "### If you choose A (build new)\n"
+        "\n"
+        "Proceed to Step 1. The rest of this prompt assumes A.\n"
+        "\n"
+        "### If you choose C (escalate)\n"
+        "\n"
+        "Use `seo/escalate.py open` per the ESCALATION RUBRIC above and "
+        "exit. Do not ship a page.\n"
+        "\n"
+        "Make the choice now (in your own working memory; you do not have "
+        "to print it). If A or C, continue. If B, do the consolidation "
+        "steps and stop.\n\n"
+    )
+
+
 def render_book_call_block(product_cfg: dict, registry: dict) -> str:
     """Emit the BookCallCTA requirement block if the product has a Cal.com link.
 
@@ -1224,6 +1485,19 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
     consumer_theme = detect_consumer_theme(repo)
     neutral = pick_neutral_family(slug)
 
+    # Inventory of already-shipped pages on this site, plus the Step 0
+    # decision block that tells the model to pick consolidate-vs-build-new
+    # BEFORE spending research budget. Together these prevent the
+    # multi-slug-same-topic clusters we shipped on Fazm (changelog, VAT,
+    # etc.) where N keywords with non-overlapping slugs all became
+    # near-duplicate pages.
+    inventory_block = render_existing_pages_inventory(product, keyword, slug)
+    reuse_block = render_reuse_or_new_decision(
+        product, keyword, slug,
+        page_url=f"{website.rstrip('/')}{ct['route_prefix']}{slug}",
+        has_inventory=bool(inventory_block),
+    )
+
     type_context = {
         "guide": "This is a general guide/explainer page. You have the most creative freedom here — the angle, section shape, and length are all yours.",
         "alternative": f"This is an alternative/comparison page. Readers arrived by searching for a competitor product. Your job is to show them {product} is the better pick for the use case their keyword implies. Read an existing alternative page in `{repo}/src/app/alternative/` to see if a shell component exists (e.g. AlternativePageShell) — if it does, use it and emit only a typed data object. If no shell exists in this repo, compose raw sections using the trust-signal components below.",
@@ -1410,6 +1684,8 @@ Full product config (authoritative source for description, voice, ICP, personas,
 
 {guardrails_block}
 {cross_roundup_block}
+{inventory_block}
+{reuse_block}
 ## Step 1 — Find an angle no competitor has
 
 Before you write anything, do research. Budget ~15 minutes for this step. It matters more than the writing.
@@ -1667,9 +1943,15 @@ If the role line `{author_role}` reads as an AI disclosure (e.g. "Written with A
 
 Output your CONCEPT block from Step 2 in the conversation so it is captured in the log.
 
-Then, as your FINAL message (nothing after it), output exactly one line of JSON with this shape:
+Then, as your FINAL message (nothing after it), output exactly one line of JSON. There are three valid shapes; pick the one that matches what you did.
+
+If you BUILT a new page (Step 0 option A):
 
 {{"success": true, "page_url": "{page_url}", "slug": "{slug}", "commit_sha": "<7-char sha>", "concept_angle": "<one-line angle>"}}
+
+If you CONSOLIDATED into an existing page (Step 0 option B):
+
+{{"success": true, "action": "consolidate", "slug": "{slug}", "target_slug": "<existing-canonical-slug>", "target_url": "<absolute URL of the canonical page>", "rationale": "<one sentence: why these are the same intent>", "target_page_edited": true}}
 
 If anything went wrong:
 
@@ -2660,6 +2942,45 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
                      content_type=content_type,
                      claude_session_id=session_id)
         return {"success": False, "error": stream["error"],
+                "content_type": content_type,
+                "stream_log": stream["stream_log_path"],
+                "tool_summary": stream["tool_summary"]}
+
+    # Step 0 path: model decided to consolidate this slug into an existing
+    # page rather than write a new file. Skip the page-file gates (typecheck,
+    # theme, fact-verification) because there is no new page.tsx; the actual
+    # write was a redirect rule in next.config.ts plus an optional edit on
+    # the canonical page. We trust the auto-commit + Vercel build to catch
+    # an invalid redirect rule (next will refuse to start), and downstream
+    # GSC/dashboard rollups will see the new keyword as `done` pointing at
+    # the canonical URL.
+    if final_json and final_json.get("action") == "consolidate":
+        target_slug = (final_json.get("target_slug") or "").strip()
+        target_url = (final_json.get("target_url") or "").strip()
+        rationale = (final_json.get("rationale") or "").strip()
+        if not target_slug:
+            update_state(trigger, product, keyword, "pending",
+                         notes="consolidate_missing_target_slug"[:500],
+                         slug=slug, content_type=content_type,
+                         claude_session_id=session_id)
+            return {"success": False,
+                    "error": "consolidate action returned without target_slug",
+                    "content_type": content_type,
+                    "stream_log": stream["stream_log_path"],
+                    "tool_summary": stream["tool_summary"]}
+        note = f"consolidated into {target_slug}; {rationale}"[:500]
+        update_state(trigger, product, keyword, "done",
+                     notes=note, slug=slug,
+                     content_type=content_type,
+                     page_url=target_url or None,
+                     claude_session_id=session_id)
+        print(f"  [consolidate] {slug} -> {target_slug} ({rationale})")
+        return {"success": True,
+                "action": "consolidate",
+                "slug": slug,
+                "target_slug": target_slug,
+                "target_url": target_url,
+                "rationale": rationale,
                 "content_type": content_type,
                 "stream_log": stream["stream_log_path"],
                 "tool_summary": stream["tool_summary"]}
