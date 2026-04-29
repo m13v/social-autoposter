@@ -96,7 +96,7 @@ def main():
     line = (
         f"{timestamp} | {args.script} | "
         f"posted={args.posted} skipped={args.skipped} failed={args.failed}"
-        f"{replies_segment}{stats_segment} "
+        f"{replies_segment}{stats_segment}{salvaged_segment} "
         f"cost=${args.cost:.2f} elapsed={args.elapsed:.0f}s{model_suffix}{failure_segment}"
     )
 
