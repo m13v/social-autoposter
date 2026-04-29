@@ -544,6 +544,7 @@ if [ -s "$REPLY_SUMMARY_FILE" ]; then
     fi
 fi
 
+_COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "stats-step4" 2>/dev/null || echo "0.0000")
 python3 "$REPO_DIR/scripts/log_run.py" \
     --script "$SCRIPT_TAG" \
     --posted 0 \
@@ -555,7 +556,7 @@ python3 "$REPO_DIR/scripts/log_run.py" \
     --removed "$REMOVED" \
     --unavailable "$UNAVAILABLE" \
     --not-found "$NOT_FOUND" \
-    --cost 0 \
+    --cost "$_COST" \
     --elapsed "$RUN_ELAPSED"
 
 # Clean up old logs (keep last 7 days). Covers both new `stats-<platform>-*`
