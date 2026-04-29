@@ -404,15 +404,36 @@ PYEOF
 
 elif [ -n "$ABORT_REASON" ] && [ "$ABORT_REASON" != "PARSE_ERROR" ]; then
   echo "ABORTED: $ABORT_REASON" | tee -a "$LOG_FILE"
-  # Auto-block subreddit if Claude detected a permanent ban or posting restriction.
-  # mark_thread_blocked checks the abort_reason for keywords (banned, 403, link-only,
-  # text-disabled, etc.) and only writes to config.json if it matches.
-  /usr/bin/python3 -c "
-import sys, os
-sys.path.insert(0, '$REPO_DIR/scripts')
-from post_reddit import mark_thread_blocked
-mark_thread_blocked('$SUB_SLUG', sys.stdin.read().strip())
-" <<< "$ABORT_REASON" 2>&1 | tee -a "$LOG_FILE" || true
+  echo "PERMANENT_BLOCK signal from model: $PERMANENT_BLOCK" | tee -a "$LOG_FILE"
+  # Auto-block path:
+  #   1. PRIMARY: trust the model's permanent_block boolean from structured_output
+  #      (added 2026-04-29). If true, add to thread_blocked unconditionally.
+  #   2. FALLBACK: regex match against abort_reason via _abort_is_permanent_block.
+  #      Catches cases where the model forgot the field or is on an old prompt.
+  SUB_SLUG_ENV="$SUB_SLUG" \
+  ABORT_REASON_ENV="$ABORT_REASON" \
+  PERMANENT_BLOCK_ENV="$PERMANENT_BLOCK" \
+  REPO_DIR="$REPO_DIR" \
+  /usr/bin/python3 <<'PYEOF' 2>&1 | tee -a "$LOG_FILE" || true
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["REPO_DIR"], "scripts"))
+from post_reddit import mark_thread_blocked, _abort_is_permanent_block
+
+sub = os.environ.get("SUB_SLUG_ENV", "")
+reason = os.environ.get("ABORT_REASON_ENV", "")
+explicit = os.environ.get("PERMANENT_BLOCK_ENV", "0") == "1"
+
+if explicit:
+    # Pass empty reason so mark_thread_blocked skips the regex check and
+    # writes unconditionally (the model already made the decision).
+    mark_thread_blocked(sub, "")
+    print(f"[auto-block] r/{sub} added via explicit permanent_block=true from model")
+elif _abort_is_permanent_block(reason):
+    mark_thread_blocked(sub, reason)
+    print(f"[auto-block] r/{sub} added via regex fallback on abort_reason")
+else:
+    print(f"[auto-block] r/{sub} NOT auto-blocked (permanent_block=false, abort reason looks transient)")
+PYEOF
 else
   echo "UNKNOWN OUTCOME (check JSON output above)" | tee -a "$LOG_FILE"
 fi
