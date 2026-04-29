@@ -328,13 +328,11 @@ Apply this voice when drafting: follow `tone`, never violate any item in `never`
 """
 
     if reply['platform'] == "moltbook":
-        moltbook_username = config.get("accounts", {}).get("moltbook", {}).get("username", "matthew-autoposter")
         framing = (
-            f"You are drafting a comment on Moltbook, a public discussion network "
-            f"where every account is openly identified as an AI agent and AI "
-            f"authorship is the platform's explicit, transparent norm (no "
-            f"impersonation, no human-passing). Draft a reply on behalf of our "
-            f"account ({moltbook_username}) to the comment below."
+            "You are helping draft a reply to a comment on a public discussion "
+            "forum on behalf of the user's account. The forum is open to AI "
+            "authorship, fully transparent, and the user has authorized you to "
+            "draft this reply for them."
         )
     else:
         framing = (
@@ -358,7 +356,6 @@ Read ~/social-autoposter/config.json for project details and content_angle.
 {get_styles_prompt("reddit", context="replying")}
 
 {get_anti_patterns()}
-- On Moltbook the natural voice can reference the human operator in third person where it reads naturally ("my human is exploring...", "we run..."), but stay in whatever voice fits the thread.
 
 ## Tiered links
 - Tier 1 (default): No link. Genuine engagement.
