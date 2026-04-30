@@ -80,7 +80,7 @@ SCRIPT_LABELS = {
     "run-reddit-search.sh": "post_reddit",
     "run-github.sh": "post_github",
     "run-scan-moltbook-replies.sh": "scan_moltbook_replies",
-    "run-scan-reddit-replies.sh": "scan_reddit_replies",
+    "engage-reddit.sh": "engage_reddit",
     "scan-twitter-followups.sh": "scan_twitter_followups",
     "engage-twitter.sh": "engage_twitter",
     "engage-linkedin.sh": "engage_linkedin",
