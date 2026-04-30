@@ -122,10 +122,16 @@ echo "=== Top-Pages pipeline (cross-project): $TS ===" | tee -a "$LOG_FILE"
 
 # API-quota markers. Once any lane surfaces one of these, every remaining
 # lane would fail the same way and burn credits — short-circuit instead.
-# We also catch Claude session JSONL signals (rate_limit_event,
-# api_error_status:429, "hit your limit") because those never appear in the
-# shell .log, only in the per-product _stream.jsonl.
-QUOTA_MARKERS='monthly usage limit|rate.?limit|429 Too Many|insufficient_quota|rate_limit_event|"api_error_status":429|hit your limit'
+# We also catch Claude session JSONL signals (api_error_status:429,
+# "hit your limit", rate_limit_event with "status":"rejected") because those
+# never appear in the shell .log, only in the per-product _stream.jsonl.
+#
+# IMPORTANT 2026-04-29: do NOT match bare `rate_limit_event` or `rate.?limit`.
+# Claude streams a `rate_limit_event` object on every successful turn as a
+# heartbeat (`"status":"allowed"` / `"allowed_warning"`); those patterns trip
+# on healthy runs and short-circuit after lane #1. Only `"status":"rejected"`
+# signals an actual rejection.
+QUOTA_MARKERS='monthly usage limit|429 Too Many|insufficient_quota|"api_error_status":429|hit your limit|"status":"rejected"'
 QUOTA_HIT=0
 
 # _quota_check FILE [FILE ...] -> 0 if any quota marker is in any of the
@@ -353,21 +359,40 @@ PY
     PARSED=$(python3 - "$PROPOSAL_FILE" <<'PY'
 import json, sys
 raw = open(sys.argv[1]).read().strip()
+# Claude's --output-format json sometimes emits a valid JSON object followed
+# by trailing junk (whitespace/newlines/extra log fragments). raw_decode
+# consumes only the first complete top-level value and ignores the rest.
 try:
-    outer = json.loads(raw)
+    outer, _idx = json.JSONDecoder().raw_decode(raw)
 except Exception as e:
-    print(f"ERR parse_outer: {e}", file=sys.stderr); sys.exit(1)
+    # Fallback: try slicing from first { to matching }.
+    s = raw.find("{")
+    if s < 0:
+        print(f"ERR parse_outer: {e}", file=sys.stderr); sys.exit(1)
+    try:
+        outer, _idx = json.JSONDecoder().raw_decode(raw[s:])
+    except Exception as e2:
+        print(f"ERR parse_outer: {e2}", file=sys.stderr); sys.exit(1)
 if outer.get("is_error"):
     print(f"ERR claude: {outer.get('result','unknown')}", file=sys.stderr); sys.exit(1)
 result_str = outer.get("result") if isinstance(outer.get("result"), str) else None
 blob = result_str if result_str else json.dumps(outer)
-start = blob.find("{"); end = blob.rfind("}") + 1
-if start < 0 or end <= start:
-    print("ERR no_json_object", file=sys.stderr); sys.exit(1)
+# Try strict first-object parse on the inner blob too.
+inner = None
 try:
-    inner = json.loads(blob[start:end])
-except Exception as e:
-    print(f"ERR parse_inner: {e}", file=sys.stderr); sys.exit(1)
+    s = blob.find("{")
+    if s >= 0:
+        inner, _ = json.JSONDecoder().raw_decode(blob[s:])
+except Exception:
+    inner = None
+if inner is None:
+    start = blob.find("{"); end = blob.rfind("}") + 1
+    if start < 0 or end <= start:
+        print("ERR no_json_object", file=sys.stderr); sys.exit(1)
+    try:
+        inner = json.loads(blob[start:end])
+    except Exception as e:
+        print(f"ERR parse_inner: {e}", file=sys.stderr); sys.exit(1)
 kw = (inner.get("keyword") or "").strip()
 slug = (inner.get("slug") or "").strip()
 concept = (inner.get("concept") or "").strip()
