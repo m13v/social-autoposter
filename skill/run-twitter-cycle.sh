@@ -352,6 +352,7 @@ STYLES_BLOCK=$(generate_styles_block twitter posting)
 # brief wait here doesn't invalidate the candidate scoring.
 log "Re-acquiring twitter-browser lock for Phase 2b posting..."
 acquire_lock "twitter-browser" 3600
+ensure_browser_healthy "twitter"
 
 log "Phase 2b: Claude reviewing top candidates and posting up to $POST_LIMIT..."
 
