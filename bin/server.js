@@ -1015,6 +1015,35 @@ async function enrichSeoRuns(runs) {
         run.details = [];
       }
     }
+    // Overwrite per-row cost_usd from claude_sessions where we have a
+    // session_id. The stream JSONL's result.total_cost_usd only sums the
+    // orchestrator's own turns and excludes Task subagent token costs, so it
+    // can undercount by 5x+. The DB ingester sums the full session, matching
+    // what's already shown in the run-level total cost.
+    const sessionIds = [];
+    for (const run of seoRuns) {
+      for (const d of run.details || []) {
+        if (d.session_id) sessionIds.push(d.session_id);
+      }
+    }
+    if (sessionIds.length) {
+      const rows = await pq(
+        'SELECT session_id, total_cost_usd FROM claude_sessions WHERE session_id = ANY($1::uuid[])',
+        [sessionIds]
+      );
+      if (rows && rows.length) {
+        const costBySession = new Map(
+          rows.map(r => [String(r.session_id), Number(r.total_cost_usd)])
+        );
+        for (const run of seoRuns) {
+          for (const d of run.details || []) {
+            if (!d.session_id) continue;
+            const dbCost = costBySession.get(String(d.session_id));
+            if (Number.isFinite(dbCost)) d.cost_usd = dbCost;
+          }
+        }
+      }
+    }
   }
 
   // DB-backed enrichers for the SEO jobs whose per-product state lives in
