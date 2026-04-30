@@ -3148,7 +3148,10 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
     # punted on the actual datum. Don't be a dead end.
     keyword_for_gate = (keyword or "").strip()
     for gate_name, gate_fn in (
-        ("dead_urls", lambda repo, files: verify_dead_urls(repo, files)),
+        # dead_urls: first pass with cleanup=False so we can hand the list
+        # back to Claude for a fix-up attempt before reverting.
+        ("dead_urls", lambda repo, files: verify_dead_urls(
+            repo, files, cleanup=False)),
         ("time_sensitive",
          lambda repo, files: verify_time_sensitive_claims(repo, files)),
         ("factual_claims",
@@ -3160,6 +3163,56 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
         gate_result = gate_fn(repo_path, expected_file_candidates)
         if gate_result.get("ok"):
             continue
+
+        # dead_urls fixup: resume the Claude session with the list of dead
+        # URLs so it can replace or remove them, then re-run the gate once.
+        # Only attempt when we have a session to resume and there is at least
+        # one dead URL to report. Any other gate failure falls straight through
+        # to the revert-and-pending path below.
+        if gate_name == "dead_urls" and session_id:
+            dead = gate_result.get("dead_urls", [])
+            if dead:
+                dead_list = "\n".join(
+                    f"  - {d['url']} ({d['error']}) in "
+                    f"{', '.join(d.get('files', []))}"
+                    for d in dead[:10]
+                )
+                fixup_prompt = (
+                    f"The fact-gate found {len(dead)} dead URL(s) in the page "
+                    "you just wrote. These URLs must not be published.\n\n"
+                    f"Dead URLs:\n{dead_list}\n\n"
+                    "For each dead URL:\n"
+                    "1. Placeholder (your-*, example.com, localhost, "
+                    "127.0.0.1, etc.) -- remove the link entirely.\n"
+                    "2. Real but wrong path -- find the correct URL via "
+                    "WebSearch and replace it.\n"
+                    "3. No valid replacement exists -- remove the link.\n\n"
+                    "After fixing every dead URL, run:\n"
+                    "  git add -A && git commit --amend --no-edit && "
+                    "git push --force-with-lease\n"
+                    "Then verify with `git log -1 --oneline`. "
+                    "As your FINAL message output exactly one JSON line:\n"
+                    '`{"success": true, "slug": "' + (slug or "") + '", '
+                    '"page_url": "..."}` on success, or '
+                    '`{"success": false, "error": "..."}` if you cannot fix '
+                    "all dead URLs. Budget: <=15 tool calls."
+                )
+                retry_log_dir = Path(stream["stream_log_path"]).parent
+                try:
+                    run_claude_stream_resume(
+                        session_id, fixup_prompt, cwd=repo_path,
+                        log_dir=retry_log_dir, slug=(slug or ""),
+                        timeout=600,
+                    )
+                except Exception:
+                    pass  # best-effort; fall through to re-gate
+            # Re-run dead_urls gate -- this time with cleanup so any remaining
+            # bad files are reverted before we potentially fail out.
+            gate_result = verify_dead_urls(
+                repo_path, expected_file_candidates, cleanup=True)
+            if gate_result.get("ok"):
+                continue  # fixup worked; advance to the next gate
+
         gate_err = gate_result.get("error", "")[:800]
         cleaned = gate_result.get("cleaned", [])
         note = f"{gate_name}_failed; cleaned={cleaned}; {gate_err}"[:500]
