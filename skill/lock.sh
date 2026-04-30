@@ -129,6 +129,58 @@ acquire_lock() {
   fi
 }
 
+# Probe + recover a wedged platform browser. Call ONLY after acquire_lock
+# "<platform>-browser" — the lock holder has exclusive access to the profile,
+# so killing live MCP/Chrome here is safe (peers cannot race us). The 2026-04-25
+# stats-mid-API SIGTERM and 2026-04-28 GPU exit_code=15 regressions both came
+# from peers killing the holder's processes; this is the inverse and is safe
+# by construction.
+#
+# Detection: find the Chrome whose --user-data-dir matches this platform's
+# profile, extract its --remote-debugging-port, GET /json/version with a 2s
+# timeout. If port is missing, Chrome isn't there, or HTTP fails, the MCP
+# is wedged or absent.
+#
+# Recovery: SIGTERM (then SIGKILL) any Chrome on the profile + any MCP wrapper
+# matching <platform>-agent.json, regardless of ppid. Remove SingletonLock so
+# the next caller can launch_persistent_context cleanly. The next claude -p /
+# twitter_browser.py / reddit_browser.py invocation cold-starts a fresh MCP.
+ensure_browser_healthy() {
+  local platform="$1"
+  local profile_dir="$HOME/.claude/browser-profiles/$platform"
+
+  # 1. Find Chrome on this profile, extract its remote-debugging-port.
+  local cdp_port
+  cdp_port=$(ps -A -o command= 2>/dev/null \
+    | awk -v p="user-data-dir=$profile_dir" 'index($0,p)>0 {
+        if (match($0, /remote-debugging-port=[0-9]+/)) {
+          print substr($0, RSTART+22, RLENGTH-22); exit
+        }
+      }')
+
+  # 2. Probe CDP. Healthy → return immediately.
+  if [ -n "$cdp_port" ] \
+     && curl -fsS --max-time 2 "http://localhost:${cdp_port}/json/version" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # 3. Wedged or absent. Kill live MCP + Chrome on this profile (we hold the
+  # lock, so this is exclusive). Lazy kill: SIGTERM, brief grace, SIGKILL.
+  echo "[ensure_browser_healthy] ${platform} CDP unreachable (port=${cdp_port:-none}); restarting MCP+Chrome"
+  pkill -TERM -f "${platform}-agent.json"          2>/dev/null || true
+  pkill -TERM -f "user-data-dir=${profile_dir}"    2>/dev/null || true
+  sleep 1
+  pkill -KILL -f "${platform}-agent.json"          2>/dev/null || true
+  pkill -KILL -f "user-data-dir=${profile_dir}"    2>/dev/null || true
+
+  # 4. Clear singletons so launch_persistent_context can start fresh.
+  rm -f "$profile_dir/SingletonLock" \
+        "$profile_dir/SingletonCookie" \
+        "$profile_dir/SingletonSocket" 2>/dev/null || true
+
+  return 0
+}
+
 # Explicit early release. Use this when a long-running script only needs the
 # browser for part of its run (e.g. run-twitter-cycle.sh holds the lock for
 # Phase 1 scrape, releases during the 5-min T1 sleep + Phase 2a HTTP poll, then
