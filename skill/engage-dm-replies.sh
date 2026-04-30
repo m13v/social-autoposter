@@ -1213,7 +1213,8 @@ if ! $NEEDS_CLAUDE && { [ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ]; }; t
     # frozen at "running LinkedIn live sidebar pre-check..." — exactly
     # the silent-failure mode we're trying to debug. Capture exit code
     # via the `&& a || b` idiom so failure stays local to the gate.
-    LI_PRECHECK=$(PYTHONPATH="$HOME/Library/Python/3.9/lib/python/site-packages" \
+    LI_PRECHECK=$(SOCIAL_AUTOPOSTER_LINKEDIN_PRECHECK=1 \
+        PYTHONPATH="$HOME/Library/Python/3.9/lib/python/site-packages" \
         /usr/bin/python3 "$REPO_DIR/scripts/linkedin_browser.py" unread-dms 2>"$LI_PRECHECK_STDERR") \
         && LI_EXIT=0 || LI_EXIT=$?
     LI_OK=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('ok'))" 2>/dev/null)
