@@ -860,6 +860,195 @@ def backfill_urls(conn, platform, records):
           f"invalid={stats['skipped_invalid']} ambiguous={stats['ambiguous']}")
 
 
+def _parse_sidebar_time_seconds(t):
+    """Parse X DM sidebar relative time string to seconds.
+
+    Examples: "5m" -> 300, "2h" -> 7200, "1d" -> 86400, "3w" -> 1814400,
+    "Just now" -> 30. Returns None when the string is unrecognized.
+    """
+    if not t:
+        return None
+    s = t.strip().lower()
+    if s in ("just now", "active now", "now", "0m", "0s"):
+        return 30
+    m = re.match(r"^(\d+)\s*([smhdw])$", s)
+    if not m:
+        return None
+    n = int(m.group(1))
+    unit = m.group(2)
+    return n * {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[unit]
+
+
+def filter_inbox(conn, platform, records):
+    """Filter a sidebar scan down to threads that need inspection.
+
+    Combines two signals to drop threads we have no business opening:
+
+      1. Sidebar visual cues from the scanner (`is_from_us`, `has_unread`).
+      2. DB-backed cross-check: if our last outbound message_at is inside
+         the sidebar's reported activity window, our reply IS the latest
+         message in the thread, so there's nothing new to read.
+
+    Skip rules:
+      - is_from_us=true                          (definitive: we sent last)
+      - has_unread=false AND outbound_age <= sidebar_seconds + buffer
+        AND last_inbound <= last_outbound        (DB confirms we replied last)
+      - conversation_status in (needs_human, closed)
+      - chat_url is unparseable
+
+    Always inspect:
+      - has_unread=true                          (X marks the row unread)
+      - no DM row exists                         (brand-new contact)
+      - sidebar timestamp unparseable + no clear DB signal (be conservative)
+
+    Output: emits a JSON array on stdout containing only records that
+    survived the filter. Each survivor is enriched with `_filter_reason`
+    and `_dm_id`. Counts are logged to stderr.
+    """
+    norm_platform = "x" if platform in ("twitter", "x") else platform
+
+    keep = []
+    counters = {
+        "kept_unread": 0,
+        "kept_no_db_row": 0,
+        "kept_ambiguous": 0,
+        "skip_is_from_us": 0,
+        "skip_we_replied_after": 0,
+        "skip_needs_human": 0,
+        "skip_closed": 0,
+        "skip_invalid_url": 0,
+    }
+
+    for rec in records:
+        chat_url_raw = rec.get("chat_url") or rec.get("thread_url") or ""
+        author = (rec.get("handle") or rec.get("author") or "").strip()
+        chat_url = _valid_chat_url(norm_platform, chat_url_raw)
+
+        if not chat_url:
+            counters["skip_invalid_url"] += 1
+            continue
+
+        # Sidebar signals (some scanners may not emit `has_unread` yet)
+        is_from_us = bool(rec.get("is_from_us"))
+        has_unread = rec.get("has_unread", None)
+        sidebar_time = rec.get("time")
+        sidebar_seconds = _parse_sidebar_time_seconds(sidebar_time)
+
+        # Hard skip: sidebar shows we sent last
+        if is_from_us:
+            counters["skip_is_from_us"] += 1
+            continue
+
+        # Look up the DM row (chat_url first, fall back to author)
+        row = None
+        if chat_url:
+            row = conn.execute(
+                "SELECT id, conversation_status FROM dms "
+                "WHERE platform = %s AND chat_url = %s "
+                "ORDER BY last_message_at DESC NULLS LAST LIMIT 1",
+                (norm_platform, chat_url),
+            ).fetchone()
+        if row is None and author:
+            row = conn.execute(
+                "SELECT id, conversation_status FROM dms "
+                "WHERE platform = %s AND LOWER(their_author) = LOWER(%s) "
+                "ORDER BY last_message_at DESC NULLS LAST LIMIT 1",
+                (norm_platform, author),
+            ).fetchone()
+
+        if row is None:
+            # Brand new contact: definitely inspect.
+            keep.append({**rec, "_filter_reason": "no_db_row", "_dm_id": None})
+            counters["kept_no_db_row"] += 1
+            continue
+
+        dm_id = row["id"]
+        status = row.get("conversation_status") or "active"
+
+        # Skip already-escalated or explicitly closed convos
+        if status == "needs_human":
+            counters["skip_needs_human"] += 1
+            continue
+        if status == "closed":
+            counters["skip_closed"] += 1
+            continue
+
+        # If sidebar visually marks the thread unread, trust it: inspect.
+        if has_unread is True:
+            keep.append({**rec, "_filter_reason": "sidebar_unread", "_dm_id": dm_id})
+            counters["kept_unread"] += 1
+            continue
+
+        # DB-backed short-circuit: pull last outbound and last inbound.
+        # If our outbound timestamp is inside the sidebar's activity window
+        # AND we have no inbound newer than that outbound, our reply IS
+        # the sidebar's latest message; nothing new for us to read.
+        msg_row = conn.execute(
+            """
+            SELECT
+                MAX(message_at) FILTER (WHERE direction = 'outbound') AS last_outbound_at,
+                MAX(message_at) FILTER (WHERE direction = 'inbound')  AS last_inbound_at
+            FROM dm_messages
+            WHERE dm_id = %s
+            """,
+            (dm_id,),
+        ).fetchone()
+
+        last_outbound_at = msg_row["last_outbound_at"] if msg_row else None
+        last_inbound_at = msg_row["last_inbound_at"] if msg_row else None
+
+        if last_outbound_at and sidebar_seconds is not None:
+            # Buffer accounts for X's bucketed times (e.g. "13m" can mean
+            # anywhere in [13m, 14m)) and DB clock skew.
+            buffer_seconds = max(120, int(sidebar_seconds * 0.25))
+            window_seconds = sidebar_seconds + buffer_seconds
+
+            cmp = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM (NOW() - %s::timestamptz))::bigint "
+                "AS outbound_age_seconds",
+                (last_outbound_at,),
+            ).fetchone()
+            outbound_age = int(cmp["outbound_age_seconds"]) if cmp else None
+
+            inbound_is_newer = (
+                last_inbound_at is not None and last_inbound_at > last_outbound_at
+            )
+
+            if (
+                outbound_age is not None
+                and outbound_age <= window_seconds
+                and not inbound_is_newer
+            ):
+                counters["skip_we_replied_after"] += 1
+                continue
+
+        # Sidebar timestamp unparseable, or our outbound is older than the
+        # sidebar window: there's likely a fresh inbound. Inspect.
+        keep.append({
+            **rec,
+            "_filter_reason": "outbound_older_than_window",
+            "_dm_id": dm_id,
+        })
+        counters["kept_ambiguous"] += 1
+
+    total_in = len(records)
+    total_keep = len(keep)
+    print(
+        f"  filter-inbox [{norm_platform}]: in={total_in} kept={total_keep} "
+        f"(unread={counters['kept_unread']}, "
+        f"no_db_row={counters['kept_no_db_row']}, "
+        f"ambiguous={counters['kept_ambiguous']}) "
+        f"skipped={total_in - total_keep} "
+        f"(is_from_us={counters['skip_is_from_us']}, "
+        f"we_replied_after={counters['skip_we_replied_after']}, "
+        f"needs_human={counters['skip_needs_human']}, "
+        f"closed={counters['skip_closed']}, "
+        f"invalid_url={counters['skip_invalid_url']})",
+        file=sys.stderr,
+    )
+    print(json.dumps(keep, default=str))
+
+
 def set_tier(conn, dm_id, tier):
     conn.execute(
         """
@@ -1048,6 +1237,17 @@ def main():
     p_backfill.add_argument("--file", default=None,
         help="Path to JSON file. If omitted, reads from stdin.")
 
+    p_filter = sub.add_parser("filter-inbox",
+        help=("Filter a sidebar scan dump down to threads that need inspection. "
+              "Combines sidebar signals (is_from_us, has_unread, time) with the "
+              "DB's last outbound message_at to drop threads where we already "
+              "sent the most recent message. "
+              "Input: JSON array on stdin or --file. "
+              "Output: filtered JSON array on stdout, summary on stderr."))
+    p_filter.add_argument("--platform", required=True, choices=["reddit", "linkedin", "x", "twitter"])
+    p_filter.add_argument("--file", default=None,
+        help="Path to JSON file. If omitted, reads from stdin.")
+
     p_tier = sub.add_parser("set-tier", help="Set conversation tier")
     p_tier.add_argument("--dm-id", type=int, required=True)
     p_tier.add_argument("--tier", type=int, required=True, choices=[1, 2, 3])
@@ -1161,6 +1361,26 @@ def main():
             print("ERROR: expected a JSON array of {author, chat_url} records", file=sys.stderr)
             sys.exit(2)
         backfill_urls(conn, args.platform, records)
+    elif args.command == "filter-inbox":
+        raw = open(args.file).read() if args.file else sys.stdin.read()
+        try:
+            records = json.loads(raw)
+        except Exception as e:
+            print(f"ERROR: could not parse JSON input: {e}", file=sys.stderr)
+            sys.exit(2)
+        if isinstance(records, dict):
+            for k in ("conversations", "threads", "dms", "items"):
+                if k in records and isinstance(records[k], list):
+                    records = records[k]
+                    break
+            else:
+                # Some scanners wrap a single thread; treat as 0 records, not an error.
+                if records.get("ok") is False:
+                    records = []
+        if not isinstance(records, list):
+            print("ERROR: expected a JSON array of thread records", file=sys.stderr)
+            sys.exit(2)
+        filter_inbox(conn, args.platform, records)
     elif args.command == "set-tier":
         set_tier(conn, args.dm_id, args.tier)
     elif args.command == "set-status":
