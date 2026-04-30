@@ -70,7 +70,7 @@ LIGHT_PAIRS: dict[str, str] = {
     "text-stone-300": "text-stone-700",
     "text-stone-400": "text-stone-600",
 
-    # Borders
+    # Borders (dark-only neutrals)
     "border-zinc-800": "border-zinc-200",
     "border-zinc-700": "border-zinc-300",
     "border-zinc-900": "border-zinc-200",
@@ -80,23 +80,21 @@ LIGHT_PAIRS: dict[str, str] = {
     "border-neutral-700": "border-neutral-300",
     "border-gray-800": "border-gray-200",
     "border-gray-700": "border-gray-300",
-    "border-black": "border-zinc-900",
 
-    # Rings
+    # Rings (dark-only neutrals)
     "ring-zinc-800": "ring-zinc-200",
     "ring-zinc-700": "ring-zinc-300",
     "ring-slate-800": "ring-slate-200",
     "ring-neutral-800": "ring-neutral-200",
     "ring-gray-800": "ring-gray-200",
 
-    # Divide
+    # Divide (dark-only neutrals)
     "divide-zinc-800": "divide-zinc-200",
     "divide-slate-800": "divide-slate-200",
     "divide-neutral-800": "divide-neutral-200",
     "divide-gray-800": "divide-gray-200",
-    "divide-white": "divide-zinc-900",
 
-    # Gradient stops (decorative, generally fine to invert)
+    # Gradient stops - only the obviously-dark direction
     "from-zinc-950": "from-zinc-50",
     "from-zinc-900": "from-zinc-50",
     "from-zinc-800": "from-zinc-100",
@@ -107,7 +105,6 @@ LIGHT_PAIRS: dict[str, str] = {
     "from-gray-950": "from-gray-50",
     "from-gray-900": "from-gray-50",
     "from-black": "from-white",
-    "from-white": "from-zinc-900",
     "to-zinc-950": "to-zinc-50",
     "to-zinc-900": "to-zinc-50",
     "to-zinc-800": "to-zinc-100",
@@ -118,29 +115,12 @@ LIGHT_PAIRS: dict[str, str] = {
     "to-gray-950": "to-gray-50",
     "to-gray-900": "to-gray-50",
     "to-black": "to-white",
-    "to-white": "to-zinc-900",
     "via-zinc-900": "via-zinc-100",
     "via-zinc-800": "via-zinc-200",
     "via-slate-900": "via-slate-100",
     "via-neutral-900": "via-neutral-100",
     "via-gray-900": "via-gray-100",
     "via-black": "via-white",
-
-    # Placeholder text (placeholder shown over inputs)
-    "placeholder-white": "placeholder-zinc-400",
-    "placeholder-zinc-400": "placeholder-zinc-500",
-    "placeholder-zinc-500": "placeholder-zinc-400",
-    # Note: placeholder-zinc-500 is mid; flip it for clarity in light mode
-
-    # Outline
-    "outline-white": "outline-zinc-900",
-
-    # Caret / selection
-    "caret-white": "caret-zinc-900",
-    "decoration-white": "decoration-zinc-900",
-
-    # Shadow (decorative; soften on light bg)
-    "shadow-black": "shadow-zinc-900",
 }
 
 
@@ -148,34 +128,19 @@ LIGHT_PAIRS: dict[str, str] = {
 # When matched, the generated light replacement uses the same modifier on a
 # darkened base so the visual weight is preserved (white/10 -> black/10).
 ALPHA_FLIPS: dict[str, str] = {
-    # bg
+    # Only `-white` direction. Translucent white = subtle highlight on dark bg;
+    # on a light page it's invisible, so flip to `-black` (subtle shadow).
+    # Translucent black is already light-friendly, leave alone.
     "bg-white": "bg-black",
-    "bg-black": "bg-white",
-    # border
     "border-white": "border-black",
-    "border-black": "border-white",
-    # text
     "text-white": "text-black",
-    "text-black": "text-white",
-    # ring
     "ring-white": "ring-black",
-    "ring-black": "ring-white",
-    # divide
     "divide-white": "divide-black",
-    "divide-black": "divide-white",
-    # outline
     "outline-white": "outline-black",
-    "outline-black": "outline-white",
-    # shadow
     "shadow-white": "shadow-black",
-    "shadow-black": "shadow-white",
-    # gradient-stops with alpha
     "from-white": "from-black",
-    "from-black": "from-white",
     "to-white": "to-black",
-    "to-black": "to-white",
     "via-white": "via-black",
-    "via-black": "via-white",
 }
 
 
