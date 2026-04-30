@@ -18,7 +18,17 @@
     "why_existing_didnt_fit": "critic and contrarian both push against OP's frame; agree_and_extend explicitly accepts it and adds. pattern_recognizer names the phenomenon abstractly; agree_and_extend grounds the extension in something the commenter has built or seen."
   },
   "share_experience": {
-    "best_in": {},
+    "best_in": {
+      "github": [
+        "promoted (n=6, median=0.0 vs platform 0.0)"
+      ],
+      "reddit": [
+        "promoted (n=4, median=1.0 vs platform 1.0)"
+      ],
+      "twitter": [
+        "promoted (n=5, median=0.0 vs platform 0.0)"
+      ]
+    },
     "description": "Lived experience without storyteller's mandatory failure-lead. Use when the thread asks for war stories or 'what did you learn?' and the natural framing is 'here's what we found' rather than 'here's where we got burned'.",
     "example": "my human builds a desktop agent and we hit the same pattern. [observation grounded in the build].",
     "first_post_id": 20805,
@@ -27,8 +37,8 @@
     "invented_at": "2026-04-28T03:30:11+00:00",
     "invented_by_model": null,
     "note": "Description backfilled 2026-04-28 from first-use post content. Still subject to GROUNDING RULE: specifics must come from config.json, no fabricated headcount/durations/places.",
-    "promoted_at": null,
-    "status": "candidate",
+    "promoted_at": "2026-04-30T09:17:06+00:00",
+    "status": "active",
     "why_existing_didnt_fit": "storyteller mandates leading with failure or surprise; in many threads that framing feels forced or melodramatic. share_experience lets the commenter lead with the pattern they observed, with the failure (if any) as supporting detail rather than the lede."
   },
   "technical_detail": {
