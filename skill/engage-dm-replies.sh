@@ -1207,21 +1207,48 @@ done
 if ! $NEEDS_CLAUDE && { [ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ]; }; then
     log "[gate] DB says nothing pending; running LinkedIn live sidebar pre-check..."
     LI_PRECHECK_STDERR="/tmp/li_precheck_stderr.$$"
-    # `set -e` is on for this script; a non-zero exit from the helper
-    # (e.g. session_invalid → exit 1) inside `$(...)` would terminate the
-    # whole shell before any of the logging below runs, leaving the log
-    # frozen at "running LinkedIn live sidebar pre-check..." — exactly
-    # the silent-failure mode we're trying to debug. Capture exit code
-    # via the `&& a || b` idiom so failure stays local to the gate.
+    LI_PRECHECK_PARSED="/tmp/li_precheck_parsed.$$"
+    # `set -e` + `set -o pipefail` is on. Three things matter:
+    #   1. Caller env var: the helper now requires
+    #      SOCIAL_AUTOPOSTER_LINKEDIN_PRECHECK=1 (added to stop wandering
+    #      Claude planners from smoke-testing it and racing the profile).
+    #   2. Capture helper exit code via `&& a || b` so a non-zero exit
+    #      doesn't trip set -e.
+    #   3. Parse the JSON in a SINGLE python invocation that tolerates
+    #      empty/whitespace input (json.loads on `\n` from echo crashes,
+    #      tripping pipefail+set -e and silently killing the script — the
+    #      bug that hid behind every prior "log frozen at precheck" run).
     LI_PRECHECK=$(SOCIAL_AUTOPOSTER_LINKEDIN_PRECHECK=1 \
         PYTHONPATH="$HOME/Library/Python/3.9/lib/python/site-packages" \
         /usr/bin/python3 "$REPO_DIR/scripts/linkedin_browser.py" unread-dms 2>"$LI_PRECHECK_STDERR") \
         && LI_EXIT=0 || LI_EXIT=$?
-    LI_OK=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('ok'))" 2>/dev/null)
-    LI_UNREAD=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('unread_count', 0))" 2>/dev/null)
-    LI_TOTAL=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('total_threads', 0))" 2>/dev/null)
-    LI_FIRST_PARTNER=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); t=d.get('threads') or [{}]; print((t[0] or {}).get('partner',''))" 2>/dev/null)
-    LI_ERROR=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('error',''))" 2>/dev/null)
+    LI_OK="" LI_UNREAD="" LI_TOTAL="" LI_FIRST_PARTNER="" LI_ERROR=""
+    /usr/bin/python3 - "$LI_PRECHECK_PARSED" "$LI_PRECHECK" << 'PYEOF' || true
+import json, shlex, sys
+out_path = sys.argv[1]
+raw = (sys.argv[2] if len(sys.argv) > 2 else "").strip()
+try:
+    d = json.loads(raw) if raw else {}
+except Exception:
+    d = {}
+threads = d.get("threads") or []
+first = (threads[0] if threads else {}) or {}
+fields = {
+    "LI_OK": d.get("ok"),
+    "LI_UNREAD": d.get("unread_count", 0),
+    "LI_TOTAL": d.get("total_threads", 0),
+    "LI_FIRST_PARTNER": first.get("partner", ""),
+    "LI_ERROR": d.get("error", ""),
+}
+with open(out_path, "w") as f:
+    for k, v in fields.items():
+        f.write(f"{k}={shlex.quote(str(v) if v is not None else '')}\n")
+PYEOF
+    if [ -s "$LI_PRECHECK_PARSED" ]; then
+        # shellcheck disable=SC1090
+        source "$LI_PRECHECK_PARSED"
+    fi
+    rm -f "$LI_PRECHECK_PARSED"
     log "[gate] linkedin precheck: exit=$LI_EXIT ok=$LI_OK total=$LI_TOTAL unread=$LI_UNREAD first_partner='${LI_FIRST_PARTNER}' error='${LI_ERROR}'"
     if [ -s "$LI_PRECHECK_STDERR" ]; then
         log "[gate] linkedin precheck stderr (first 20 lines):"
