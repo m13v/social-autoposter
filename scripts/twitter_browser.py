@@ -26,6 +26,7 @@ to reuse the existing logged-in session.
 import atexit
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -50,6 +51,61 @@ if not DM_PASSCODE:
                 if line.startswith("TWITTER_DM_PASSCODE="):
                     DM_PASSCODE = line.strip().split("=", 1)[1]
                     break
+
+
+def _load_active_twitter_campaigns():
+    """Best-effort loader for active Twitter campaigns with literal suffixes.
+
+    Returns [(id, suffix, sample_rate), ...]. On any failure (no DB, missing
+    module, etc.) returns []. This keeps twitter_browser.py usable in non-DB
+    contexts (e.g. ad-hoc invocations from a shell). Mirrors the
+    `_load_active_reddit_campaigns_for_dm` helper in reddit_browser.py.
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import db as _db
+        _db.load_env()
+        conn = _db.get_conn()
+        try:
+            cur = conn.execute(
+                """SELECT id, suffix, COALESCE(sample_rate, 1.000)
+                   FROM campaigns
+                   WHERE status='active'
+                     AND (',' || platforms || ',') LIKE '%,twitter,%'
+                     AND max_posts_total IS NOT NULL
+                     AND posts_made < max_posts_total
+                     AND suffix IS NOT NULL AND suffix <> ''
+                   ORDER BY id"""
+            )
+            return [(r[0], r[1], float(r[2])) for r in cur.fetchall()]
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[twitter_browser] _load_active_twitter_campaigns failed: {e}",
+              file=sys.stderr)
+        return []
+
+
+def _log_twitter_dm_outbound(dm_id, content):
+    """After a verified send, log via dm_conversation.py log-outbound so the
+    suffix-detection path attributes the message to the active campaign and
+    advances the counter. Best-effort; failures are non-fatal."""
+    if not dm_id:
+        return False
+    try:
+        subprocess.run(
+            ["python3",
+             os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "dm_conversation.py"),
+             "log-outbound", "--dm-id", str(dm_id),
+             "--content", content, "--verified"],
+            capture_output=True, text=True, timeout=20,
+        )
+        return True
+    except Exception as e:
+        print(f"[twitter_browser] internal log-outbound failed: {e}",
+              file=sys.stderr)
+        return False
 
 
 def find_twitter_cdp_port():
@@ -340,14 +396,32 @@ def _collect_our_reply_links(page):
     }}"""))
 
 
-def reply_to_tweet(tweet_url, text):
+def reply_to_tweet(tweet_url, text, apply_campaigns=True):
     """Reply to a tweet.
 
     Navigates to the tweet, clicks the reply box, types the reply, and submits.
 
-    Returns: {"ok": true, "tweet_url": "...", "reply_url": "..."} or {"ok": false, "error": "..."}
+    Active Twitter campaigns with a `suffix` are applied at this tool layer:
+    the suffix is appended to `text` (per `sample_rate` coin flip per campaign)
+    before typing, so the literal text is guaranteed to land. Caller opts out
+    via `apply_campaigns=False` (used by the self-reply path so the project URL
+    follow-up doesn't carry the campaign tag).
+
+    Returns: {"ok": true, "tweet_url": "...", "reply_url": "...",
+              "applied_campaigns": [...], "final_text": "..."}
+              or {"ok": false, "error": "..."}
     """
     print(f"[twitter_browser] reply_to_tweet called: {tweet_url}", file=sys.stderr)
+
+    applied_campaigns = []
+    if apply_campaigns:
+        for cid, suffix, sample_rate in _load_active_twitter_campaigns():
+            if random.random() < sample_rate:
+                text = text + suffix
+                applied_campaigns.append(cid)
+        print(f"[reply_to_tweet] applied_campaigns={applied_campaigns} text_len={len(text)}",
+              file=sys.stderr)
+
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
@@ -498,6 +572,8 @@ def reply_to_tweet(tweet_url, text):
                 "tweet_url": tweet_url,
                 "reply_url": reply_url,
                 "verified": verified,
+                "applied_campaigns": applied_campaigns,
+                "final_text": text,
             }
 
         finally:
@@ -935,14 +1011,32 @@ def read_conversation(thread_url, max_messages=20):
                 browser.close()
 
 
-def send_dm(thread_url, message):
+def send_dm(thread_url, message, dm_id=None):
     """Send a message in a Twitter/X DM conversation.
 
     Navigates to the thread URL, types the message in the compose box,
     and sends it.
 
-    Returns: {"ok": true, "thread_url": "..."} or {"ok": false, "error": "..."}
+    Active Twitter campaigns with a `suffix` are applied at this tool layer:
+    the suffix is appended to `message` (per `sample_rate` coin flip per
+    campaign) before typing, so the literal text is guaranteed to be
+    delivered. After a verified send, logs via dm_conversation.py log-outbound
+    so the campaign counter advances automatically (the CLI auto-detects the
+    suffix in stored content). `dm_id` is required for the auto-log; without
+    it the suffix still applies but counter attribution is skipped.
+
+    Returns: {"ok": true, "thread_url": "...", "verified": true,
+              "applied_campaigns": [...], "message_sent": "..."}
+              or {"ok": false, "error": "..."}
     """
+    applied_campaigns = []
+    for cid, suffix, sample_rate in _load_active_twitter_campaigns():
+        if random.random() < sample_rate:
+            message = message + suffix
+            applied_campaigns.append(cid)
+    print(f"[send_dm] applied_campaigns={applied_campaigns} message_len={len(message)} dm_id={dm_id}",
+          file=sys.stderr)
+
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
@@ -1011,11 +1105,16 @@ def send_dm(thread_url, message):
                 return text.includes(msgStart);
             }""", msg_start)
 
+            if verified and dm_id is not None:
+                _log_twitter_dm_outbound(dm_id, message)
+
             return {
                 "ok": verified,
                 "thread_url": page.url,
                 "verified": verified,
                 "error": None if verified else "send_unverified_no_dom_confirmation",
+                "applied_campaigns": applied_campaigns,
+                "message_sent": message,
             }
 
         finally:
@@ -1375,7 +1474,9 @@ def main():
             final = stripped
         else:
             final = f"{stripped} {project_url}"
-        result = reply_to_tweet(our_url, final)
+        # Self-reply opts out of the campaign suffix: this turn is the
+        # project-URL follow-up, not the primary post that gets tagged.
+        result = reply_to_tweet(our_url, final, apply_campaigns=False)
         result["final_text"] = final
         print(json.dumps(result, indent=2))
 
@@ -1396,11 +1497,18 @@ def main():
     elif cmd == "send-dm":
         if len(sys.argv) < 4:
             print(
-                "Usage: twitter_browser.py send-dm <thread_url> <message>",
+                "Usage: twitter_browser.py send-dm <thread_url> <message> [dm_id]",
                 file=sys.stderr,
             )
             sys.exit(1)
-        result = send_dm(sys.argv[2], sys.argv[3])
+        dm_id_arg = None
+        if len(sys.argv) >= 5 and sys.argv[4].strip():
+            try:
+                dm_id_arg = int(sys.argv[4])
+            except ValueError:
+                print(f"send-dm: dm_id must be int, got {sys.argv[4]!r}", file=sys.stderr)
+                sys.exit(1)
+        result = send_dm(sys.argv[2], sys.argv[3], dm_id=dm_id_arg)
         print(json.dumps(result, indent=2))
 
     elif cmd == "notifications":
