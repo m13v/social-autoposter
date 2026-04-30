@@ -299,15 +299,14 @@ def rewrite_text(text: str) -> tuple[str, int]:
         if not QUICK_CHECK_RE.search(body):
             return whole
 
-        # Templates with ${...} interpolation: rewrite only the static parts
-        # between interpolations.
+        # Templates with ${...} interpolation: rewrite the static parts AND
+        # recursively scan inside ${...} blocks (they may contain ternaries,
+        # cn() calls, or other string literals that need rewriting).
         if quote == '`' and '${' in body:
-            # Walk and split: collect spans of static text and ${...} blocks.
             parts: list[str] = []
             i = 0
             while i < len(body):
                 if body[i:i+2] == '${':
-                    # Find matching '}'
                     depth = 1
                     j = i + 2
                     while j < len(body) and depth > 0:
@@ -316,7 +315,13 @@ def rewrite_text(text: str) -> tuple[str, int]:
                         elif body[j] == '}':
                             depth -= 1
                         j += 1
-                    parts.append(body[i:j])  # ${...}
+                    # j points one past the closing '}'. The interior is
+                    # body[i+2:j-1]. Recurse via rewrite_text so nested
+                    # string literals get scanned too.
+                    inner = body[i+2:j-1]
+                    rewritten_inner, n = rewrite_text(inner)
+                    total_changes += n
+                    parts.append('${' + rewritten_inner + '}')
                     i = j
                 else:
                     j = body.find('${', i)
