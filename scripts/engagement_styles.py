@@ -40,14 +40,45 @@ STYLES = {
         "note": "NEVER just nitpick; offer a non-obvious insight.",
     },
     "storyteller": {
-        "description": "Pure first-person narrative with specific details (numbers, dates, names). Lead with failure/surprise, not success.",
-        "example": "we tracked this for six months and found... / i made this exact mistake when...",
+        "description": (
+            "Narrative-driven comment. Per the GROUNDING RULE, every "
+            "storyteller comment picks ONE of two mutually exclusive lanes: "
+            "Lane 1 (DISCLOSED STORY) opens with a hedge like "
+            "'hypothetically', 'imagine someone running this', 'scenario:', "
+            "'say a friend tried' and is then free to invent any specifics; "
+            "Lane 2 (NO FABRICATION) stays first-person only when every "
+            "specific (numbers, durations, places, course names, brands, "
+            "headcount) appears verbatim in the matched project's "
+            "content_angle / voice / messaging in config.json, otherwise "
+            "drops the specifics or pattern-frames "
+            "('the part that breaks down is...', 'the typical failure mode "
+            "is...'). Lead with failure or surprise, not success."
+        ),
+        "example": (
+            "LANE 1 (disclosed): 'hypothetically, imagine running this for "
+            "a couple of lecture blocks: cheap recorder into whisper into "
+            "gpt into anki. raw prompts get you somewhere around a third "
+            "usable cards before duplicate distractors take over.' "
+            "LANE 2 grounded: 'on a 90-slide deck the rubric scored 81.3 "
+            "vs ~68 field average; the cards weren't the bottleneck, the "
+            "rubric was.' "
+            "LANE 2 pattern-frame: 'the whisper-to-gpt-to-anki setup isn't "
+            "where this breaks. card generation is.'"
+        ),
         "best_in": {
             "reddit": ["r/startups", "r/Meditation", "r/vipassana"],
             "twitter": ["personal growth", "founder stories"],
             "linkedin": ["career", "leadership", "lessons learned"],
         },
-        "note": "NEVER pivot to a product pitch.",
+        "note": (
+            "NEVER pivot to a product pitch. NEVER mix lanes: presenting an "
+            "invented specific as a personal first-hand claim ('i ran this "
+            "exact pipeline last semester for two anatomy blocks', 'ran 22 "
+            "cameras across three properties for 8 months', 'sat 6 courses "
+            "across three centers') without a Lane 1 opener and without "
+            "config.json grounding is the exact failure mode the GROUNDING "
+            "RULE forbids."
+        ),
     },
     "pattern_recognizer": {
         "description": "Name the pattern or phenomenon. Authority through pattern recognition, not credentials.",
@@ -677,6 +708,8 @@ def get_styles_prompt(platform, context="posting"):
         lines.append("")
 
     lines.append('AVOID the "pleaser/validator" style ("this is great", "had similar results", "100% agree"). It consistently gets the lowest engagement across all platforms.')
+    lines.append("")
+    lines.append(get_grounding_rule())
     return "\n".join(lines)
 
 
@@ -790,7 +823,7 @@ def get_content_rules(platform):
         "NO em dashes. Use commas, periods, or regular dashes (-).",
         "Never say 'I built' or 'we built'. Never mention any project by name unless recommending.",
         'Never start with "exactly", "yeah totally", "100%", "that\'s smart".',
-        "Specificity is the #1 authenticity signal. Use concrete numbers, dates, timeframes.",
+        "Specificity is the #1 authenticity signal, but only for specifics you have license to use. See GROUNDING RULE: pick LANE 1 (open with a disclosure phrase like 'hypothetically' or 'scenario:' and then invent freely) OR LANE 2 (no fabricated specifics; first-person only when the numbers, durations, dates, places, course/program names, headcount, or named tools come verbatim from the matched project's config.json). Never present a fabricated specific as a personal first-hand claim.",
         "Include imperfections: contractions, casual asides, occasional lowercase.",
     ]
 
