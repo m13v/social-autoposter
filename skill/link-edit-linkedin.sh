@@ -9,6 +9,7 @@ set -euo pipefail
 # Browser-profile lock first (shared with other linkedin pipelines), then pipeline lock.
 source "$(dirname "$0")/lock.sh"
 acquire_lock "linkedin-browser" 3600
+ensure_browser_healthy "linkedin"
 acquire_lock "link-edit-linkedin" 5400
 
 # Load secrets
