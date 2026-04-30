@@ -11,6 +11,7 @@ set -euo pipefail
 # Browser-profile lock shared with all twitter pipelines.
 source "$(dirname "$0")/lock.sh"
 acquire_lock "twitter-browser" 0
+ensure_browser_healthy "twitter"
 acquire_lock "scan-twitter-followups" 0
 
 [ -f "$HOME/social-autoposter/.env" ] && source "$HOME/social-autoposter/.env"
