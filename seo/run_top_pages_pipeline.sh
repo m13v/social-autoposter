@@ -37,7 +37,11 @@ GENERATOR="python3 $SCRIPT_DIR/generate_page.py"
 DB="python3 $SCRIPT_DIR/db_helpers.py"
 
 RUN_START=$(date +%s)
-trap '__e=$?; python3 "$SCRIPT_DIR/log_seo_run.py" --script "seo_top_pages" --since "$RUN_START" --failed "$__e" --elapsed "$(( $(date +%s) - RUN_START ))" >/dev/null 2>&1 || true' EXIT
+# NOTE: do NOT set an EXIT trap here. The global-lock cleanup at line ~105
+# overwrites EXIT traps (bash keeps only one per signal), so the logging
+# trap was being silently replaced and run_monitor.log never got a row for
+# this pipeline. Both lock-cleanup and logging now live in a single combined
+# trap installed AFTER the lock is created.
 
 # Retry wrapper for `claude` (guards against auto-update unlink window).
 # shellcheck source=./claude_helpers.sh
@@ -102,7 +106,12 @@ if [ -f "$GLOBAL_LOCK" ]; then
     rm -f "$GLOBAL_LOCK"
 fi
 echo "$$" > "$GLOBAL_LOCK"
-trap 'rm -f "$GLOBAL_LOCK"' EXIT
+# Combined EXIT trap: lock cleanup + run_monitor.log row. Both operations
+# must live here because bash only keeps one trap per signal. If you split
+# them across two `trap … EXIT` statements, the second one wins and the
+# first is silently dropped (which is what historically caused seo_top_pages
+# to be invisible in the dashboard Job History).
+trap '__e=$?; rm -f "$GLOBAL_LOCK"; python3 "$SCRIPT_DIR/log_seo_run.py" --script "seo_top_pages" --since "$RUN_START" --failed "$__e" --elapsed "$(( $(date +%s) - RUN_START ))" >/dev/null 2>&1 || true' EXIT
 
 TS=$(_timestamp)
 LOG_DIR="$LOG_ROOT/_global/top_pages"
