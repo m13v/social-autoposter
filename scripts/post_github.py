@@ -139,6 +139,7 @@ def pick_github_project(config, recent_counts):
         p for p in config.get("projects", [])
         if p.get("enabled", True)
         and p.get("weight", 0) > 0
+        and "github" not in (p.get("platforms_disabled") or [])
         and (p.get("search_topics") or p.get("github_search_topics"))
     ]
     if not pool:
