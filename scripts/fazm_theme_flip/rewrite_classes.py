@@ -181,7 +181,10 @@ SATURATED_BG_RE = re.compile(
 
 # A single Tailwind class token, decomposed into (variant_prefixes, base, alpha).
 # Tokens may contain dashes, slashes, brackets, dots, colons.
-TOKEN_BOUNDARY_BEFORE = r'(?<![\w/\.\[\]-])'
+# CRITICAL: deny `:` in the lookbehind so the match cannot start in the middle
+# of a variant chain (e.g. after `dark:`), otherwise an already-paired
+# `dark:bg-white/20` would re-match as a bare `bg-white/20` and double-rewrite.
+TOKEN_BOUNDARY_BEFORE = r'(?<![\w/\.\[\]:-])'
 TOKEN_BOUNDARY_AFTER = r'(?![\w/\.\[\]-])'
 VARIANT_CHAIN = r'((?:(?:[a-z][\w-]*(?:\[[^\]]+\])?|[a-z][\w-]*-\[[^\]]+\]):)*?)'
 
@@ -330,17 +333,7 @@ def rewrite_text(text: str) -> tuple[str, int]:
             i = 0
             while i < len(body):
                 if body[i:i+2] == '${':
-                    depth = 1
-                    j = i + 2
-                    while j < len(body) and depth > 0:
-                        if body[j] == '{':
-                            depth += 1
-                        elif body[j] == '}':
-                            depth -= 1
-                        j += 1
-                    # j points one past the closing '}'. The interior is
-                    # body[i+2:j-1]. Recurse via rewrite_text so nested
-                    # string literals get scanned too.
+                    j = _find_template_expr_end(body, i)
                     inner = body[i+2:j-1]
                     rewritten_inner, n = rewrite_text(inner)
                     total_changes += n
