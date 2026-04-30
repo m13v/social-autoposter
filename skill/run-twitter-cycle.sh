@@ -213,6 +213,12 @@ echo "$SCAN_OUTPUT" >> "$LOG_FILE"
 
 # Parse the structured-output envelope and write the tweets array to $RAW_FILE.
 # claude -p --output-format json wraps results as {"structured_output": {...}, ...}.
+# Also extract queries_used (the LLM's drafted query list with per-query
+# tweets_found counts) to $QUERIES_FILE so we can log every attempt to
+# twitter_search_attempts — including the ZERO-result ones, which are the
+# whole point of this telemetry. We MUST write $QUERIES_FILE even on the
+# no-tweets exit path; otherwise duds never get logged and the negative
+# anti-list stays empty.
 python3 -c "
 import json, sys
 text = sys.stdin.read().strip()
@@ -228,6 +234,13 @@ if so is None:
 if isinstance(so, str):
     try: so = json.loads(so)
     except Exception: pass
+
+queries_used = so.get('queries_used', []) if isinstance(so, dict) else []
+# Always write \$QUERIES_FILE even when empty so the shell's existence check
+# is unambiguous; logger no-ops on empty list.
+json.dump(queries_used, open('$QUERIES_FILE', 'w'))
+print(f'Extracted {len(queries_used)} queries_used entries to $QUERIES_FILE', file=sys.stderr)
+
 tweets = so.get('tweets', []) if isinstance(so, dict) else []
 if not tweets:
     print('No tweets in structured_output.tweets', file=sys.stderr); sys.exit(1)
@@ -236,6 +249,15 @@ print(f'Extracted {len(tweets)} tweets to $RAW_FILE', file=sys.stderr)
 " <<< "$SCAN_OUTPUT" 2>&1 | tee -a "$LOG_FILE"
 
 EXTRACT_EXIT=${PIPESTATUS[0]:-1}
+
+# Log every drafted query (incl. zero-result ones) to twitter_search_attempts
+# BEFORE any early-exit branches. Runs even when the tweets array is empty
+# so dud queries actually accumulate in the negative-signal table.
+if [ -f "$QUERIES_FILE" ]; then
+    python3 "$REPO_DIR/scripts/log_twitter_search_attempts.py" --batch-id "$BATCH_ID" \
+        < "$QUERIES_FILE" 2>&1 | tee -a "$LOG_FILE"
+    rm -f "$QUERIES_FILE"
+fi
 if [ "$EXTRACT_EXIT" -ne 0 ] || [ ! -f "$RAW_FILE" ]; then
     log "No tweets extracted in Phase 1. Aborting cycle."
     _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "run-twitter-cycle-scan" "run-twitter-cycle-post" 2>/dev/null || echo "0.0000")
