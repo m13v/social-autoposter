@@ -442,8 +442,12 @@ For each chosen candidate:
 4. Post via the CDP script:
      python3 $REPO_DIR/scripts/twitter_browser.py reply \"CANDIDATE_URL\" \"YOUR_REPLY_TEXT\"
    It returns JSON. Parse reply_url. If reply_url is missing/invalid/doesn't match x.com/m13v_/status/, treat as FAILED: do NOT log, mark candidate 'failed' not 'posted'. NEVER use the parent URL as our_url.
+   The tool may append an active campaign suffix at sample_rate (tool-level enforcement, the literal text is guaranteed to land). Use the JSON's \`final_text\` (NOT YOUR_REPLY_TEXT) for log_post.py in step 5 so the stored content matches what was posted, and use \`applied_campaigns\` (the array of campaign ids that fired) in step 5b.
 5. Log the primary reply to the database FIRST, BEFORE attempting the self-reply. This guarantees the row exists even if the self-reply crashes; the link-edit-twitter sweep will pick it up later. Parse post_id from the JSON output:
-     python3 $REPO_DIR/scripts/log_post.py --platform twitter --thread-url CANDIDATE_URL --our-url REPLY_URL --our-content 'YOUR_REPLY_TEXT' --project MATCHED_PROJECT --thread-author AUTHOR --thread-title 'TWEET_TEXT' --engagement-style STYLE --language LANG
+     python3 $REPO_DIR/scripts/log_post.py --platform twitter --thread-url CANDIDATE_URL --our-url REPLY_URL --our-content 'FINAL_TEXT_FROM_REPLY_JSON' --project MATCHED_PROJECT --thread-author AUTHOR --thread-title 'TWEET_TEXT' --engagement-style STYLE --language LANG
+5b. Attribute the post to any campaigns that fired. For each \`cid\` in \`applied_campaigns\` from step 4's JSON (skip if the array is empty):
+     python3 $REPO_DIR/scripts/campaign_bump.py --table posts --id POST_ID --campaign-id cid
+   Mandatory when applied_campaigns is non-empty; otherwise the campaign counter does not advance and the campaign will over-post.
 6. Self-reply with project link.
    LANDING-PAGE GATE: if the matched project has a landing_pages config in config.json (repo + base_url set), SKIP this step entirely. Do not post a bare-URL self-reply. The link-edit-twitter sweep (runs every 6h) will generate a custom per-thread landing page via seo/generate_page.py and post the self-reply with that URL. A bare homepage link would permanently mark the post as link-edited and lock out the custom page. Proceed directly to step 7.
    If the matched project has NO landing_pages config, post the inline self-reply with the plain project URL:
