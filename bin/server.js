@@ -785,9 +785,16 @@ function _readSeoStreamResult(streamPath) {
     } catch { /* fall through to next line */ }
   }
   // Some failure modes don't emit a result line (worker died); look for a
-  // rate_limit_event so we can still classify as a quota hit.
+  // rate_limit_event with `"status":"rejected"` so we can still classify as
+  // a quota hit. IMPORTANT: do NOT match the bare `"type":"rate_limit_event"`
+  // string — Claude streams these on every successful turn as heartbeats
+  // (`"status":"allowed"` / `"allowed_warning"`), so a bare match would
+  // mis-classify every healthy session that happened to be cut short for any
+  // unrelated reason.
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (lines[i].indexOf('"type":"rate_limit_event"') >= 0) {
+    const ln = lines[i];
+    if (ln.indexOf('"type":"rate_limit_event"') >= 0 &&
+        ln.indexOf('"status":"rejected"') >= 0) {
       return { type: 'rate_limit_event', is_error: true, api_error_status: 429 };
     }
   }
