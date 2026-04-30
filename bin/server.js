@@ -1217,6 +1217,11 @@ let _pendingCache = { at: 0, value: null };
 let _statusCache = { at: 0, value: null };
 const activityStatsCache = new Map();
 const styleStatsCache = new Map();
+// Style metadata cache (description / note / status / invented_at / why_existing_didnt_fit
+// for the merged hardcoded + sidecar universe). Sourced via a one-shot Python call.
+// 1h TTL is fine: the universe only changes when the sidecar JSON is edited or the
+// promoter/code adds a style, both rare.
+let _stylesMetaCache = { at: 0, value: null };
 // Funnel stats: cached by days. Value shape: { at, value } or { at, pending: Promise }.
 const funnelStatsCache = new Map();
 // Views-per-day: cached by days. Value shape: { at, value }.
@@ -2239,63 +2244,45 @@ async function handleApi(req, res) {
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
-  // GET /api/styles/candidates - sidecar-registered candidate styles + DB usage.
-  // Surfaces inventions for human sanity-check before the promoter graduates them.
-  if (p === '/api/styles/candidates' && req.method === 'GET') {
+  // GET /api/styles/meta - merged hardcoded + sidecar style metadata
+  // (description, note, status, invented_at, why_existing_didnt_fit, etc).
+  // Used by the dashboard's "by engagement style" table to populate per-row hover
+  // tooltips. Cached in memory for 1h since the universe rarely changes.
+  if (p === '/api/styles/meta' && req.method === 'GET') {
     return (async () => {
-      const sidecarPath = path.join(DEST, 'scripts', 'engagement_styles_extra.json');
-      let sidecar = {};
-      try { sidecar = JSON.parse(fs.readFileSync(sidecarPath, 'utf8')); } catch {}
-      const names = Object.keys(sidecar);
-      if (!names.length) return json(res, { candidates: [] });
-      // Aggregate posts per (style, platform): count + median engagement.
-      // For median we use upvotes (or upvotes+comments for moltbook, comments_count for github).
-      const escaped = names.map(n => "'" + n.replace(/'/g, "''") + "'").join(',');
-      const q =
-        "SELECT engagement_style, platform, COUNT(*)::int AS posts, " +
-        "PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY " +
-          "CASE LOWER(platform) " +
-            "WHEN 'github' THEN COALESCE(comments_count, 0) " +
-            "WHEN 'moltbook' THEN COALESCE(upvotes, 0) + COALESCE(comments_count, 0) " +
-            "ELSE COALESCE(upvotes, 0) END) AS median_score " +
-        "FROM posts WHERE engagement_style IN (" + escaped + ") AND status='active' " +
-        "AND our_content IS NOT NULL AND LENGTH(our_content) >= 30 " +
-        "GROUP BY engagement_style, platform";
-      let rows = [];
-      try { rows = await pq(q); } catch (e) { return json(res, { error: e.message }, 500); }
-      const stats = {};
-      for (const r of rows) {
-        if (!stats[r.engagement_style]) stats[r.engagement_style] = [];
-        stats[r.engagement_style].push({
-          platform: r.platform, posts: Number(r.posts) || 0,
-          median: Number(r.median_score) || 0,
-        });
+      if (_stylesMetaCache.value && Date.now() - _stylesMetaCache.at < 3600000) {
+        return json(res, { meta: _stylesMetaCache.value, cachedAt: _stylesMetaCache.at });
       }
-      const candidates = names.map(name => {
-        const e = sidecar[name] || {};
-        return {
-          name,
-          status: e.status || 'candidate',
-          description: e.description || '',
-          example: e.example || '',
-          note: e.note || '',
-          why_existing_didnt_fit: e.why_existing_didnt_fit || '',
-          first_post_url: e.first_post_url || null,
-          first_post_platform: e.first_post_platform || null,
-          invented_by_model: e.invented_by_model || null,
-          invented_at: e.invented_at || null,
-          promoted_at: e.promoted_at || null,
-          usage: stats[name] || [],
-        };
+      const code =
+        "import json,sys; sys.path.insert(0,'scripts'); " +
+        "from engagement_styles import get_all_styles; m = get_all_styles(); " +
+        "print(json.dumps({n: {" +
+          "'description': v.get('description','') or ''," +
+          "'example': v.get('example','') or ''," +
+          "'note': v.get('note','') or ''," +
+          "'status': v.get('status','active') or 'active'," +
+          "'why_existing_didnt_fit': v.get('why_existing_didnt_fit','') or ''," +
+          "'first_post_url': v.get('first_post_url')," +
+          "'first_post_platform': v.get('first_post_platform')," +
+          "'invented_by_model': v.get('invented_by_model')," +
+          "'invented_at': v.get('invented_at')," +
+          "'promoted_at': v.get('promoted_at')," +
+        "} for n, v in m.items()}))";
+      const pending = new Promise((resolve, reject) => {
+        const child = spawn('python3', ['-c', code], { env: process.env, cwd: DEST });
+        let out = '', err = '';
+        child.stdout.on('data', d => out += d);
+        child.stderr.on('data', d => err += d);
+        child.on('error', reject);
+        child.on('close', c => {
+          if (c !== 0) return reject(new Error(err || ('exit ' + c)));
+          try { resolve(JSON.parse(out)); } catch (e) { reject(e); }
+        });
       });
-      // Newest first (by invented_at desc), then alphabetical.
-      candidates.sort((a, b) => {
-        const da = a.invented_at || '';
-        const db = b.invented_at || '';
-        if (db !== da) return db.localeCompare(da);
-        return a.name.localeCompare(b.name);
-      });
-      return json(res, { candidates });
+      pending.then(val => {
+        _stylesMetaCache = { at: Date.now(), value: val };
+        json(res, { meta: val });
+      }).catch(err => json(res, { error: String(err && err.message || err) }, 500));
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
@@ -4261,15 +4248,6 @@ const HTML = `<!DOCTYPE html>
     </summary>
     <div id="style-stats-body">
       <div class="style-stats-empty">Loading\u2026</div>
-    </div>
-  </details>
-  <details class="style-stats-section" id="style-candidates">
-    <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">&#x25B6;</span><span>Model-invented candidate styles</span></span>
-      <span class="style-stats-total" id="style-candidates-total"></span>
-    </summary>
-    <div id="style-candidates-body">
-      <div class="style-stats-empty">Click to load.</div>
     </div>
   </details>
   <details class="style-stats-section" id="funnel-stats" open>
@@ -6716,10 +6694,35 @@ function renderStyleStatsPills(containerId, values, selected, labelAll) {
     });
   });
 }
-function renderStyleStats(payload) {
+// Build a tooltip body for a single engagement-style row from the merged meta.
+// Returns an HTML string for the table cell. The style name remains plain text;
+// hover popover content comes from data-tooltip via the global .sa-tooltip handler
+// (which honors \n with white-space: pre-line).
+function formatStyleCell(name, metaMap) {
+  const safeName = escapeHtml(name == null ? '' : String(name));
+  const m = (metaMap && metaMap[name]) || null;
+  if (!m || name === '(none)') return safeName;
+  const lines = [];
+  if (m.description) lines.push(m.description);
+  if (m.note) lines.push('Note: ' + m.note);
+  if (m.why_existing_didnt_fit) lines.push('Why invented: ' + m.why_existing_didnt_fit);
+  const status = m.status || 'active';
+  const provenance = [];
+  if (status && status !== 'active') provenance.push('status=' + status);
+  if (m.invented_at) provenance.push('invented ' + String(m.invented_at).slice(0, 10));
+  if (m.first_post_platform) provenance.push('first on ' + m.first_post_platform);
+  if (m.promoted_at) provenance.push('promoted ' + String(m.promoted_at).slice(0, 10));
+  if (provenance.length) lines.push(provenance.join(' · '));
+  if (!lines.length) return safeName;
+  const tip = lines.join('\n');
+  return '<span data-tooltip="' + escapeHtml(tip) + '" style="cursor: help; border-bottom: 1px dotted var(--text-muted);">' + safeName + '</span>';
+}
+
+function renderStyleStats(payload, meta) {
   const body = document.getElementById('style-stats-body');
   const totalEl = document.getElementById('style-stats-total');
   if (!body) return;
+  const styleMeta = meta || {};
   const selectedPlatform = (payload && payload.platform) || 'all';
   const selectedProject  = (payload && payload.project)  || 'all';
   renderStyleStatsPills('style-stats-platform-pills', (payload && payload.platforms) || [], selectedPlatform, 'All');
@@ -6797,7 +6800,7 @@ function renderStyleStats(payload) {
     storageKey: 'sa.styleStatsTable.v1',
     showTotals: true,
     columns: [
-      { key: 'style',    label: 'Style',    type: 'text',    align: 'left',  formatter: v => escapeHtml(v), helpText: STYLE_STATS_HELP.style },
+      { key: 'style',    label: 'Style',    type: 'text',    align: 'left',  formatter: v => formatStyleCell(v, styleMeta), helpText: STYLE_STATS_HELP.style },
       // Score isn't summable across styles: it's a per-post ratio derived
       // from upvotes_discounted (which isn't available in the normalized
       // rows), so blank the footer rather than show a misleading aggregate.
@@ -6888,6 +6891,18 @@ async function loadStyleCandidates() {
   }
 }
 
+// Style metadata is fetched once per page load and reused across re-renders.
+// Stale by an hour is fine; the dashboard reloads on any meaningful change.
+let _styleMetaPromise = null;
+function getStyleMeta() {
+  if (_styleMetaPromise) return _styleMetaPromise;
+  _styleMetaPromise = fetch('/api/styles/meta')
+    .then(r => r.json())
+    .then(d => (d && d.meta) || {})
+    .catch(() => ({}));
+  return _styleMetaPromise;
+}
+
 async function loadStyleStats() {
   try {
     const platformRow = document.getElementById('style-stats-platform-pills');
@@ -6898,9 +6913,11 @@ async function loadStyleStats() {
     const params = ['hours=' + hours];
     if (platform && platform !== 'all') params.push('platform=' + encodeURIComponent(platform));
     if (project  && project  !== 'all') params.push('project='  + encodeURIComponent(project));
-    const res = await fetch('/api/style/stats?' + params.join('&'));
-    const data = await res.json();
-    renderStyleStats(data);
+    const [statsRes, meta] = await Promise.all([
+      fetch('/api/style/stats?' + params.join('&')).then(r => r.json()),
+      getStyleMeta(),
+    ]);
+    renderStyleStats(statsRes, meta);
   } catch {}
 }
 
