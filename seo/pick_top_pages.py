@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -98,13 +99,23 @@ def _posthog_api_key():
         return ""
 
 
+_THROTTLE_HINT_RE = re.compile(r"available in (\d+) seconds?", re.IGNORECASE)
+_THROTTLE_MAX_WAIT_SEC = 120
+
+
 def _hogql(api_key, project_id, query, timeout=60):
+    """Run a HogQL query.
+
+    Retries on 429 (PostHog throttle) and 5xx. Honors PostHog's "available in
+    N seconds" hint on 429 instead of using a fixed backoff.
+    """
     url = f"https://us.posthog.com/api/projects/{project_id}/query/"
     body = json.dumps({"query": {"kind": "HogQLQuery", "query": query}}).encode("utf-8")
     last_err = None
-    for wait in (0.0, 2.0, 5.0, 12.0):
-        if wait:
-            time.sleep(wait)
+    backoffs = [0.0, 2.0, 5.0, 12.0]
+    for attempt, fallback_wait in enumerate(backoffs):
+        if fallback_wait:
+            time.sleep(fallback_wait)
         req = urllib.request.Request(
             url, data=body, method="POST",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -119,8 +130,23 @@ def _hogql(api_key, project_id, query, timeout=60):
             except Exception:
                 body_txt = ""
             last_err = f"HTTP {e.code}: {body_txt}"
-            if e.code not in (429,) and not (500 <= e.code < 600):
-                break
+            if e.code == 429:
+                wait_sec = None
+                ra = (e.headers.get("Retry-After") or "").strip() if e.headers else ""
+                if ra.isdigit():
+                    wait_sec = int(ra)
+                if wait_sec is None:
+                    m = _THROTTLE_HINT_RE.search(body_txt)
+                    if m:
+                        wait_sec = int(m.group(1))
+                if wait_sec is None:
+                    wait_sec = max(15, int(backoffs[min(attempt + 1, len(backoffs) - 1)]))
+                wait_sec = min(wait_sec, _THROTTLE_MAX_WAIT_SEC)
+                time.sleep(wait_sec + 2)
+                continue
+            if 500 <= e.code < 600:
+                continue
+            break
         except urllib.error.URLError as e:
             last_err = f"URLError: {e}"
     raise RuntimeError(f"HogQL failed: {last_err}")
