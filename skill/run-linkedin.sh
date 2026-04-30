@@ -36,6 +36,7 @@ echo "=== LinkedIn Post Run: $(date) ===" | tee "$LOG_FILE"
 # lock between phases or a sibling pipeline would steal the browser.
 source "$REPO_DIR/skill/lock.sh"
 acquire_lock "linkedin-browser" 3600
+ensure_browser_healthy "linkedin"
 
 # ===== Phase A: discovery (slim context) =====
 PROJECT_DIST=$(python3 "$REPO_DIR/scripts/pick_project.py" --platform linkedin --distribution 2>/dev/null || echo "(distribution unavailable)")
