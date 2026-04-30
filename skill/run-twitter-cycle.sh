@@ -111,10 +111,18 @@ TOP_QUERIES_JSON=$(python3 "$REPO_DIR/scripts/top_twitter_queries.py" --limit 20
 TOP_COUNT=$(echo "$TOP_QUERIES_JSON" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
 log "Top past queries loaded: $TOP_COUNT"
 
+# --- Dud queries: phrasings that returned 0 tweets in the last 48h ----------
+# Fed into the prompt as a negative-signal anti-list so the LLM stops
+# redrafting the same flat queries every 20-min cycle. Source is
+# twitter_search_attempts, populated below from this run's queries_used.
+DUD_QUERIES_JSON=$(python3 "$REPO_DIR/scripts/top_dud_twitter_queries.py" --limit 30 --window-hours 48 2>/dev/null || echo "[]")
+DUD_COUNT=$(echo "$DUD_QUERIES_JSON" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+log "Dud queries loaded: $DUD_COUNT (last 48h, 0-result)"
+
 # --- Phase 1: Claude drafts queries, scrapes tweets -------------------------
 # JSON schema forces structured output. Eliminates the prose-drift failure mode
 # where the scanner summarized instead of dumping the JSON array.
-SCAN_SCHEMA='{"type":"object","properties":{"tweets":{"type":"array","items":{"type":"object","properties":{"handle":{"type":"string"},"text":{"type":"string"},"tweetUrl":{"type":"string"},"datetime":{"type":"string"},"replies":{"type":"integer"},"retweets":{"type":"integer"},"likes":{"type":"integer"},"views":{"type":"integer"},"bookmarks":{"type":"integer"},"search_topic":{"type":"string"},"matched_project":{"type":"string"}},"required":["handle","text","tweetUrl","datetime","replies","retweets","likes","views","bookmarks","search_topic","matched_project"]}}},"required":["tweets"]}'
+SCAN_SCHEMA='{"type":"object","properties":{"tweets":{"type":"array","items":{"type":"object","properties":{"handle":{"type":"string"},"text":{"type":"string"},"tweetUrl":{"type":"string"},"datetime":{"type":"string"},"replies":{"type":"integer"},"retweets":{"type":"integer"},"likes":{"type":"integer"},"views":{"type":"integer"},"bookmarks":{"type":"integer"},"search_topic":{"type":"string"},"matched_project":{"type":"string"}},"required":["handle","text","tweetUrl","datetime","replies","retweets","likes","views","bookmarks","search_topic","matched_project"]}},"queries_used":{"type":"array","items":{"type":"object","properties":{"query":{"type":"string"},"project":{"type":"string"},"tweets_found":{"type":"integer"}},"required":["query","project","tweets_found"]}}},"required":["tweets","queries_used"]}'
 
 log "Phase 1: drafting queries and scraping tweets..."
 
@@ -129,6 +137,9 @@ $PROJECTS_JSON
 
 Past top-performing query STYLES (use these only as inspiration for phrasing, operators, and specificity level; do NOT copy keywords blindly, adapt them to each project):
 $TOP_QUERIES_JSON
+
+DUD QUERIES — DO NOT REUSE these phrasings or close variants. They returned ZERO tweets in the last 48h, so redrafting them wastes the budget. \`attempts\` is how many cycles already wasted on each one; \`last_ran_h_ago\` is hours since the most recent attempt. Pick a different angle, different operators, or different keyword cluster:
+$DUD_QUERIES_JSON
 
 Query guidelines:
 - MANDATORY: every query MUST include the operator \`since:$(date -u -v-1d +%Y-%m-%d)\` so X returns only tweets from the last ~24h. Evergreen tweets waste budget — we want momentum, not history.
