@@ -12,6 +12,7 @@ set -uo pipefail
 
 source "$(dirname "$0")/lock.sh"
 acquire_lock "twitter-browser" 3600
+ensure_browser_healthy "twitter"
 acquire_lock "link-edit-twitter" 5400
 
 # shellcheck source=/dev/null
