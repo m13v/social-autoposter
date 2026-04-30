@@ -113,8 +113,26 @@ echo "=== Top-Pages pipeline (cross-project): $TS ===" | tee -a "$LOG_FILE"
 
 # API-quota markers. Once any lane surfaces one of these, every remaining
 # lane would fail the same way and burn credits — short-circuit instead.
-QUOTA_MARKERS='monthly usage limit|rate.?limit|429 Too Many|insufficient_quota'
+# We also catch Claude session JSONL signals (rate_limit_event,
+# api_error_status:429, "hit your limit") because those never appear in the
+# shell .log, only in the per-product _stream.jsonl.
+QUOTA_MARKERS='monthly usage limit|rate.?limit|429 Too Many|insufficient_quota|rate_limit_event|"api_error_status":429|hit your limit'
 QUOTA_HIT=0
+
+# _quota_check FILE [FILE ...] -> 0 if any quota marker is in any of the
+# given files. Skips files that don't exist.
+_quota_check() {
+    for f in "$@"; do
+        [ -n "$f" ] && [ -f "$f" ] && grep -qiE "$QUOTA_MARKERS" "$f" 2>/dev/null && return 0
+    done
+    return 1
+}
+
+# _latest_stream_jsonl DIR -> path to most-recent *_stream.jsonl in DIR.
+_latest_stream_jsonl() {
+    [ -d "$1" ] || return 0
+    ls -t "$1"/*_stream.jsonl 2>/dev/null | head -1
+}
 
 # Phase 1: drain stale pending rows from prior ticks. Each pending row is a
 # (product, keyword, slug) that a prior run proposed and inserted but whose
@@ -154,7 +172,8 @@ if [ -n "$pending_rows" ]; then
         RETRY_RC=$?
         echo "=== retry rc=$RETRY_RC ===" | tee -a "$LOG_FILE" "$DRAIN_LOG"
         DRAINED_PRODUCTS+=("$DRAIN_PRODUCT")
-        if grep -qiE "$QUOTA_MARKERS" "$DRAIN_LOG" 2>/dev/null; then
+        DRAIN_STREAM=$(_latest_stream_jsonl "$DRAIN_LOG_DIR")
+        if _quota_check "$DRAIN_LOG" "$DRAIN_STREAM"; then
             QUOTA_HIT=1
             echo "  !! $DRAIN_PRODUCT hit API quota during retry — halting tick" | tee -a "$LOG_FILE"
             break
@@ -395,7 +414,8 @@ PY
 
     # Quota short-circuit: if this target hit the usage wall, the next one
     # will too. Set the flag so the loop stops on the next iteration.
-    if grep -qiE "$QUOTA_MARKERS" "$PER_LOG" 2>/dev/null; then
+    PER_STREAM=$(_latest_stream_jsonl "$PER_LOG_DIR")
+    if _quota_check "$PER_LOG" "$PER_STREAM"; then
         QUOTA_HIT=1
         echo "  !! $TARGET_PRODUCT hit API quota — halting tick" | tee -a "$LOG_FILE"
     fi
