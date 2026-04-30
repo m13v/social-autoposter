@@ -547,9 +547,14 @@ def unread_dms():
                     return _rate_limit_response(reason, rl_counter, page.url)
                 return {"ok": False, "error": "not_on_dm_page", "url": page.url}
 
-            # Extract conversation list from the accessible link names
-            # Each conversation is a listitem with a link whose accessible
-            # name contains: "user avatar NAME TIME PREVIEW"
+            # Extract conversation list by walking the real DOM structure.
+            # As of 2026-04: aria-label on conversation links is empty, so we
+            # can't rely on it. Instead, every conversation row has:
+            #   - a leaf div with font-weight 700 = author name
+            #   - a leaf div with font-weight 400 = relative time (e.g. "4h")
+            #   - optional span with font-weight 500 and text "You:" = we sent last
+            #   - a leaf span with the preview text. font-weight 400 = read,
+            #     font-weight >= 600 = unread (bold).
             conversations = page.evaluate("""() => {
                 const results = [];
                 const items = document.querySelectorAll('main li, main [role="listitem"]');
@@ -571,93 +576,71 @@ def unread_dms():
                         if (m) handle = m[1];
                     }
 
-                    // Extract structured data from the DOM
-                    // The link contains nested divs with: [avatar] [name+time div] [preview div]
-                    // Walk the DOM tree to find text nodes
+                    // Walk leaf text nodes inside the link, capturing tag,
+                    // computed font-weight, and trimmed text. Order matches
+                    // visual order: [name, time, optional "You:", preview].
+                    const leaves = [];
+                    const all = link.querySelectorAll('*');
+                    for (const el of all) {
+                        if (el.children.length !== 0) continue;
+                        const t = (el.textContent || '').trim();
+                        if (!t) continue;
+                        const fw = parseInt(window.getComputedStyle(el).fontWeight, 10) || 400;
+                        leaves.push({tag: el.tagName.toLowerCase(), fw: fw, t: t});
+                    }
+
                     let author = '';
                     let time = '';
                     let preview = '';
+                    let isFromUs = false;
+                    let previewFw = 400;
 
-                    // The link's accessible name has everything
-                    const linkText = (link.getAttribute('aria-label') || '').trim();
-                    if (linkText) {
-                        // Format: "user avatar NAME TIME PREVIEW"
-                        let text = linkText.replace(/^user avatar\\s*/, '');
-                        // Try to parse out components
-                        const timeMatch = text.match(/\\s+(\\d+[hmd]|\\d+w|Just now)\\s+/);
-                        if (timeMatch) {
-                            const idx = text.indexOf(timeMatch[0]);
-                            author = text.substring(0, idx).trim();
-                            time = timeMatch[1];
-                            preview = text.substring(idx + timeMatch[0].length).trim();
+                    for (const node of leaves) {
+                        // Author: first bold (fw>=700) leaf, short text, not a timestamp
+                        if (!author && node.fw >= 700 && node.t.length < 80 &&
+                            !/^(\\d+[hmd]|\\d+w|Just now)$/.test(node.t)) {
+                            author = node.t;
+                            continue;
+                        }
+                        // Time: short text matching relative-time pattern
+                        if (!time && /^(\\d+[hmd]|\\d+w|Just now)$/.test(node.t)) {
+                            time = node.t;
+                            continue;
+                        }
+                        // "You:" prefix: standalone span with text "You:"
+                        if (!isFromUs && node.tag === 'span' && /^You:?$/.test(node.t)) {
+                            isFromUs = true;
+                            continue;
+                        }
+                        // Preview: any remaining text. The bolded preview span
+                        // (fw >= 600) signals an unread message; fw 400 is read.
+                        if (!preview && node.t.length > 0) {
+                            preview = node.t;
+                            previewFw = node.fw;
                         }
                     }
 
-                    // Fallback: parse from child elements directly
-                    if (!author) {
-                        const divs = link.querySelectorAll('div');
-                        const texts = [];
-                        for (const d of divs) {
-                            // Only get leaf-ish nodes
-                            if (d.children.length <= 1) {
-                                const t = d.textContent.trim();
-                                if (t && t.length > 0) texts.push(t);
-                            }
-                        }
-                        // Typically: [name, verified_badge?, time, preview]
-                        for (const t of texts) {
-                            if (t.match(/^\\d+[hmd]$/) || t.match(/^\\d+w$/)) {
-                                time = t;
-                            } else if (!author && t.length > 0 && t.length < 50 &&
-                                       t !== 'user avatar') {
-                                author = t;
-                            } else if (author && !preview && t.length > 5) {
-                                preview = t;
-                            }
-                        }
-                    }
+                    // Unread detection. Primary signal: preview span is bolded
+                    // (fw >= 600) when there is an unread inbound. Backup:
+                    // aria-label anywhere in the row containing "unread", or a
+                    // small visible dot/badge. If we sent last ("You:" prefix),
+                    // override to read regardless.
+                    let hasUnread = previewFw >= 600;
 
-                    const isFromUs = preview.startsWith('You:');
-
-                    // Detect unread state from sidebar visual indicators.
-                    // X marks unread DMs by bolding the name+preview text and/or
-                    // showing an aria-labeled badge. We try several signals so a
-                    // single CSS rename on X's side doesn't blind us.
-                    let hasUnread = false;
-
-                    // Signal 1: any descendant with aria-label containing "unread"
-                    const ariaUnread = item.querySelector(
-                        '[aria-label*="unread" i], [aria-label*="Unread" i]'
-                    );
-                    if (ariaUnread) hasUnread = true;
-
-                    // Signal 2: bold font weight on the conversation's text divs.
-                    // X uses font-weight: 700 on unread, 400 on read.
                     if (!hasUnread) {
-                        const textDivs = link.querySelectorAll('div[dir="auto"], div[dir="ltr"], div[dir="rtl"], span');
-                        for (const d of textDivs) {
-                            const txt = (d.textContent || '').trim();
-                            if (!txt) continue;
-                            // Skip pure timestamps to avoid false positives
-                            if (/^(\\d+[hmd]|\\d+w|Just now)$/.test(txt)) continue;
-                            const fw = window.getComputedStyle(d).fontWeight;
-                            const fwNum = parseInt(fw, 10);
-                            if (!isNaN(fwNum) && fwNum >= 700) {
-                                hasUnread = true;
-                                break;
-                            }
-                        }
+                        const ariaUnread = item.querySelector(
+                            '[aria-label*="unread" i]'
+                        );
+                        if (ariaUnread) hasUnread = true;
                     }
 
-                    // Signal 3: small colored dot/badge inside the row that isn't
-                    // the avatar image. Heuristic: a span/div with explicit
-                    // background-color and a tiny size.
                     if (!hasUnread) {
+                        // Tiny coloured pill/dot heuristic
                         const candidates = item.querySelectorAll('span, div');
                         for (const el of candidates) {
+                            if (el.children.length !== 0) continue;
                             const style = window.getComputedStyle(el);
                             const bg = style.backgroundColor || '';
-                            // X blue or any saturated solid background on a tiny element
                             if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') continue;
                             const w = el.offsetWidth, h = el.offsetHeight;
                             if (w > 0 && w <= 14 && h > 0 && h <= 14 && Math.abs(w - h) <= 2) {
@@ -667,9 +650,6 @@ def unread_dms():
                         }
                     }
 
-                    // Hard override: if the preview literally starts with "You:",
-                    // we sent the most recent visible message. Even if some
-                    // unread heuristic misfired, there's nothing new to read.
                     if (isFromUs) hasUnread = false;
 
                     if (author || handle) {
