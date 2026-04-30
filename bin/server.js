@@ -6697,7 +6697,10 @@ function renderStyleStatsPills(containerId, values, selected, labelAll) {
 // Build a tooltip body for a single engagement-style row from the merged meta.
 // Returns an HTML string for the table cell. The style name remains plain text;
 // hover popover content comes from data-tooltip via the global .sa-tooltip handler
-// (which honors \n with white-space: pre-line).
+// (which renders newlines via white-space: pre-line).
+// NOTE: backslashes inside this HTML/JS template get eaten by the outer
+// backtick template, so embedded newline escapes must be double-escaped
+// (double-backslash-n becomes single-backslash-n in the served JS).
 function formatStyleCell(name, metaMap) {
   const safeName = escapeHtml(name == null ? '' : String(name));
   const m = (metaMap && metaMap[name]) || null;
@@ -6714,7 +6717,7 @@ function formatStyleCell(name, metaMap) {
   if (m.promoted_at) provenance.push('promoted ' + String(m.promoted_at).slice(0, 10));
   if (provenance.length) lines.push(provenance.join(' · '));
   if (!lines.length) return safeName;
-  const tip = lines.join('\n');
+  const tip = lines.join('\\n');
   return '<span data-tooltip="' + escapeHtml(tip) + '" style="cursor: help; border-bottom: 1px dotted var(--text-muted);">' + safeName + '</span>';
 }
 
