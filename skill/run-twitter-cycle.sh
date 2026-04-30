@@ -29,6 +29,7 @@ mkdir -p "$LOG_DIR"
 BATCH_ID="twcycle-$(date +%Y%m%d-%H%M%S)"
 LOG_FILE="$LOG_DIR/twitter-cycle-$(date +%Y-%m-%d_%H%M%S).log"
 RAW_FILE="/tmp/twitter_cycle_raw_$(date +%s).json"
+QUERIES_FILE="/tmp/twitter_cycle_queries_$(date +%s).json"
 RUN_START=$(date +%s)
 # Tweets older than this are no longer worth replying to. Pending rows older
 # than this are hard-expired by Phase 0; younger pending rows are salvaged
@@ -195,11 +196,17 @@ async (page) => {
 
 3. After scanning all projects, return EVERY extracted tweet via the structured 'tweets' field. Each tweet object MUST include 'search_topic' (the query that found it) and 'matched_project' (the project name whose query found it).
 
+4. ALSO return the structured 'queries_used' array with ONE entry per project (length must equal the number of projects), each with:
+   - 'query': the exact final query string you searched on x.com (without the leading 'q=' or url-encoding)
+   - 'project': the project name
+   - 'tweets_found': integer count of tweets you extracted for that query (0 if X showed 'No results' or the page was empty)
+   This list is logged to twitter_search_attempts so future cycles can avoid redrafting dead phrasings. Emit it even when tweets_found is 0 — the zero rows are the whole point of this list.
+
 CRITICAL RULES:
 - Use ONLY mcp__twitter-agent__* tools for scraping
 - Do NOT post, reply, like, or interact with any tweet
 - Do NOT generate any reply content
-- If a search fails or times out, skip it and continue to the next" 2>&1)
+- If a search fails or times out, skip it and continue to the next (still emit a queries_used entry with tweets_found:0 for that project)" 2>&1)
 
 # Dump the captured envelope to the cycle log for offline inspection.
 echo "$SCAN_OUTPUT" >> "$LOG_FILE"
