@@ -4981,6 +4981,28 @@ function applyJobsHistoryFilter() {
     return r.job_type === tf || scriptNorm === tf;
   });
   body.innerHTML = buildJobsHistoryTable(filtered);
+  wireJobsHistoryExpansion(body);
+}
+
+// Click-to-expand on rows that have a per-product breakdown (currently
+// seo_improve and seo_top_pages). The detail row is rendered inline as a
+// hidden <tr> right after the main row by buildJobsHistoryTable, so toggle
+// is just flipping display:none. The listener is attached to the container
+// once (innerHTML resets children but not the body itself, so the delegated
+// listener survives across filter changes).
+function wireJobsHistoryExpansion(body) {
+  if (!body || body._expansionWired) return;
+  body._expansionWired = true;
+  body.addEventListener('click', (e) => {
+    const row = e.target.closest('tr.sa-job-row-expandable');
+    if (!row) return;
+    const detail = row.nextElementSibling;
+    if (!detail || !detail.classList.contains('sa-job-detail-row')) return;
+    const isOpen = detail.style.display !== 'none' && detail.style.display !== '';
+    detail.style.display = isOpen ? 'none' : '';
+    const caret = row.querySelector('.sa-job-caret');
+    if (caret) caret.style.transform = isOpen ? '' : 'rotate(90deg)';
+  });
 }
 
 function wirePillRow(rowId, onSelect) {
