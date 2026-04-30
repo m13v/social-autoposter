@@ -3702,7 +3702,11 @@ const HTML = `<!DOCTYPE html>
           <button type="button" class="style-stats-pill" data-value="octolens">Octolens</button>
           <button type="button" class="style-stats-pill" data-value="stats">Stats</button>
           <button type="button" class="style-stats-pill" data-value="audit">Audit</button>
-          <button type="button" class="style-stats-pill" data-value="seo">SEO</button>
+          <button type="button" class="style-stats-pill" data-value="serp_seo">SERP SEO</button>
+          <button type="button" class="style-stats-pill" data-value="gsc_seo">GSC SEO</button>
+          <button type="button" class="style-stats-pill" data-value="seo_improve">SEO Improve</button>
+          <button type="button" class="style-stats-pill" data-value="seo_top_pages">SEO Top Pages</button>
+          <button type="button" class="style-stats-pill" data-value="seo_weekly_roundup">SEO Roundup</button>
           <button type="button" class="style-stats-pill" data-value="report">Report</button>
           <button type="button" class="style-stats-pill" data-value="other">Other</button>
         </div>
@@ -4626,10 +4630,15 @@ function applyJobsHistoryFilter() {
   const pf = _jobHistoryPlatformFilter, tf = _jobHistoryTypeFilter;
   // Window is applied server-side (see loadJobsHistory), so this filter only
   // narrows on platform/type.
-  const filtered = _jobHistoryRuns.filter(r =>
-    (pf === 'all' || r.platform_key === pf) &&
-    (tf === 'all' || r.job_type === tf)
-  );
+  const filtered = _jobHistoryRuns.filter(r => {
+    if (pf !== 'all' && r.platform_key !== pf) return false;
+    if (tf === 'all') return true;
+    // Type filter matches either job_type (general: post/engage/dm-replies/etc.)
+    // or the normalized script name (specific SEO subtypes: serp_seo, gsc_seo,
+    // seo_improve, seo_top_pages, seo_weekly_roundup).
+    const scriptNorm = (r.script || '').replace(/-/g, '_').toLowerCase();
+    return r.job_type === tf || scriptNorm === tf;
+  });
   body.innerHTML = buildJobsHistoryTable(filtered);
 }
 
