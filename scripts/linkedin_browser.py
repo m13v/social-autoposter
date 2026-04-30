@@ -64,6 +64,12 @@ LOCK_EXPIRY = 300  # Must match ~/.claude/hooks/linkedin-agent-lock.sh
 LOCK_WAIT_MAX = 30  # seconds; pre-check should not block long
 LOCK_POLL_INTERVAL = 2
 VIEWPORT = {"width": 911, "height": 1016}
+# linkedin-agent uses the system Google Chrome binary, not Playwright's
+# bundled "Chrome for Testing". Profile was created/migrated by system
+# Chrome and "Chrome for Testing" fails to open it (SIGTRAP / kill EPERM
+# observed 2026-04-29). Match the agent's binary so the profile stays
+# compatible.
+SYSTEM_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 _LOCK_SESSION_ID = f"python:{os.getpid()}"
 _LOCK_INHERITED = False
@@ -158,10 +164,22 @@ def unread_dms() -> dict:
         context = None
         last_err: Optional[Exception] = None
         while True:
+            # Clear stale Singleton* before each attempt. The MCP-spawned
+            # Chrome may have left these behind on a non-graceful exit;
+            # ensure_browser_healthy in lock.sh also tries this but
+            # there's still a race window.
+            for fname in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                try:
+                    os.remove(os.path.join(PROFILE_DIR, fname))
+                except OSError:
+                    pass
             try:
                 context = p.chromium.launch_persistent_context(
                     PROFILE_DIR,
                     headless=False,
+                    executable_path=(
+                        SYSTEM_CHROME if os.path.exists(SYSTEM_CHROME) else None
+                    ),
                     args=[
                         "--disable-blink-features=AutomationControlled",
                         "--window-position=3953,-1032",
