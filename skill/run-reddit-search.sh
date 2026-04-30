@@ -93,6 +93,7 @@ for i in $(seq 1 "$ITERATIONS"); do
     # post, release immediately so the next iteration's plan runs unlocked.
     log "Acquiring reddit-browser lock for post phase..."
     acquire_lock "reddit-browser" 3600
+    ensure_browser_healthy "reddit"
 
     set +e
     POST_OUT=$(python3 "$REPO_DIR/scripts/post_reddit.py" --phase post --in "$PLAN_FILE" 2>&1 | tee -a "$LOG_FILE")
