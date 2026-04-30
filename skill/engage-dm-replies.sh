@@ -538,7 +538,7 @@ if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ]; t
    python3 scripts/twitter_browser.py unread-dms > /tmp/twitter_threads.json
    ```
    This handles the encrypted DM passcode automatically (loaded from .env TWITTER_DM_PASSCODE).
-   Returns JSON array with: author, handle, preview, time, thread_url, is_from_us.
+   Returns JSON array with: author, handle, preview, time, thread_url, is_from_us, has_unread.
 
 1a. Backfill chat URLs for any existing X DM row still missing one. Cheap, idempotent, fills buttons for historical rows whose chat is still in the sidebar:
    ```bash
@@ -546,11 +546,17 @@ if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ]; t
      | python3 scripts/dm_conversation.py backfill-urls --platform x
    ```
 
-2. For each conversation where is_from_us is false (has unread inbound messages), read the full messages:
+1b. **REQUIRED:** Filter the sidebar dump down to threads that actually need inspection. The filter combines sidebar signals (is_from_us, has_unread, time) with the DB's last outbound message_at to drop threads where we already sent the most recent message. This is what saves the run from $30+ in unnecessary `read-conversation` calls:
+   ```bash
+   python3 scripts/dm_conversation.py filter-inbox --platform x --file /tmp/twitter_threads.json > /tmp/twitter_threads_to_inspect.json
+   ```
+   The summary line goes to stderr (`in=N kept=M skipped=K (...breakdown...)`). The filtered JSON array on stdout contains only threads worth opening, each enriched with `_filter_reason` (sidebar_unread / no_db_row / outbound_older_than_window) and `_dm_id`. **Use this file as the inspection list in step 2, not the raw scan.**
+
+2. For each conversation in `/tmp/twitter_threads_to_inspect.json`, read the full messages:
    ```bash
    python3 scripts/twitter_browser.py read-conversation "THREAD_URL"
    ```
-   Returns JSON with: partner_name, partner_handle, messages (each with sender, content, time, is_from_us), total_found.
+   Returns JSON with: partner_name, partner_handle, messages (each with sender, content, time, is_from_us), total_found. Do NOT iterate over the raw `/tmp/twitter_threads.json` — that re-introduces the all-threads-every-cycle waste this filter exists to prevent.
 
 3. For each conversation:
    a. Identify the sender from the partner_name/partner_handle
@@ -559,7 +565,7 @@ if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ]; t
       ```bash
       cd ~/social-autoposter && python3 scripts/dm_conversation.py ensure-dm --platform x --author "PARTNER_HANDLE" --chat-url "THREAD_URL"
       ```
-      Use the printed `DM_ID=<n>` for every subsequent log-inbound on this conversation. `THREAD_URL` must be `https://x.com/i/chat/<ids>` (the value from `thread_url` returned by `twitter_browser.py unread-dms`, never the tweet URL or the profile URL). The validator refuses anything else.
+      Use the printed `DM_ID=<n>` for every subsequent log-inbound on this conversation. `THREAD_URL` must be `https://x.com/i/chat/<ids>` (the value from `thread_url` returned by `twitter_browser.py unread-dms`, never the tweet URL or the profile URL). The validator refuses anything else. If the filter step in 1b already attached `_dm_id`, you can skip this call for that thread.
    d. Log inbound messages:
       ```bash
       python3 scripts/dm_conversation.py log-inbound --dm-id DM_ID --author "PARTNER_HANDLE" --content "MESSAGE_TEXT"
