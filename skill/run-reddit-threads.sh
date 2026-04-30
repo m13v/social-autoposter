@@ -185,6 +185,7 @@ export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
 
 # Acquire the browser lock now, immediately before the Claude/MCP step.
 acquire_lock "reddit-browser" 3600
+ensure_browser_healthy "reddit"
 
 # Capture Claude output to a temp file so a non-zero exit doesn't swallow stderr
 # before we get a chance to log it. Without this, run_claude.sh failures look
