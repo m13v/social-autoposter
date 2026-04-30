@@ -312,6 +312,56 @@ QUICK_CHECK_RE = re.compile(
 )
 
 
+def _find_template_expr_end(body: str, start: int) -> int:
+    """Given body[start:start+2] == '${', return the index one past the
+    matching '}' that closes the expression. Skips over string and template
+    literals inside the expression so that braces appearing in those don't
+    confuse the depth counter (the bug that broke a nested `${...}` inside
+    a ternary in hero-videos.tsx).
+    """
+    assert body[start:start+2] == '${'
+    depth = 1
+    i = start + 2
+    n = len(body)
+    while i < n and depth > 0:
+        c = body[i]
+        if c == '{':
+            depth += 1
+            i += 1
+        elif c == '}':
+            depth -= 1
+            i += 1
+        elif c == '"' or c == "'":
+            quote = c
+            i += 1
+            while i < n and body[i] != quote:
+                if body[i] == '\\' and i + 1 < n:
+                    i += 2
+                else:
+                    i += 1
+            i += 1  # consume closing quote
+        elif c == '`':
+            i += 1
+            while i < n and body[i] != '`':
+                if body[i] == '\\' and i + 1 < n:
+                    i += 2
+                elif body[i:i+2] == '${':
+                    i = _find_template_expr_end(body, i)
+                else:
+                    i += 1
+            i += 1  # consume closing backtick
+        elif c == '/' and i + 1 < n and body[i+1] == '/':
+            # line comment - skip to end of line
+            nl = body.find('\n', i)
+            i = n if nl < 0 else nl
+        elif c == '/' and i + 1 < n and body[i+1] == '*':
+            end = body.find('*/', i + 2)
+            i = n if end < 0 else end + 2
+        else:
+            i += 1
+    return i
+
+
 def rewrite_text(text: str) -> tuple[str, int]:
     total_changes = 0
 
