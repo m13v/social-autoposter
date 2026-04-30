@@ -78,7 +78,10 @@ done
 # when the org has exhausted its monthly usage or a provider-side rate limit
 # trips. Once any lane reports it, every remaining lane would fail the same
 # way and burn credits for nothing — short-circuit instead.
-QUOTA_MARKERS='monthly usage limit|rate.?limit|429 Too Many|insufficient_quota'
+# Match both shell-output markers and Claude session JSONL signals
+# (rate_limit_event / api_error_status:429 / "hit your limit"). The latter
+# only appear in the per-product *_stream.jsonl, never in the shell log.
+QUOTA_MARKERS='monthly usage limit|rate.?limit|429 Too Many|insufficient_quota|rate_limit_event|"api_error_status":429|hit your limit'
 QUOTA_HIT=0
 
 # Run products sequentially instead of in parallel. Parallel fanout used to
@@ -176,12 +179,24 @@ PY
     # killing the subshell — e.g. the 22:32 claude-meter incident) doesn't
     # trip the parent's `set -e` and abandon the remaining queued lanes.
 
-    # Quota short-circuit: the lane just finished; if its log contains a
-    # quota marker the next lane will hit the same wall. Flag it so the
-    # outer loop breaks on the next iteration.
+    # Quota short-circuit: the lane just finished; if its log OR its Claude
+    # session JSONL contains a quota marker, the next lane will hit the same
+    # wall. Flag it so the outer loop breaks on the next iteration. The
+    # Claude session stream lives under seo/logs/<product_lower>/ alongside
+    # the generator's other artifacts; the lane_log only captures shell
+    # output, which never contains rate_limit_event.
+    quota_match=""
     if grep -qiE "$QUOTA_MARKERS" "$lane_log" 2>/dev/null; then
+        quota_match="$lane_log"
+    else
+        product_stream=$(ls -t "$SCRIPT_DIR/logs/${product_lower}/"*_stream.jsonl 2>/dev/null | head -1)
+        if [ -n "$product_stream" ] && grep -qiE "$QUOTA_MARKERS" "$product_stream" 2>/dev/null; then
+            quota_match="$product_stream"
+        fi
+    fi
+    if [ -n "$quota_match" ]; then
         QUOTA_HIT=1
-        log "  !! $product hit API quota — halting tick, ${#ELIGIBLE[@]} lanes still pending"
+        log "  !! $product hit API quota ($(basename "$quota_match")) — halting tick, ${#ELIGIBLE[@]} lanes still pending"
     fi
 done
 
