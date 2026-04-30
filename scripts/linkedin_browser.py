@@ -359,13 +359,53 @@ def unread_dms() -> dict:
                 pass
 
 
+def unread_dms_with_retry(max_attempts: int = 2) -> dict:
+    """Wrap unread_dms with one retry on TargetClosedError-style transient
+    failures. The headed Chrome launch races against atexit lock release on
+    the previous run; a single retry after a short delay clears most cases.
+    """
+    last_result: dict = {"ok": False, "error": "no_attempts"}
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = unread_dms()
+        except Exception as e:
+            result = {
+                "ok": False,
+                "error": "exception",
+                "detail": f"{type(e).__name__}: {e}",
+                "attempt": attempt,
+            }
+        last_result = result
+        # Only retry on transient browser-target failures, not on
+        # session_invalid / profile_locked which won't self-heal.
+        err = (result.get("error") or "").lower()
+        detail = (result.get("detail") or "").lower()
+        transient = (
+            "targetclosed" in detail
+            or "target page" in detail
+            or "browser has been closed" in detail
+            or err == "navigation_failed"
+        )
+        if result.get("ok") or not transient or attempt >= max_attempts:
+            if attempt > 1:
+                result["retry_attempt"] = attempt
+            return result
+        print(
+            f"[linkedin_browser] transient failure attempt {attempt}: "
+            f"{result.get('detail') or result.get('error')}; retrying...",
+            file=sys.stderr,
+        )
+        time.sleep(2)
+    return last_result
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(2)
     cmd = sys.argv[1]
     if cmd == "unread-dms":
-        result = unread_dms()
+        result = unread_dms_with_retry()
         print(json.dumps(result, indent=2))
         sys.exit(0 if result.get("ok") else 1)
     print(f"Unknown command: {cmd}", file=sys.stderr)
