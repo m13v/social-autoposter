@@ -286,7 +286,12 @@ CANDIDATES=$(psql "$DATABASE_URL" -t -A -F '|' -c "
            virality_score,
            COALESCE(delta_score, 0), matched_project, search_topic,
            likes_t1, retweets_t1, replies_t1, views_t1, author_followers,
-           EXTRACT(EPOCH FROM (NOW() - tweet_posted_at))/3600
+           EXTRACT(EPOCH FROM (NOW() - tweet_posted_at))/3600,
+           REPLACE(REPLACE(COALESCE(draft_reply_text, ''), E'\n', ' '), E'\r', ' '),
+           COALESCE(draft_engagement_style, ''),
+           CASE WHEN drafted_at IS NULL THEN -1
+                ELSE EXTRACT(EPOCH FROM (NOW() - drafted_at))/60
+           END
     FROM twitter_candidates
     WHERE batch_id='$BATCH_ID' AND status='pending' AND delta_score >= 1
     ORDER BY delta_score DESC
@@ -321,7 +326,14 @@ fi
 log "Adaptive post cap: $HIGH_DELTA_COUNT candidates with Δ≥10 → POST_LIMIT=$POST_LIMIT"
 
 CANDIDATE_BLOCK=""
-while IFS='|' read -r cid curl cauthor ctext cscore cdelta cproject ctopic clikes crts creplies cviews cfollowers cage; do
+while IFS='|' read -r cid curl cauthor ctext cscore cdelta cproject ctopic clikes crts creplies cviews cfollowers cage cdraft cdraftstyle cdraftage; do
+    DRAFT_LINE=""
+    if [ -n "$cdraft" ] && [ "$cdraftage" != "-1" ]; then
+        # Round draft age to whole minutes for the prompt.
+        DRAFT_MIN=$(printf '%.0f' "$cdraftage")
+        DRAFT_LINE="
+EXISTING DRAFT (style=$cdraftstyle, age=${DRAFT_MIN}m): $cdraft"
+    fi
     CANDIDATE_BLOCK="${CANDIDATE_BLOCK}
 ---
 Candidate ID: $cid
@@ -330,7 +342,7 @@ Author: @$cauthor (${cfollowers} followers)
 Text: $ctext
 Score: $cscore | Delta (5min): $cdelta | Likes: $clikes | RTs: $crts | Replies: $creplies | Views: $cviews | Age: ${cage}h
 Search query: $ctopic
-Project match: $cproject
+Project match: $cproject${DRAFT_LINE}
 "
 done <<< "$CANDIDATES"
 
@@ -381,7 +393,12 @@ Reply to AT MOST $POST_LIMIT candidate(s) this cycle (post limit). Pick the ones
 For each chosen candidate:
 1. Navigate to the candidate URL via mcp__twitter-agent__browser_navigate (read-only, to understand context)
 2. Read the full thread
-3. Draft a reply using the best engagement style. Keep it 1-2 sentences. NEVER use em dashes. Apply the matched project's \`voice\` block from ALL_PROJECTS_JSON above: follow \`voice.tone\`, never violate any item in \`voice.never\`, and mirror \`voice.examples\` / \`voice.examples_good\` when present.
+3. DRAFT HANDLING (existing draft vs fresh):
+   - If the candidate block above shows an EXISTING DRAFT line AND the draft age is under 30 minutes, REUSE that draft text as-is. Skip drafting; jump to step 4 with YOUR_REPLY_TEXT = the existing draft. Reason: a prior cycle already paid the LLM cost; don't waste it. The draft was vetted at draft time; thread context rarely shifts meaningfully in 30 min.
+   - Otherwise (no draft, or draft age ≥ 30 min): draft a reply using the best engagement style. Keep it 1-2 sentences. NEVER use em dashes. Apply the matched project's \`voice\` block from ALL_PROJECTS_JSON above: follow \`voice.tone\`, never violate any item in \`voice.never\`, and mirror \`voice.examples\` / \`voice.examples_good\` when present.
+3a. PERSIST THE DRAFT BEFORE POSTING (only when you drafted fresh in step 3; skip when reusing an existing draft):
+     python3 $REPO_DIR/scripts/log_draft.py --candidate-id CANDIDATE_ID --text 'YOUR_REPLY_TEXT' --style STYLE
+   This guarantees that if step 4 fails (CDP timeout, browser crash, monthly cap), the next cycle's Phase 2b sees the draft on the salvaged row and can post it without redrafting. Failure here is non-fatal: log a warning and continue to step 4.
 4. Post via the CDP script:
      python3 $REPO_DIR/scripts/twitter_browser.py reply \"CANDIDATE_URL\" \"YOUR_REPLY_TEXT\"
    It returns JSON. Parse reply_url. If reply_url is missing/invalid/doesn't match x.com/m13v_/status/, treat as FAILED: do NOT log, mark candidate 'failed' not 'posted'. NEVER use the parent URL as our_url.
