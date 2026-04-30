@@ -545,6 +545,13 @@ def _log_search(query: str, vertical: str, ok: bool, error: Optional[str]) -> No
 # evaluate channel marshals nested objects. Limit to the first 25 cards on the
 # page — anything beyond that requires scrolling, which we explicitly do not
 # do.
+#
+# Provenance:
+#   _SEARCH_JS_CONTENT  — lifted from skill/run-linkedin.sh (production-tested).
+#   _SEARCH_JS_PEOPLE   — UNVERIFIED. Selectors based on widely-documented
+#                         LinkedIn patterns + multiple fallbacks. Smoke-test
+#                         against a real SERP before relying on the output.
+#   _SEARCH_JS_COMPANIES — UNVERIFIED. Same caveat as people.
 _SEARCH_JS_PEOPLE = r"""
 () => {
   const out = [];
@@ -586,52 +593,147 @@ _SEARCH_JS_PEOPLE = r"""
 }
 """
 
+# Content-search extractor: lifted verbatim (modulo JSON.stringify wrap) from
+# skill/run-linkedin.sh Phase A, which has been the production scraper since
+# the post-restriction rebuild. Richer than a basic title/href grab: pulls
+# activity URN with regex fallbacks, author follower count, post age in
+# hours, and reaction/comment/repost counts from social-details-social-counts.
+# Keep this in sync if either side changes.
 _SEARCH_JS_CONTENT = r"""
 () => {
   const out = [];
-  const cards = document.querySelectorAll(
-    "div.feed-shared-update-v2[data-urn], "
-    + "div.update-components-update-v2, "
-    + "[data-chameleon-result-urn]"
+  const containers = document.querySelectorAll(
+    'div.feed-shared-update-v2, '
+    + 'div[data-urn*="urn:li:activity"], '
+    + 'div[data-urn*="urn:li:share"], '
+    + 'div[data-urn*="urn:li:ugcPost"]'
   );
-  for (const c of Array.from(cards).slice(0, 25)) {
-    const urn = c.getAttribute("data-urn")
-      || c.getAttribute("data-chameleon-result-urn") || "";
-    const actorLink = c.querySelector(
-      "a.update-components-actor__meta-link, "
-      + ".update-components-actor a[href*='/in/'], "
-      + ".update-components-actor a[href*='/company/']"
-    );
-    const author = (() => {
-      const a = c.querySelector(
-        ".update-components-actor__title, "
-        + ".update-components-actor__name, "
-        + "span.feed-shared-actor__name"
-      );
-      return a ? (a.textContent || "").trim() : "";
-    })();
-    const text = (() => {
-      const t = c.querySelector(
-        ".update-components-text, .feed-shared-update-v2__description, "
-        + ".update-components-update-v2__commentary"
-      );
-      return t ? (t.textContent || "").trim() : "";
-    })();
-    const activityMatch = urn.match(/activity:(\d+)/)
-      || urn.match(/ugcPost:(\d+)/);
-    const postUrl = activityMatch
-      ? ("https://www.linkedin.com/feed/update/urn:li:activity:"
-          + activityMatch[1] + "/")
-      : "";
-    if (!author && !text && !postUrl) continue;
-    out.push({
-      author: author.replace(/\s+/g, " ").slice(0, 200),
-      post_text: text.replace(/\s+/g, " ").slice(0, 600),
-      post_url: postUrl,
-      actor_url: actorLink
-        ? (actorLink.href || "").split("?")[0] : "",
-    });
+  const seenUrns = new Set();
+  const re = /(activity|share|ugcPost)[:_-](\d{16,19})/gi;
+
+  function parseRelativeAge(txt) {
+    if (!txt) return null;
+    const m = txt.match(/(\d+)\s*(s|m|h|d|w|mo|y)/i);
+    if (!m) return null;
+    const n = parseInt(m[1], 10);
+    const unit = m[2].toLowerCase();
+    const map = { s: 1/3600, m: 1/60, h: 1, d: 24, w: 24*7, mo: 24*30, y: 24*365 };
+    return n * (map[unit] || 0);
   }
+  function parseCount(txt) {
+    if (!txt) return 0;
+    const t = txt.replace(/,/g, '').trim();
+    const m = t.match(/([\d.]+)\s*([KkMm]?)/);
+    if (!m) return 0;
+    const n = parseFloat(m[1]);
+    const mult = m[2].toLowerCase() === 'k' ? 1000
+      : (m[2].toLowerCase() === 'm' ? 1_000_000 : 1);
+    return Math.round(n * mult);
+  }
+
+  Array.from(containers).slice(0, 25).forEach(el => {
+    let activityId = null;
+    const urns = new Set();
+    const dataUrn = el.getAttribute('data-urn') || '';
+    let m;
+    re.lastIndex = 0;
+    while ((m = re.exec(dataUrn)) !== null) {
+      urns.add(m[2]);
+      if (m[1].toLowerCase() === 'activity' && !activityId) activityId = m[2];
+    }
+    if (!activityId) {
+      el.querySelectorAll(
+        '[data-urn], a[href*="urn:li"], a[href*="/feed/update/"]'
+      ).forEach(d => {
+        const v = (d.getAttribute('data-urn') || d.getAttribute('href') || '');
+        re.lastIndex = 0;
+        let mm;
+        while ((mm = re.exec(v)) !== null) {
+          urns.add(mm[2]);
+          if (mm[1].toLowerCase() === 'activity' && !activityId) activityId = mm[2];
+        }
+      });
+    }
+    if (!activityId || seenUrns.has(activityId)) return;
+    seenUrns.add(activityId);
+
+    const authorAnchor = el.querySelector(
+      'a[href*="/in/"], a[data-control-name*="actor"]'
+    );
+    const authorName = (el.querySelector(
+      '.update-components-actor__name, span.feed-shared-actor__name'
+    )?.textContent || '').trim();
+    const authorUrl = authorAnchor ? authorAnchor.href : null;
+    let authorFollowers = 0;
+    const supplementary = el.querySelector(
+      '.update-components-actor__supplementary-actor-info, '
+      + '.feed-shared-actor__sub-description'
+    );
+    if (supplementary) {
+      const fm = (supplementary.textContent || '').match(
+        /([\d.,]+[KkMm]?)\s*follower/
+      );
+      if (fm) authorFollowers = parseCount(fm[1]);
+    }
+
+    const textEl = el.querySelector(
+      '.update-components-text, .feed-shared-update-v2__description, '
+      + 'span.break-words'
+    );
+    const postText = (textEl ? textEl.textContent : '').trim().slice(0, 500);
+
+    const timeEl = el.querySelector(
+      'time, .update-components-actor__sub-description, '
+      + 'span.feed-shared-actor__sub-description'
+    );
+    const ageText = timeEl ? timeEl.textContent.trim() : '';
+    const ageHours = parseRelativeAge(ageText);
+
+    const social = el.querySelector(
+      '.social-details-social-counts, .social-action-counts, '
+      + '.update-v2-social-activity'
+    );
+    let reactions = 0, comments = 0, reposts = 0;
+    if (social) {
+      const reactEl = social.querySelector(
+        '[aria-label*="reaction" i], '
+        + '.social-details-social-counts__reactions-count'
+      );
+      if (reactEl) reactions = parseCount(
+        reactEl.textContent || reactEl.getAttribute('aria-label') || ''
+      );
+      const commentEl = social.querySelector(
+        '[aria-label*="comment" i], '
+        + 'li.social-details-social-counts__comments'
+      );
+      if (commentEl) comments = parseCount(
+        commentEl.textContent || commentEl.getAttribute('aria-label') || ''
+      );
+      const repostEl = social.querySelector(
+        '[aria-label*="repost" i], '
+        + 'li.social-details-social-counts__item--right-aligned'
+      );
+      if (repostEl) reposts = parseCount(
+        repostEl.textContent || repostEl.getAttribute('aria-label') || ''
+      );
+    }
+
+    out.push({
+      post_url: 'https://www.linkedin.com/feed/update/urn:li:activity:'
+        + activityId + '/',
+      activity_id: activityId,
+      all_urns: Array.from(urns),
+      author_name: authorName || null,
+      author_profile_url: authorUrl,
+      author_followers: authorFollowers || null,
+      post_text: postText,
+      age_hours: ageHours,
+      reactions: reactions,
+      comments: comments,
+      reposts: reposts,
+      age_text: ageText
+    });
+  });
   return JSON.stringify(out);
 }
 """
@@ -702,8 +804,12 @@ def search(vertical: str, query: str) -> dict:
     _acquire_browser_lock()
 
     encoded = urllib.parse.quote(query)
+    # Content searches sort by date_posted to match skill/run-linkedin.sh
+    # Phase A behavior — fresh posts > stale ones for engagement work.
+    suffix = "&sortBy=date_posted" if vertical == "content" else ""
     search_url = (
-        f"https://www.linkedin.com/search/results/{vertical}/?keywords={encoded}"
+        f"https://www.linkedin.com/search/results/{vertical}/"
+        f"?keywords={encoded}{suffix}"
     )
 
     with sync_playwright() as p:
