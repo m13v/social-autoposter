@@ -10,6 +10,7 @@ set -euo pipefail
 # Browser-profile lock first (shared with other twitter pipelines), then pipeline lock.
 source "$(dirname "$0")/lock.sh"
 acquire_lock "twitter-browser" 3600
+ensure_browser_healthy "twitter"
 acquire_lock "dm-outreach-twitter" 2700
 
 # Load secrets
