@@ -103,6 +103,33 @@ print(json.dumps({p['name']: p.get('voice', {}) for p in c.get('projects', []) i
     # Top performers feedback report (platform-wide)
     TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter 2>/dev/null || echo "(top performers report unavailable)")
 
+    # Precompute active Twitter campaign suffix + sample_rate + id for the
+    # prompt to inline. Phase B replies go through the MCP browser_type path
+    # (twitter_browser.py reply wedges against the MCP profile), so tool-level
+    # injection is unavailable; the LLM has to flip a coin and append the
+    # literal suffix by hand. When no active campaign exists, all three vars
+    # resolve to empty strings and the prompt's "if empty, do nothing extra"
+    # branch fires. Mirrors the Reddit MCP-fallback pattern in
+    # engage-dm-replies.sh.
+    TWITTER_CAMPAIGN_SUFFIX_LITERAL=$(psql "$DATABASE_URL" -t -A -c "
+        SELECT suffix FROM campaigns
+        WHERE status='active' AND (',' || platforms || ',') LIKE '%,twitter,%'
+          AND max_posts_total IS NOT NULL AND posts_made < max_posts_total
+          AND suffix IS NOT NULL AND suffix <> ''
+        ORDER BY id LIMIT 1;" 2>/dev/null | tr -d '\n' || echo "")
+    TWITTER_CAMPAIGN_SAMPLE_RATE=$(psql "$DATABASE_URL" -t -A -c "
+        SELECT COALESCE(sample_rate, 1.000) FROM campaigns
+        WHERE status='active' AND (',' || platforms || ',') LIKE '%,twitter,%'
+          AND max_posts_total IS NOT NULL AND posts_made < max_posts_total
+          AND suffix IS NOT NULL AND suffix <> ''
+        ORDER BY id LIMIT 1;" 2>/dev/null | tr -d '\n' || echo "")
+    TWITTER_CAMPAIGN_ID=$(psql "$DATABASE_URL" -t -A -c "
+        SELECT id FROM campaigns
+        WHERE status='active' AND (',' || platforms || ',') LIKE '%,twitter,%'
+          AND max_posts_total IS NOT NULL AND posts_made < max_posts_total
+          AND suffix IS NOT NULL AND suffix <> ''
+        ORDER BY id LIMIT 1;" 2>/dev/null | tr -d '\n' || echo "")
+
     PHASE_B_PROMPT=$(mktemp)
     cat > "$PHASE_B_PROMPT" <<PROMPT_EOF
 You are the Social Autoposter Twitter/X engagement bot.
@@ -188,6 +215,22 @@ MANDATORY reply flow for every item:
              the existing project_name and follow global content rules.
   Step 3: Draft the reply using the resolved project's voice + chosen engagement
           style. 1-2 sentences. NEVER em dashes. Match parent tweet language.
+  Step 3a: ACTIVE CAMPAIGN SUFFIX (MCP fallback, mirrors Reddit's pattern).
+          The phase-B reply path goes through mcp__twitter-agent__browser_type
+          (twitter_browser.py reply wedges against the same MCP profile), so
+          the tool layer can NOT inject the campaign suffix — the LLM has to
+          do it by hand. Active Twitter campaign (precomputed by the shell):
+            TWITTER_CAMPAIGN_ID=$TWITTER_CAMPAIGN_ID
+            TWITTER_CAMPAIGN_SUFFIX_LITERAL='$TWITTER_CAMPAIGN_SUFFIX_LITERAL'
+            TWITTER_CAMPAIGN_SAMPLE_RATE=$TWITTER_CAMPAIGN_SAMPLE_RATE
+          If TWITTER_CAMPAIGN_SUFFIX_LITERAL is empty, do nothing extra.
+          Otherwise: flip a coin at TWITTER_CAMPAIGN_SAMPLE_RATE. On heads,
+          append the literal suffix verbatim to YOUR_REPLY_TEXT and remember
+          that the campaign fired (CAMPAIGN_FIRED=1 + CAMPAIGN_ID_TO_BUMP=$TWITTER_CAMPAIGN_ID).
+          On tails, leave the text alone and CAMPAIGN_FIRED=0.
+          Do this BEFORE Step 4, since the typed text in Step 4c must include
+          the suffix. The literal text rule is the entire point: never paraphrase
+          or reformat the suffix.
   Step 4: Post the reply via the SAME mcp__twitter-agent__ browser from Step 2.
           a) mcp__twitter-agent__browser_snapshot to refresh element refs.
           b) Find the reply textbox: role="textbox" with name like "Post your reply"
@@ -209,7 +252,13 @@ MANDATORY reply flow for every item:
              - Find the topmost link matching /m13v_/status/<digits>. That is REPLY_URL.
              If no fresh reply URL appears within 30s, leave REPLY_URL empty and
              continue to Step 5 (the reply IS posted; we just lack the URL link).
-  Step 5: python3 reply_db.py replied ID "reply text" REPLY_URL ENGAGEMENT_STYLE [IS_RECOMMENDATION]   <- mark AFTER success. ENGAGEMENT_STYLE is TONE (e.g. critic, storyteller). Pass IS_RECOMMENDATION="1" ONLY when the reply casually recommends a project (Tier 2/3); leave unset otherwise. Tone and intent are independent.
+  Step 5: python3 reply_db.py replied ID "reply text" REPLY_URL ENGAGEMENT_STYLE [IS_RECOMMENDATION]   <- mark AFTER success. ENGAGEMENT_STYLE is TONE (e.g. critic, storyteller). Pass IS_RECOMMENDATION="1" ONLY when the reply casually recommends a project (Tier 2/3); leave unset otherwise. Tone and intent are independent. Use the FINAL TYPED TEXT (with any campaign suffix from Step 3a) as "reply text" so the stored content matches what was posted.
+  Step 5a: If CAMPAIGN_FIRED=1 from Step 3a, attribute this reply to the
+          campaign and advance the counter. The reply id is the ID you passed
+          to reply_db.py in Step 5 (it returns the row id; or query
+          \`SELECT id FROM replies ORDER BY id DESC LIMIT 1\` if you can't parse it):
+            python3 $REPO_DIR/scripts/campaign_bump.py --table replies --id REPLY_ROW_ID --campaign-id CAMPAIGN_ID_TO_BUMP
+          If CAMPAIGN_FIRED=0, skip this step entirely.
 If Step 5 fails, the item stays 'processing' and will be reset to 'pending' on the next run.
 If the tweet has been deleted or is unavailable, mark as 'skipped' with reason 'tweet_not_found'.
 
