@@ -115,10 +115,17 @@ _run_one() {
 #
 # We grep BOTH the per-product .log (shell wrapper output) AND the matching
 # Claude session _stream.jsonl, because the actual rate-limit signal from
-# Claude lives only in the JSONL stream as `rate_limit_event` /
-# `api_error_status":429` / `"You've hit your limit"`. Pre-2026-04-29 this
-# only grepped the .log and let the loop walk into 9 sequential failures.
-QUOTA_MARKERS='monthly usage limit|rate.?limit|429 Too Many|insufficient_quota|rate_limit_event|"api_error_status":429|hit your limit'
+# Claude lives only in the JSONL stream as `"api_error_status":429` /
+# `"You've hit your limit"` / a rate_limit_event with `"status":"rejected"`.
+# Pre-2026-04-29 this only grepped the .log and let the loop walk into 9
+# sequential failures.
+#
+# IMPORTANT 2026-04-29: do NOT match bare `rate_limit_event` or `rate.?limit`.
+# Claude streams a `rate_limit_event` object on EVERY successful turn as a
+# heartbeat (e.g. `"status":"allowed"` or `"allowed_warning"`), so those
+# patterns trip on every healthy run and short-circuit after product #1.
+# Only the `"status":"rejected"` variant signals an actual rejection.
+QUOTA_MARKERS='monthly usage limit|429 Too Many|insufficient_quota|"api_error_status":429|hit your limit|"status":"rejected"'
 
 _product_log_latest() {
     # Path to the most-recent per-product log under $SCRIPT_DIR/logs/<lower>/improve.
