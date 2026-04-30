@@ -950,8 +950,22 @@ def update_github(db, quiet=False, limit=None):
 def update_twitter(db, config=None, quiet=False, audit_mode=False):
     """Fetch Twitter/X stats via fxtwitter API (no browser needed).
 
-    In normal mode: only updates tweets needing refresh (engagement_updated_at older than 7 days).
-    In audit_mode: checks ALL active tweets, also detects deleted/suspended tweets.
+    Two cadences split by post age so the per-6h job and the daily audit don't
+    fight over the same column:
+
+      Per-6h (audit_mode=False): hot tier, posts younger than 7 days, gated at
+        5h staleness. Hit by stats-twitter every 6 hours so each fresh tweet is
+        polled ~4x per day. Deletion detection runs here too so a deleted hot
+        tweet is caught within hours instead of waiting on the daily audit.
+
+      Daily audit (audit_mode=True): cold tier, posts older than 7 days. Hit
+        by audit-twitter at 04:13. Stable-skip (3+ unchanged scans + posted_at
+        older than 5 days) keeps the long tail cheap; deletion detection
+        confirms removed tweets after 2 strikes.
+
+    Before this split, audit refreshed every active row daily and stamped
+    engagement_updated_at on all of them, which silently locked the per-6h
+    job out of the hot tier for a week at a time.
     """
     config = config or {}
 
@@ -962,6 +976,7 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
             "upvotes, views "
             "FROM posts "
             "WHERE platform='twitter' AND status='active' AND our_url IS NOT NULL "
+            "AND posted_at <= NOW() - INTERVAL '7 days' "
             "ORDER BY id"
         ).fetchall()
     else:
@@ -971,7 +986,8 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
             "upvotes, views "
             "FROM posts "
             "WHERE platform='twitter' AND status='active' AND our_url IS NOT NULL "
-            "AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days') "
+            "AND posted_at > NOW() - INTERVAL '7 days' "
+            "AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '5 hours') "
             "ORDER BY id"
         ).fetchall()
 
@@ -986,8 +1002,10 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
         prev_upvotes = post[4]
         prev_views = post[5]
 
-        # Skip stable posts in non-audit mode: 3+ scans with no change AND older than 5 days
-        if not audit_mode and no_change >= 3 and posted_at:
+        # Stable-skip applies only to the cold tier (audit). The hot tier's
+        # SQL filter restricts to posted_at > NOW() - 7d, so the "older than
+        # 5 days" branch can only fire in audit mode anyway.
+        if audit_mode and no_change >= 3 and posted_at:
             age = datetime.now(timezone.utc) - (posted_at.replace(tzinfo=timezone.utc) if posted_at.tzinfo is None else posted_at)
             if age > timedelta(days=5):
                 skipped += 1
@@ -1021,30 +1039,29 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
         tweet = data.get("tweet")
 
         if code == 404 or tweet is None:
-            # Tweet not found - could be deleted or suspended
-            if audit_mode:
-                row = db.execute(
-                    "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
-                ).fetchone()
-                detect_count = (row[0] if row else 0) + 1
-                if detect_count >= 2:
-                    db.execute(
-                        "UPDATE posts SET status='deleted', deletion_detect_count=%s, "
-                        "status_checked_at=NOW() WHERE id=%s",
-                        [detect_count, post_id]
-                    )
-                    deleted += 1
-                    if not quiet:
-                        print(f"DELETED [{post_id}] (confirmed after {detect_count} detections)")
-                else:
-                    db.execute(
-                        "UPDATE posts SET deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
-                        [detect_count, post_id]
-                    )
-                    if not quiet:
-                        print(f"DELETION PENDING [{post_id}] (detection {detect_count}/2)")
+            # Tweet not found, could be deleted or suspended. Run the 2-strike
+            # confirmation in both modes so hot-tier deletions surface within
+            # hours; the cold-tier audit still runs the same pipeline daily.
+            row = db.execute(
+                "SELECT COALESCE(deletion_detect_count, 0) FROM posts WHERE id=%s", [post_id]
+            ).fetchone()
+            detect_count = (row[0] if row else 0) + 1
+            if detect_count >= 2:
+                db.execute(
+                    "UPDATE posts SET status='deleted', deletion_detect_count=%s, "
+                    "status_checked_at=NOW() WHERE id=%s",
+                    [detect_count, post_id]
+                )
+                deleted += 1
+                if not quiet:
+                    print(f"DELETED [{post_id}] (confirmed after {detect_count} detections)")
             else:
-                errors += 1
+                db.execute(
+                    "UPDATE posts SET deletion_detect_count=%s, status_checked_at=NOW() WHERE id=%s",
+                    [detect_count, post_id]
+                )
+                if not quiet:
+                    print(f"DELETION PENDING [{post_id}] (detection {detect_count}/2)")
             continue
 
         # Extract stats
@@ -1054,19 +1071,12 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
         retweets = tweet.get("retweets") or 0
         bookmarks = tweet.get("bookmarks") or 0
 
-        if audit_mode:
-            db.execute(
-                "UPDATE posts SET views=%s, upvotes=%s, comments_count=%s, "
-                "engagement_updated_at=NOW(), "
-                "status_checked_at=NOW(), deletion_detect_count=0 WHERE id=%s",
-                [views, likes, replies, post_id],
-            )
-        else:
-            db.execute(
-                "UPDATE posts SET views=%s, upvotes=%s, comments_count=%s, "
-                "engagement_updated_at=NOW(), deletion_detect_count=0 WHERE id=%s",
-                [views, likes, replies, post_id],
-            )
+        db.execute(
+            "UPDATE posts SET views=%s, upvotes=%s, comments_count=%s, "
+            "engagement_updated_at=NOW(), status_checked_at=NOW(), "
+            "deletion_detect_count=0 WHERE id=%s",
+            [views, likes, replies, post_id],
+        )
         dbmod.snapshot_post_views(db, post_id, views)
 
         updated += 1
