@@ -400,6 +400,28 @@ def unread_dms_with_retry(max_attempts: int = 2) -> dict:
 
 
 def main():
+    # Guard: only the engage-dm-replies pipeline is allowed to invoke this.
+    # Other Claude subprocess planners (post_reddit, post_twitter, etc.)
+    # auto-load CLAUDE.md as system context, see this helper documented
+    # there, and have wandered off-task to "smoke test" it — racing the
+    # linkedin profile's SingletonLock and triggering server-side session
+    # invalidation. The caller (engage-dm-replies.sh) sets this env var
+    # immediately before invoking; nothing else does.
+    if os.environ.get("SOCIAL_AUTOPOSTER_LINKEDIN_PRECHECK") != "1":
+        print(
+            json.dumps({
+                "ok": False,
+                "error": "unauthorized_caller",
+                "detail": (
+                    "linkedin_browser.py is the engage-dm-replies pre-check "
+                    "helper. Only that pipeline may invoke it. Set "
+                    "SOCIAL_AUTOPOSTER_LINKEDIN_PRECHECK=1 from the caller "
+                    "if this invocation is legitimate."
+                ),
+            }),
+            file=sys.stderr,
+        )
+        sys.exit(2)
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(2)
