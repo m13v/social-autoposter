@@ -6,6 +6,7 @@ set -uo pipefail
 
 source "$(dirname "$0")/lock.sh"
 acquire_lock "reddit-browser" 3600
+ensure_browser_healthy "reddit"
 acquire_lock "audit-reddit-resurrect" 3600
 
 # shellcheck source=/dev/null
