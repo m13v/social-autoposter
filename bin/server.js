@@ -4841,16 +4841,104 @@ function renderResult(run) {
   );
 }
 
+// Status badge for SEO per-product detail rows. The five "real" outcomes are:
+//   committed         -> good, page edited and pushed
+//   no_change         -> session ran, decided no change worth shipping (rare)
+//   no_traffic        -> picker bailed: no pageviews in last 24h
+//   posthog_throttle  -> PostHog HogQL 429 — picker couldn't even ask
+//   posthog_error     -> PostHog HogQL non-throttle error
+//   claude_rate_limit -> Claude session aborted by 5h usage limit
+//   claude_error      -> Claude session errored for some other reason
+//   brief_error       -> picker crashed mid-brief
+//   locked            -> per-product lock held by an earlier still-running tick
+//   failed            -> session committed but flagged failed (rare)
+//   unknown           -> fallback when nothing matched
+function _seoStatusBadge(status) {
+  const palette = {
+    committed:         { bg: 'rgba(34,197,94,0.15)',  fg: '#22c55e', text: 'committed' },
+    no_change:         { bg: 'rgba(148,163,184,0.18)', fg: '#94a3b8', text: 'no change' },
+    no_traffic:        { bg: 'rgba(148,163,184,0.18)', fg: '#94a3b8', text: 'no traffic' },
+    posthog_throttle:  { bg: 'rgba(234,179,8,0.18)',   fg: '#eab308', text: 'PostHog throttled' },
+    posthog_error:     { bg: 'rgba(234,88,12,0.18)',   fg: '#ea580c', text: 'PostHog error' },
+    claude_rate_limit: { bg: 'rgba(239,68,68,0.18)',   fg: '#ef4444', text: 'Claude rate-limit' },
+    claude_error:      { bg: 'rgba(239,68,68,0.18)',   fg: '#ef4444', text: 'Claude error' },
+    brief_error:       { bg: 'rgba(234,88,12,0.18)',   fg: '#ea580c', text: 'brief error' },
+    locked:            { bg: 'rgba(148,163,184,0.18)', fg: '#94a3b8', text: 'locked' },
+    failed:            { bg: 'rgba(239,68,68,0.18)',   fg: '#ef4444', text: 'failed' },
+    unknown:           { bg: 'rgba(148,163,184,0.18)', fg: '#94a3b8', text: status || 'unknown' },
+  };
+  const p = palette[status] || palette.unknown;
+  return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:' +
+    p.bg + ';color:' + p.fg + ';">' + p.text + '</span>';
+}
+
+function buildSeoDetailRows(run) {
+  const details = Array.isArray(run.details) ? run.details : [];
+  if (!details.length) return '';
+  const subRows = details.map(d => {
+    const cost = (typeof d.cost_usd === 'number' && d.cost_usd > 0)
+      ? '$' + d.cost_usd.toFixed(2)
+      : '<span style="color:var(--muted);">—</span>';
+    const turns = (typeof d.num_turns === 'number' && d.num_turns > 0)
+      ? d.num_turns
+      : '<span style="color:var(--muted);">—</span>';
+    const fmCount = (d.files_modified || []).length;
+    const filesCell = fmCount
+      ? ('<span style="color:#22c55e;font-weight:600;">' + fmCount + '</span> ' +
+         '<span style="color:var(--muted);font-size:11px;">' + (d.files_modified[0] || '') +
+         (fmCount > 1 ? ' +' + (fmCount - 1) : '') + '</span>')
+      : '<span style="color:var(--muted);">—</span>';
+    const detailCell = d.detail
+      ? '<span style="color:var(--muted);font-size:11px;">' + escapeHtml(d.detail) + '</span>'
+      : (d.target_slug
+          ? '<span style="color:var(--muted);font-size:11px;">' + escapeHtml(d.target_slug) + '</span>'
+          : '<span style="color:var(--muted);">—</span>');
+    return (
+      '<tr>' +
+        '<td style="padding-left:32px;">' + escapeHtml(d.product) + '</td>' +
+        '<td>' + _seoStatusBadge(d.status) + '</td>' +
+        '<td style="text-align:left;">' + detailCell + '</td>' +
+        '<td>' + turns + '</td>' +
+        '<td>' + cost + '</td>' +
+        '<td style="text-align:left;">' + filesCell + '</td>' +
+      '</tr>'
+    );
+  }).join('');
+  return (
+    '<tr class="sa-job-detail-row" style="display:none;background:rgba(148,163,184,0.04);">' +
+      '<td colspan="6" style="padding:8px 16px;">' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+          '<thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.04em;">' +
+            '<th style="text-align:left;padding:4px 8px 4px 32px;">Project</th>' +
+            '<th style="text-align:left;padding:4px 8px;">Status</th>' +
+            '<th style="text-align:left;padding:4px 8px;">Target / detail</th>' +
+            '<th style="text-align:left;padding:4px 8px;">Turns</th>' +
+            '<th style="text-align:left;padding:4px 8px;">Cost</th>' +
+            '<th style="text-align:left;padding:4px 8px;">Files modified</th>' +
+          '</tr></thead>' +
+          '<tbody>' + subRows + '</tbody>' +
+        '</table>' +
+      '</td>' +
+    '</tr>'
+  );
+}
+
 function buildJobsHistoryTable(runs) {
   if (!runs || !runs.length) {
     return '<div class="style-stats-empty" style="padding:16px;">No runs match the current filters.</div>';
   }
-  const rows = runs.slice(0, 300).map(r => {
+  const rowsHtml = runs.slice(0, 300).map((r, idx) => {
     const cost = r.result && r.result.cost_usd;
     const costCell = cost ? fmtCost(cost) : '<span style="color:var(--muted);">—</span>';
-    return (
-      '<tr>' +
-        '<td style="text-align:left;padding-left:16px;">' + (r.job_label || r.script) + '</td>' +
+    const hasDetails = Array.isArray(r.details) && r.details.length;
+    const caret = hasDetails
+      ? '<span class="sa-job-caret" style="display:inline-block;width:12px;color:var(--muted);cursor:pointer;user-select:none;transition:transform 0.15s ease;">&#9656;</span> '
+      : '<span style="display:inline-block;width:12px;"></span> ';
+    const rowClass = hasDetails ? 'sa-job-row sa-job-row-expandable' : 'sa-job-row';
+    const main = (
+      '<tr class="' + rowClass + '" data-run-idx="' + idx + '"' +
+        (hasDetails ? ' style="cursor:pointer;"' : '') + '>' +
+        '<td style="text-align:left;padding-left:16px;">' + caret + (r.job_label || r.script) + '</td>' +
         '<td>' + (r.platform || '<span style="color:var(--muted);">—</span>') + '</td>' +
         '<td>' + fmtLocalTime(r.started_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtRelTime(r.started_at) + ')</span></td>' +
         '<td>' + fmtLocalTime(r.finished_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtElapsed(r.elapsed_s) + ')</span></td>' +
@@ -4858,6 +4946,7 @@ function buildJobsHistoryTable(runs) {
         '<td style="color:var(--muted);font-size:12px;">' + costCell + '</td>' +
       '</tr>'
     );
+    return main + (hasDetails ? buildSeoDetailRows(r) : '');
   }).join('');
   return (
     '<table class="matrix-table" style="margin-top:0;">' +
@@ -4869,10 +4958,12 @@ function buildJobsHistoryTable(runs) {
         '<th style="text-align:left;">Result</th>' +
         '<th>Cost</th>' +
       '</tr></thead>' +
-      '<tbody>' + rows + '</tbody>' +
+      '<tbody>' + rowsHtml + '</tbody>' +
     '</table>'
   );
 }
+// escapeHtml is defined further down in this same client-side template
+// literal (see ~line 5683); reusing it instead of duplicating.
 
 function applyJobsHistoryFilter() {
   const body = document.getElementById('jobs-history-body');
