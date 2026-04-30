@@ -218,6 +218,7 @@ PROMPT_EOF
 # Chrome (the Claude/reddit-agent MCP session). Blocks if a peer is mid-run.
 log "Acquiring reddit-browser lock for Claude/MCP step..."
 acquire_lock "reddit-browser" 3600
+ensure_browser_healthy "reddit"
 
 gtimeout 2700 "$REPO_DIR/scripts/run_claude.sh" "dm-outreach-reddit" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Reddit DM outreach claude exited with code $?"
 rm -f "$PROMPT_FILE"
