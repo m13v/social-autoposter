@@ -309,8 +309,16 @@ def rewrite_class_string(s: str) -> tuple[str, int]:
 # doesn't support recursion. Use a small state machine instead.
 def _find_string_literals(text: str):
     """Yield (start, end) spans for every top-level string literal in `text`,
-    handling nested template-literal interpolations correctly. Skips line and
-    block comments and regex literals (best-effort)."""
+    handling nested template-literal interpolations correctly.
+
+    Note: we deliberately do NOT skip JS-style `//` or `/*...*/` comments at
+    this level. JSX text content (e.g. `system/*</code>`) contains `/*`
+    sequences that would otherwise look like block-comment starts and trick
+    the scanner into skipping the rest of the file. Walking past comment
+    syntax as plain characters is fine because comments don't contain class
+    strings we care about, and even if they did, rewriting them is harmless.
+    Comments inside template-literal expressions are still handled by
+    `_find_template_expr_end`, which knows it is in real JS context."""
     n = len(text)
     i = 0
     while i < n:
@@ -323,12 +331,6 @@ def _find_string_literals(text: str):
             j = _scan_template(text, i)
             yield (i, j)
             i = j
-        elif c == '/' and i + 1 < n and text[i+1] == '/':
-            nl = text.find('\n', i)
-            i = n if nl < 0 else nl
-        elif c == '/' and i + 1 < n and text[i+1] == '*':
-            end = text.find('*/', i + 2)
-            i = n if end < 0 else end + 2
         else:
             i += 1
 
