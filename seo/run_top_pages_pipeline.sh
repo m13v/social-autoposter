@@ -359,22 +359,33 @@ PY
     PARSED=$(python3 - "$PROPOSAL_FILE" <<'PY'
 import json, sys
 raw = open(sys.argv[1]).read().strip()
-# Claude's --output-format json sometimes emits a valid JSON object followed
-# by trailing junk (whitespace/newlines/extra log fragments). raw_decode
-# consumes only the first complete top-level value and ignores the rest.
-try:
-    outer, _idx = json.JSONDecoder().raw_decode(raw)
-except Exception as e:
-    # Fallback: try slicing from first { to matching }.
+# Claude CLI may emit multiple JSON objects when a 429 rate-limit fires and
+# the CLI auto-retries: line 1 is is_error:true, line 2 is the real result.
+# Strategy: iterate every line, skip is_error:true lines, take the LAST
+# is_error:false object. Falls back to the whole-blob approach if no lines
+# parse cleanly (e.g. output is a single multi-line JSON blob).
+outer = None
+for line in raw.splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(line)
+        if isinstance(obj, dict) and not obj.get("is_error"):
+            outer = obj
+    except Exception:
+        pass
+if outer is None:
+    # Fallback: treat whole blob as one JSON object (original approach).
     s = raw.find("{")
     if s < 0:
-        print(f"ERR parse_outer: {e}", file=sys.stderr); sys.exit(1)
+        print("ERR no_json_in_output", file=sys.stderr); sys.exit(1)
     try:
-        outer, _idx = json.JSONDecoder().raw_decode(raw[s:])
-    except Exception as e2:
-        print(f"ERR parse_outer: {e2}", file=sys.stderr); sys.exit(1)
-if outer.get("is_error"):
-    print(f"ERR claude: {outer.get('result','unknown')}", file=sys.stderr); sys.exit(1)
+        outer, _ = json.JSONDecoder().raw_decode(raw[s:])
+    except Exception as e:
+        print(f"ERR parse_outer: {e}", file=sys.stderr); sys.exit(1)
+    if outer.get("is_error"):
+        print(f"ERR claude: {outer.get('result','unknown')}", file=sys.stderr); sys.exit(1)
 result_str = outer.get("result") if isinstance(outer.get("result"), str) else None
 blob = result_str if result_str else json.dumps(outer)
 # Try strict first-object parse on the inner blob too.
