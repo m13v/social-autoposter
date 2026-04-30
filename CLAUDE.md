@@ -63,11 +63,25 @@ A `run-*.sh` can occasionally hang indefinitely because the model invokes `grep 
 
 - `/voyager/api/*` calls of any kind (Python, `fetch()`, `page.evaluate`). That is the internal web-client backend, not the public API.
 - Loops that open each post permalink to scrape reactions/comments, or combine `scrollBy` with clicks on "Show more comments" / "Load earlier replies".
-- Python Playwright/CDP helpers for LinkedIn. No programmatic `login()` flows.
+- Python Playwright/CDP helpers that drive *posting, replying, scrolling, multi-page navigation, or programmatic `login()` flows*. The 17 Apr restriction was caused by behavioral fingerprinting of those patterns, not by Python existing in the call stack.
 
 Allowed: `scripts/linkedin_api.py` (OAuth `api.linkedin.com/v2/socialActions/*`, documented) for posting, and `mcp__linkedin-agent__*` (real headed Chrome) for any browser work, driven by Claude inside the shell pipelines. Session checks are passive: if login/checkpoint appears, print `SESSION_INVALID` and stop.
 
-New LinkedIn capability? Extend `linkedin_api.py` or add a Claude-driven `mcp__linkedin-agent__` step. Do not write a new Python CDP helper.
+**Carve-out (2026-04-29): read-only sidebar pre-checks via Python Playwright are allowed under strict conditions.** `scripts/linkedin_browser.py` may attach to the linkedin-agent's persistent profile (`~/.claude/browser-profiles/linkedin`) in **headed** mode for cost-saving "is anything unread?" gates ahead of the Claude-driven engage-dm-replies pipeline. Allowed inside this helper:
+
+- ONE `page.goto('/messaging/')` per invocation.
+- ONE `page.evaluate()` to read sidebar conversation rows + unread badges from the DOM.
+- Headed Chromium only (`headless=False`). Headless fingerprints differently.
+- Inherit the same persistent profile so cookies/session/fingerprint match the MCP agent.
+
+Banned inside this helper, no exceptions:
+
+- `/voyager/api/*` (still). The pre-check reads only DOM that the user themselves would see.
+- Multi-page loops, permalink scrapes, scroll-and-expand on threads, "Show more" clicks.
+- Any clicks, types, or form interactions. Read-only.
+- Programmatic login. If `_is_login_or_checkpoint(url)` matches, return `session_invalid` and stop.
+
+New LinkedIn capability that *acts* (posts, replies, edits, scrolls multiple pages)? Extend `linkedin_api.py` or add a Claude-driven `mcp__linkedin-agent__` step. Do not write a new Python CDP *action* helper.
 
 ## Engagement Styles System (DO NOT REMOVE)
 
