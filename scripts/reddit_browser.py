@@ -778,6 +778,103 @@ def edit_comment(comment_permalink, new_text):
                 browser.close()
 
 
+def edit_thread(thread_permalink, new_body):
+    """Edit the selftext of a Reddit thread we authored.
+
+    Used by the campaign system to append a literal suffix to original
+    threads after submit. Only works on selftext posts (link posts have no
+    edit link). Mirrors edit_comment but targets the main post (#siteTable
+    .thing.self) instead of a nested comment.
+
+    Returns: {"ok": true, "verified": bool} or {"ok": false, "error": "..."}
+    """
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser, page, is_cdp = get_browser_and_page(p)
+
+        try:
+            old_url = _to_old_reddit(thread_permalink)
+            page.goto(old_url, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+            _ensure_old_reddit(page)
+
+            page_text = page.text_content("body") or ""
+            if "page not found" in page_text.lower():
+                return {"ok": False, "error": "thread_not_found"}
+
+            target = page.locator("#siteTable .thing.self").first
+            try:
+                target.wait_for(state="visible", timeout=5000)
+            except Exception:
+                return {"ok": False, "error": "thread_not_found"}
+
+            edit_clicked = False
+            try:
+                edit_link = target.locator(
+                    ":scope .entry .flat-list a:has-text('edit')"
+                ).first
+                edit_link.wait_for(state="visible", timeout=5000)
+                edit_link.click()
+                edit_clicked = True
+            except Exception:
+                pass
+
+            if not edit_clicked:
+                return {"ok": False, "error": "edit_link_not_found"}
+
+            page.wait_for_timeout(1000)
+
+            edit_box = None
+            all_ta = target.locator(
+                ":scope .entry .usertext-edit textarea"
+            )
+            for i in range(all_ta.count()):
+                if all_ta.nth(i).is_visible():
+                    edit_box = all_ta.nth(i)
+                    break
+
+            if not edit_box:
+                return {"ok": False, "error": "edit_textarea_not_found"}
+
+            edit_box.fill(new_body)
+            page.wait_for_timeout(1000)
+
+            save_btn = None
+            all_btns = target.locator(
+                ":scope .entry .usertext-edit button[type='submit']"
+            )
+            for i in range(all_btns.count()):
+                if all_btns.nth(i).is_visible():
+                    save_btn = all_btns.nth(i)
+                    break
+
+            if not save_btn:
+                return {"ok": False, "error": "edit_save_button_not_found"}
+
+            save_btn.click()
+            page.wait_for_timeout(4000)
+
+            verified = page.evaluate("""(newTextStart) => {
+                const t = document.querySelector('#siteTable .thing.self');
+                if (!t) return false;
+                const body = t.querySelector('.entry .usertext-body');
+                return body && body.textContent &&
+                    body.textContent.includes(newTextStart);
+            }""", new_body[-50:] if len(new_body) >= 50 else new_body)
+
+            return {
+                "ok": True,
+                "verified": verified,
+                "thread_permalink": thread_permalink,
+            }
+
+        finally:
+            page.context.close()
+            if not is_cdp:
+                browser.close()
+
+
 def unread_dms():
     """Scan Reddit for unread DMs/chat conversations.
 
@@ -1836,6 +1933,16 @@ def main():
             )
             sys.exit(1)
         result = edit_comment(sys.argv[2], sys.argv[3])
+        print(json.dumps(result, indent=2))
+
+    elif cmd == "edit-thread":
+        if len(sys.argv) < 4:
+            print(
+                "Usage: reddit_browser.py edit-thread <thread_permalink> <new_body>",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        result = edit_thread(sys.argv[2], sys.argv[3])
         print(json.dumps(result, indent=2))
 
     elif cmd == "unread-dms":
