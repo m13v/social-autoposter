@@ -3189,6 +3189,55 @@ def generate(product: str, keyword: str, slug: str, trigger: str = "manual",
     if not verify["ok"] and last_verify_err:
         verify["error"] = f"{last_verify_err} (tried {len(expected_file_candidates)} candidates)"
 
+    # Salvage retry: when Claude bailed without emitting the final success JSON
+    # AND no commit landed, the session likely ran out of context or got
+    # confused mid-task. Resume the session ONE TIME and ask it to finish:
+    # write whatever piece is missing, then `git add -A && commit && push`,
+    # then emit the success JSON. Cheap because the session already has full
+    # context. Killed Clone + tenxats in the 2026-04-28 run.
+    if not verify["ok"] and not claimed_success and session_id:
+        retry_log_dir = Path(stream["stream_log_path"]).parent
+        salvage_prompt = (
+            "Your previous session ended without committing a page or emitting "
+            "the final success JSON. The pipeline is about to fail this lane. "
+            "Finish the work now: if a page file is partially written, complete "
+            "it; if nothing was written, write the page at "
+            f"`{repo_path}/{expected_file_candidates[0]}` per the original "
+            "instructions. Then run "
+            "`git add -A && git commit -m \"feat(seo): " + slug + "\" && git push`. "
+            "Verify the commit landed with `git log -1 --oneline`. As your FINAL "
+            "message, output exactly one JSON line: "
+            "`{\"success\": true, \"slug\": \"" + slug + "\", \"page_url\": \"...\"}` "
+            "on success, or `{\"success\": false, \"error\": \"...\"}` if you "
+            "genuinely cannot complete it. Budget: <=20 tool calls."
+        )
+        try:
+            salvage = run_claude_stream_resume(
+                session_id, salvage_prompt, cwd=repo_path,
+                log_dir=retry_log_dir, slug=slug,
+                timeout=900,
+            )
+        except Exception as e:
+            salvage = {"exit_code": -1, "final_result_text": "",
+                       "tool_summary": {}, "error": f"salvage exception: {e}"}
+        # Re-check verify on each candidate after the salvage attempt.
+        for candidate in expected_file_candidates:
+            v = verify_commit_landed(repo_path, candidate)
+            if v["ok"]:
+                verify = v
+                verify["file"] = candidate
+                break
+        if verify.get("ok"):
+            # Adopt the salvage stream's final result for downstream parsing.
+            new_final = salvage.get("final_result_text") or ""
+            if new_final:
+                stream = dict(stream)
+                stream["final_result_text"] = new_final
+                final_json = parse_final_json(new_final)
+                claimed_success = bool(final_json and final_json.get("success"))
+                claimed_err = (final_json or {}).get(
+                    "error", "no final success JSON from claude")
+
     if not verify["ok"]:
         # Surface the real gate error (e.g. "no commit on origin/main ...").
         # When Claude also skipped the final success JSON, append that as
