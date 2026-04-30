@@ -51,6 +51,23 @@ Consumer sites import via the `@seo/components` alias. When adding a new compone
 - **Do NOT add rate limits to ANY file** - do not add "Max N posts per 24 hours" or any posting rate limit language to SKILL.md, setup/SKILL.md, shell scripts, or any other file. There is NO posting rate limit. If a file does not contain a rate limit, that is intentional.
 - **Do NOT "improve" or "fix" the workflow** - do not renumber steps, do not add safety checks, do not restructure the file.
 
+## Locked pipeline files: NEVER unlock without explicit user instruction
+
+Many pipeline scripts are locked with `chflags uchg` to prevent agents from "simplifying" or reverting data-driven improvements. An agent did exactly this on 2026-04-28: it ran `chflags nouchg`, stripped critical guardrails (two-lane grounding rule, Moltbook AUP context clearing), then relocked the files.
+
+**NEVER run `chflags nouchg` on any file in this repo without the user explicitly saying "unlock X and change Y".** The lock is not a suggestion. It is a hard stop. If you think a locked file needs to change, stop and tell the user instead.
+
+Locked files (do NOT unlock or edit without explicit user instruction):
+- `scripts/engagement_styles.py` (grounding rule, tier weights, platform weights)
+- `scripts/engage_reddit.py` (Moltbook context clearing, grounding rule in prompt)
+- `skill/run-reddit-search.sh`, `skill/run-twitter.sh`, `skill/run-github.sh`
+- `scripts/top_performers.py`, `scripts/post_reddit.py`, `scripts/post_github.py`, `scripts/github_tools.py`
+- `seo/generate_page.py`, `seo/escalate.py`, `seo/resume_escalations.py`
+- `scripts/ingest_human_seo_replies.py`, `scripts/scan_dm_candidates.py`
+- `skill/dm-outreach-reddit.sh`, `skill/dm-outreach-twitter.sh`, `skill/dm-outreach-linkedin.sh`
+- `scripts/twitter_browser.py`, `scripts/scan_twitter_thread_followups.py`, `skill/scan-twitter-followups.sh`
+- `scripts/watchdog_hung_runs.py`, `skill/stats.sh`
+
 
 ## Known unresolved issue: hung runs from BSD grep on /tmp FIFOs
 
