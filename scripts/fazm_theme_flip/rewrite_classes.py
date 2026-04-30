@@ -213,6 +213,11 @@ _SOLID_PATTERNS = [(base, light, _make_solid_pattern(base))
                    for base, light in LIGHT_PAIRS.items()]
 _ALPHA_PATTERNS = [(base, flipped, _make_alpha_pattern(base))
                    for base, flipped in ALPHA_FLIPS.items()]
+# Alpha-modified versions of LIGHT_PAIRS bases. e.g. `bg-zinc-950/40` is a
+# translucent dark overlay; on a light page we want `bg-white/40` instead,
+# preserving the same alpha modifier.
+_SOLID_ALPHA_PATTERNS = [(base, light, _make_alpha_pattern(base))
+                         for base, light in LIGHT_PAIRS.items()]
 
 
 def rewrite_class_string(s: str) -> tuple[str, int]:
@@ -254,6 +259,24 @@ def rewrite_class_string(s: str) -> tuple[str, int]:
                 return m.group(0)
             light_token = f'{prefixes}{_light}'
             dark_token = f'dark:{prefixes}{_base}'
+            changes += 1
+            return f'{light_token} {dark_token}'
+
+        s = pattern.sub(repl, s)
+
+    # Pass 3: alpha-modified versions of solid bases (e.g. bg-zinc-950/40)
+    for base, light, pattern in _SOLID_ALPHA_PATTERNS:
+        if has_colored_bg and base in LIGHT_TEXT_BASES_TO_SKIP_ON_COLORED_BG:
+            continue
+
+        def repl(m: re.Match, _base=base, _light=light) -> str:
+            nonlocal changes
+            prefixes = m.group(1) or ""
+            alpha = m.group(2)
+            if _is_dark_paired(prefixes):
+                return m.group(0)
+            light_token = f'{prefixes}{_light}{alpha}'
+            dark_token = f'dark:{prefixes}{_base}{alpha}'
             changes += 1
             return f'{light_token} {dark_token}'
 
