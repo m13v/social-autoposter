@@ -997,17 +997,181 @@ function _collectSeoDetails(run, phaseDir) {
 
 async function enrichSeoRuns(runs) {
   const seoRuns = runs.filter(r => SEO_PHASE_DIR[r.script]);
-  if (!seoRuns.length) return;
-  for (const run of seoRuns) {
-    const phase = SEO_PHASE_DIR[run.script];
-    try {
-      run.details = _collectSeoDetails(run, phase);
-    } catch (e) {
-      // Don't fail the whole /api/job-runs response if one run's artifacts
-      // are partially corrupt — just leave details empty.
-      run.details = [];
+  if (seoRuns.length) {
+    for (const run of seoRuns) {
+      const phase = SEO_PHASE_DIR[run.script];
+      try {
+        run.details = _collectSeoDetails(run, phase);
+      } catch (e) {
+        // Don't fail the whole /api/job-runs response if one run's artifacts
+        // are partially corrupt, just leave details empty.
+        run.details = [];
+      }
     }
   }
+
+  // DB-backed enrichers for the SEO jobs whose per-product state lives in
+  // Postgres rather than on disk. These query seo_keywords / gsc_queries /
+  // claude_sessions joined on the run window and produce the same details[]
+  // shape the renderer expects.
+  const dbEnrichers = {
+    serp_seo: _collectSerpDetailsFromDb,
+    gsc_seo: _collectGscDetailsFromDb,
+    seo_weekly_roundup: _collectRoundupDetailsFromDb,
+  };
+  const dbRuns = runs.filter(r => dbEnrichers[r.script]);
+  if (dbRuns.length) {
+    await Promise.all(dbRuns.map(async (run) => {
+      try {
+        run.details = await dbEnrichers[run.script](run);
+      } catch (e) {
+        console.error('[enrichSeoRuns]', run.script, 'failed:', e.message);
+        run.details = [];
+      }
+    }));
+  }
+}
+
+// DB-backed enrichment uses run.started_at and run.finished_at to define a
+// window, plus a small slack on each side for clock skew between the shell
+// trap that wrote the run_monitor line and the page row's completed_at.
+const _RUN_WINDOW_SLACK_MS = 60 * 1000;
+function _runWindow(run) {
+  const startMs = run.started_at ? Date.parse(run.started_at) : null;
+  const endMs = run.finished_at ? Date.parse(run.finished_at) : null;
+  if (!startMs || !endMs) return null;
+  return {
+    start: new Date(startMs - _RUN_WINDOW_SLACK_MS).toISOString(),
+    end: new Date(endMs + _RUN_WINDOW_SLACK_MS).toISOString(),
+  };
+}
+
+// Map a seo_keywords / gsc_queries row to the dashboard `details[]` shape.
+// Status mapping mirrors what the operator wants to see at a glance:
+//   done                -> committed (page actually generated/improved)
+//   skip                -> skipped   (low score / consolidate / dedup / etc.)
+//   pending|in_progress -> stuck     (started but never reached done; lane fail)
+//   failed              -> failed    (explicit failure status, rare)
+function _normalizeSeoStatus(raw) {
+  if (raw === 'done') return 'committed';
+  if (raw === 'skip') return 'skipped';
+  if (raw === 'pending' || raw === 'in_progress') return 'stuck';
+  if (raw === 'failed') return 'failed';
+  return raw || 'unknown';
+}
+
+async function _collectSerpDetailsFromDb(run) {
+  const win = _runWindow(run);
+  if (!win) return [];
+  // SERP pipeline writes seo_keywords rows with source NULL or 'serp'. We
+  // exclude top_page / roundup which have their own dedicated jobs.
+  // The window catches both completions and explicit skips (skip rows have
+  // a scored_at but no completed_at).
+  const rows = await pq(
+    `SELECT
+       k.product, k.keyword, k.slug, k.status, k.page_url, k.notes,
+       k.score, k.signal1, k.signal2, k.signal3,
+       COALESCE(k.completed_at, k.scored_at, k.updated_at) AS event_at,
+       cs.total_cost_usd, cs.duration_ms, cs.session_id
+     FROM seo_keywords k
+     LEFT JOIN claude_sessions cs ON cs.session_id = k.claude_session_id
+     WHERE COALESCE(k.source, '') NOT IN ('top_page', 'roundup')
+       AND COALESCE(k.completed_at, k.scored_at, k.updated_at) >= $1
+       AND COALESCE(k.completed_at, k.scored_at, k.updated_at) <= $2
+       AND k.status IN ('done', 'skip', 'pending', 'in_progress', 'failed')
+     ORDER BY event_at ASC, k.id ASC`,
+    [win.start, win.end]
+  );
+  if (!rows) return [];
+  return rows.map((r) => ({
+    product: r.product || '—',
+    ts: r.event_at ? new Date(r.event_at).toISOString() : '',
+    status: _normalizeSeoStatus(r.status),
+    detail: r.keyword
+      ? (r.notes ? `${r.keyword} — ${String(r.notes).slice(0, 100)}` : r.keyword)
+      : '',
+    target_url: r.page_url || null,
+    target_slug: r.slug || null,
+    num_turns: null,
+    cost_usd: r.total_cost_usd != null ? Number(r.total_cost_usd) : null,
+    files_modified: [],
+    error: null,
+  }));
+}
+
+async function _collectGscDetailsFromDb(run) {
+  const win = _runWindow(run);
+  if (!win) return [];
+  // GSC pipeline writes gsc_queries rows. The 'skip' status here covers the
+  // case where Claude judged the query as already-covered or low-fit and
+  // recorded a 'consolidate' or 'skip' action. 'done' = page generated.
+  const rows = await pq(
+    `SELECT
+       q.product, q.query, q.page_slug, q.page_url, q.status,
+       q.impressions, q.clicks, q.position, q.notes,
+       COALESCE(q.completed_at, q.updated_at) AS event_at,
+       cs.total_cost_usd, cs.session_id
+     FROM gsc_queries q
+     LEFT JOIN claude_sessions cs ON cs.session_id = q.claude_session_id
+     WHERE COALESCE(q.completed_at, q.updated_at) >= $1
+       AND COALESCE(q.completed_at, q.updated_at) <= $2
+       AND q.status IN ('done', 'skip', 'pending', 'in_progress', 'failed')
+     ORDER BY event_at ASC, q.id ASC`,
+    [win.start, win.end]
+  );
+  if (!rows) return [];
+  return rows.map((r) => {
+    // Surface impressions/position so the operator sees why this query was picked.
+    const impPos = (r.impressions != null && r.position != null)
+      ? ` (${r.impressions} impr, pos ${Number(r.position).toFixed(1)})`
+      : '';
+    const queryLabel = r.query ? `${r.query}${impPos}` : '';
+    return {
+      product: r.product || '—',
+      ts: r.event_at ? new Date(r.event_at).toISOString() : '',
+      status: _normalizeSeoStatus(r.status),
+      detail: queryLabel + (r.notes ? ` — ${String(r.notes).slice(0, 100)}` : ''),
+      target_url: r.page_url || null,
+      target_slug: r.page_slug || null,
+      num_turns: null,
+      cost_usd: r.total_cost_usd != null ? Number(r.total_cost_usd) : null,
+      files_modified: [],
+      error: null,
+    };
+  });
+}
+
+async function _collectRoundupDetailsFromDb(run) {
+  const win = _runWindow(run);
+  if (!win) return [];
+  // Weekly roundup writes seo_keywords rows with source='roundup'.
+  const rows = await pq(
+    `SELECT
+       k.product, k.keyword, k.slug, k.status, k.page_url, k.notes,
+       COALESCE(k.completed_at, k.updated_at) AS event_at,
+       cs.total_cost_usd, cs.session_id
+     FROM seo_keywords k
+     LEFT JOIN claude_sessions cs ON cs.session_id = k.claude_session_id
+     WHERE k.source = 'roundup'
+       AND COALESCE(k.completed_at, k.updated_at) >= $1
+       AND COALESCE(k.completed_at, k.updated_at) <= $2
+       AND k.status IN ('done', 'skip', 'pending', 'in_progress', 'failed')
+     ORDER BY event_at ASC, k.id ASC`,
+    [win.start, win.end]
+  );
+  if (!rows) return [];
+  return rows.map((r) => ({
+    product: r.product || '—',
+    ts: r.event_at ? new Date(r.event_at).toISOString() : '',
+    status: _normalizeSeoStatus(r.status),
+    detail: r.keyword || '',
+    target_url: r.page_url || null,
+    target_slug: r.slug || null,
+    num_turns: null,
+    cost_usd: r.total_cost_usd != null ? Number(r.total_cost_usd) : null,
+    files_modified: [],
+    error: null,
+  }));
 }
 
 // 5s TTL cache so /api/status polling (typically every 1-2s) doesn't spawn
@@ -4915,6 +5079,11 @@ function _seoStatusBadge(status) {
     brief_error:       { bg: 'rgba(234,88,12,0.18)',   fg: '#ea580c', text: 'brief error' },
     locked:            { bg: 'rgba(148,163,184,0.18)', fg: '#94a3b8', text: 'locked' },
     failed:            { bg: 'rgba(239,68,68,0.18)',   fg: '#ef4444', text: 'failed' },
+    // serp_seo / gsc_seo / weekly_roundup outcomes from the DB enricher
+    // ('skip' = scored low or judged consolidate; 'stuck' = pending or
+    // in_progress at end of window, lane never marked the row done).
+    skipped:           { bg: 'rgba(234,179,8,0.18)',   fg: '#eab308', text: 'skipped' },
+    stuck:             { bg: 'rgba(234,88,12,0.18)',   fg: '#ea580c', text: 'stuck' },
     unknown:           { bg: 'rgba(148,163,184,0.18)', fg: '#94a3b8', text: status || 'unknown' },
   };
   const p = palette[status] || palette.unknown;
