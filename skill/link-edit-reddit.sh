@@ -103,6 +103,7 @@ PROMPT_EOF
 # Acquire the browser lock now, immediately before the Claude/MCP step.
 log "Acquiring reddit-browser lock for Claude/MCP step..."
 acquire_lock "reddit-browser" 3600
+ensure_browser_healthy "reddit"
 
 gtimeout 5400 "$REPO_DIR/scripts/run_claude.sh" "link-edit-reddit" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" --disallowed-tools "ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,EnterWorktree" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Reddit link-edit claude exited with code $?"
 rm -f "$PROMPT_FILE"
