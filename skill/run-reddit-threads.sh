@@ -400,7 +400,65 @@ row = conn.execute(
      session),
 ).fetchone()
 conn.commit()
-print(f"[db-insert] OK — inserted posts.id={row[0]} for {permalink}")
+post_id = row[0]
+print(f"[db-insert] OK — inserted posts.id={post_id} for {permalink}")
+
+# Campaign wiring: post-submit edit pattern.
+# Threads can't apply the suffix at submit time (Claude drives the browser
+# directly via MCP), so we load active campaigns AFTER insert, roll the dice,
+# and use reddit_browser.py edit-thread to append the suffix on the live post.
+# Bumps the campaign counter only on a verified live edit (parallels
+# post_reddit / engage_reddit / send_dm semantics).
+import random, subprocess
+from post_reddit import load_active_reddit_campaigns
+
+active_campaigns = load_active_reddit_campaigns()
+applied_campaign_ids = []
+new_body = body
+for camp in active_campaigns:
+    if random.random() < camp["sample_rate"]:
+        new_body = new_body + camp["suffix"]
+        applied_campaign_ids.append(camp["id"])
+
+if applied_campaign_ids:
+    print(f"[campaign-thread] applying {applied_campaign_ids} (suffix to be appended via edit)")
+    rb = os.path.join(os.environ["REPO_DIR"], "scripts", "reddit_browser.py")
+    edit_proc = subprocess.run(
+        ["python3", rb, "edit-thread", permalink, new_body],
+        capture_output=True, text=True, timeout=120,
+    )
+    edit_ok = False
+    try:
+        edit_payload = json.loads((edit_proc.stdout or "").strip().splitlines()[-1])
+        edit_ok = edit_payload.get("ok") is True
+    except Exception:
+        edit_payload = {"_parse_error": (edit_proc.stdout or "")[-200:]}
+    if edit_ok:
+        conn.execute(
+            "UPDATE posts SET our_content = %s WHERE id = %s",
+            (new_body, post_id),
+        )
+        conn.commit()
+        bump = os.path.join(os.environ["REPO_DIR"], "scripts", "campaign_bump.py")
+        for cid in applied_campaign_ids:
+            try:
+                subprocess.run(
+                    ["python3", bump,
+                     "--table", "posts", "--id", str(post_id),
+                     "--campaign-id", str(cid)],
+                    capture_output=True, text=True, timeout=15,
+                )
+            except Exception as e:
+                print(f"[campaign-thread] WARNING: campaign_bump failed (id={post_id} c={cid}): {e}")
+        print(f"[campaign-thread] OK — edit verified={edit_payload.get('verified')}, our_content updated, counters bumped")
+    else:
+        # Edit failed — leave the post untagged. The post is already live, so
+        # this is a degraded but not data-corrupting outcome. campaign_id stays
+        # NULL, so the row joins the control bucket for A/B purposes.
+        err = edit_payload.get("error") or edit_payload.get("_parse_error") or "unknown"
+        print(f"[campaign-thread] WARNING: edit-thread failed ({err}); post stays untagged. stderr={(edit_proc.stderr or '')[-200:]}")
+else:
+    print("[campaign-thread] no active campaigns fired (or none active)")
 PYEOF
 
 elif [ -n "$ABORT_REASON" ] && [ "$ABORT_REASON" != "PARSE_ERROR" ]; then
