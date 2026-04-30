@@ -552,6 +552,35 @@ def _log_search(query: str, vertical: str, ok: bool, error: Optional[str]) -> No
 #                         LinkedIn patterns + multiple fallbacks. Smoke-test
 #                         against a real SERP before relying on the output.
 #   _SEARCH_JS_COMPANIES — UNVERIFIED. Same caveat as people.
+#
+# Reconciliation procedure for the UNVERIFIED extractors (do this once,
+# then update this block to mark them VERIFIED with the date):
+#   Preconditions:
+#     - linkedin-agent has been idle >= 1 hour. Check
+#       ~/.playwright-mcp/linkedin-agent/page-*.yml mtimes.
+#     - The persistent profile is logged in. Do NOT trigger a probe like
+#       "navigate to LinkedIn and tell me what you see" — that prompt itself
+#       is the high-risk behavior that invalidated cookies on 2026-04-29.
+#       If the session is dead, wait for the next normal pipeline cycle to
+#       re-auth, then resume reconciliation in a fresh hour.
+#   Steps (use the linkedin-agent MCP, NOT this script — the script logs to
+#   linkedin_browser_searches and burns the rate budget for nothing):
+#     1. mcp__linkedin-agent__browser_navigate to
+#        https://www.linkedin.com/search/results/people/?keywords=founder%20ai
+#     2. mcp__linkedin-agent__browser_evaluate, paste _SEARCH_JS_PEOPLE
+#        verbatim (including the JSON.stringify wrap). JSON.parse the
+#        returned string.
+#        Accept criterion: >= 5 entries with non-empty name AND profile_url.
+#        Reject: [] or rows with all-empty fields → snapshot the page,
+#        find the live card class names, patch the querySelectorAll lists.
+#        Keep existing fallback selectors at the END of each list to stay
+#        compatible with the older layout.
+#     3. Repeat for /search/results/companies/?keywords=founder%20ai with
+#        _SEARCH_JS_COMPANIES. Same accept criterion (>= 5 cards with
+#        company AND company_url).
+#   Hard limits during reconciliation: 2 navigations total, no
+#   close-and-reopen of the agent, no scroll, no clicks. Anything more is
+#   the same fingerprint pattern that triggered the 2026-04-29 lockouts.
 _SEARCH_JS_PEOPLE = r"""
 () => {
   const out = [];
