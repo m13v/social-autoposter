@@ -112,13 +112,27 @@ _run_one() {
 # remaining product would fail the same way and burn credits for nothing —
 # short-circuit the outer loop instead. Matches the roundup / top_pages
 # pipelines so behavior stays consistent across SEO jobs.
-QUOTA_MARKERS='monthly usage limit|rate.?limit|429 Too Many|insufficient_quota'
+#
+# We grep BOTH the per-product .log (shell wrapper output) AND the matching
+# Claude session _stream.jsonl, because the actual rate-limit signal from
+# Claude lives only in the JSONL stream as `rate_limit_event` /
+# `api_error_status":429` / `"You've hit your limit"`. Pre-2026-04-29 this
+# only grepped the .log and let the loop walk into 9 sequential failures.
+QUOTA_MARKERS='monthly usage limit|rate.?limit|429 Too Many|insufficient_quota|rate_limit_event|"api_error_status":429|hit your limit'
 
 _product_log_latest() {
     # Path to the most-recent per-product log under $SCRIPT_DIR/logs/<lower>/improve.
     local lower
     lower=$(echo "$1" | tr '[:upper:]' '[:lower:]')
     ls -t "$SCRIPT_DIR/logs/${lower}/improve/"*.log 2>/dev/null | head -1
+}
+
+_product_stream_latest() {
+    # Path to the most-recent Claude session JSONL for this product. The
+    # improve runner names these <ts>_<slug>_stream.jsonl alongside the .log.
+    local lower
+    lower=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+    ls -t "$SCRIPT_DIR/logs/${lower}/improve/"*_stream.jsonl 2>/dev/null | head -1
 }
 
 case "${1:-}" in
@@ -141,12 +155,21 @@ case "${1:-}" in
                 continue
             fi
             _run_one "$p" || overall=$?
-            # Quota short-circuit: peek at the latest per-product log and stop
-            # if the lane surfaced a usage-limit signal.
+            # Quota short-circuit: peek at the latest per-product .log AND the
+            # Claude session _stream.jsonl. Claude rate-limit signals only
+            # land in the JSONL stream, never in the shell .log, so checking
+            # only the .log lets the loop walk into N sequential failures.
             plog=$(_product_log_latest "$p")
+            pstream=$(_product_stream_latest "$p")
+            quota_match=""
             if [ -n "$plog" ] && grep -qiE "$QUOTA_MARKERS" "$plog" 2>/dev/null; then
+                quota_match="$plog"
+            elif [ -n "$pstream" ] && grep -qiE "$QUOTA_MARKERS" "$pstream" 2>/dev/null; then
+                quota_match="$pstream"
+            fi
+            if [ -n "$quota_match" ]; then
                 quota_hit=1
-                echo "[$(date '+%H:%M:%S')] !! $p hit API quota — halting tick" >&2
+                echo "[$(date '+%H:%M:%S')] !! $p hit API quota ($(basename "$quota_match")) — halting tick" >&2
             fi
         done <<< "$PRODUCTS"
         exit "$overall"
