@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""LinkedIn browser automation: read-only sidebar pre-check.
+"""LinkedIn browser automation: read-only sidebar pre-check + search SERP read.
 
 Usage:
     python3 linkedin_browser.py unread-dms
+    python3 linkedin_browser.py search <vertical> <query>
+        # vertical = people | content | companies
 
-This is a read-only sidebar scan. NO Voyager API. NO scroll-and-expand loops.
-NO programmatic login. ONE navigation (/messaging/) + ONE page.evaluate() to
-read unread badges off the visible inbox, then close.
+Both commands are read-only DOM scrapes: NO Voyager API, NO scroll-and-expand
+loops, NO permalink fan-out, NO clicks/typing, NO programmatic login. Each
+invocation does ONE navigation + ONE page.evaluate() then closes the context.
 
 Per CLAUDE.md "LinkedIn: flagged patterns" carve-out (2026-04-29): a
-read-only sidebar pre-check is permitted because its fingerprint is
-indistinguishable from the existing mcp__linkedin-agent__ sessions (same
-profile, same cookies, same headed Chrome binary). The 2026-04-17
-restriction was caused by Voyager calls + permalink scroll loops, neither
-of which appear here.
+read-only DOM read is permitted because its fingerprint is indistinguishable
+from the existing mcp__linkedin-agent__ sessions (same profile, same cookies,
+same headed Chrome binary). The 2026-04-17 restriction was caused by Voyager
+calls + permalink scroll loops, neither of which appear here.
+
+The search subcommand additionally enforces a rate-limit budget against the
+linkedin_browser_searches table (see _check_rate_limit) per the 2026-04-29
+research findings: ~30s min gap, ~40/day, ~150/month soft cap leaves headroom
+under LinkedIn's ~300/month commercial-use wall on free accounts.
 
 Connects to the running linkedin-agent's persistent profile at
 ~/.claude/browser-profiles/linkedin. Launches HEADED Chromium (per the
@@ -22,40 +28,61 @@ the linkedin-browser lock for the entire run; expects the caller (shell)
 to have already done lock acquisition + ensure_browser_healthy so the MCP
 Chrome is gone and the profile is free.
 
-Output (stdout, JSON):
+Output (stdout, JSON), unread-dms:
     {
         "ok": true,
         "url": "https://www.linkedin.com/messaging/",
         "total_threads": 13,
         "unread_count": 0,
-        "threads": [
-            {
-                "partner": "Greg Newbegin",
-                "preview": "Appreciate the back and forth, insightful",
-                "thread_url": "https://www.linkedin.com/messaging/thread/.../"
-                              | null (LinkedIn lazy-renders hrefs),
-                "unread": false,
-                "last_msg_time": "3:03 PM"
-            },
-            ...
-        ]
+        "threads": [...],
     }
 
-Failure shapes:
+Output (stdout, JSON), search:
+    {
+        "ok": true,
+        "url": "https://www.linkedin.com/search/results/people/?keywords=...",
+        "vertical": "people",
+        "query": "founder rag retrieval",
+        "result_count": 10,
+        "results": [
+            {
+                "name": "...",            # people only
+                "headline": "...",        # people only
+                "location": "...",        # people only
+                "profile_url": "...",     # people only
+                "author": "...",          # content only
+                "post_text": "...",       # content only (snippet)
+                "post_url": "...",        # content only
+                "company": "...",         # companies only
+                "tagline": "...",         # companies only
+                "company_url": "...",     # companies only
+            },
+            ...
+        ],
+    }
+
+Failure shapes (both commands):
     {"ok": false, "error": "session_invalid", "url": "..."}
     {"ok": false, "error": "profile_locked", "detail": "..."}
     {"ok": false, "error": "navigation_failed", "detail": "..."}
 
-Exits 0 on success, 1 on failure. The caller decides whether to early-exit
-the pipeline based on `unread_count`.
+Search-only failure shapes:
+    {"ok": false, "error": "bad_vertical", "detail": "..."}
+    {"ok": false, "error": "rate_limited", "reason": "min_gap|daily_cap|monthly_cap",
+     "detail": "...", "retry_after_seconds": N}
+    {"ok": false, "error": "db_unavailable", "detail": "..."}
+
+Exits 0 on success, 1 on failure.
 """
 
 import atexit
 import json
 import os
+import random
 import re
 import sys
 import time
+import urllib.parse
 from typing import Optional
 
 PROFILE_DIR = os.path.expanduser("~/.claude/browser-profiles/linkedin")
@@ -76,6 +103,28 @@ _LOCK_INHERITED = False
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
+
+# Search rate-limit budget. Picked from 2026-04-29 research synthesis: vendor
+# consensus is 8-25s gap + 80-100 profile views/hour + <500/day at high-volume
+# scraping. We scale that down hard because we are using one real human
+# account, not a farm. The hard ceiling is LinkedIn's free-tier commercial-use
+# wall at ~300 people-searches/month — we target half of that.
+SEARCH_MIN_GAP_SECONDS = 30
+SEARCH_DAILY_CAP = 40         # 10 searches × ~4 sessions/day
+SEARCH_MONTHLY_CAP = 150      # 50% headroom under LinkedIn's ~300/month wall
+SEARCH_VERTICALS = ("people", "content", "companies")
+SEARCH_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS linkedin_browser_searches (
+    id        SERIAL PRIMARY KEY,
+    query     TEXT NOT NULL,
+    vertical  TEXT NOT NULL,
+    ok        BOOLEAN NOT NULL,
+    error     TEXT,
+    ran_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_lbs_ran_at
+    ON linkedin_browser_searches(ran_at DESC);
+"""
 
 
 def _release_browser_lock():
