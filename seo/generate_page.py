@@ -1961,6 +1961,17 @@ Do not output any text after the final JSON line.
 """
 
 
+def _safe_slug_component(slug: str) -> str:
+    """Sanitize a slug so it's safe to embed in a filename. Replaces path
+    separators and other filesystem-unsafe characters with underscore. Without
+    this, slugs like 't/ai-agent-monitor' would create implicit subdirectories
+    when used as part of a filename and the open() would crash with
+    FileNotFoundError."""
+    if not slug:
+        return "page"
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", slug).strip("_") or "page"
+
+
 def run_claude_stream(prompt: str, cwd: str, log_dir: Path, slug: str) -> dict:
     """
     Invoke claude -p with stream-json output. Capture every tool call to a jsonl file.
@@ -1968,7 +1979,8 @@ def run_claude_stream(prompt: str, cwd: str, log_dir: Path, slug: str) -> dict:
     """
     log_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    stream_log = log_dir / f"{ts}_{slug}_stream.jsonl"
+    safe_slug = _safe_slug_component(slug)
+    stream_log = log_dir / f"{ts}_{safe_slug}_stream.jsonl"
 
     session_id = str(uuid.uuid4())
     cmd = [
@@ -2063,7 +2075,8 @@ def run_claude_stream_resume(session_id: str, prompt: str, cwd: str,
     rewrite. Same return shape as run_claude_stream."""
     log_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    stream_log = log_dir / f"{ts}_{slug}_retry_stream.jsonl"
+    safe_slug = _safe_slug_component(slug)
+    stream_log = log_dir / f"{ts}_{safe_slug}_retry_stream.jsonl"
 
     cmd = [
         "claude", "-p", prompt,
