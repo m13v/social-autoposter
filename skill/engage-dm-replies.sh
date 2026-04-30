@@ -1161,13 +1161,17 @@ esac
 NEEDS_CLAUDE=false
 GATE_REASON=""
 
-# Helper: count active DMs where last message is inbound, per platform.
+# Helper: count DMs where last message is inbound, per platform. Includes
+# both 'active' and 'needs_reply' because Phase A.0 ingest flips status to
+# 'needs_reply' the moment a fresh inbound lands; gating on 'active' alone
+# silently skipped every fresh inbound (bug surfaced 2026-04-30 with 4 warm
+# leads stuck unanswered for hours/days).
 needs_reply_count_for() {
     local plat="$1"
     psql "$DATABASE_URL" -tA -c "
         SELECT COUNT(*) FROM dms d
         WHERE d.platform='$plat'
-          AND d.conversation_status='active'
+          AND d.conversation_status IN ('active', 'needs_reply')
           AND EXISTS (
             SELECT 1 FROM dm_messages m
             WHERE m.dm_id = d.id
