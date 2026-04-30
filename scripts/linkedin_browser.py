@@ -408,6 +408,457 @@ def unread_dms() -> dict:
                 pass
 
 
+def _open_db():
+    """Lazy-import scripts.db so unread-dms callers don't need psycopg2.
+
+    Raises ImportError on failure; callers convert to {"error":"db_unavailable"}.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import db as dbmod  # type: ignore  # noqa: WPS433
+    dbmod.load_env()
+    return dbmod.get_conn()
+
+
+def _check_rate_limit() -> dict:
+    """Return {"ok": True} if a new search is allowed, else a failure shape.
+
+    Auto-creates the linkedin_browser_searches table on first use so this
+    helper is self-contained (no separate migration step needed).
+    Fails CLOSED on DB errors: if we can't enforce the budget we don't
+    perform the search. Better to silently skip a cycle than to drift past
+    the ~300/month wall and trigger a restriction.
+    """
+    try:
+        conn = _open_db()
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "db_unavailable",
+            "detail": f"{type(e).__name__}: {e}",
+        }
+    try:
+        # Idempotent. Each statement is run separately because psycopg2
+        # rejects multi-statement strings on simple cursors.
+        for stmt in [s.strip() for s in SEARCH_TABLE_DDL.split(";") if s.strip()]:
+            conn.execute(stmt)
+        conn.commit()
+
+        cur = conn.execute(
+            "SELECT EXTRACT(EPOCH FROM (NOW() - MAX(ran_at)))::INT AS gap "
+            "FROM linkedin_browser_searches"
+        )
+        row = cur.fetchone()
+        gap = row["gap"] if row and row["gap"] is not None else None
+        if gap is not None and gap < SEARCH_MIN_GAP_SECONDS:
+            return {
+                "ok": False,
+                "error": "rate_limited",
+                "reason": "min_gap",
+                "detail": (
+                    f"last search was {gap}s ago, "
+                    f"need {SEARCH_MIN_GAP_SECONDS}s gap"
+                ),
+                "retry_after_seconds": SEARCH_MIN_GAP_SECONDS - gap,
+            }
+
+        cur = conn.execute(
+            "SELECT COUNT(*) AS n FROM linkedin_browser_searches "
+            "WHERE ran_at >= NOW() - INTERVAL '24 hours'"
+        )
+        daily = cur.fetchone()["n"]
+        if daily >= SEARCH_DAILY_CAP:
+            return {
+                "ok": False,
+                "error": "rate_limited",
+                "reason": "daily_cap",
+                "detail": f"{daily} searches in last 24h, cap {SEARCH_DAILY_CAP}",
+                "retry_after_seconds": 3600,
+            }
+
+        cur = conn.execute(
+            "SELECT COUNT(*) AS n FROM linkedin_browser_searches "
+            "WHERE ran_at >= date_trunc('month', NOW())"
+        )
+        monthly = cur.fetchone()["n"]
+        if monthly >= SEARCH_MONTHLY_CAP:
+            return {
+                "ok": False,
+                "error": "rate_limited",
+                "reason": "monthly_cap",
+                "detail": (
+                    f"{monthly} searches this month, cap {SEARCH_MONTHLY_CAP}"
+                ),
+                "retry_after_seconds": 86400,
+            }
+        return {"ok": True, "daily_used": daily, "monthly_used": monthly}
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "db_unavailable",
+            "detail": f"{type(e).__name__}: {e}",
+        }
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _log_search(query: str, vertical: str, ok: bool, error: Optional[str]) -> None:
+    """Best-effort write of one row to linkedin_browser_searches.
+
+    Never raises: a failed log must not turn a successful search into a
+    failure. Note that if logging fails we silently let the row drop, which
+    means the next rate-limit check will under-count. Acceptable: the
+    monthly cap has 50% headroom under the actual wall.
+    """
+    try:
+        conn = _open_db()
+    except Exception as e:
+        print(
+            f"[linkedin_browser] _log_search: db open failed: {e}",
+            file=sys.stderr,
+        )
+        return
+    try:
+        conn.execute(
+            "INSERT INTO linkedin_browser_searches "
+            "(query, vertical, ok, error) VALUES (%s, %s, %s, %s)",
+            [query, vertical, ok, error],
+        )
+        conn.commit()
+    except Exception as e:
+        print(
+            f"[linkedin_browser] _log_search: insert failed: {e}",
+            file=sys.stderr,
+        )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+# DOM extractors per vertical. Each is a single querySelectorAll + map, with
+# multiple selector fallbacks because LinkedIn's class names rotate. Returns
+# JSON.stringify(...) so the Python side can json.loads regardless of how the
+# evaluate channel marshals nested objects. Limit to the first 25 cards on the
+# page — anything beyond that requires scrolling, which we explicitly do not
+# do.
+_SEARCH_JS_PEOPLE = r"""
+() => {
+  const out = [];
+  const cards = document.querySelectorAll(
+    "div.search-results-container li div.entity-result, "
+    + "li.reusable-search__result-container, "
+    + "[data-chameleon-result-urn]"
+  );
+  for (const c of Array.from(cards).slice(0, 25)) {
+    const link = c.querySelector(
+      "a[href*='/in/'].app-aware-link, a[href*='/in/']"
+    );
+    const profileUrl = link
+      ? (link.href || link.getAttribute("href") || "")
+      : "";
+    const nameEl = c.querySelector(
+      ".entity-result__title-text, .entity-result__title-line, "
+      + "span[aria-hidden='true']"
+    );
+    const name = nameEl ? (nameEl.textContent || "").trim() : "";
+    const headlineEl = c.querySelector(
+      ".entity-result__primary-subtitle, .t-14.t-black.t-normal"
+    );
+    const headline = headlineEl
+      ? (headlineEl.textContent || "").trim() : "";
+    const locEl = c.querySelector(
+      ".entity-result__secondary-subtitle, .t-14.t-normal"
+    );
+    const location = locEl ? (locEl.textContent || "").trim() : "";
+    if (!name && !profileUrl) continue;
+    out.push({
+      name: name.replace(/\s+/g, " ").slice(0, 200),
+      headline: headline.replace(/\s+/g, " ").slice(0, 300),
+      location: location.replace(/\s+/g, " ").slice(0, 200),
+      profile_url: profileUrl.split("?")[0],
+    });
+  }
+  return JSON.stringify(out);
+}
+"""
+
+_SEARCH_JS_CONTENT = r"""
+() => {
+  const out = [];
+  const cards = document.querySelectorAll(
+    "div.feed-shared-update-v2[data-urn], "
+    + "div.update-components-update-v2, "
+    + "[data-chameleon-result-urn]"
+  );
+  for (const c of Array.from(cards).slice(0, 25)) {
+    const urn = c.getAttribute("data-urn")
+      || c.getAttribute("data-chameleon-result-urn") || "";
+    const actorLink = c.querySelector(
+      "a.update-components-actor__meta-link, "
+      + ".update-components-actor a[href*='/in/'], "
+      + ".update-components-actor a[href*='/company/']"
+    );
+    const author = (() => {
+      const a = c.querySelector(
+        ".update-components-actor__title, "
+        + ".update-components-actor__name, "
+        + "span.feed-shared-actor__name"
+      );
+      return a ? (a.textContent || "").trim() : "";
+    })();
+    const text = (() => {
+      const t = c.querySelector(
+        ".update-components-text, .feed-shared-update-v2__description, "
+        + ".update-components-update-v2__commentary"
+      );
+      return t ? (t.textContent || "").trim() : "";
+    })();
+    const activityMatch = urn.match(/activity:(\d+)/)
+      || urn.match(/ugcPost:(\d+)/);
+    const postUrl = activityMatch
+      ? ("https://www.linkedin.com/feed/update/urn:li:activity:"
+          + activityMatch[1] + "/")
+      : "";
+    if (!author && !text && !postUrl) continue;
+    out.push({
+      author: author.replace(/\s+/g, " ").slice(0, 200),
+      post_text: text.replace(/\s+/g, " ").slice(0, 600),
+      post_url: postUrl,
+      actor_url: actorLink
+        ? (actorLink.href || "").split("?")[0] : "",
+    });
+  }
+  return JSON.stringify(out);
+}
+"""
+
+_SEARCH_JS_COMPANIES = r"""
+() => {
+  const out = [];
+  const cards = document.querySelectorAll(
+    "div.search-results-container li div.entity-result, "
+    + "li.reusable-search__result-container, "
+    + "[data-chameleon-result-urn]"
+  );
+  for (const c of Array.from(cards).slice(0, 25)) {
+    const link = c.querySelector(
+      "a[href*='/company/'].app-aware-link, a[href*='/company/']"
+    );
+    const url = link ? (link.href || link.getAttribute("href") || "") : "";
+    const nameEl = c.querySelector(
+      ".entity-result__title-text, .entity-result__title-line, "
+      + "span[aria-hidden='true']"
+    );
+    const name = nameEl ? (nameEl.textContent || "").trim() : "";
+    const taglineEl = c.querySelector(
+      ".entity-result__primary-subtitle, .t-14.t-black.t-normal"
+    );
+    const tagline = taglineEl ? (taglineEl.textContent || "").trim() : "";
+    if (!name && !url) continue;
+    out.push({
+      company: name.replace(/\s+/g, " ").slice(0, 200),
+      tagline: tagline.replace(/\s+/g, " ").slice(0, 300),
+      company_url: url.split("?")[0],
+    });
+  }
+  return JSON.stringify(out);
+}
+"""
+
+_SEARCH_JS_BY_VERTICAL = {
+    "people": _SEARCH_JS_PEOPLE,
+    "content": _SEARCH_JS_CONTENT,
+    "companies": _SEARCH_JS_COMPANIES,
+}
+
+
+def search(vertical: str, query: str) -> dict:
+    """Read one page of LinkedIn search results, headed, read-only.
+
+    ONE goto, ONE evaluate, close. No scrolling, no clicks. Rate-limited
+    against linkedin_browser_searches; fails closed if the DB is reachable
+    but the budget is exhausted.
+    """
+    if vertical not in SEARCH_VERTICALS:
+        return {
+            "ok": False,
+            "error": "bad_vertical",
+            "detail": f"got {vertical!r}; want one of {SEARCH_VERTICALS}",
+        }
+    query = (query or "").strip()
+    if not query:
+        return {"ok": False, "error": "empty_query", "detail": ""}
+
+    rate = _check_rate_limit()
+    if not rate.get("ok"):
+        return rate
+
+    from playwright.sync_api import sync_playwright
+
+    _acquire_browser_lock()
+
+    encoded = urllib.parse.quote(query)
+    search_url = (
+        f"https://www.linkedin.com/search/results/{vertical}/?keywords={encoded}"
+    )
+
+    with sync_playwright() as p:
+        deadline = time.time() + LOCK_WAIT_MAX
+        context = None
+        last_err: Optional[Exception] = None
+        while True:
+            for fname in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                try:
+                    os.remove(os.path.join(PROFILE_DIR, fname))
+                except OSError:
+                    pass
+            try:
+                context = p.chromium.launch_persistent_context(
+                    PROFILE_DIR,
+                    headless=False,
+                    executable_path=(
+                        SYSTEM_CHROME if os.path.exists(SYSTEM_CHROME) else None
+                    ),
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--window-position=3953,-1032",
+                        "--window-size=911,1016",
+                    ],
+                    viewport=VIEWPORT,
+                    user_agent=(
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/131.0.0.0 Safari/537.36"
+                    ),
+                    locale="en-US",
+                    extra_http_headers={
+                        "Accept-Language": "en-US,en;q=0.9",
+                    },
+                )
+                break
+            except Exception as e:
+                last_err = e
+                if time.time() >= deadline:
+                    err = {
+                        "ok": False,
+                        "error": "profile_locked",
+                        "detail": f"launch_persistent_context failed: {e}",
+                    }
+                    _log_search(query, vertical, ok=False, error="profile_locked")
+                    return err
+                time.sleep(LOCK_POLL_INTERVAL)
+
+        try:
+            page = context.new_page()
+            try:
+                page.goto(
+                    search_url,
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
+            except Exception as e:
+                _log_search(query, vertical, ok=False, error="navigation_failed")
+                return {
+                    "ok": False,
+                    "error": "navigation_failed",
+                    "detail": str(e),
+                }
+
+            # Settle: search results lazy-render after DOMContentLoaded.
+            # Selectors reflect both the post-2023 layout (entity-result) and
+            # the older (reusable-search__result-container).
+            try:
+                page.wait_for_selector(
+                    "div.search-results-container, "
+                    "main[aria-label*='Search'], "
+                    "div.feed-shared-update-v2",
+                    timeout=10000,
+                )
+            except Exception:
+                pass  # extractor will return [] if nothing rendered
+
+            # Random 1-3s human-pacing delay before reading the DOM. Per
+            # 2026-04-29 research; not a fingerprint cure, but cheap.
+            page.wait_for_timeout(random.randint(1000, 3000))
+
+            cur_url = page.url
+            if _is_login_or_checkpoint(cur_url):
+                _log_search(query, vertical, ok=False, error="session_invalid")
+                return {
+                    "ok": False,
+                    "error": "session_invalid",
+                    "url": cur_url,
+                }
+
+            raw = page.evaluate(_SEARCH_JS_BY_VERTICAL[vertical])
+            try:
+                results = json.loads(raw or "[]")
+            except json.JSONDecodeError:
+                results = []
+
+            _log_search(query, vertical, ok=True, error=None)
+            return {
+                "ok": True,
+                "url": cur_url,
+                "vertical": vertical,
+                "query": query,
+                "result_count": len(results),
+                "results": results,
+                "rate_budget": {
+                    "daily_used": rate.get("daily_used"),
+                    "daily_cap": SEARCH_DAILY_CAP,
+                    "monthly_used": rate.get("monthly_used"),
+                    "monthly_cap": SEARCH_MONTHLY_CAP,
+                },
+            }
+
+        finally:
+            try:
+                context.close()
+            except Exception:
+                pass
+
+
+def search_with_retry(vertical: str, query: str, max_attempts: int = 2) -> dict:
+    """Mirror unread_dms_with_retry: one retry on transient browser-target
+    failures only. Do NOT retry on rate_limited / session_invalid / db_*."""
+    last_result: dict = {"ok": False, "error": "no_attempts"}
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = search(vertical, query)
+        except Exception as e:
+            result = {
+                "ok": False,
+                "error": "exception",
+                "detail": f"{type(e).__name__}: {e}",
+                "attempt": attempt,
+            }
+        last_result = result
+        err = (result.get("error") or "").lower()
+        detail = (result.get("detail") or "").lower()
+        transient = (
+            "targetclosed" in detail
+            or "target page" in detail
+            or "browser has been closed" in detail
+            or err == "navigation_failed"
+        )
+        if result.get("ok") or not transient or attempt >= max_attempts:
+            if attempt > 1:
+                result["retry_attempt"] = attempt
+            return result
+        print(
+            f"[linkedin_browser] search transient failure attempt {attempt}: "
+            f"{result.get('detail') or result.get('error')}; retrying...",
+            file=sys.stderr,
+        )
+        time.sleep(2)
+    return last_result
+
+
 def unread_dms_with_retry(max_attempts: int = 2) -> dict:
     """Wrap unread_dms with one retry on TargetClosedError-style transient
     failures. The headed Chrome launch races against atexit lock release on
@@ -449,23 +900,33 @@ def unread_dms_with_retry(max_attempts: int = 2) -> dict:
 
 
 def main():
-    # Guard: only the engage-dm-replies pipeline is allowed to invoke this.
-    # Other Claude subprocess planners (post_reddit, post_twitter, etc.)
-    # auto-load CLAUDE.md as system context, see this helper documented
-    # there, and have wandered off-task to "smoke test" it — racing the
-    # linkedin profile's SingletonLock and triggering server-side session
-    # invalidation. The caller (engage-dm-replies.sh) sets this env var
+    # Guard: only authorized pipelines may invoke this helper. Other Claude
+    # subprocess planners (post_reddit, post_twitter, etc.) auto-load
+    # CLAUDE.md as system context, see this helper documented there, and
+    # have wandered off-task to "smoke test" it — racing the linkedin
+    # profile's SingletonLock and triggering server-side session
+    # invalidation. The legitimate caller sets the matching env var
     # immediately before invoking; nothing else does.
-    if os.environ.get("SOCIAL_AUTOPOSTER_LINKEDIN_PRECHECK") != "1":
+    #
+    # Allowed env vars:
+    #   SOCIAL_AUTOPOSTER_LINKEDIN_PRECHECK=1  -> unread-dms (engage-dm-replies)
+    #   SOCIAL_AUTOPOSTER_LINKEDIN_SEARCH=1    -> search (run-linkedin / discovery)
+    authorized = (
+        os.environ.get("SOCIAL_AUTOPOSTER_LINKEDIN_PRECHECK") == "1"
+        or os.environ.get("SOCIAL_AUTOPOSTER_LINKEDIN_SEARCH") == "1"
+    )
+    if not authorized:
         print(
             json.dumps({
                 "ok": False,
                 "error": "unauthorized_caller",
                 "detail": (
-                    "linkedin_browser.py is the engage-dm-replies pre-check "
-                    "helper. Only that pipeline may invoke it. Set "
-                    "SOCIAL_AUTOPOSTER_LINKEDIN_PRECHECK=1 from the caller "
-                    "if this invocation is legitimate."
+                    "linkedin_browser.py is invoked only by the "
+                    "engage-dm-replies pre-check or the run-linkedin search "
+                    "discovery pipeline. Set "
+                    "SOCIAL_AUTOPOSTER_LINKEDIN_PRECHECK=1 (for unread-dms) "
+                    "or SOCIAL_AUTOPOSTER_LINKEDIN_SEARCH=1 (for search) "
+                    "from the caller if this invocation is legitimate."
                 ),
             }),
             file=sys.stderr,
@@ -477,6 +938,19 @@ def main():
     cmd = sys.argv[1]
     if cmd == "unread-dms":
         result = unread_dms_with_retry()
+        print(json.dumps(result, indent=2))
+        sys.exit(0 if result.get("ok") else 1)
+    if cmd == "search":
+        if len(sys.argv) < 4:
+            print(
+                "Usage: linkedin_browser.py search "
+                "<people|content|companies> <query>",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        vertical = sys.argv[2]
+        query = " ".join(sys.argv[3:])
+        result = search_with_retry(vertical, query)
         print(json.dumps(result, indent=2))
         sys.exit(0 if result.get("ok") else 1)
     print(f"Unknown command: {cmd}", file=sys.stderr)
