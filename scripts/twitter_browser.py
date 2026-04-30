@@ -514,7 +514,13 @@ def unread_dms():
     timestamp, and conversation URL.
 
     Returns: [{"author": "...", "handle": "...", "preview": "...", "time": "...",
-               "thread_url": "...", "is_from_us": bool}, ...]
+               "thread_url": "...", "is_from_us": bool, "has_unread": bool}, ...]
+
+    `has_unread` is the signal callers should filter on. It is derived from the
+    sidebar's visual unread state (aria-label "unread", bold font weight on the
+    preview/name, or a notification dot SVG). Threads where we sent last AND have
+    no new inbound show `has_unread: false` even when the "You:" prefix is
+    truncated, so this avoids opening every thread to verify.
     """
     from playwright.sync_api import sync_playwright
 
@@ -613,6 +619,59 @@ def unread_dms():
 
                     const isFromUs = preview.startsWith('You:');
 
+                    // Detect unread state from sidebar visual indicators.
+                    // X marks unread DMs by bolding the name+preview text and/or
+                    // showing an aria-labeled badge. We try several signals so a
+                    // single CSS rename on X's side doesn't blind us.
+                    let hasUnread = false;
+
+                    // Signal 1: any descendant with aria-label containing "unread"
+                    const ariaUnread = item.querySelector(
+                        '[aria-label*="unread" i], [aria-label*="Unread" i]'
+                    );
+                    if (ariaUnread) hasUnread = true;
+
+                    // Signal 2: bold font weight on the conversation's text divs.
+                    // X uses font-weight: 700 on unread, 400 on read.
+                    if (!hasUnread) {
+                        const textDivs = link.querySelectorAll('div[dir="auto"], div[dir="ltr"], div[dir="rtl"], span');
+                        for (const d of textDivs) {
+                            const txt = (d.textContent || '').trim();
+                            if (!txt) continue;
+                            // Skip pure timestamps to avoid false positives
+                            if (/^(\\d+[hmd]|\\d+w|Just now)$/.test(txt)) continue;
+                            const fw = window.getComputedStyle(d).fontWeight;
+                            const fwNum = parseInt(fw, 10);
+                            if (!isNaN(fwNum) && fwNum >= 700) {
+                                hasUnread = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Signal 3: small colored dot/badge inside the row that isn't
+                    // the avatar image. Heuristic: a span/div with explicit
+                    // background-color and a tiny size.
+                    if (!hasUnread) {
+                        const candidates = item.querySelectorAll('span, div');
+                        for (const el of candidates) {
+                            const style = window.getComputedStyle(el);
+                            const bg = style.backgroundColor || '';
+                            // X blue or any saturated solid background on a tiny element
+                            if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') continue;
+                            const w = el.offsetWidth, h = el.offsetHeight;
+                            if (w > 0 && w <= 14 && h > 0 && h <= 14 && Math.abs(w - h) <= 2) {
+                                hasUnread = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Hard override: if the preview literally starts with "You:",
+                    // we sent the most recent visible message. Even if some
+                    // unread heuristic misfired, there's nothing new to read.
+                    if (isFromUs) hasUnread = false;
+
                     if (author || handle) {
                         results.push({
                             author: author,
@@ -621,6 +680,7 @@ def unread_dms():
                             time: time,
                             thread_url: threadUrl,
                             is_from_us: isFromUs,
+                            has_unread: hasUnread,
                         });
                     }
                 }
