@@ -914,6 +914,7 @@ def filter_inbox(conn, platform, records):
         "kept_ambiguous": 0,
         "skip_is_from_us": 0,
         "skip_we_replied_after": 0,
+        "skip_recently_inspected": 0,
         "skip_needs_human": 0,
         "skip_closed": 0,
         "skip_invalid_url": 0,
@@ -939,18 +940,20 @@ def filter_inbox(conn, platform, records):
             counters["skip_is_from_us"] += 1
             continue
 
-        # Look up the DM row (chat_url first, fall back to author)
+        # Look up the DM row (chat_url first, fall back to author).
+        # Pull last_inspected_at too: if we've already opened this thread
+        # recently and confirmed nothing new, we don't want to re-open it.
         row = None
         if chat_url:
             row = conn.execute(
-                "SELECT id, conversation_status FROM dms "
+                "SELECT id, conversation_status, last_inspected_at FROM dms "
                 "WHERE platform = %s AND chat_url = %s "
                 "ORDER BY last_message_at DESC NULLS LAST LIMIT 1",
                 (norm_platform, chat_url),
             ).fetchone()
         if row is None and author:
             row = conn.execute(
-                "SELECT id, conversation_status FROM dms "
+                "SELECT id, conversation_status, last_inspected_at FROM dms "
                 "WHERE platform = %s AND LOWER(their_author) = LOWER(%s) "
                 "ORDER BY last_message_at DESC NULLS LAST LIMIT 1",
                 (norm_platform, author),
@@ -964,6 +967,7 @@ def filter_inbox(conn, platform, records):
 
         dm_id = row["id"]
         status = row.get("conversation_status") or "active"
+        last_inspected_at = row.get("last_inspected_at")
 
         # Skip already-escalated or explicitly closed convos
         if status == "needs_human":
@@ -1022,6 +1026,31 @@ def filter_inbox(conn, platform, records):
                 counters["skip_we_replied_after"] += 1
                 continue
 
+        # Recently-inspected short-circuit. Some threads stay near the top
+        # of the sidebar with stale activity (cold conversations, reactions,
+        # X bumps for "you both follow N people now" cards) but have no new
+        # inbound text. If we already opened this thread after the most
+        # recent message we logged, AND that visit was recent (default 24h),
+        # don't open it again until something new actually happens.
+        if last_inspected_at is not None:
+            inspect_after_messages = (
+                last_inbound_at is None or last_inspected_at >= last_inbound_at
+            ) and (
+                last_outbound_at is None or last_inspected_at >= last_outbound_at
+            )
+            if inspect_after_messages:
+                age = conn.execute(
+                    "SELECT EXTRACT(EPOCH FROM (NOW() - %s::timestamptz))::bigint AS age_s",
+                    (last_inspected_at,),
+                ).fetchone()
+                inspected_age = int(age["age_s"]) if age else None
+                # Re-inspect at most once per 24h. Sidebar timestamps roll
+                # past this naturally, so this caps the "we keep checking
+                # the same stale thread" cost at one open per day per thread.
+                if inspected_age is not None and inspected_age <= 86400:
+                    counters["skip_recently_inspected"] += 1
+                    continue
+
         # Sidebar timestamp unparseable, or our outbound is older than the
         # sidebar window: there's likely a fresh inbound. Inspect.
         keep.append({
@@ -1041,12 +1070,29 @@ def filter_inbox(conn, platform, records):
         f"skipped={total_in - total_keep} "
         f"(is_from_us={counters['skip_is_from_us']}, "
         f"we_replied_after={counters['skip_we_replied_after']}, "
+        f"recently_inspected={counters['skip_recently_inspected']}, "
         f"needs_human={counters['skip_needs_human']}, "
         f"closed={counters['skip_closed']}, "
         f"invalid_url={counters['skip_invalid_url']})",
         file=sys.stderr,
     )
     print(json.dumps(keep, default=str))
+
+
+def mark_inspected(conn, dm_id):
+    """Stamp NOW() onto dms.last_inspected_at.
+
+    Called by the engagement prompt after every successful read-conversation
+    that doesn't produce a new outbound or new inbound row, so the next
+    cycle's filter-inbox can short-circuit threads we've already verified
+    have nothing new in them.
+    """
+    conn.execute(
+        "UPDATE dms SET last_inspected_at = NOW() WHERE id = %s",
+        (dm_id,),
+    )
+    conn.commit()
+    print(f"  Marked DM #{dm_id} inspected at NOW()")
 
 
 def set_tier(conn, dm_id, tier):
@@ -1248,6 +1294,13 @@ def main():
     p_filter.add_argument("--file", default=None,
         help="Path to JSON file. If omitted, reads from stdin.")
 
+    p_inspect = sub.add_parser("mark-inspected",
+        help=("Stamp NOW() onto dms.last_inspected_at after a read-conversation "
+              "call confirmed there is no new content to log. The next "
+              "filter-inbox run will skip this thread for 24h unless a fresh "
+              "outbound or inbound is logged in the meantime."))
+    p_inspect.add_argument("--dm-id", type=int, required=True)
+
     p_tier = sub.add_parser("set-tier", help="Set conversation tier")
     p_tier.add_argument("--dm-id", type=int, required=True)
     p_tier.add_argument("--tier", type=int, required=True, choices=[1, 2, 3])
@@ -1381,6 +1434,8 @@ def main():
             print("ERROR: expected a JSON array of thread records", file=sys.stderr)
             sys.exit(2)
         filter_inbox(conn, args.platform, records)
+    elif args.command == "mark-inspected":
+        mark_inspected(conn, args.dm_id)
     elif args.command == "set-tier":
         set_tier(conn, args.dm_id, args.tier)
     elif args.command == "set-status":
