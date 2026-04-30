@@ -1136,6 +1136,104 @@ case "${PLATFORM:-all}" in
         ;;
 esac
 
+# ============================================================================
+# EARLY-EXIT GATE (added 2026-04-29 to skip Claude on empty cycles)
+# ----------------------------------------------------------------------------
+# Before invoking Claude (~$5-20 per run on Opus, mostly burned reading
+# huge LinkedIn DOM snapshots), check whether there's *anything* to do:
+#
+#   1. DB-side: any active DM where the most recent message is inbound?
+#      (Cheap: ~50ms SQL.) Catches every conversation we're already
+#      tracking that needs a reply.
+#
+#   2. Live-side, LinkedIn only: scrape /messaging/ sidebar via the
+#      read-only helper (scripts/linkedin_browser.py unread-dms) and
+#      count threads with the unread badge. Catches brand-new inbound
+#      from prospects we haven't logged a DM row for yet.
+#
+# If both signals say "nothing", we log run with cost=0 and exit cleanly.
+# ============================================================================
+NEEDS_CLAUDE=false
+GATE_REASON=""
+
+# Helper: count active DMs where last message is inbound, per platform.
+needs_reply_count_for() {
+    local plat="$1"
+    psql "$DATABASE_URL" -tA -c "
+        SELECT COUNT(*) FROM dms d
+        WHERE d.platform='$plat'
+          AND d.conversation_status='active'
+          AND EXISTS (
+            SELECT 1 FROM dm_messages m
+            WHERE m.dm_id = d.id
+              AND m.direction='inbound'
+              AND m.message_at > COALESCE(
+                (SELECT MAX(m2.message_at) FROM dm_messages m2
+                 WHERE m2.dm_id=d.id AND m2.direction='outbound'),
+                'epoch'::timestamp
+              )
+          );
+    " 2>/dev/null | tr -d ' \n' || echo "?"
+}
+
+# DB-side check across in-scope platforms.
+for plat_check in ${PLATFORM:-reddit linkedin twitter}; do
+    case "$plat_check" in
+        x) plat_check="twitter" ;;
+    esac
+    NR=$(needs_reply_count_for "$plat_check")
+    if [ "$NR" != "0" ] && [ "$NR" != "?" ] && [ -n "$NR" ]; then
+        NEEDS_CLAUDE=true
+        GATE_REASON="db: ${plat_check} has ${NR} convos with inbound>outbound"
+        log "[gate] ${GATE_REASON}"
+        break
+    fi
+done
+
+# Live-side LinkedIn pre-check (only when DB said nothing AND LinkedIn is
+# in scope). Read-only sidebar scrape via headed Chromium, ~5s, $0.
+if ! $NEEDS_CLAUDE && { [ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ]; }; then
+    log "[gate] DB says nothing pending; running LinkedIn live sidebar pre-check..."
+    LI_PRECHECK=$(PYTHONPATH="$HOME/Library/Python/3.9/lib/python/site-packages" \
+        /usr/bin/python3 "$REPO_DIR/scripts/linkedin_browser.py" unread-dms 2>/dev/null)
+    LI_OK=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('ok'))" 2>/dev/null)
+    LI_UNREAD=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('unread_count', 0))" 2>/dev/null)
+    if [ "$LI_OK" = "True" ] && [ "$LI_UNREAD" = "0" ]; then
+        log "[gate] LinkedIn sidebar pre-check: 0 unread threads"
+    elif [ "$LI_OK" = "True" ]; then
+        NEEDS_CLAUDE=true
+        GATE_REASON="linkedin live: ${LI_UNREAD} unread threads in sidebar"
+        log "[gate] ${GATE_REASON}"
+    else
+        # Helper failed (session_invalid, profile_locked, etc). Be safe:
+        # fall through to Claude rather than silently dropping work.
+        NEEDS_CLAUDE=true
+        GATE_REASON="linkedin pre-check failed (helper non-ok); falling through to Claude"
+        log "[gate] ${GATE_REASON}"
+    fi
+fi
+
+if ! $NEEDS_CLAUDE; then
+    log "[gate] All signals say nothing to do; skipping Claude invocation."
+    rm -f "$PHASE_A_PROMPT"
+    RUN_ELAPSED=$(( $(date +%s) - RUN_START ))
+    # Log a zero-cost run so the dashboard shows the cycle fired.
+    if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "reddit" ]; then
+        python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_reddit" --posted 0 --skipped 0 --failed 0 --cost "0.0" --elapsed "$RUN_ELAPSED" 2>/dev/null || true
+    fi
+    if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ]; then
+        python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_linkedin" --posted 0 --skipped 0 --failed 0 --cost "0.0" --elapsed "$RUN_ELAPSED" 2>/dev/null || true
+    fi
+    if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ]; then
+        python3 "$REPO_DIR/scripts/log_run.py" --script "dm_replies_twitter" --posted 0 --skipped 0 --failed 0 --cost "0.0" --elapsed "$RUN_ELAPSED" 2>/dev/null || true
+    fi
+    log "=== DM reply engagement complete (gated, cost=\$0): $(date) ==="
+    exit 0
+fi
+# ============================================================================
+# END EARLY-EXIT GATE
+# ============================================================================
+
 gtimeout 5400 "$REPO_DIR/scripts/run_claude.sh" "engage-dm-replies" --strict-mcp-config --mcp-config "$DM_MCP_CONFIG" -p "$(cat "$PHASE_A_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: DM reply claude exited with code $?"
 rm -f "$PHASE_A_PROMPT"
 
