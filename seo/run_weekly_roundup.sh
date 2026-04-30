@@ -79,9 +79,16 @@ done
 # trips. Once any lane reports it, every remaining lane would fail the same
 # way and burn credits for nothing — short-circuit instead.
 # Match both shell-output markers and Claude session JSONL signals
-# (rate_limit_event / api_error_status:429 / "hit your limit"). The latter
-# only appear in the per-product *_stream.jsonl, never in the shell log.
-QUOTA_MARKERS='monthly usage limit|rate.?limit|429 Too Many|insufficient_quota|rate_limit_event|"api_error_status":429|hit your limit'
+# (api_error_status:429 / "hit your limit" / rate_limit_event with
+# "status":"rejected"). The latter only appear in the per-product
+# *_stream.jsonl, never in the shell log.
+#
+# IMPORTANT 2026-04-29: do NOT match bare `rate_limit_event` or `rate.?limit`.
+# Claude streams a `rate_limit_event` object on every successful turn as a
+# heartbeat (`"status":"allowed"` / `"allowed_warning"`); those patterns trip
+# on healthy runs and short-circuit after lane #1. Only `"status":"rejected"`
+# signals an actual rejection.
+QUOTA_MARKERS='monthly usage limit|429 Too Many|insufficient_quota|"api_error_status":429|hit your limit|"status":"rejected"'
 QUOTA_HIT=0
 
 # Run products sequentially instead of in parallel. Parallel fanout used to
