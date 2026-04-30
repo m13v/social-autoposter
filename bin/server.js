@@ -728,20 +728,63 @@ async function enrichCheckRepliesRuns(runs) {
 // stream.jsonl gives us turns/cost/files_modified/error from its final `result`
 // line. We tail-read the stream because it can be megabytes.
 const SEO_LOG_ROOT = path.join(DEST, 'seo', 'logs');
-const SEO_PHASE_DIR = {
-  seo_improve: 'improve',
-  seo_top_pages: 'top_pages',
-  // seo_weekly_roundup writes per-product Claude streams directly under
-  // seo/logs/<product>/ (not in a subdir). Handled separately.
+// Per-job layout descriptor. Each entry tells the collector where to look:
+//   kind: 'subdir-ts'   => seo/logs/<product>/<phaseDir>/<TS>.log
+//   kind: 'root-slug'   => seo/logs/<product>/<TS>_<slug>.log
+//   kind: 'roundup'     => seo/logs/roundup/<TICK>_<product>.log
+//
+// All three patterns produce the same per-product detail row shape so the
+// dashboard renders them with one expandable-row template.
+const SEO_JOB_LAYOUT = {
+  seo_improve:        { kind: 'subdir-ts', phaseDir: 'improve' },
+  seo_top_pages:      { kind: 'subdir-ts', phaseDir: 'top_pages' },
+  serp_seo:           { kind: 'root-slug' },
+  gsc_seo:            { kind: 'root-slug' },
+  seo_weekly_roundup: { kind: 'roundup' },
 };
+// Back-compat alias for any internal caller still expecting the old name.
+const SEO_PHASE_DIR = Object.fromEntries(
+  Object.entries(SEO_JOB_LAYOUT)
+    .filter(([, v]) => v.kind === 'subdir-ts')
+    .map(([k, v]) => [k, v.phaseDir]),
+);
 // Match seo/logs/<product>/<phase>/<TS>.log where TS is YYYYMMDD-HHMMSS UTC.
 const SEO_LOG_TS_RE = /^(\d{8})-(\d{6})\.log$/;
+// Match seo/logs/<product>/<TS>_<slug>.log (serp_seo / gsc_seo flavor).
+const SEO_LOG_TS_SLUG_RE = /^(\d{8})-(\d{6})_([^/]+)\.log$/;
+// Match seo/logs/roundup/<TICK>_<product>.log where TICK = YYYY-MM-DD_HHMMSS.
+const SEO_ROUNDUP_LANE_RE = /^(\d{4}-\d{2}-\d{2})_(\d{6})_(.+)\.log$/;
 
 function _parseSeoLogTsToMs(filename) {
   const m = filename.match(SEO_LOG_TS_RE);
   if (!m) return null;
   const [yy, mm, dd] = [m[1].slice(0, 4), m[1].slice(4, 6), m[1].slice(6, 8)];
   const [hh, mn, ss] = [m[2].slice(0, 2), m[2].slice(2, 4), m[2].slice(4, 6)];
+  const iso = `${yy}-${mm}-${dd}T${hh}:${mn}:${ss}Z`;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+// Same as _parseSeoLogTsToMs but for `<TS>_<slug>.log` (serp/gsc layout).
+function _parseSeoSlugLogTsToMs(filename) {
+  const m = filename.match(SEO_LOG_TS_SLUG_RE);
+  if (!m) return null;
+  const [yy, mm, dd] = [m[1].slice(0, 4), m[1].slice(4, 6), m[1].slice(6, 8)];
+  const [hh, mn, ss] = [m[2].slice(0, 2), m[2].slice(2, 4), m[2].slice(4, 6)];
+  const iso = `${yy}-${mm}-${dd}T${hh}:${mn}:${ss}Z`;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+// Parse the roundup lane filename `YYYY-MM-DD_HHMMSS_<product>.log` into ms.
+function _parseSeoRoundupLogTsToMs(filename) {
+  const m = filename.match(SEO_ROUNDUP_LANE_RE);
+  if (!m) return null;
+  const [yy, mm, dd] = m[1].split('-');
+  const [hh, mn, ss] = [m[2].slice(0, 2), m[2].slice(2, 4), m[2].slice(4, 6)];
+  // Roundup lane log timestamps are written in local time (per shell `date
+  // +%Y-%m-%d_%H%M%S`), not UTC. We don't know the operator's TZ inside
+  // the dashboard process, so use Z and accept a wider window when matching.
   const iso = `${yy}-${mm}-${dd}T${hh}:${mn}:${ss}Z`;
   const ms = Date.parse(iso);
   return Number.isFinite(ms) ? ms : null;
