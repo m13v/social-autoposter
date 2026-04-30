@@ -711,6 +711,255 @@ async function enrichCheckRepliesRuns(runs) {
   }
 }
 
+// SEO pipeline runs (seo_improve, seo_top_pages, seo_weekly_roundup) have a
+// per-product breakdown that the run_monitor.log line aggregates into a flat
+// posted/failed pair. The dashboard wants to show "fazm: committed, terminator:
+// rate-limited, c0nsl: posthog throttle" etc. so the operator can tell apart
+// "Claude rate-limited" from "PostHog throttled" from "no traffic" without
+// digging through logs.
+//
+// Each per-product attempt leaves three artifacts in seo/logs/<product>/<phase>/:
+//   <utc_ts>.log                     shell wrapper output (small, deterministic)
+//   <utc_ts>_brief.json              brief handed to Claude (target slug/url)
+//   <utc_ts>_<slug>_stream.jsonl     full Claude session JSONL
+//
+// The .log filename's UTC timestamp is the source of truth for "did this attempt
+// fall in this run's window". The brief.json gives us the target page; the
+// stream.jsonl gives us turns/cost/files_modified/error from its final `result`
+// line. We tail-read the stream because it can be megabytes.
+const SEO_LOG_ROOT = path.join(DEST, 'seo', 'logs');
+const SEO_PHASE_DIR = {
+  seo_improve: 'improve',
+  seo_top_pages: 'top_pages',
+  // seo_weekly_roundup writes per-product Claude streams directly under
+  // seo/logs/<product>/ (not in a subdir). Handled separately.
+};
+// Match seo/logs/<product>/<phase>/<TS>.log where TS is YYYYMMDD-HHMMSS UTC.
+const SEO_LOG_TS_RE = /^(\d{8})-(\d{6})\.log$/;
+
+function _parseSeoLogTsToMs(filename) {
+  const m = filename.match(SEO_LOG_TS_RE);
+  if (!m) return null;
+  const [yy, mm, dd] = [m[1].slice(0, 4), m[1].slice(4, 6), m[1].slice(6, 8)];
+  const [hh, mn, ss] = [m[2].slice(0, 2), m[2].slice(2, 4), m[2].slice(4, 6)];
+  const iso = `${yy}-${mm}-${dd}T${hh}:${mn}:${ss}Z`;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+// Read the last N bytes of a file (for tailing large _stream.jsonl files
+// efficiently — only the last `result` line carries the run summary).
+function _tailFileSync(filePath, bytes) {
+  try {
+    const stat = fs.statSync(filePath);
+    const size = stat.size;
+    const start = Math.max(0, size - bytes);
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      return buf.toString('utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return '';
+  }
+}
+
+// Extract the final `{"type":"result", ...}` line from a Claude session
+// stream JSONL. Returns null if not found.
+function _readSeoStreamResult(streamPath) {
+  if (!streamPath) return null;
+  // Last 16 KB is enough; the result line is typically ~2-4 KB.
+  const tail = _tailFileSync(streamPath, 16 * 1024);
+  if (!tail) return null;
+  const lines = tail.split('\n').filter(Boolean);
+  // Walk backwards: the very last line should be the result line.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line.startsWith('{') || line.indexOf('"type":"result"') < 0) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (obj && obj.type === 'result') return obj;
+    } catch { /* fall through to next line */ }
+  }
+  // Some failure modes don't emit a result line (worker died); look for a
+  // rate_limit_event so we can still classify as a quota hit.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].indexOf('"type":"rate_limit_event"') >= 0) {
+      return { type: 'rate_limit_event', is_error: true, api_error_status: 429 };
+    }
+  }
+  return null;
+}
+
+function _readSeoBrief(briefPath) {
+  if (!briefPath) return null;
+  try {
+    const raw = fs.readFileSync(briefPath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+// Classify the per-product .log into a status string. The shell wrapper
+// writes a fixed set of markers we can pattern-match on.
+function _classifySeoLog(logText) {
+  if (!logText) return { status: 'unknown', detail: '' };
+  // Successful Claude session logs the result JSON inline.
+  const m = logText.match(/"status":\s*"([a-z_]+)"/);
+  if (m) {
+    return { status: m[1], detail: '' };
+  }
+  if (/SKIP:.*no pageviews in last 24h/i.test(logText)) {
+    return { status: 'no_traffic', detail: 'no pageviews in last 24h' };
+  }
+  if (/HogQL failed: HTTP 429/i.test(logText)) {
+    // PostHog throttle. Try to surface the wait hint.
+    const wait = logText.match(/available in (\d+) seconds/i);
+    return {
+      status: 'posthog_throttle',
+      detail: wait ? `PostHog throttled (${wait[1]}s)` : 'PostHog HogQL throttled',
+    };
+  }
+  if (/HogQL failed/i.test(logText)) {
+    return { status: 'posthog_error', detail: 'PostHog HogQL error' };
+  }
+  if (/already running for/i.test(logText)) {
+    return { status: 'locked', detail: 'lock held by prior run' };
+  }
+  if (/ERROR building brief/i.test(logText)) {
+    return { status: 'brief_error', detail: 'brief builder failed' };
+  }
+  return { status: 'unknown', detail: '' };
+}
+
+// Build per-product detail rows for one SEO run. `phaseDir` is the subfolder
+// under seo/logs/<product>/ to scan ('improve' or 'top_pages').
+function _collectSeoDetails(run, phaseDir) {
+  if (!fs.existsSync(SEO_LOG_ROOT)) return [];
+  const startMs = run.started_at ? Date.parse(run.started_at) : null;
+  const endMs = run.finished_at ? Date.parse(run.finished_at) : null;
+  if (!startMs || !endMs) return [];
+  // 60s pre-window slack covers the small gap between log line write and the
+  // shell trap recording the run end. 60s post-window covers the artifact
+  // being flushed after the trap fires.
+  const winStart = startMs - 60 * 1000;
+  const winEnd = endMs + 60 * 1000;
+  const details = [];
+  let products;
+  try {
+    products = fs.readdirSync(SEO_LOG_ROOT, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => d.name);
+  } catch { return []; }
+  for (const product of products) {
+    const phasePath = path.join(SEO_LOG_ROOT, product, phaseDir);
+    let entries;
+    try {
+      entries = fs.readdirSync(phasePath);
+    } catch { continue; }
+    for (const fname of entries) {
+      const ms = _parseSeoLogTsToMs(fname);
+      if (ms == null) continue;
+      if (ms < winStart || ms > winEnd) continue;
+      const ts = fname.slice(0, fname.lastIndexOf('.log'));
+      const logPath = path.join(phasePath, fname);
+      let logText = '';
+      try { logText = fs.readFileSync(logPath, 'utf8'); } catch { /* ignore */ }
+      const cls = _classifySeoLog(logText);
+      // Find the matching brief and the most recent _stream.jsonl that starts
+      // with this TS (Claude session timestamps drift a few seconds after
+      // the .log timestamp, so we just match by ts prefix).
+      const briefPath = path.join(phasePath, `${ts}_brief.json`);
+      const brief = fs.existsSync(briefPath) ? _readSeoBrief(briefPath) : null;
+      let streamPath = null;
+      // _stream.jsonl filename is <stream_ts>_<slug>_stream.jsonl, where
+      // stream_ts > log ts (Claude session starts after brief write). Take
+      // the latest stream file in this folder whose ts is within the window.
+      for (const s of entries) {
+        if (!s.endsWith('_stream.jsonl')) continue;
+        const sTsM = s.match(/^(\d{8})-(\d{6})_/);
+        if (!sTsM) continue;
+        const sIso = `${sTsM[1].slice(0, 4)}-${sTsM[1].slice(4, 6)}-${sTsM[1].slice(6, 8)}T${sTsM[2].slice(0, 2)}:${sTsM[2].slice(2, 4)}:${sTsM[2].slice(4, 6)}Z`;
+        const sMs = Date.parse(sIso);
+        if (!Number.isFinite(sMs)) continue;
+        // Stream must start within +/- 5 min of this attempt's .log ts.
+        if (Math.abs(sMs - ms) > 5 * 60 * 1000) continue;
+        if (!streamPath || sMs > _parseSeoLogTsToMs(path.basename(streamPath).replace(/_[^_]+_stream\.jsonl$/, '.log'))) {
+          streamPath = path.join(phasePath, s);
+        }
+      }
+      const streamRes = streamPath ? _readSeoStreamResult(streamPath) : null;
+      // Extract a usable target page label.
+      let targetUrl = null, targetSlug = null;
+      if (brief) {
+        targetUrl = brief.page_url || brief.url || (brief.winner && brief.winner.page_url) || null;
+        targetSlug = brief.slug || (brief.winner && brief.winner.slug) || null;
+      }
+      // Refine status from stream when available (it has the canonical answer).
+      let status = cls.status;
+      let detail = cls.detail;
+      let cost = null;
+      let numTurns = null;
+      let filesModified = [];
+      let errorMsg = null;
+      if (streamRes) {
+        if (streamRes.is_error) {
+          if (streamRes.api_error_status === 429 ||
+              (typeof streamRes.result === 'string' && /hit your limit|rate.?limit/i.test(streamRes.result))) {
+            status = 'claude_rate_limit';
+            detail = 'Claude usage limit hit mid-session';
+          } else {
+            status = 'claude_error';
+            detail = (typeof streamRes.result === 'string' ? streamRes.result : '').slice(0, 200);
+          }
+          errorMsg = (typeof streamRes.result === 'string' ? streamRes.result : '').slice(0, 200);
+        }
+        if (typeof streamRes.total_cost_usd === 'number') cost = streamRes.total_cost_usd;
+        if (typeof streamRes.num_turns === 'number') numTurns = streamRes.num_turns;
+      }
+      // Pull files_modified from the inline result JSON in the .log if present.
+      const fmM = logText.match(/"files_modified":\s*\[([^\]]*)\]/);
+      if (fmM) {
+        filesModified = fmM[1].split(',').map(s => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
+      }
+      details.push({
+        product,
+        ts,
+        status,
+        detail,
+        target_url: targetUrl,
+        target_slug: targetSlug,
+        num_turns: numTurns,
+        cost_usd: cost,
+        files_modified: filesModified,
+        error: errorMsg,
+      });
+    }
+  }
+  // Sort by .log timestamp ascending (matches run order).
+  details.sort((a, b) => a.ts.localeCompare(b.ts));
+  return details;
+}
+
+async function enrichSeoRuns(runs) {
+  const seoRuns = runs.filter(r => SEO_PHASE_DIR[r.script]);
+  if (!seoRuns.length) return;
+  for (const run of seoRuns) {
+    const phase = SEO_PHASE_DIR[run.script];
+    try {
+      run.details = _collectSeoDetails(run, phase);
+    } catch (e) {
+      // Don't fail the whole /api/job-runs response if one run's artifacts
+      // are partially corrupt — just leave details empty.
+      run.details = [];
+    }
+  }
+}
+
 // 5s TTL cache so /api/status polling (typically every 1-2s) doesn't spawn
 // a psql subprocess on every hit. Stale-by-5s is fine for the pending-reply
 // counter since it only affects the dashboard badge.
@@ -1548,6 +1797,7 @@ async function handleApi(req, res) {
       await enrichLinkEditRuns(runs);
       await enrichEngageRuns(runs);
       await enrichCheckRepliesRuns(runs);
+      await enrichSeoRuns(runs);
       return json(res, { runs });
     })().catch(e => json(res, { error: e.message }, 500));
   }
