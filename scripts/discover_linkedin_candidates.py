@@ -5,30 +5,44 @@ Usage:
     python3 discover_linkedin_candidates.py <vertical> <query>
         # vertical = people | content | companies
 
-Designed to replace the Claude-driven SERP nav inside skill/run-linkedin.sh
-Phase A. Pulls ONE page of LinkedIn search results, extracts candidate
-metadata + engagement, prints a JSON envelope to stdout. The shell pipes
-that envelope to log_linkedin_search_attempts.py and
-score_linkedin_candidates.py (existing consumers).
+Attaches to the linkedin-agent MCP's already-running Chromium via CDP
+(http://localhost:<port> read from DevToolsActivePort) and reuses its
+existing BrowserContext. Same Chrome process, same cookies, same UA, same
+fingerprint as whatever LinkedIn already trusts from the MCP session.
+Opens our own page in that context, navigates to the SERP, runs ONE
+page.evaluate() against the rendered DOM, closes our page, disconnects.
 
 Read-only DOM scrape: NO Voyager API, NO scroll-and-expand loops, NO
-permalink fan-out, NO clicks/typing, NO programmatic login. ONE goto +
-ONE page.evaluate() then close the context.
+permalink fan-out, NO clicks/typing, NO programmatic login.
 
-Per CLAUDE.md "LinkedIn: flagged patterns" carve-out (2026-04-29): a
-read-only DOM read is permitted because its fingerprint is indistinguishable
-from the existing mcp__linkedin-agent__ sessions (same profile, same
-cookies, same headed Chrome binary). The 2026-04-17 restriction was caused
-by Voyager calls + permalink scroll loops, neither of which appear here.
+Pre-conditions for this to work:
+    1. The linkedin-agent MCP is currently running and has launched Chrome
+       at least once this session (so DevToolsActivePort exists).
+    2. The MCP's launchOptions.args includes --remote-debugging-port=0;
+       see ~/.claude/browser-agent-configs/linkedin-agent.json. Without
+       this flag Chrome only exposes a CDP pipe inherited by the MCP
+       server and is unreachable from this script.
+    3. The user is logged in inside that browser. We do NOT log in.
+
+Why CDP attach rather than launch_persistent_context: the previous version
+launched its own Chrome against the shared profile dir. When LinkedIn
+redirected the SERP request (UA mismatch / fresh-launch fingerprint) the
+homepage response contained Set-Cookie headers that cleared li_at. On
+context.close() Chrome flushed the cleared cookies to disk, logging the
+shared profile out and breaking unread-dms + the linkedin-agent MCP.
+Attaching to the MCP's running Chrome eliminates the launch fingerprint,
+removes the cookie-flush risk (we never close the context), and keeps the
+profile fully owned by one process at a time.
+
+Per CLAUDE.md "LinkedIn: flagged patterns" carve-out (2026-04-29): the
+read-only DOM read is permitted because the request runs inside the same
+Chrome the MCP already drives. The 2026-04-17 restriction was caused by
+Voyager calls + permalink scroll loops, neither of which appear here.
 
 Rate-limited against linkedin_browser_searches per the 2026-04-29 research:
 ~30s min gap, ~40/day, ~150/month soft cap leaves headroom under LinkedIn's
 ~300/month commercial-use wall on free accounts. Fails CLOSED on DB errors:
 if we cannot enforce the budget we do not perform the search.
-
-Shares the persistent-profile launcher + lock helpers with linkedin_browser
-(unread-dms pre-check), so both tools cooperate on
-~/.claude/linkedin-agent-lock.json and ~/.claude/browser-profiles/linkedin.
 
 Output (stdout, JSON):
     {
@@ -44,7 +58,9 @@ Output (stdout, JSON):
 
 Failure shapes:
     {"ok": false, "error": "session_invalid", "url": "..."}
-    {"ok": false, "error": "profile_locked", "detail": "..."}
+    {"ok": false, "error": "serp_redirected", "url": "..."}
+    {"ok": false, "error": "mcp_not_running", "detail": "..."}
+    {"ok": false, "error": "cdp_attach_failed", "detail": "..."}
     {"ok": false, "error": "navigation_failed", "detail": "..."}
     {"ok": false, "error": "bad_vertical", "detail": "..."}
     {"ok": false, "error": "empty_query", "detail": ""}
@@ -64,21 +80,18 @@ import time
 import urllib.parse
 from typing import Optional
 
-# Shared persistent-profile launcher + lock helpers live in linkedin_browser
-# so the unread-dms pre-check and this discovery tool cooperate on the same
-# Chrome profile and the same ~/.claude/linkedin-agent-lock.json. Importing
-# linkedin_browser also registers its atexit handler that releases the lock
-# on process exit — covers us too.
+# Reuse the lock helper + login-URL detector from linkedin_browser. We share
+# the lock so concurrent Python helpers (search vs unread-dms) serialize on
+# the same ~/.claude/linkedin-agent-lock.json. PROFILE_DIR also points at
+# the directory where the linkedin-agent MCP writes DevToolsActivePort.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from linkedin_browser import (  # noqa: E402
-    LOCK_POLL_INTERVAL,
-    LOCK_WAIT_MAX,
     PROFILE_DIR,
-    SYSTEM_CHROME,
-    VIEWPORT,
     _acquire_browser_lock,
     _is_login_or_checkpoint,
 )
+
+DEVTOOLS_ACTIVE_PORT = os.path.join(PROFILE_DIR, "DevToolsActivePort")
 
 # Search rate-limit budget. Picked from 2026-04-29 research synthesis: vendor
 # consensus is 8-25s gap + 80-100 profile views/hour + <500/day at high-volume
@@ -495,12 +508,26 @@ _SEARCH_JS_BY_VERTICAL = {
 }
 
 
-def search(vertical: str, query: str) -> dict:
-    """Read one page of LinkedIn search results, headed, read-only.
+def _read_devtools_port() -> Optional[int]:
+    """Return the CDP port the linkedin-agent MCP's Chrome is listening on,
+    or None if the file is missing/unreadable. Chrome writes the port on
+    line 1 of DevToolsActivePort when launched with --remote-debugging-port.
+    The file is removed when Chrome exits, so its absence means the MCP's
+    Chrome is not currently running."""
+    try:
+        with open(DEVTOOLS_ACTIVE_PORT) as f:
+            port = int(f.readline().strip())
+            return port if port > 0 else None
+    except (OSError, ValueError):
+        return None
 
-    ONE goto, ONE evaluate, close. No scrolling, no clicks. Rate-limited
-    against linkedin_browser_searches; fails closed if the DB is reachable
-    but the budget is exhausted.
+
+def search(vertical: str, query: str) -> dict:
+    """Attach to the linkedin-agent MCP's Chrome via CDP and read one SERP.
+
+    ONE goto, ONE evaluate. No own-Chrome launch, no context.close(),
+    so we never write cookies back to disk. Rate-limited against
+    linkedin_browser_searches; fails closed if the DB budget is exhausted.
     """
     if vertical not in SEARCH_VERTICALS:
         return {
@@ -516,6 +543,19 @@ def search(vertical: str, query: str) -> dict:
     if not rate.get("ok"):
         return rate
 
+    port = _read_devtools_port()
+    if port is None:
+        return {
+            "ok": False,
+            "error": "mcp_not_running",
+            "detail": (
+                f"{DEVTOOLS_ACTIVE_PORT} is missing or empty. The "
+                "linkedin-agent MCP must be running and have loaded Chrome "
+                "at least once this session, with --remote-debugging-port=0 "
+                "in its launchOptions.args."
+            ),
+        }
+
     from playwright.sync_api import sync_playwright
 
     _acquire_browser_lock()
@@ -528,53 +568,33 @@ def search(vertical: str, query: str) -> dict:
         f"https://www.linkedin.com/search/results/{vertical}/"
         f"?keywords={encoded}{suffix}"
     )
+    serp_prefix = f"https://www.linkedin.com/search/results/{vertical}/"
 
     with sync_playwright() as p:
-        deadline = time.time() + LOCK_WAIT_MAX
-        context = None
-        last_err: Optional[Exception] = None
-        while True:
-            for fname in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
-                try:
-                    os.remove(os.path.join(PROFILE_DIR, fname))
-                except OSError:
-                    pass
-            try:
-                context = p.chromium.launch_persistent_context(
-                    PROFILE_DIR,
-                    headless=False,
-                    executable_path=(
-                        SYSTEM_CHROME if os.path.exists(SYSTEM_CHROME) else None
-                    ),
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--window-position=3953,-1032",
-                        "--window-size=911,1016",
-                    ],
-                    viewport=VIEWPORT,
-                    user_agent=(
-                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/131.0.0.0 Safari/537.36"
-                    ),
-                    locale="en-US",
-                    extra_http_headers={
-                        "Accept-Language": "en-US,en;q=0.9",
-                    },
-                )
-                break
-            except Exception as e:
-                last_err = e
-                if time.time() >= deadline:
-                    err = {
-                        "ok": False,
-                        "error": "profile_locked",
-                        "detail": f"launch_persistent_context failed: {e}",
-                    }
-                    _log_search(query, vertical, ok=False, error="profile_locked")
-                    return err
-                time.sleep(LOCK_POLL_INTERVAL)
+        try:
+            browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
+        except Exception as e:
+            _log_search(query, vertical, ok=False, error="cdp_attach_failed")
+            return {
+                "ok": False,
+                "error": "cdp_attach_failed",
+                "detail": f"connect_over_cdp(localhost:{port}) failed: {e}",
+            }
 
+        # Reuse the existing context (cookies / UA / fingerprint already set
+        # by the MCP launch). Never close it — that would kill the MCP's
+        # pages too. We only own the page we create below.
+        if not browser.contexts:
+            browser.disconnect()
+            _log_search(query, vertical, ok=False, error="cdp_attach_failed")
+            return {
+                "ok": False,
+                "error": "cdp_attach_failed",
+                "detail": "browser.contexts is empty; MCP has no open context",
+            }
+        context = browser.contexts[0]
+
+        page = None
         try:
             page = context.new_page()
             try:
@@ -616,6 +636,18 @@ def search(vertical: str, query: str) -> dict:
                     "error": "session_invalid",
                     "url": cur_url,
                 }
+            # LinkedIn's anti-automation likes to redirect a refused SERP to
+            # https://www.linkedin.com/ (no /login marker). Without this
+            # check the extractor would run on the homepage, find nothing,
+            # and we'd return ok:true with result_count:0 — masking failure
+            # as an empty query. Require landing on the SERP path.
+            if not cur_url.startswith(serp_prefix):
+                _log_search(query, vertical, ok=False, error="serp_redirected")
+                return {
+                    "ok": False,
+                    "error": "serp_redirected",
+                    "url": cur_url,
+                }
 
             raw = page.evaluate(_SEARCH_JS_BY_VERTICAL[vertical])
             try:
@@ -640,8 +672,15 @@ def search(vertical: str, query: str) -> dict:
             }
 
         finally:
+            # Close ONLY our page, never the context or the browser. The
+            # MCP keeps owning the Chrome instance and its existing pages.
             try:
-                context.close()
+                if page is not None:
+                    page.close()
+            except Exception:
+                pass
+            try:
+                browser.disconnect()
             except Exception:
                 pass
 
