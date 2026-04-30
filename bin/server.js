@@ -956,6 +956,7 @@ function _collectSeoDetails(run, phaseDir) {
       let numTurns = null;
       let filesModified = [];
       let errorMsg = null;
+      let sessionId = null;
       if (streamRes) {
         if (streamRes.is_error) {
           if (streamRes.api_error_status === 429 ||
@@ -968,8 +969,13 @@ function _collectSeoDetails(run, phaseDir) {
           }
           errorMsg = (typeof streamRes.result === 'string' ? streamRes.result : '').slice(0, 200);
         }
+        // streamRes.total_cost_usd undercounts when the session spawned Task
+        // subagents (the SDK only sums the orchestrator's own turns). We keep
+        // it as a fallback and let enrichSeoRuns overwrite from claude_sessions
+        // by session_id when available.
         if (typeof streamRes.total_cost_usd === 'number') cost = streamRes.total_cost_usd;
         if (typeof streamRes.num_turns === 'number') numTurns = streamRes.num_turns;
+        if (typeof streamRes.session_id === 'string') sessionId = streamRes.session_id;
       }
       // Pull files_modified from the inline result JSON in the .log if present.
       const fmM = logText.match(/"files_modified":\s*\[([^\]]*)\]/);
@@ -987,6 +993,7 @@ function _collectSeoDetails(run, phaseDir) {
         cost_usd: cost,
         files_modified: filesModified,
         error: errorMsg,
+        session_id: sessionId,
       });
     }
   }
