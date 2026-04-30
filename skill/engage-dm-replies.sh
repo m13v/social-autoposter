@@ -906,16 +906,16 @@ If CDP returns {ok:false} with any other non-recoverable error, fall back to mcp
 
 **X/Twitter DMs** (Python CDP script, no browser MCP needed):
 \`\`\`bash
-cd ~/social-autoposter && python3 scripts/twitter_browser.py send-dm "THREAD_URL" "YOUR_REPLY_TEXT"
+cd ~/social-autoposter && python3 scripts/twitter_browser.py send-dm "THREAD_URL" "YOUR_REPLY_TEXT" DM_ID
 \`\`\`
-Returns JSON with {ok: true, thread_url, verified} on success. Handles the encrypted DM passcode automatically.
+Pass the conversation's DM_ID as the third positional arg so the tool can self-log the outbound and auto-attribute to any active Twitter campaign whose suffix it appended. Returns JSON with {ok: true, thread_url, verified, applied_campaigns, message_sent} on success. \`message_sent\` is the literal text that landed (which may include the campaign suffix appended at \`sample_rate\`). Handles the encrypted DM passcode automatically.
 On {ok:false}, treat these errors as TERMINAL for this run: \`rate_limited\`, \`conversation_not_found_in_sidebar\`, \`message_box_not_found\`, \`tweet_not_found\`. They mean platform-level state we can't fix mid-cycle. SKIP the conversation, do NOT retry, do NOT flag-human, do NOT log-outbound. The next launchd cycle handles its own backoff. The generic "retry up to 3 times" rule does NOT apply to these errors — retrying a rate_limited burns more X-side budget.
 
 ### Step 5: Log the reply
 \`\`\`bash
-cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "YOUR_REPLY_TEXT" --verified
+cd ~/social-autoposter && python3 scripts/dm_conversation.py log-outbound --dm-id DM_ID --content "MESSAGE_SENT_FROM_TOOL_JSON" --verified
 \`\`\`
-Pass --verified ONLY when the browser tool returned verified=true (or you visually confirmed the message in the thread). The flag is a hard gate: log-outbound refuses to insert without it. If verification failed, log nothing and let the next cycle retry; never pass --verified speculatively. The log-outbound command also has a dedup guard. If it says "DEDUP BLOCKED" or "VERIFY BLOCKED", the message was NOT logged. Do not retry.
+Use \`message_sent\` from the send-dm JSON as the content (NOT YOUR_REPLY_TEXT) so any campaign suffix the tool appended is captured, enabling auto-attribution. For Twitter, the send-dm helper has already self-logged when DM_ID was passed; this call is dedup-protected and acts as a no-op confirmation. Pass --verified ONLY when the browser tool returned verified=true (or you visually confirmed the message in the thread). The flag is a hard gate: log-outbound refuses to insert without it. If verification failed, log nothing and let the next cycle retry; never pass --verified speculatively. The log-outbound command also has a dedup guard. If it says "DEDUP BLOCKED" or "VERIFY BLOCKED", the message was NOT logged. Do not retry.
 
 ### Step 5b: Classify interest level AND mode (REQUIRED on every reply)
 
