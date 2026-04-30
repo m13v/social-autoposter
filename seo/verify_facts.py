@@ -182,11 +182,17 @@ def _probe_url(url: str) -> tuple[str, str | None]:
     return url, None
 
 
-def verify_dead_urls(repo_path: str, file_paths: list[str]) -> dict:
+def verify_dead_urls(repo_path: str, file_paths: list[str],
+                     cleanup: bool = True) -> dict:
     """Gate #2: every external URL emitted in the page must resolve and respond.
 
     Catches the failure mode where the model invented a working-looking
     endpoint (`https://mcp.10xats.com/v1`) and rendered it as a live URL.
+
+    ``cleanup=False`` skips the file-restore step so the caller can hand the
+    dead URL list back to the Claude session for a fix-up attempt before
+    reverting. Always pass ``cleanup=True`` (the default) on a final/retry
+    call so stale files do not linger for the auto-commit cron.
     """
     files = _read_existing(repo_path, file_paths)
     if not files:
@@ -215,7 +221,9 @@ def verify_dead_urls(repo_path: str, file_paths: list[str]) -> dict:
     if not dead:
         return {"ok": True, "checked": len(candidates)}
 
-    cleaned = _cleanup_files(repo_path, file_paths)
+    cleaned: list[str] = []
+    if cleanup:
+        cleaned = _cleanup_files(repo_path, file_paths)
     sample = "; ".join(
         f"{d['url']} -> {d['error']}" for d in dead[:3]
     )
