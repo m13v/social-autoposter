@@ -4,8 +4,15 @@ For each occurrence of a dark-only class (e.g. `bg-zinc-900`, `text-white`) that
 is NOT already paired with a `dark:` variant, emit:
     {prefixes}{light_replacement}  dark:{prefixes}{original}
 
-Operates on raw file text. The match is anchored so it only fires on tokens that
-look like Tailwind classes (preceded/followed by class-string boundaries).
+Operates on raw file text. We scan each .tsx/.ts file, find string literals
+(double, single, or simple template strings), and rewrite class tokens within
+each literal.
+
+Context-aware exception: when a className string contains a saturated colored
+background (e.g. `bg-accent`, `bg-teal-500`, `bg-blue-600`), the white-ish text
+classes (`text-white`, `text-zinc-100`, etc.) inside the same string are NOT
+flipped, since they're providing intentional contrast on a colored fill that
+won't change between themes.
 
 Run:
     python3 scripts/fazm_theme_flip/rewrite_classes.py [--dry-run]
@@ -21,8 +28,11 @@ REPO = Path("/Users/matthewdi/fazm-website")
 SRC = REPO / "src"
 
 
-# Map: dark-only base class -> light-mode replacement.
-# Alpha modifiers (e.g. `text-white/30`) are handled by a special expansion below.
+# ---------------------------------------------------------------------------
+# Mappings
+# ---------------------------------------------------------------------------
+
+# Solid (no alpha modifier) dark-only base -> light-mode replacement.
 LIGHT_PAIRS: dict[str, str] = {
     # Solid backgrounds (page/section)
     "bg-zinc-950": "bg-white",
@@ -43,7 +53,7 @@ LIGHT_PAIRS: dict[str, str] = {
     "bg-gray-700": "bg-gray-200",
     "bg-black": "bg-white",
 
-    # Text colors (light text on dark -> dark text on light)
+    # Text colors (light-on-dark -> dark-on-light)
     "text-white": "text-zinc-900",
     "text-zinc-50": "text-zinc-900",
     "text-zinc-100": "text-zinc-900",
@@ -94,7 +104,7 @@ LIGHT_PAIRS: dict[str, str] = {
     "divide-neutral-800": "divide-neutral-200",
     "divide-gray-800": "divide-gray-200",
 
-    # Gradient stops - only the obviously-dark direction
+    # Gradient stops - only dark direction
     "from-zinc-950": "from-zinc-50",
     "from-zinc-900": "from-zinc-50",
     "from-zinc-800": "from-zinc-100",
@@ -123,14 +133,9 @@ LIGHT_PAIRS: dict[str, str] = {
     "via-black": "via-white",
 }
 
-
-# Bases that take an alpha modifier (`/30`, `/[0.05]`, etc.).
-# When matched, the generated light replacement uses the same modifier on a
-# darkened base so the visual weight is preserved (white/10 -> black/10).
+# Alpha-flips (e.g. `bg-white/5` -> `bg-black/5 dark:bg-white/5`).
+# Only the white direction; black-with-alpha is already light-friendly.
 ALPHA_FLIPS: dict[str, str] = {
-    # Only `-white` direction. Translucent white = subtle highlight on dark bg;
-    # on a light page it's invisible, so flip to `-black` (subtle shadow).
-    # Translucent black is already light-friendly, leave alone.
     "bg-white": "bg-black",
     "border-white": "border-black",
     "text-white": "text-black",
@@ -143,27 +148,49 @@ ALPHA_FLIPS: dict[str, str] = {
     "via-white": "via-black",
 }
 
+# When a className contains a saturated colored bg, light text tokens are
+# providing intentional contrast on a colored fill - leave them alone.
+LIGHT_TEXT_BASES_TO_SKIP_ON_COLORED_BG = {
+    "text-white", "text-zinc-50", "text-zinc-100",
+    "text-slate-50", "text-slate-100",
+    "text-neutral-50", "text-neutral-100",
+    "text-gray-50", "text-gray-100",
+    "text-stone-50", "text-stone-100",
+}
 
-# Char that may legally appear inside a Tailwind class token (after the prefixes).
-# We use this to anchor the regex so we don't catch a substring like
-# `bg-zinc-900` inside `bg-zinc-9000` (none such, but defensively).
+# Saturated colored backgrounds (bg-accent + named-color-{300..900}).
+# A `bg-{color}-{N}` where N >= 300 is "saturated enough" that white text is
+# intentional. `bg-{color}-{50,100,200}` is light enough to need flipping logic.
+SATURATED_BG_RE = re.compile(
+    r'(?<![\w/-])'
+    r'(?:[a-z][\w-]*(?:\[[^\]]+\])?:)*'           # variant chain
+    r'(?:'
+        r'bg-accent(?:-light|-dark|-dim|-contrast)?'
+        r'|'
+        r'bg-(?:red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)'
+        r'-(?:[3-9]\d{2})'                         # 300-999
+    r')'
+    r'(?:/\d+(?:\.\d+)?|/\[[^\]]+\])?'             # optional alpha
+    r'(?![\w/-])'
+)
+
+
+# ---------------------------------------------------------------------------
+# Token-level rewrite
+# ---------------------------------------------------------------------------
+
+# A single Tailwind class token, decomposed into (variant_prefixes, base, alpha).
+# Tokens may contain dashes, slashes, brackets, dots, colons.
 TOKEN_BOUNDARY_BEFORE = r'(?<![\w/\.\[\]-])'
 TOKEN_BOUNDARY_AFTER = r'(?![\w/\.\[\]-])'
-
-# Variant prefix chain: zero or more `name:` segments.
-# A variant name can contain letters, digits, hyphens, and brackets (for
-# arbitrary variants like `data-[state=open]:`). We do not capture `dark:`
-# as part of "name" because we treat it as a sentinel.
-VARIANT_CHAIN = r'((?:(?:[a-z][\w-]*|\[[^\]]+\]|[a-z][\w-]*-\[[^\]]+\]):)*?)'
+VARIANT_CHAIN = r'((?:(?:[a-z][\w-]*(?:\[[^\]]+\])?|[a-z][\w-]*-\[[^\]]+\]):)*?)'
 
 
-def is_dark_paired(prefixes: str) -> bool:
-    """Return True if the prefix chain already includes a `dark:` variant."""
+def _is_dark_paired(prefixes: str) -> bool:
     return bool(re.search(r'(?:^|:)dark:', f':{prefixes}'))
 
 
-def make_solid_pattern(base: str) -> re.Pattern:
-    """Match optional variant chain + base class, with no alpha modifier."""
+def _make_solid_pattern(base: str) -> re.Pattern:
     return re.compile(
         TOKEN_BOUNDARY_BEFORE
         + VARIANT_CHAIN
@@ -172,11 +199,7 @@ def make_solid_pattern(base: str) -> re.Pattern:
     )
 
 
-def make_alpha_pattern(base: str) -> re.Pattern:
-    """Match optional variant chain + base class + REQUIRED alpha modifier.
-
-    Alpha modifier: `/N` where N is a number, OR `/[arbitrary]`.
-    """
+def _make_alpha_pattern(base: str) -> re.Pattern:
     return re.compile(
         TOKEN_BOUNDARY_BEFORE
         + VARIANT_CHAIN
@@ -186,48 +209,137 @@ def make_alpha_pattern(base: str) -> re.Pattern:
     )
 
 
-def rewrite_text(text: str) -> tuple[str, int]:
-    """Apply all rewrites to a file's content. Return (new_text, change_count)."""
+_SOLID_PATTERNS = [(base, light, _make_solid_pattern(base))
+                   for base, light in LIGHT_PAIRS.items()]
+_ALPHA_PATTERNS = [(base, flipped, _make_alpha_pattern(base))
+                   for base, flipped in ALPHA_FLIPS.items()]
+
+
+def rewrite_class_string(s: str) -> tuple[str, int]:
+    """Rewrite Tailwind class tokens inside a single class string."""
+    if not s:
+        return s, 0
+
+    has_colored_bg = bool(SATURATED_BG_RE.search(s))
     changes = 0
 
-    # 1) Alpha-flips first (longer, more specific): bg-white/5 etc.
-    #    Order matters: alpha pattern requires a `/...` so it wouldn't match the
-    #    bare `bg-white` token, but doing alpha first avoids accidentally splitting
-    #    an alpha-class via a solid-base pattern that doesn't exist for the base.
-    for base, flipped in ALPHA_FLIPS.items():
-        pattern = make_alpha_pattern(base)
+    # Pass 1: alpha-flips (e.g. bg-white/5)
+    for base, flipped, pattern in _ALPHA_PATTERNS:
+        # Skip light-text alpha flips when on a colored bg
+        if has_colored_bg and base in LIGHT_TEXT_BASES_TO_SKIP_ON_COLORED_BG:
+            continue
 
-        def repl(m: re.Match) -> str:
+        def repl(m: re.Match, _base=base, _flipped=flipped) -> str:
             nonlocal changes
             prefixes = m.group(1) or ""
             alpha = m.group(2)
-            if is_dark_paired(prefixes):
+            if _is_dark_paired(prefixes):
                 return m.group(0)
-            light_token = f'{prefixes}{flipped}{alpha}'
-            dark_token = f'dark:{prefixes}{base}{alpha}'
+            light_token = f'{prefixes}{_flipped}{alpha}'
+            dark_token = f'dark:{prefixes}{_base}{alpha}'
             changes += 1
             return f'{light_token} {dark_token}'
 
-        text = pattern.sub(repl, text)
+        s = pattern.sub(repl, s)
 
-    # 2) Solid bases (no alpha): bg-zinc-900, text-white, etc.
-    for base, light in LIGHT_PAIRS.items():
-        pattern = make_solid_pattern(base)
+    # Pass 2: solid bases
+    for base, light, pattern in _SOLID_PATTERNS:
+        if has_colored_bg and base in LIGHT_TEXT_BASES_TO_SKIP_ON_COLORED_BG:
+            continue
 
-        def repl(m: re.Match) -> str:
+        def repl(m: re.Match, _base=base, _light=light) -> str:
             nonlocal changes
             prefixes = m.group(1) or ""
-            if is_dark_paired(prefixes):
+            if _is_dark_paired(prefixes):
                 return m.group(0)
-            light_token = f'{prefixes}{light}'
-            dark_token = f'dark:{prefixes}{base}'
+            light_token = f'{prefixes}{_light}'
+            dark_token = f'dark:{prefixes}{_base}'
             changes += 1
             return f'{light_token} {dark_token}'
 
-        text = pattern.sub(repl, text)
+        s = pattern.sub(repl, s)
 
-    return text, changes
+    return s, changes
 
+
+# ---------------------------------------------------------------------------
+# String-literal scanner
+# ---------------------------------------------------------------------------
+
+# Match string literals: "..." or '...' or `...` (template).
+# The value group captures the content. Templates with ${...} interpolations
+# are handled by allowing ${...} blocks inside via a permissive pattern.
+STRING_LITERAL_RE = re.compile(
+    r'(?P<dq>"(?:[^"\\\n]|\\.)*")'
+    r'|'
+    r"(?P<sq>'(?:[^'\\\n]|\\.)*')"
+    r'|'
+    r'(?P<bt>`(?:[^`\\]|\\.|\$\{(?:[^{}]|\{[^{}]*\})*\})*`)'
+)
+
+# A string literal is "class-y" if it contains at least one dark-only base
+# class we know about. Cheap precheck so we don't spend regex time on every
+# JSX text fragment.
+TARGET_BASES = sorted(set(LIGHT_PAIRS) | set(ALPHA_FLIPS), key=len, reverse=True)
+QUICK_CHECK_RE = re.compile(
+    r'(?:' + '|'.join(re.escape(b) for b in TARGET_BASES) + r')'
+)
+
+
+def rewrite_text(text: str) -> tuple[str, int]:
+    total_changes = 0
+
+    def replace_literal(m: re.Match) -> str:
+        nonlocal total_changes
+        whole = m.group(0)
+        # Strip the opening/closing quote/backtick.
+        quote = whole[0]
+        body = whole[1:-1]
+
+        if not QUICK_CHECK_RE.search(body):
+            return whole
+
+        # Templates with ${...} interpolation: rewrite only the static parts
+        # between interpolations.
+        if quote == '`' and '${' in body:
+            # Walk and split: collect spans of static text and ${...} blocks.
+            parts: list[str] = []
+            i = 0
+            while i < len(body):
+                if body[i:i+2] == '${':
+                    # Find matching '}'
+                    depth = 1
+                    j = i + 2
+                    while j < len(body) and depth > 0:
+                        if body[j] == '{':
+                            depth += 1
+                        elif body[j] == '}':
+                            depth -= 1
+                        j += 1
+                    parts.append(body[i:j])  # ${...}
+                    i = j
+                else:
+                    j = body.find('${', i)
+                    if j < 0:
+                        j = len(body)
+                    static = body[i:j]
+                    rewritten, n = rewrite_class_string(static)
+                    total_changes += n
+                    parts.append(rewritten)
+                    i = j
+            return quote + ''.join(parts) + quote
+        else:
+            rewritten, n = rewrite_class_string(body)
+            total_changes += n
+            return quote + rewritten + quote
+
+    new_text = STRING_LITERAL_RE.sub(replace_literal, text)
+    return new_text, total_changes
+
+
+# ---------------------------------------------------------------------------
+# Driver
+# ---------------------------------------------------------------------------
 
 def walk_files(root: Path):
     for p in root.rglob("*.tsx"):
@@ -237,9 +349,6 @@ def walk_files(root: Path):
     for p in root.rglob("*.ts"):
         if "node_modules" in p.parts:
             continue
-        # Skip declaration / config-style files; rewrite only files that look
-        # like they may contain JSX classNames (most .ts files won't, but
-        # err on the side of inclusion for module-level constants).
         yield p
 
 
