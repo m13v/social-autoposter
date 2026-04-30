@@ -570,6 +570,11 @@ if [ -z "$PLATFORM" ] || [ "$PLATFORM" = "twitter" ] || [ "$PLATFORM" = "x" ]; t
       ```bash
       python3 scripts/dm_conversation.py log-inbound --dm-id DM_ID --author "PARTNER_HANDLE" --content "MESSAGE_TEXT"
       ```
+   e. **REQUIRED at the end of every read-conversation, even when nothing was logged in step d** (e.g. you saw only old messages already in our DB, or only a reaction/typing-indicator). Stamp `dms.last_inspected_at` so the next cycle's filter-inbox knows we already verified this thread:
+      ```bash
+      python3 scripts/dm_conversation.py mark-inspected --dm-id DM_ID
+      ```
+      Skipping this on a "nothing new" thread is the bug that makes us re-open the same cold conversation every cycle. Always run it. The next filter-inbox will skip the thread for 24h unless a fresh inbound or outbound is logged in the meantime.
 PHASE_C_EOF
 fi
 
