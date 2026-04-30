@@ -1197,23 +1197,48 @@ done
 
 # Live-side LinkedIn pre-check (only when DB said nothing AND LinkedIn is
 # in scope). Read-only sidebar scrape via headed Chromium, ~5s, $0.
+#
+# We capture stderr (don't /dev/null it) so a Playwright traceback is
+# auditable in the run log. We also surface total_threads and the first
+# partner name so post-hoc you can tell "really empty inbox" from "session
+# bad / DOM didn't render" — both of which would otherwise look identical
+# (ok=true, unread_count=0). total_threads==0 is treated as a soft failure
+# because our account always has 10+ sidebar threads.
 if ! $NEEDS_CLAUDE && { [ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ]; }; then
     log "[gate] DB says nothing pending; running LinkedIn live sidebar pre-check..."
+    LI_PRECHECK_STDERR="/tmp/li_precheck_stderr.$$"
     LI_PRECHECK=$(PYTHONPATH="$HOME/Library/Python/3.9/lib/python/site-packages" \
-        /usr/bin/python3 "$REPO_DIR/scripts/linkedin_browser.py" unread-dms 2>/dev/null)
+        /usr/bin/python3 "$REPO_DIR/scripts/linkedin_browser.py" unread-dms 2>"$LI_PRECHECK_STDERR")
+    LI_EXIT=$?
     LI_OK=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('ok'))" 2>/dev/null)
     LI_UNREAD=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('unread_count', 0))" 2>/dev/null)
-    if [ "$LI_OK" = "True" ] && [ "$LI_UNREAD" = "0" ]; then
-        log "[gate] LinkedIn sidebar pre-check: 0 unread threads"
-    elif [ "$LI_OK" = "True" ]; then
+    LI_TOTAL=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('total_threads', 0))" 2>/dev/null)
+    LI_FIRST_PARTNER=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); t=d.get('threads') or [{}]; print((t[0] or {}).get('partner',''))" 2>/dev/null)
+    LI_ERROR=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('error',''))" 2>/dev/null)
+    log "[gate] linkedin precheck: exit=$LI_EXIT ok=$LI_OK total=$LI_TOTAL unread=$LI_UNREAD first_partner='${LI_FIRST_PARTNER}' error='${LI_ERROR}'"
+    if [ -s "$LI_PRECHECK_STDERR" ]; then
+        log "[gate] linkedin precheck stderr (first 20 lines):"
+        head -20 "$LI_PRECHECK_STDERR" | sed 's/^/[gate]   /' | tee -a "$LOG_FILE" >/dev/null
+    fi
+    rm -f "$LI_PRECHECK_STDERR"
+    if [ "$LI_OK" = "True" ] && [ "$LI_TOTAL" != "0" ] && [ -n "$LI_TOTAL" ] && [ "$LI_UNREAD" = "0" ]; then
+        log "[gate] LinkedIn sidebar pre-check: 0 unread of $LI_TOTAL threads"
+    elif [ "$LI_OK" = "True" ] && [ "$LI_TOTAL" != "0" ] && [ -n "$LI_TOTAL" ]; then
         NEEDS_CLAUDE=true
-        GATE_REASON="linkedin live: ${LI_UNREAD} unread threads in sidebar"
+        GATE_REASON="linkedin live: ${LI_UNREAD} unread of ${LI_TOTAL} threads in sidebar"
+        log "[gate] ${GATE_REASON}"
+    elif [ "$LI_OK" = "True" ]; then
+        # ok=true but total_threads=0 is suspicious. Could be: session
+        # silently expired (no /login redirect), DOM markup changed, or
+        # a TargetClosedError mid-scan that the helper didn't catch.
+        # Don't drop work; fall through to Claude.
+        NEEDS_CLAUDE=true
+        GATE_REASON="linkedin pre-check returned 0 total threads (suspect bad session or DOM); falling through to Claude"
         log "[gate] ${GATE_REASON}"
     else
-        # Helper failed (session_invalid, profile_locked, etc). Be safe:
-        # fall through to Claude rather than silently dropping work.
+        # Helper failed (session_invalid, profile_locked, crash, etc).
         NEEDS_CLAUDE=true
-        GATE_REASON="linkedin pre-check failed (helper non-ok); falling through to Claude"
+        GATE_REASON="linkedin pre-check failed (ok=$LI_OK error=$LI_ERROR); falling through to Claude"
         log "[gate] ${GATE_REASON}"
     fi
 fi
