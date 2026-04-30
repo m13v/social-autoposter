@@ -58,7 +58,7 @@ const JOBS = [
   { label: 'com.m13v.social-engage-linkedin', name: 'Engage LinkedIn', type: 'Engage', platform: 'LinkedIn', script: 'engage-linkedin.sh', logPrefix: 'engage-linkedin-', plist: 'com.m13v.social-engage-linkedin.plist' },
   { label: 'com.m13v.social-github-engage', name: 'GitHub Engage', type: 'Engage', platform: 'GitHub', script: 'github-engage.sh', logPrefix: 'github-engage-', plist: 'com.m13v.social-github-engage.plist' },
   // Check Replies row (discover new inbound replies; feeds Engage)
-  { label: 'com.m13v.social-scan-reddit-replies', name: 'Engage Reddit', type: 'Engage', platform: 'Reddit', script: 'run-scan-reddit-replies.sh', logPrefix: 'run-scan-reddit-replies-', plist: 'com.m13v.social-scan-reddit-replies.plist' },
+  { label: 'com.m13v.social-engage-reddit', name: 'Engage Reddit', type: 'Engage', platform: 'Reddit', script: 'engage-reddit.sh', logPrefix: 'engage-reddit-', plist: 'com.m13v.social-engage-reddit.plist' },
   { label: 'com.m13v.social-scan-moltbook-replies', name: 'MoltBook Scan', type: 'Other', platform: 'MoltBook', script: 'run-scan-moltbook-replies.sh', logPrefix: 'run-scan-moltbook-replies-', plist: 'com.m13v.social-scan-moltbook-replies.plist' },
   { label: 'com.m13v.social-scan-twitter-followups', name: 'Twitter Thread Follow-ups', type: 'Other', platform: 'Twitter', script: 'scan-twitter-followups.sh', logPrefix: 'scan-twitter-followups-', plist: 'com.m13v.social-scan-twitter-followups.plist' },
   // DM Outreach row (initiate DMs to engaged users)
@@ -106,7 +106,7 @@ const REQUIRED_LOCKS = {
   'engage-twitter.sh':              ['twitter-browser', 'twitter'],
   'engage-linkedin.sh':             ['linkedin-browser', 'linkedin'],
   'github-engage.sh':               ['github'],
-  'run-scan-reddit-replies.sh':     ['scan-reddit-replies'],
+  'engage-reddit.sh':               ['engage-reddit'],
   'run-scan-moltbook-replies.sh':   ['scan-moltbook-replies'],
   'scan-twitter-followups.sh':      ['twitter-browser', 'scan-twitter-followups'],
   'dm-outreach-reddit.sh':          ['reddit-browser', 'dm-outreach-reddit'],
