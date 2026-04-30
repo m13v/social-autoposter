@@ -1207,9 +1207,15 @@ done
 if ! $NEEDS_CLAUDE && { [ -z "$PLATFORM" ] || [ "$PLATFORM" = "linkedin" ]; }; then
     log "[gate] DB says nothing pending; running LinkedIn live sidebar pre-check..."
     LI_PRECHECK_STDERR="/tmp/li_precheck_stderr.$$"
+    # `set -e` is on for this script; a non-zero exit from the helper
+    # (e.g. session_invalid → exit 1) inside `$(...)` would terminate the
+    # whole shell before any of the logging below runs, leaving the log
+    # frozen at "running LinkedIn live sidebar pre-check..." — exactly
+    # the silent-failure mode we're trying to debug. Capture exit code
+    # via the `&& a || b` idiom so failure stays local to the gate.
     LI_PRECHECK=$(PYTHONPATH="$HOME/Library/Python/3.9/lib/python/site-packages" \
-        /usr/bin/python3 "$REPO_DIR/scripts/linkedin_browser.py" unread-dms 2>"$LI_PRECHECK_STDERR")
-    LI_EXIT=$?
+        /usr/bin/python3 "$REPO_DIR/scripts/linkedin_browser.py" unread-dms 2>"$LI_PRECHECK_STDERR") \
+        && LI_EXIT=0 || LI_EXIT=$?
     LI_OK=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('ok'))" 2>/dev/null)
     LI_UNREAD=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('unread_count', 0))" 2>/dev/null)
     LI_TOTAL=$(echo "$LI_PRECHECK" | /usr/bin/python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('total_threads', 0))" 2>/dev/null)
