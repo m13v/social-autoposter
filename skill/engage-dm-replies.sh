@@ -1117,13 +1117,16 @@ fi
 # with other pipelines that also acquire multiple browser locks.
 log "Acquiring platform-browser lock(s) for Claude/MCP step..."
 case "${PLATFORM:-all}" in
-    linkedin) acquire_lock "linkedin-browser" 3600 ;;
-    reddit)   acquire_lock "reddit-browser" 3600 ;;
-    twitter|x) acquire_lock "twitter-browser" 3600 ;;
+    linkedin) acquire_lock "linkedin-browser" 3600; ensure_browser_healthy "linkedin" ;;
+    reddit)   acquire_lock "reddit-browser" 3600; ensure_browser_healthy "reddit" ;;
+    twitter|x) acquire_lock "twitter-browser" 3600; ensure_browser_healthy "twitter" ;;
     all)
         acquire_lock "linkedin-browser" 3600
+        ensure_browser_healthy "linkedin"
         acquire_lock "reddit-browser" 3600
+        ensure_browser_healthy "reddit"
         acquire_lock "twitter-browser" 3600
+        ensure_browser_healthy "twitter"
         ;;
 esac
 
