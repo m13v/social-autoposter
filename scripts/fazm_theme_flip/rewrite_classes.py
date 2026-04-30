@@ -33,25 +33,29 @@ SRC = REPO / "src"
 # ---------------------------------------------------------------------------
 
 # Solid (no alpha modifier) dark-only base -> light-mode replacement.
+# Note: `bg-zinc-950` -> `bg-zinc-50` (not `bg-white`) so the alpha-modified
+# pattern in pass 3 doesn't produce `bg-white/X` tokens that would then be
+# re-flipped by ALPHA_FLIPS in a second invocation. `bg-zinc-50` is essentially
+# white visually but isn't in any other rewrite table.
 LIGHT_PAIRS: dict[str, str] = {
     # Solid backgrounds (page/section)
-    "bg-zinc-950": "bg-white",
-    "bg-zinc-900": "bg-white",
+    "bg-zinc-950": "bg-zinc-50",
+    "bg-zinc-900": "bg-zinc-50",
     "bg-zinc-800": "bg-zinc-100",
     "bg-zinc-700": "bg-zinc-200",
-    "bg-slate-950": "bg-white",
-    "bg-slate-900": "bg-white",
+    "bg-slate-950": "bg-slate-50",
+    "bg-slate-900": "bg-slate-50",
     "bg-slate-800": "bg-slate-100",
     "bg-slate-700": "bg-slate-200",
-    "bg-neutral-950": "bg-white",
-    "bg-neutral-900": "bg-white",
+    "bg-neutral-950": "bg-neutral-50",
+    "bg-neutral-900": "bg-neutral-50",
     "bg-neutral-800": "bg-neutral-100",
     "bg-neutral-700": "bg-neutral-200",
-    "bg-gray-950": "bg-white",
-    "bg-gray-900": "bg-white",
+    "bg-gray-950": "bg-gray-50",
+    "bg-gray-900": "bg-gray-50",
     "bg-gray-800": "bg-gray-100",
     "bg-gray-700": "bg-gray-200",
-    "bg-black": "bg-white",
+    "bg-black": "bg-zinc-50",
 
     # Text colors (light-on-dark -> dark-on-light)
     "text-white": "text-zinc-900",
@@ -104,7 +108,8 @@ LIGHT_PAIRS: dict[str, str] = {
     "divide-neutral-800": "divide-neutral-200",
     "divide-gray-800": "divide-gray-200",
 
-    # Gradient stops - only dark direction
+    # Gradient stops - only dark direction. Use `*-50` (not `*-white`) for
+    # idempotency, same reasoning as the bg- entries above.
     "from-zinc-950": "from-zinc-50",
     "from-zinc-900": "from-zinc-50",
     "from-zinc-800": "from-zinc-100",
@@ -114,7 +119,7 @@ LIGHT_PAIRS: dict[str, str] = {
     "from-neutral-900": "from-neutral-50",
     "from-gray-950": "from-gray-50",
     "from-gray-900": "from-gray-50",
-    "from-black": "from-white",
+    "from-black": "from-zinc-50",
     "to-zinc-950": "to-zinc-50",
     "to-zinc-900": "to-zinc-50",
     "to-zinc-800": "to-zinc-100",
@@ -124,13 +129,13 @@ LIGHT_PAIRS: dict[str, str] = {
     "to-neutral-900": "to-neutral-50",
     "to-gray-950": "to-gray-50",
     "to-gray-900": "to-gray-50",
-    "to-black": "to-white",
+    "to-black": "to-zinc-50",
     "via-zinc-900": "via-zinc-100",
     "via-zinc-800": "via-zinc-200",
     "via-slate-900": "via-slate-100",
     "via-neutral-900": "via-neutral-100",
     "via-gray-900": "via-gray-100",
-    "via-black": "via-white",
+    "via-black": "via-zinc-100",
 }
 
 # Alpha-flips (e.g. `bg-white/5` -> `bg-black/5 dark:bg-white/5`).
@@ -219,8 +224,15 @@ _ALPHA_PATTERNS = [(base, flipped, _make_alpha_pattern(base))
 # Alpha-modified versions of LIGHT_PAIRS bases. e.g. `bg-zinc-950/40` is a
 # translucent dark overlay; on a light page we want `bg-white/40` instead,
 # preserving the same alpha modifier.
+#
+# Exclude bases that are the FLIPPED form of an ALPHA_FLIP entry (e.g.
+# `bg-black`, `from-black`, etc.). Otherwise pass 1 produces `bg-black/20` from
+# `bg-white/20`, and pass 3 re-flips it back, creating a runaway loop.
+# Translucent black on a light page is already fine - leave it alone.
+_ALPHA_FLIP_RHS = set(ALPHA_FLIPS.values())
 _SOLID_ALPHA_PATTERNS = [(base, light, _make_alpha_pattern(base))
-                         for base, light in LIGHT_PAIRS.items()]
+                         for base, light in LIGHT_PAIRS.items()
+                         if base not in _ALPHA_FLIP_RHS]
 
 
 def rewrite_class_string(s: str) -> tuple[str, int]:
@@ -292,16 +304,70 @@ def rewrite_class_string(s: str) -> tuple[str, int]:
 # String-literal scanner
 # ---------------------------------------------------------------------------
 
-# Match string literals: "..." or '...' or `...` (template).
-# The value group captures the content. Templates with ${...} interpolations
-# are handled by allowing ${...} blocks inside via a permissive pattern.
-STRING_LITERAL_RE = re.compile(
-    r'(?P<dq>"(?:[^"\\\n]|\\.)*")'
-    r'|'
-    r"(?P<sq>'(?:[^'\\\n]|\\.)*')"
-    r'|'
-    r'(?P<bt>`(?:[^`\\]|\\.|\$\{(?:[^{}]|\{[^{}]*\})*\})*`)'
-)
+# String literal scanner. A regex can't handle arbitrarily-nested template
+# literals (nested `${`...`}` with backticks inside) because Python's `re`
+# doesn't support recursion. Use a small state machine instead.
+def _find_string_literals(text: str):
+    """Yield (start, end) spans for every top-level string literal in `text`,
+    handling nested template-literal interpolations correctly. Skips line and
+    block comments and regex literals (best-effort)."""
+    n = len(text)
+    i = 0
+    while i < n:
+        c = text[i]
+        if c == '"' or c == "'":
+            j = _scan_simple_string(text, i, c)
+            yield (i, j)
+            i = j
+        elif c == '`':
+            j = _scan_template(text, i)
+            yield (i, j)
+            i = j
+        elif c == '/' and i + 1 < n and text[i+1] == '/':
+            nl = text.find('\n', i)
+            i = n if nl < 0 else nl
+        elif c == '/' and i + 1 < n and text[i+1] == '*':
+            end = text.find('*/', i + 2)
+            i = n if end < 0 else end + 2
+        else:
+            i += 1
+
+
+def _scan_simple_string(text: str, start: int, quote: str) -> int:
+    """Return one-past-end of a "..." or '...' string starting at `start`."""
+    n = len(text)
+    i = start + 1
+    while i < n:
+        c = text[i]
+        if c == '\\' and i + 1 < n:
+            i += 2
+        elif c == quote:
+            return i + 1
+        elif c == '\n':
+            # JS strings can't span newlines unescaped; treat as terminator.
+            return i
+        else:
+            i += 1
+    return n
+
+
+def _scan_template(text: str, start: int) -> int:
+    """Return one-past-end of a `...` template literal at `start`,
+    properly skipping over nested ${...} expressions which may themselves
+    contain string and template literals."""
+    n = len(text)
+    i = start + 1
+    while i < n:
+        c = text[i]
+        if c == '\\' and i + 1 < n:
+            i += 2
+        elif c == '`':
+            return i + 1
+        elif c == '$' and i + 1 < n and text[i+1] == '{':
+            i = _find_template_expr_end(text, i)
+        else:
+            i += 1
+    return n
 
 # A string literal is "class-y" if it contains at least one dark-only base
 # class we know about. Cheap precheck so we don't spend regex time on every
@@ -364,31 +430,40 @@ def _find_template_expr_end(body: str, start: int) -> int:
 
 def rewrite_text(text: str) -> tuple[str, int]:
     total_changes = 0
+    parts: list[str] = []
+    last = 0
 
-    def replace_literal(m: re.Match) -> str:
-        nonlocal total_changes
-        whole = m.group(0)
-        # Strip the opening/closing quote/backtick.
+    for start, end in _find_string_literals(text):
+        if start > last:
+            parts.append(text[last:start])
+        whole = text[start:end]
+        if not whole or len(whole) < 2:
+            parts.append(whole)
+            last = end
+            continue
         quote = whole[0]
-        body = whole[1:-1]
+        body = whole[1:-1] if whole.endswith(quote) else whole[1:]
+        closing = quote if whole.endswith(quote) else ''
 
         if not QUICK_CHECK_RE.search(body):
-            return whole
+            parts.append(whole)
+            last = end
+            continue
 
-        # Templates with ${...} interpolation: rewrite the static parts AND
-        # recursively scan inside ${...} blocks (they may contain ternaries,
-        # cn() calls, or other string literals that need rewriting).
         if quote == '`' and '${' in body:
-            parts: list[str] = []
+            inner_parts: list[str] = []
             i = 0
             while i < len(body):
                 if body[i:i+2] == '${':
-                    j = _find_template_expr_end(body, i)
-                    inner = body[i+2:j-1]
-                    rewritten_inner, n = rewrite_text(inner)
+                    # Find matching '}' relative to body. The expression's
+                    # absolute span in `text` is (start + 1 + i, ...).
+                    abs_pos = start + 1 + i
+                    abs_end = _find_template_expr_end(text, abs_pos)
+                    expr_inner = text[abs_pos+2:abs_end-1]
+                    rewritten_inner, n = rewrite_text(expr_inner)
                     total_changes += n
-                    parts.append('${' + rewritten_inner + '}')
-                    i = j
+                    inner_parts.append('${' + rewritten_inner + '}')
+                    i = abs_end - (start + 1)
                 else:
                     j = body.find('${', i)
                     if j < 0:
@@ -396,16 +471,19 @@ def rewrite_text(text: str) -> tuple[str, int]:
                     static = body[i:j]
                     rewritten, n = rewrite_class_string(static)
                     total_changes += n
-                    parts.append(rewritten)
+                    inner_parts.append(rewritten)
                     i = j
-            return quote + ''.join(parts) + quote
+            parts.append(quote + ''.join(inner_parts) + closing)
         else:
             rewritten, n = rewrite_class_string(body)
             total_changes += n
-            return quote + rewritten + quote
+            parts.append(quote + rewritten + closing)
+        last = end
 
-    new_text = STRING_LITERAL_RE.sub(replace_literal, text)
-    return new_text, total_changes
+    if last < len(text):
+        parts.append(text[last:])
+
+    return ''.join(parts), total_changes
 
 
 # ---------------------------------------------------------------------------
