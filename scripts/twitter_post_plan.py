@@ -114,6 +114,54 @@ def update_candidate(cid: int, status: str) -> None:
         print(f"[post] candidate {cid} status update failed: {err}", flush=True)
 
 
+def already_posted_to_thread(thread_url: str) -> tuple[bool, int | None]:
+    """Pre-post dedup race guard.
+
+    Returns (True, post_id) if posts already has a row for
+    (platform='twitter', thread_url=<thread_url>), else (False, None).
+
+    Why this exists: cycles overlap. Phase 0 of cycle B can salvage a
+    candidate while cycle A is still in its T1 wait window — cycle A
+    hasn't INSERTed into posts yet, so salvage's
+    `tweet_url NOT IN (SELECT thread_url FROM posts)` guard lets the
+    same row through. Both cycles then call reply_to_tweet, the second
+    one gets DUPLICATE_THREAD from log_post.py only AFTER the second
+    reply is already on X. Real double-post observed 2026-05-01:
+    posts #22317 (cycle 14:23, our_url ...4034) AND a second reply
+    ...8891 (cycle 14:38, never logged).
+
+    This SELECT runs ~26s after the peer cycle's INSERT in the observed
+    race, so it would have caught the duplicate. It does not eliminate
+    the race entirely — two cycles SELECTing in the same ms would both
+    pass — but advisory-lock-grade atomicity is overkill for an event
+    that fires once per cycle. log_post.py's post-INSERT dedup is still
+    the final backstop.
+    """
+    if not DATABASE_URL:
+        return (False, None)
+    # Use psql -t -A for tab-separated, no header, no padding output.
+    # Quote thread_url for SQL literal; thread_url is captured from the
+    # tweet URL which only ever contains [A-Za-z0-9_/:.] so single-quote
+    # escaping is sufficient.
+    safe_url = thread_url.replace("'", "''")
+    cmd = [
+        "psql", DATABASE_URL, "-t", "-A", "-c",
+        "SELECT id FROM posts "
+        f"WHERE platform='twitter' AND thread_url='{safe_url}' LIMIT 1",
+    ]
+    rc, out, err = run_subprocess(cmd, timeout_sec=15)
+    if rc != 0:
+        print(f"[post] dedup pre-check psql failed (rc={rc}): {err}", flush=True)
+        return (False, None)
+    out = (out or "").strip()
+    if not out:
+        return (False, None)
+    try:
+        return (True, int(out.splitlines()[0].strip()))
+    except (ValueError, IndexError):
+        return (True, None)
+
+
 def update_candidate_posted(cid: int, post_id: int) -> None:
     if not DATABASE_URL:
         print("[post] DATABASE_URL not set; cannot mark candidate posted", flush=True)
@@ -148,6 +196,22 @@ def post_one(c: dict) -> tuple[str, str]:
         print(f"[post] candidate {cid}: empty reply_text; skipping", flush=True)
         update_candidate(cid, "skipped")
         return ("skipped", "empty_reply_text")
+
+    # Pre-post dedup race guard. See already_posted_to_thread() docstring
+    # for the full failure mode this closes (overlapping cycles double-
+    # posting because Phase 0 salvage runs before the peer cycle has
+    # INSERTed into posts). Skip without calling reply_to_tweet so we
+    # don't burn a second reply tweet on a thread we've already engaged.
+    pre_dup, pre_dup_pid = already_posted_to_thread(candidate_url)
+    if pre_dup:
+        print(
+            f"[post] candidate {cid}: pre-post dedup hit "
+            f"(existing post_id={pre_dup_pid}, thread={candidate_url}); "
+            f"skipping reply call",
+            flush=True,
+        )
+        update_candidate(cid, "skipped")
+        return ("skipped", "duplicate_thread_pre_post")
 
     full_text = f"{reply_text} {link_url}".strip() if link_url else reply_text
 
