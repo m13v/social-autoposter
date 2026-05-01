@@ -311,6 +311,15 @@ CREATE INDEX IF NOT EXISTS idx_claude_sessions_started ON claude_sessions(starte
 -- full per-model split for multi-model sessions.
 ALTER TABLE claude_sessions ADD COLUMN IF NOT EXISTS model TEXT;
 
+-- orchestrator_cost_usd: native SDK cost from the result line of the stream
+-- (streamRes.total_cost_usd in bin/server.js). This reflects ONLY the
+-- orchestrator turns and EXCLUDES Task subagent token costs (see Anthropic
+-- claude-code issue #43945). It is the authoritative value Anthropic bills
+-- for the orchestrator session, but undercounts when subagents are spawned.
+-- Compare against total_cost_usd (manual full-transcript estimate including
+-- subagents, computed by scripts/log_claude_session.py).
+ALTER TABLE claude_sessions ADD COLUMN IF NOT EXISTS orchestrator_cost_usd NUMERIC(10, 6);
+
 ALTER TABLE posts        ADD COLUMN IF NOT EXISTS claude_session_id UUID;
 ALTER TABLE replies      ADD COLUMN IF NOT EXISTS claude_session_id UUID;
 ALTER TABLE dms          ADD COLUMN IF NOT EXISTS claude_session_id UUID;
