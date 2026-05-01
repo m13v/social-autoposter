@@ -182,6 +182,30 @@ def _release_browser_lock():
 atexit.register(_release_browser_lock)
 
 
+def _is_holder_alive(holder: str) -> bool:
+    """Mirror ~/.claude/hooks/twitter-agent-lock.sh is_holder_alive().
+
+    A live Claude session puts its UUID on the cmdline as
+    `claude --session-id <UUID>`. pgrep matches it; absence means the
+    holder is dead and the lock is stale, even if its JSONL transcript
+    is still tail-flushing.
+    """
+    if not holder:
+        return False
+    try:
+        return (
+            subprocess.run(
+                ["pgrep", "-f", f"claude.*--session-id {holder}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            ).returncode
+            == 0
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return True  # err on the side of NOT stealing
+
+
 def _acquire_browser_lock():
     """Check if another session holds the Twitter browser lock, then acquire it.
 
@@ -201,6 +225,12 @@ def _acquire_browser_lock():
                     lock = json.load(f)
                 age = time.time() - lock.get("timestamp", 0)
                 holder = lock.get("session_id", "")
+                # pgrep alive-check is authoritative: a Claude UUID holder
+                # whose process is gone leaves a stale lockfile (the unlock
+                # hook only refreshes timestamp, not deletes). Same fix as
+                # linkedin_browser.py — see 2026-05-01 14:33 incident.
+                if _UUID_RE.match(holder or "") and not _is_holder_alive(holder):
+                    break  # stale, take it
                 if age >= LOCK_EXPIRY:
                     break
                 if _UUID_RE.match(holder or ""):
@@ -541,31 +571,23 @@ def reply_to_tweet(tweet_url, text, apply_campaigns=True):
                         break
                     page.wait_for_timeout(2000)
 
-            # Method 3: Check our profile for the latest reply
-            if not reply_url:
-                try:
-                    page.goto(f"https://x.com/{OUR_HANDLE}/with_replies", wait_until="domcontentloaded")
-                    page.wait_for_timeout(4000)
-                    profile_links = _collect_our_reply_links(page)
-                    if profile_links:
-                        latest_path = max(profile_links, key=lambda x: int(re.search(r'/status/(\d+)', x).group(1)))
-                        latest_id = re.search(r'/status/(\d+)', latest_path).group(1)
-                        tracker_file = "/tmp/social-autoposter-last-reply-id.txt"
-                        last_known = ""
-                        try:
-                            with open(tracker_file) as f:
-                                last_known = f.read().strip()
-                        except FileNotFoundError:
-                            pass
-                        if latest_id != last_known:
-                            reply_url = f"https://x.com{latest_path}" if not latest_path.startswith("http") else latest_path
-                            with open(tracker_file, "w") as f:
-                                f.write(latest_id)
-                except Exception:
-                    pass
-
+            # Method 3 REMOVED 2026-05-01: profile-page (`/with_replies`)
+            # scrape was returning the wrong URL under parallel cycles. It
+            # picked `max(status_id)` of any m13v_ reply on the profile page
+            # and de-duped against a shared `/tmp` tracker file, but with
+            # multiple cycles posting in parallel that "latest" reply often
+            # belonged to a DIFFERENT thread than the one we just posted to.
+            # Observed cross-thread contamination on 2026-05-01: cycles
+            # 074506 and 080006 both captured 2050228098633982405 as "their"
+            # reply URL but for different parent tweets. Better to leave
+            # reply_url=None and let the caller treat it as soft-skip than
+            # to attribute someone else's tweet to this candidate's row.
             if reply_url:
                 print(f"[reply_url] found: {reply_url}", file=sys.stderr)
+            else:
+                print("[reply_url] capture failed (CDP+DOM both empty); "
+                      "returning null — caller should skip without retry",
+                      file=sys.stderr)
 
             return {
                 "ok": True,
