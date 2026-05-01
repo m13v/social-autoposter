@@ -4381,9 +4381,6 @@ const HTML = `<!DOCTYPE html>
   .dm-class-sub      { color: var(--text-muted); font-size: 10px; margin-top: 2px; text-transform: lowercase; }
   .dm-thread-author  { color: var(--text); font-weight: 600; font-size: 13px; }
   .dm-thread-tier    { color: var(--text-muted); font-size: 11px; font-family: 'SF Mono', 'Fira Code', monospace; }
-  .dm-surface-pill   { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; vertical-align: baseline; margin-left: 4px; border: 1px solid; }
-  .dm-surface-public { background: rgba(139, 92, 246, 0.10); color: #6d28d9; border-color: rgba(139, 92, 246, 0.35); }
-  .dm-surface-dm     { background: rgba(34, 197, 94, 0.10); color: #15803d; border-color: rgba(34, 197, 94, 0.35); }
   .dm-last-dir       { display: inline-block; background: var(--pill-inverse-bg); color: var(--pill-inverse-text); font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 3px; margin-right: 6px; vertical-align: baseline; }
   .dm-thread-subline { margin-top: 4px; }
   .dm-last-ts        { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; }
