@@ -732,7 +732,7 @@ def unread_dms():
                         results.push({
                             author: author,
                             handle: handle,
-                            preview: preview.substring(0, 300),
+                            preview: preview,
                             time: time,
                             thread_url: threadUrl,
                             is_from_us: isFromUs,
@@ -1195,7 +1195,7 @@ def discover_notifications(scroll_count=8, tab="all"):
               tweet_id: tweetId,
               handle: handle,
               display_name: displayName.trim(),
-              text: (text || '').substring(0, 1000),
+              text: (text || ''),
               tweet_url: tweetUrl,
               datetime: datetime,
               replies: replies, retweets: retweets, likes: likes, views: views, bookmarks: bookmarks,
@@ -1293,7 +1293,7 @@ def scrape_thread_followups(thread_url, scroll_count=3):
               tweet_id: tweetId,
               handle: handle,
               display_name: displayName.trim(),
-              text: (text || '').substring(0, 1000),
+              text: (text || ''),
               tweet_url: tweetUrl,
               datetime: datetime,
               replying_to: replyingTo
@@ -1392,7 +1392,7 @@ def scrape_many_thread_followups(thread_urls, scroll_count=3, per_url_delay_ms=2
                           }
                           if (tweetId && handle) {
                             out.push({tweet_id: tweetId, handle, display_name: displayName.trim(),
-                                      text: (text || '').substring(0, 1000), tweet_url: tweetUrl,
+                                      text: (text || ''), tweet_url: tweetUrl,
                                       datetime, replying_to: replyingTo});
                           }
                         } catch(e) {}
