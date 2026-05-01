@@ -363,7 +363,7 @@ def main():
     # --- Phase 0: context ---------------------------------------------------
     config = load_config()
     projects_json = json.dumps(
-        {p["name"]: {k: p.get(k) for k in ("description", "website", "topics", "voice")}
+        {p["name"]: {k: p.get(k) for k in ("description", "website", "search_topics", "voice")}
          for p in config.get("projects", [])
          if p.get("weight", 0) > 0
          and "moltbook" not in (p.get("platforms_disabled") or [])},
