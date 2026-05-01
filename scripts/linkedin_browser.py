@@ -306,7 +306,7 @@ def unread_dms() -> dict:
                         .replace(partner, "")
                         .replace(time, "")
                         .trim()
-                        .slice(0, 200);
+                        .slice(0, 2000);
                     }
 
                     let threadUrl = null;
@@ -321,7 +321,7 @@ def unread_dms() -> dict:
 
                     out.push({
                       partner,
-                      preview: preview.slice(0, 200),
+                      preview: preview.slice(0, 2000),
                       time,
                       thread_url: threadUrl,
                       unread,
