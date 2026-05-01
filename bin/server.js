@@ -3222,10 +3222,12 @@ async function handleApi(req, res) {
         .reduce((a, p) => a + (p.weight || 0), 0);
     }
     const rows = await pq(
-      "SELECT COALESCE(project_name, '(none)') AS project_name, platform, COUNT(*)::int AS n " +
+      "SELECT COALESCE(project_name, '(none)') AS project_name, " +
+      "LOWER(CASE WHEN LOWER(platform)='x' THEN 'twitter' ELSE platform END) AS platform, " +
+      "COUNT(*)::int AS n " +
       "FROM posts WHERE posted_at >= NOW() - INTERVAL '" + hours + " hours' " +
       "AND our_content <> '(mention - no original post)' " +
-      "GROUP BY project_name, platform"
+      "GROUP BY project_name, LOWER(CASE WHEN LOWER(platform)='x' THEN 'twitter' ELSE platform END)"
     ) || [];
     const byProject = {};
     let grandTotal = 0;
