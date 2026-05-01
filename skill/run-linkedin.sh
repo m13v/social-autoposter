@@ -62,7 +62,7 @@ for p in config.get('projects', []):
     if 'linkedin' in (p.get('platforms_disabled') or []):
         continue
     rec = {k: p[k] for k in ('name','description','qualification') if k in p}
-    rec['search_topics'] = p.get('search_topics') or p.get('linkedin_topics') or p.get('topics') or []
+    rec['search_topics'] = p.get('search_topics') or []
     slim[p['name']] = rec
 print(json.dumps(slim, indent=2))
 " 2>/dev/null || echo "{}")
