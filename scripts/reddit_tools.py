@@ -194,12 +194,25 @@ def _build_search_url(query, sort, limit, time_filter, subreddits=None):
 
 
 def _parse_search_results(data, already_posted, blocked_subs):
-    """Parse Reddit search JSON into thread list."""
+    """Parse Reddit search JSON into thread list.
+
+    Returns (threads, stats) where stats counts the per-reason drops so the
+    caller (cmd_search) can emit a `[reddit_search]` marker to stderr that the
+    dashboard's reddit-run enricher parses to surface raw/passed/dropped pills
+    (mirroring linkedin_search_attempts.candidates_dropped_below_floor and
+    twitter_search_attempts.tweets_found, see bin/server.js enrichers).
+    """
     threads = []
+    stats = {"raw": 0, "blocked_sub": 0, "archived": 0, "locked": 0, "too_old": 0,
+             "already_posted_flagged": 0}
+    top_score = 0
+    top_comments = 0
     for child in data.get("data", {}).get("children", []):
         post = child.get("data", {})
+        stats["raw"] += 1
         subreddit = post.get("subreddit", "").lower()
         if subreddit in blocked_subs:
+            stats["blocked_sub"] += 1
             continue
         created = post.get("created_utc", 0)
         age_hours = (datetime.now(timezone.utc).timestamp() - created) / 3600 if created else 999
@@ -218,12 +231,25 @@ def _parse_search_results(data, already_posted, blocked_subs):
         }
         if already:
             entry["SKIP"] = ">>> ALREADY POSTED IN THIS THREAD - DO NOT POST AGAIN <<<"
-        if age_hours > 4320 or post.get("archived"):
+            stats["already_posted_flagged"] += 1
+        if post.get("archived"):
+            stats["archived"] += 1
+            continue
+        if age_hours > 4320:
+            stats["too_old"] += 1
             continue
         if post.get("locked"):
+            stats["locked"] += 1
             continue
+        if entry["score"] > top_score:
+            top_score = entry["score"]
+        if entry["num_comments"] > top_comments:
+            top_comments = entry["num_comments"]
         threads.append(entry)
-    return threads
+    stats["returned"] = len(threads)
+    stats["top_score"] = top_score
+    stats["top_comments"] = top_comments
+    return threads, stats
 
 
 def cmd_search(args):
@@ -252,7 +278,20 @@ def cmd_search(args):
 
     url = _build_search_url(query, args.sort, args.limit, time_filter, subreddits=target_subs)
     data = _do_request(url)
-    threads = _parse_search_results(data, already_posted, blocked_subs)
+    threads, stats = _parse_search_results(data, already_posted, blocked_subs)
+
+    # Emit a single-line marker on stderr so post_reddit.py can forward it into
+    # run-reddit-search-*.log, where the dashboard's enrichPostCommentsRedditRuns
+    # parses it for the raw/passed pills. Stdout JSON contract unchanged.
+    safe_q = query.replace('"', '\\"')[:120]
+    print(
+        f'[reddit_search] q="{safe_q}" raw={stats["raw"]} returned={stats["returned"]} '
+        f'blocked_sub={stats["blocked_sub"]} archived={stats["archived"]} '
+        f'locked={stats["locked"]} too_old={stats["too_old"]} '
+        f'already_posted_flagged={stats["already_posted_flagged"]} '
+        f'top_score={stats["top_score"]} top_comments={stats["top_comments"]}',
+        file=sys.stderr, flush=True,
+    )
 
     print(json.dumps(threads, indent=2))
 
