@@ -4358,6 +4358,13 @@ const HTML = `<!DOCTYPE html>
   #top-dms-container .style-stats-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 10px 10px; }
   #top-dms-container .style-stats-table td[data-col-key="last_msg"] { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; color: var(--text-secondary); font-size: 12px; }
   #top-dms-container .style-stats-table td[data-col-key="last_ts"] { white-space: normal; overflow: visible; text-overflow: clip; vertical-align: top; }
+  #top-dms-container .style-stats-table td[data-col-key="message_count"] { white-space: normal; overflow: visible; text-overflow: clip; vertical-align: top; }
+  #top-dms-container .style-stats-table td[data-col-key="link_sent"] { vertical-align: top; }
+  .dm-stat-stack { display: flex; flex-direction: column; gap: 2px; line-height: 1.3; }
+  .dm-stat-line { font-size: 12px; white-space: nowrap; }
+  .dm-stat-line-muted { color: var(--text-faint); }
+  .dm-stat-num { font-weight: 600; }
+  .dm-stat-label { color: var(--text-muted); font-size: 11px; }
   .dm-class-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
   .dm-class-human    { background: #7f1d1d; color: #fecaca; }
   .dm-class-hot      { background: #b91c1c; color: #fff; }
@@ -5204,9 +5211,12 @@ function relTime(iso) {
 function parseServerUtcTs(iso) {
   if (!iso) return null;
   const s = String(iso);
-  const last = s.charAt(s.length - 1);
-  const hasZ = last === 'Z' || last === 'z';
-  const d = new Date(hasZ ? s : s + 'Z');
+  // Already tagged with a timezone (Z, +HH:MM, -HH:MM, +HHMM, -HHMM)? Pass through.
+  // The pg pool driver returns timestamps as "...+00:00", which is a valid offset
+  // already; appending Z would corrupt it. Only legacy bare "...HH:MM:SS[.fff]"
+  // strings (no offset) need the Z to be parsed as UTC.
+  const hasOffset = /(Z|[+-]\d{2}:?\d{2})$/i.test(s);
+  const d = new Date(hasOffset ? s : s + 'Z');
   return isNaN(d.getTime()) ? null : d;
 }
 
@@ -9217,28 +9227,51 @@ function renderTopDms(payload) {
       formatter: (_v, r) => r.project_display ? escapeHtml(PROJECT_LABELS[String(r.project_display)] || String(r.project_display)) : '<span style="color:var(--text-faint);">\u2014</span>' },
     { key: 'their_author',   label: 'Thread',   type: 'text',    align: 'left',  widthPct: 13,
       formatter: (_v, r) => renderDmThreadCell(r) },
-    { key: 'last_msg',       label: 'Last message', type: 'text', align: 'left', widthPct: 32,
+    { key: 'last_msg',       label: 'Last message', type: 'text', align: 'left', widthPct: 30,
       formatter: (_v, r) => renderDmLastMsgCell(r) },
-    { key: 'message_count',  label: 'Msgs',     type: 'numeric', align: 'right', widthPct: 5,  formatter: fmt },
-    { key: 'short_link_clicks', label: 'Clicks', type: 'numeric', align: 'right', widthPct: 5,
+    { key: 'message_count',  label: 'Messages', type: 'numeric', align: 'right', widthPct: 9,
       formatter: (v, r) => {
-        const n = Number(v) || 0;
-        if (!r.short_link_code) return '<span style="color:var(--text-faint);">—</span>';
-        const code = String(r.short_link_code);
-        const lastAt = r.short_link_last_click_at ? new Date(r.short_link_last_click_at).toLocaleString() : 'never';
-        const tip = '/r/' + code + (n ? (' • last click: ' + lastAt) : ' • no clicks yet');
-        const color = n > 0 ? 'var(--accent)' : 'var(--text-muted)';
-        return '<span data-tooltip="' + escapeHtml(tip) + '" style="color:' + color + ';font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
-      } },
-    { key: 'bookings_count', label: 'Booked', type: 'numeric', align: 'right', widthPct: 5,
-      formatter: (v, r) => {
-        const total = Number(v) || 0;
-        if (!total) return '<span style="color:var(--text-faint);">—</span>';
+        const msgs = Number(v) || 0;
+        const clicks = Number(r.short_link_clicks) || 0;
         const booked = Number(r.bookings_booked) || 0;
         const cancelled = Number(r.bookings_cancelled) || 0;
-        const lastAt = r.last_booking_at ? new Date(r.last_booking_at).toLocaleString() : '';
-        const tip = booked + ' booked' + (cancelled ? (' • ' + cancelled + ' cancelled') : '') + (lastAt ? (' • last: ' + lastAt) : '');
-        return '<span data-tooltip="' + escapeHtml(tip) + '" style="color:var(--success);font-weight:600;font-variant-numeric:tabular-nums;">' + fmt(booked) + '</span>';
+
+        const msgLine = '<div class="dm-stat-line"><span class="dm-stat-num" style="font-variant-numeric:tabular-nums;">' + fmt(msgs) + '</span> <span class="dm-stat-label">messages</span></div>';
+
+        let clickLine;
+        if (!r.short_link_code) {
+          clickLine = '<div class="dm-stat-line dm-stat-line-muted"><span class="dm-stat-num">—</span> <span class="dm-stat-label">clicks</span></div>';
+        } else {
+          const lastAt = r.short_link_last_click_at ? new Date(r.short_link_last_click_at).toLocaleString() : 'never';
+          const tip = '/r/' + String(r.short_link_code) + (clicks ? (' • last click: ' + lastAt) : ' • no clicks yet');
+          const color = clicks > 0 ? 'var(--accent)' : 'var(--text-muted)';
+          clickLine = '<div class="dm-stat-line" data-tooltip="' + escapeHtml(tip) + '" style="color:' + color + ';"><span class="dm-stat-num" style="font-variant-numeric:tabular-nums;">' + fmt(clicks) + '</span> <span class="dm-stat-label">clicks</span></div>';
+        }
+
+        let bookedLine;
+        if (!booked && !(Number(r.bookings_count) || 0)) {
+          bookedLine = '<div class="dm-stat-line dm-stat-line-muted"><span class="dm-stat-num">—</span> <span class="dm-stat-label">booked</span></div>';
+        } else {
+          const lastAt = r.last_booking_at ? new Date(r.last_booking_at).toLocaleString() : '';
+          const tip = booked + ' booked' + (cancelled ? (' • ' + cancelled + ' cancelled') : '') + (lastAt ? (' • last: ' + lastAt) : '');
+          bookedLine = '<div class="dm-stat-line" data-tooltip="' + escapeHtml(tip) + '" style="color:var(--success);font-weight:600;"><span class="dm-stat-num" style="font-variant-numeric:tabular-nums;">' + fmt(booked) + '</span> <span class="dm-stat-label">booked</span></div>';
+        }
+
+        return '<div class="dm-stat-stack">' + msgLine + clickLine + bookedLine + '</div>';
+      } },
+    { key: 'link_sent', label: 'Link sent', type: 'text', align: 'center', widthPct: 6,
+      accessor: r => (r.booking_link_sent_at || r.short_link_code) ? 'yes' : 'no',
+      formatter: (_v, r) => {
+        const sent = !!(r.booking_link_sent_at || r.short_link_code);
+        if (!sent) return '<span style="color:var(--text-faint);">No</span>';
+        const sentAt = r.booking_link_sent_at ? new Date(r.booking_link_sent_at).toLocaleString() : '';
+        const code = r.short_link_code ? ('/r/' + String(r.short_link_code)) : '';
+        const tipParts = [];
+        if (sentAt) tipParts.push('sent: ' + sentAt);
+        if (code) tipParts.push(code);
+        const tip = tipParts.join(' • ');
+        const tipAttr = tip ? ' data-tooltip="' + escapeHtml(tip) + '"' : '';
+        return '<span' + tipAttr + ' style="color:var(--success);font-weight:600;">Yes</span>';
       } },
     { key: 'interest_level', label: 'Class',    type: 'text',    align: 'left',  widthPct: 11,
       formatter: (_v, r) => dmClassBadge(r) },
