@@ -423,6 +423,15 @@ _SEARCH_JS_CONTENT = r"""
       const m = al.match(/View\s+(.+?)['’]s\s+profile/i);
       if (m) authorName = m[1].trim();
     }
+    // The new SDUI layout puts the View-profile aria on an inner <svg>, not
+    // the <a>. Probe descendants of the link too before falling back.
+    if (!authorName && authorLink) {
+      const inner = authorLink.querySelector('[aria-label*="profile" i]');
+      if (inner) {
+        const m = (inner.getAttribute('aria-label') || '').match(/View\s+(.+?)['’]s\s+profile/i);
+        if (m) authorName = m[1].trim();
+      }
+    }
     if (!authorName) {
       const followBtn = item.querySelector('button[aria-label^="Follow "]');
       if (followBtn) {
@@ -447,6 +456,28 @@ _SEARCH_JS_CONTENT = r"""
       if (fm) authorFollowers = parseCount(fm[1]);
     }
 
+    // Actor block = the prefix of the listitem text before "• Follow". On the
+    // new SDUI layout it has the shape "Feed post<NAME> • <CONNECTION><HEADLINE><AGE>".
+    const fullItemText = (item.textContent || '').replace(/\s+/g, ' ').trim();
+    const followIdx0 = fullItemText.indexOf('• Follow');
+    const actorBlock = followIdx0 >= 0 ? fullItemText.slice(0, followIdx0) : fullItemText.slice(0, 300);
+
+    // Author headline: strip "Feed post" prefix, the name, the connection
+    // marker, and the trailing age. Best-effort; for company pages or
+    // non-standard layouts (no • <connection>) we still return whatever's
+    // left after the name.
+    let authorHeadline = null;
+    {
+      let h = actorBlock.replace(/^Feed post/, '').trim();
+      if (authorName && h.startsWith(authorName)) h = h.slice(authorName.length);
+      h = h.replace(/^\s*•\s*(1st|2nd|3rd\+?|Out of network|Following)\s*/i, '');
+      h = h.replace(/\s*(?:•\s*)?\d+\s*(?:s|min|m|hr|h|d|w|mo|y)\s*$/i, '');
+      h = h.trim();
+      if (h) authorHeadline = h;
+    }
+
+    // Post body. Legacy: prefer the dedicated text element. New SDUI: take
+    // text after "• Follow", then strip trailing CTA / count noise.
     let postText = '';
     const textEl = item.querySelector(
       '.update-components-text, .feed-shared-update-v2__description, span.break-words'
@@ -454,10 +485,24 @@ _SEARCH_JS_CONTENT = r"""
     if (textEl) {
       postText = (textEl.textContent || '').replace(/\s+/g, ' ').trim();
     } else {
-      let s = (item.textContent || '').replace(/\s+/g, ' ').trim();
-      s = s.replace(/^Feed post/, '').trim();
+      let s = fullItemText.replace(/^Feed post/, '').trim();
       const idx = s.indexOf('• Follow');
       if (idx >= 0) s = s.slice(idx + '• Follow'.length).trim();
+      // Strip trailing "… more" / "...more" the new layout appends.
+      s = s.replace(/\s*[…\.]+\s*more\s*$/i, '').trim();
+      // Strip trailing count noise like "+132 comments23 reactions",
+      // "1 comment1", "+811 reaction", "23 reactions".
+      // Count widgets concatenate without delimiters; consume runs greedily.
+      for (let i = 0; i < 6; i++) {
+        const before = s;
+        s = s.replace(
+          /\s*\+?\s*\d+\s*(?:reactions?|comments?|reposts?)\s*\d*\s*$/i,
+          ''
+        ).trim();
+        if (s === before) break;
+      }
+      // Strip a stray trailing digit (artifact of glued-in count widgets).
+      s = s.replace(/\s+\d+\s*$/, '').trim();
       postText = s;
     }
 
@@ -468,39 +513,67 @@ _SEARCH_JS_CONTENT = r"""
     );
     if (timeEl) ageText = (timeEl.textContent || '').trim();
     if (!ageText) {
-      const fullText = (item.textContent || '').replace(/\s+/g, ' ').trim();
-      const ageM = fullText.match(/(\d+\s*(?:s|min|m|hr|h|d|w|mo|y))\b/i);
+      const ageM = fullItemText.match(/(\d+\s*(?:s|min|m|hr|h|d|w|mo|y))\b/i);
       if (ageM) ageText = ageM[1];
     }
     const ageHours = parseRelativeAge(ageText);
 
+    // Counts. New SDUI hides counts from button aria-labels and embeds them
+    // as plain leaf-divs ("1 comment", "23 reactions", "+811 reaction").
+    // We walk every leaf div/span and match the strict shape; we keep the
+    // max in case the same widget is mirrored across nested wrappers.
     let reactions = 0, comments = 0, reposts = 0;
-    const reactEl = item.querySelector(
-      '[aria-label*=" reaction" i], '
-      + '.social-details-social-counts__reactions-count'
-    );
-    if (reactEl) {
-      const m = (reactEl.getAttribute('aria-label') || reactEl.textContent || '')
-        .match(/([\d.,]+\s*[KkMm]?)\s*reaction/i);
-      if (m) reactions = parseCount(m[1]);
+    item.querySelectorAll('div, span').forEach(el => {
+      if (el.children.length > 0) return;
+      const t = (el.textContent || '').trim();
+      if (!t || t.length > 30) return;
+      let m;
+      if ((m = t.match(/^[+]?\s*([\d.,]+\s*[KkMm]?)\s+reactions?$/i))) {
+        const v = parseCount(m[1]);
+        if (v > reactions) reactions = v;
+      }
+      if ((m = t.match(/^[+]?\s*([\d.,]+\s*[KkMm]?)\s+comments?$/i))) {
+        const v = parseCount(m[1]);
+        if (v > comments) comments = v;
+      }
+      if ((m = t.match(/^[+]?\s*([\d.,]+\s*[KkMm]?)\s+reposts?$/i))) {
+        const v = parseCount(m[1]);
+        if (v > reposts) reposts = v;
+      }
+    });
+    // Legacy fallbacks (unchanged): aria-label-based counts on the old layout.
+    if (reactions === 0) {
+      const reactEl = item.querySelector(
+        '[aria-label*=" reaction" i], '
+        + '.social-details-social-counts__reactions-count'
+      );
+      if (reactEl) {
+        const m = (reactEl.getAttribute('aria-label') || reactEl.textContent || '')
+          .match(/([\d.,]+\s*[KkMm]?)\s*reaction/i);
+        if (m) reactions = parseCount(m[1]);
+      }
     }
-    const commentEl = item.querySelector(
-      '[aria-label*=" comment" i], '
-      + 'li.social-details-social-counts__comments'
-    );
-    if (commentEl) {
-      const m = (commentEl.getAttribute('aria-label') || commentEl.textContent || '')
-        .match(/([\d.,]+\s*[KkMm]?)\s*comment/i);
-      if (m) comments = parseCount(m[1]);
+    if (comments === 0) {
+      const commentEl = item.querySelector(
+        '[aria-label*=" comment" i], '
+        + 'li.social-details-social-counts__comments'
+      );
+      if (commentEl) {
+        const m = (commentEl.getAttribute('aria-label') || commentEl.textContent || '')
+          .match(/([\d.,]+\s*[KkMm]?)\s*comment/i);
+        if (m) comments = parseCount(m[1]);
+      }
     }
-    const repostEl = item.querySelector(
-      '[aria-label*=" repost" i], '
-      + 'li.social-details-social-counts__item--right-aligned'
-    );
-    if (repostEl) {
-      const m = (repostEl.getAttribute('aria-label') || repostEl.textContent || '')
-        .match(/([\d.,]+\s*[KkMm]?)\s*repost/i);
-      if (m) reposts = parseCount(m[1]);
+    if (reposts === 0) {
+      const repostEl = item.querySelector(
+        '[aria-label*=" repost" i], '
+        + 'li.social-details-social-counts__item--right-aligned'
+      );
+      if (repostEl) {
+        const m = (repostEl.getAttribute('aria-label') || repostEl.textContent || '')
+          .match(/([\d.,]+\s*[KkMm]?)\s*repost/i);
+        if (m) reposts = parseCount(m[1]);
+      }
     }
 
     if (!authorName && !authorUrl && !postText) continue;
@@ -512,6 +585,7 @@ _SEARCH_JS_CONTENT = r"""
       activity_id: activityId,
       all_urns: Array.from(allUrns),
       author_name: authorName || null,
+      author_headline: authorHeadline,
       author_profile_url: authorUrl,
       author_followers: authorFollowers,
       post_text: postText,
