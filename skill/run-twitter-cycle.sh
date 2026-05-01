@@ -302,6 +302,45 @@ print(f'Extracted {len(tweets)} tweets to $RAW_FILE', file=sys.stderr)
 
 EXTRACT_EXIT=${PIPESTATUS[0]:-1}
 
+# --- Discovery-stage counters ------------------------------------------------
+# Capture queries-run / duds / raw-tweets-pulled BEFORE any early-exit branch
+# so every log_run.py call below can pass --queries/--duds/--tweets-pulled.
+# QUERIES_FILE is the array Claude returned (one row per drafted query incl.
+# zero-result ones); RAW_FILE is the deduped tweet array. Use python3 inline so
+# we get the exact in-memory counts the rest of the pipeline operates on.
+QUERIES_TOTAL=0
+DUDS_TOTAL=0
+TWEETS_PULLED=0
+if [ -f "$QUERIES_FILE" ]; then
+    QUERIES_TOTAL=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print(len(d) if isinstance(d, list) else 0)
+except Exception:
+    print(0)
+" "$QUERIES_FILE" 2>/dev/null || echo 0)
+    DUDS_TOTAL=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    n = sum(1 for q in (d if isinstance(d, list) else []) if (q.get('tweets_found') or 0) == 0)
+    print(n)
+except Exception:
+    print(0)
+" "$QUERIES_FILE" 2>/dev/null || echo 0)
+fi
+if [ -f "$RAW_FILE" ]; then
+    TWEETS_PULLED=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print(len(d) if isinstance(d, list) else 0)
+except Exception:
+    print(0)
+" "$RAW_FILE" 2>/dev/null || echo 0)
+fi
+
 # Log every drafted query (incl. zero-result ones) to twitter_search_attempts
 # BEFORE any early-exit branches. Runs even when the tweets array is empty
 # so dud queries actually accumulate in the negative-signal table.
@@ -325,6 +364,8 @@ if [ "$EXTRACT_EXIT" -ne 0 ] || [ ! -f "$RAW_FILE" ]; then
     fi
     python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped 0 --failed 1 \
         --salvaged "${SALVAGED:-0}" \
+        --queries "${QUERIES_TOTAL:-0}" --duds "${DUDS_TOTAL:-0}" \
+        --tweets-pulled "${TWEETS_PULLED:-0}" \
         --failure-reasons "${PHASE1_REASON}:1" \
         --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
     exit 0
@@ -350,6 +391,8 @@ if [ "$BATCH_COUNT" = "0" ]; then
     # returned no tweets at all".
     python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped 0 --failed 1 \
         --salvaged "${SALVAGED:-0}" \
+        --queries "${QUERIES_TOTAL:-0}" --duds "${DUDS_TOTAL:-0}" \
+        --tweets-pulled "${TWEETS_PULLED:-0}" \
         --failure-reasons "empty_batch:1" \
         --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
     exit 0
@@ -404,6 +447,8 @@ if [ -z "$CANDIDATES" ]; then
     # the silent "—" we used to render. failure_reasons stays empty.
     python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped "${EXPIRED_BATCH:-0}" --failed 0 \
         --salvaged "${SALVAGED:-0}" \
+        --queries "${QUERIES_TOTAL:-0}" --duds "${DUDS_TOTAL:-0}" \
+        --tweets-pulled "${TWEETS_PULLED:-0}" --candidates "${BATCH_COUNT:-0}" \
         --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
     exit 0
 fi
@@ -596,9 +641,15 @@ if [ "${PLAN_COUNT:-0}" = "0" ]; then
     rm -f "$PLAN_FILE"
     _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "run-twitter-cycle-scan" "run-twitter-cycle-prep" "run-twitter-cycle-post" 2>/dev/null || echo "0.0000")
     if [ "$PREP_REASON" = "monthly_limit" ]; then
-        python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped "${CANDIDATE_COUNT:-0}" --failed 1 --salvaged "${SALVAGED:-0}" --failure-reasons "monthly_limit:1" --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
+        python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped "${CANDIDATE_COUNT:-0}" --failed 1 --salvaged "${SALVAGED:-0}" \
+            --queries "${QUERIES_TOTAL:-0}" --duds "${DUDS_TOTAL:-0}" \
+            --tweets-pulled "${TWEETS_PULLED:-0}" --candidates "${BATCH_COUNT:-0}" --above-floor "${HIGH_DELTA_COUNT:-0}" \
+            --failure-reasons "monthly_limit:1" --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
     else
-        python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped "${CANDIDATE_COUNT:-0}" --failed 0 --salvaged "${SALVAGED:-0}" --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
+        python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped "${CANDIDATE_COUNT:-0}" --failed 0 --salvaged "${SALVAGED:-0}" \
+            --queries "${QUERIES_TOTAL:-0}" --duds "${DUDS_TOTAL:-0}" \
+            --tweets-pulled "${TWEETS_PULLED:-0}" --candidates "${BATCH_COUNT:-0}" --above-floor "${HIGH_DELTA_COUNT:-0}" \
+            --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
     fi
     exit 0
 fi
@@ -650,18 +701,34 @@ SKIPPED_CT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM twitter_candida
 _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "run-twitter-cycle-scan" "run-twitter-cycle-prep" "run-twitter-cycle-post" 2>/dev/null || echo "0.0000")
 
 # --- Phase 2b failure-reason detection -------------------------------------
-# When POSTED_CT=0 but Phase 2b had candidates to work with, scan the cycle
-# log for known error markers so the dashboard renders an actual reason
-# instead of a silent "—". Reason keys are kept consistent with the unified
-# failure_reasons schema (engage_reddit.py, engage_github, etc.) so a single
-# rendering pass in bin/server.js works across all jobs.
-FAILED_CT=0
-FAILURE_REASONS=""
-if [ "${POSTED_CT:-0}" = "0" ] && [ "${CANDIDATE_COUNT:-0}" -gt 0 ]; then
-    # Anchor on the Phase 2b marker so we don't false-positive on Phase 1
-    # prose. macOS bash 3.2 has no associative arrays, so build the
-    # comma-separated reasons string directly with positional appends.
-    PHASE2B_LOG=$(awk '/Phase 2b: Claude reviewing/,EOF' "$LOG_FILE" 2>/dev/null || echo "")
+# Source of truth = the JSON summary from twitter_post_plan.py
+# (EXEC_FAILED + EXEC_REASONS, captured at line ~627 above). We only synthesize
+# additional reasons when the cycle never reached Phase 2b-post at all
+# (monthly_limit, auth_redirect, browser crash during prep) — i.e.,
+# posted=0 AND failed=0 AND skipped=0 AND we still had candidates pending.
+# Pre-2026-05-01 this block fired whenever POSTED_CT=0 with candidates,
+# so legitimate clean skips (DUPLICATE_THREAD on a thread we already
+# replied to, empty_reply_text) were silently re-tagged as
+# "failed: phase2b_silent" — observed false-positive 14:38 cycle on
+# 2026-05-01 when log_post.py rejected a duplicate but EXEC_FAILED=0.
+# Reason keys are kept consistent with the unified failure_reasons schema
+# (engage_reddit.py, engage_github, etc.) so one rendering pass in
+# bin/server.js covers every platform.
+FAILED_CT="${EXEC_FAILED:-0}"
+FAILURE_REASONS="${EXEC_REASONS:-}"
+if [ "${POSTED_CT:-0}" = "0" ] \
+    && [ "${FAILED_CT:-0}" = "0" ] \
+    && [ "${EXEC_SKIPPED:-0}" = "0" ] \
+    && [ -z "$FAILURE_REASONS" ] \
+    && [ "${CANDIDATE_COUNT:-0}" -gt 0 ]; then
+    # Scan from Phase 1 onward; the prep/post phases are sub-markers but
+    # all the error signatures we care about (Anthropic 429, auth
+    # redirect, X rate limit, browser timeout) only ever appear in
+    # those phases. Pre-2026-05-01 anchor was "Phase 2b: Claude
+    # reviewing" which the new prep/post split renamed to
+    # "Phase 2b-prep: Claude reading", so the awk window was empty
+    # and every matcher silently false-negatived.
+    PHASE2B_LOG=$(awk '/Phase 1: drafting queries|Phase 2b-prep: Claude reading|Phase 2b-post:/,EOF' "$LOG_FILE" 2>/dev/null || echo "")
     add_reason() {
         # $1 = reason key, $2 = count
         FAILURE_REASONS="${FAILURE_REASONS:+$FAILURE_REASONS,}${1}:${2}"
@@ -685,14 +752,19 @@ if [ "${POSTED_CT:-0}" = "0" ] && [ "${CANDIDATE_COUNT:-0}" -gt 0 ]; then
     if echo "$PHASE2B_LOG" | grep -qiE 'reply_box_not_found|tweet_not_found'; then
         add_reason posting_blocked 1
     fi
-    # Fallback: candidates existed but nothing posted and no specific marker
+    # Fallback: cycle aborted with zero progress and no specific marker
     # surfaced. Better to render a generic reason than a silent "—".
     if [ -z "$FAILURE_REASONS" ]; then
         add_reason phase2b_silent 1
     fi
 fi
 
-LOG_ARGS=(--script "post_twitter" --posted "${POSTED_CT:-0}" --skipped "${SKIPPED_CT:-0}" --failed "$FAILED_CT" --salvaged "${SALVAGED:-0}" --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START )))
+LOG_ARGS=(--script "post_twitter" --posted "${POSTED_CT:-0}" --skipped "${SKIPPED_CT:-0}" --failed "$FAILED_CT" --salvaged "${SALVAGED:-0}")
+# Discovery counters: each only emits a segment when non-zero, so passing
+# 0 here is safe and just omits the corresponding `key=N` from the log line.
+LOG_ARGS+=(--queries "${QUERIES_TOTAL:-0}" --duds "${DUDS_TOTAL:-0}")
+LOG_ARGS+=(--tweets-pulled "${TWEETS_PULLED:-0}" --candidates "${BATCH_COUNT:-0}" --above-floor "${HIGH_DELTA_COUNT:-0}")
+LOG_ARGS+=(--cost "$_COST" --elapsed $(( $(date +%s) - RUN_START )))
 [ -n "$FAILURE_REASONS" ] && LOG_ARGS+=(--failure-reasons "$FAILURE_REASONS")
 python3 "$REPO_DIR/scripts/log_run.py" "${LOG_ARGS[@]}"
 
