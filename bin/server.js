@@ -5535,9 +5535,9 @@ function fmtElapsed(s) {
 
 function renderResult(run) {
   const r = run.result || {};
-  const pill = (label, n, color) =>
+  const pill = (label, n, _color) =>
     '<span style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
-    label + ' <span style="color:' + color + ';font-weight:600;">' + n + '</span></span>';
+    label + ' <span style="color:var(--text);font-weight:600;">' + n + '</span></span>';
   if (r.type === 'link-edit') {
     return (
       pill('touched', r.total, 'var(--text)') +
@@ -5583,7 +5583,7 @@ function renderResult(run) {
       const count = failed || (reasons[0] ? reasons[0].count : 0);
       return '<span title="' + tt.replace(/"/g, '&quot;') + '" ' +
         'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
-        label + (count ? ' <span style="color:#ef4444;font-weight:600;">' + count + '</span>' : '') + '</span>';
+        label + (count ? ' <span style="color:var(--text);font-weight:600;">' + count + '</span>' : '') + '</span>';
     };
     if (!searches && !posted && !queue && !failed && !reasons.length) {
       return '<span style="color:var(--muted);font-size:12px;">no searches</span>';
@@ -5632,7 +5632,7 @@ function renderResult(run) {
       const count = failed || (reasons[0] ? reasons[0].count : 0);
       return '<span title="' + tt.replace(/"/g, '&quot;') + '" ' +
         'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
-        label + (count ? ' <span style="color:#ef4444;font-weight:600;">' + count + '</span>' : '') + '</span>';
+        label + (count ? ' <span style="color:var(--text);font-weight:600;">' + count + '</span>' : '') + '</span>';
     };
     if (!searches && !posted && !queue && !failed && !reasons.length) {
       return '<span style="color:var(--muted);font-size:12px;">no searches</span>';
