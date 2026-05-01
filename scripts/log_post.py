@@ -142,8 +142,7 @@ def log_rejected(args):
     if args.rejection_reason:
         summary_parts.append(f"REASON: {args.rejection_reason}")
     if args.network_response:
-        # Cap to keep row size sane — we only need the response shape.
-        summary_parts.append(f"NETWORK: {args.network_response[:4000]}")
+        summary_parts.append(f"NETWORK: {args.network_response}")
     summary = "\n".join(summary_parts) if summary_parts else "rejected_by_platform"
 
     dbmod.load_env()
@@ -302,7 +301,7 @@ def main():
 
     # Dedup: refuse if we already posted in this thread on this platform
     cur = conn.execute(
-        "SELECT id, LEFT(our_content, 100) FROM posts "
+        "SELECT id, our_content FROM posts "
         "WHERE platform = %s AND thread_url = %s LIMIT 1",
         [args.platform, args.thread_url],
     )
