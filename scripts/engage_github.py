@@ -73,7 +73,7 @@ def get_next_pending(conn):
 def get_recent_archetypes(conn, limit=3):
     """Fetch our last N GitHub replies so Claude can vary style across threads."""
     cur = conn.execute("""
-        SELECT LEFT(our_reply_content, 200)
+        SELECT our_reply_content
         FROM replies
         WHERE status='replied' AND platform='github'
               AND our_reply_content IS NOT NULL
