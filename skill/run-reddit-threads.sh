@@ -20,6 +20,7 @@ mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/run-reddit-threads-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Reddit Threads Run: $(date) ===" | tee "$LOG_FILE"
+RUN_START_EPOCH=$(date +%s)
 
 # Diagnostic: log the failing line and command before set -e kills the script.
 # Without this, silent deaths (e.g., Claude exits non-zero inside the $() below)
@@ -428,11 +429,17 @@ if applied_campaign_ids:
         capture_output=True, text=True, timeout=120,
     )
     edit_ok = False
+    edit_payload = {}
     try:
-        edit_payload = json.loads((edit_proc.stdout or "").strip().splitlines()[-1])
+        # reddit_browser.py edit-thread prints multi-line JSON via
+        # json.dumps(result, indent=2). Use raw_decode on the full stdout so
+        # we get the whole document, not just the final '}' line.
+        stdout_str = (edit_proc.stdout or "").strip()
+        edit_payload, _ = json.JSONDecoder().raw_decode(stdout_str)
         edit_ok = edit_payload.get("ok") is True
-    except Exception:
-        edit_payload = {"_parse_error": (edit_proc.stdout or "")[-200:]}
+    except Exception as e:
+        edit_payload = {"_parse_error": f"{type(e).__name__}: {e}",
+                        "_stdout_tail": (edit_proc.stdout or "")[-200:]}
     if edit_ok:
         conn.execute(
             "UPDATE posts SET our_content = %s WHERE id = %s",
@@ -496,6 +503,19 @@ PYEOF
 else
   echo "UNKNOWN OUTCOME (check JSON output above)" | tee -a "$LOG_FILE"
 fi
+
+# Surface this run in the dashboard's Job History under "Post Threads · Reddit".
+# Script name `thread_reddit` is what bin/server.js classifyScript() matches.
+ELAPSED=$(( $(date +%s) - RUN_START_EPOCH ))
+if [ "$PERMALINK" != "null" ] && [ "$PERMALINK" != "" ] && [ "$PERMALINK" != "PARSE_ERROR" ]; then
+  POSTED_CT=1; SKIPPED_CT=0; FAILED_CT=0
+elif [ -n "$ABORT_REASON" ] && [ "$ABORT_REASON" != "PARSE_ERROR" ]; then
+  POSTED_CT=0; SKIPPED_CT=1; FAILED_CT=0
+else
+  POSTED_CT=0; SKIPPED_CT=0; FAILED_CT=1
+fi
+_COST=$(/usr/bin/python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START_EPOCH" --scripts "run-reddit-threads" 2>/dev/null || echo "0.0000")
+/usr/bin/python3 "$REPO_DIR/scripts/log_run.py" --script "thread_reddit" --posted "$POSTED_CT" --skipped "$SKIPPED_CT" --failed "$FAILED_CT" --cost "$_COST" --elapsed "$ELAPSED" || true
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 find "$LOG_DIR" -name "run-reddit-threads-*.log" -mtime +14 -delete 2>/dev/null || true
