@@ -48,9 +48,35 @@ import atexit
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from typing import Optional
+
+
+def _is_holder_alive(holder: str) -> bool:
+    """Mirror ~/.claude/hooks/linkedin-agent-lock.sh is_holder_alive().
+
+    A live Claude session puts its UUID on the cmdline as
+    `claude --session-id <UUID>`. pgrep matches it; absence means the
+    holder is dead and the lock is stale, even if its JSONL transcript
+    is still tail-flushing. This is the canonical liveness signal.
+    """
+    if not holder:
+        return False
+    try:
+        return (
+            subprocess.run(
+                ["pgrep", "-f", f"claude.*--session-id {holder}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            ).returncode
+            == 0
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        # On error, assume alive to err on the side of NOT stealing the lock.
+        return True
 
 PROFILE_DIR = os.path.expanduser("~/.claude/browser-profiles/linkedin")
 LOCK_FILE = os.path.expanduser("~/.claude/linkedin-agent-lock.json")
@@ -99,6 +125,14 @@ def _acquire_browser_lock():
                     lock = json.load(f)
                 age = time.time() - lock.get("timestamp", 0)
                 holder = lock.get("session_id", "")
+                # pgrep alive-check is authoritative: a Claude UUID holder
+                # whose process is gone leaves a stale lockfile (the unlock
+                # hook only refreshes timestamp, not deletes). This is what
+                # caused the 2026-05-01 14:33 LinkedIn false positive.
+                if _UUID_RE.match(holder or "") and not _is_holder_alive(
+                    holder
+                ):
+                    break  # stale, take it
                 if age >= LOCK_EXPIRY:
                     break  # stale, take it
                 if _UUID_RE.match(holder or ""):
