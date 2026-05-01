@@ -47,6 +47,7 @@ or empty.
 import argparse
 import json
 import os
+import random
 import subprocess
 import sys
 from pathlib import Path
@@ -55,6 +56,24 @@ REPO_DIR = os.path.expanduser("~/social-autoposter")
 GENERATE_PAGE = os.path.join(REPO_DIR, "seo", "generate_page.py")
 CONFIG_PATH = os.path.join(REPO_DIR, "config.json")
 GEN_TIMEOUT_SEC = 3000  # generate_page.py's own 2400s budget + slack
+
+# A/B gate: per-candidate coin flip for the page-gen lane. 0.25 means 25% of
+# eligible candidates (project has landing_pages config + LLM provided
+# keyword/slug) actually trigger generate_page.py; the rest fall through to
+# the plain project URL with link_source='plain_url_ab_skip'. Tunable via
+# env var so cadence can be swept without a code change. 0.0 disables
+# page-gen entirely; 1.0 restores the pre-A/B behaviour.
+def _page_gen_rate() -> float:
+    raw = os.environ.get("TWITTER_PAGE_GEN_RATE", "0.25")
+    try:
+        v = float(raw)
+    except ValueError:
+        return 0.25
+    if v < 0.0:
+        return 0.0
+    if v > 1.0:
+        return 1.0
+    return v
 
 
 def load_projects() -> dict:
@@ -88,30 +107,45 @@ def run_generate(product: str, keyword: str, slug: str) -> tuple[str, str]:
     if r.stderr:
         # Trail-truncate so we don't blow out the cycle log on a verbose failure.
         print("[gen][stderr-tail]", r.stderr[-2000:], flush=True)
-    # generate_page.py prints a final JSON line: {"success": ..., "page_url": ...}
+    # generate_page.py prints its final result via json.dumps(result, indent=2),
+    # so the success object is a pretty-printed multi-line block. Scan stdout
+    # for every top-level JSON object via JSONDecoder.raw_decode and keep the
+    # last dict we can parse: that's the final result line regardless of
+    # whether it was emitted as one line or many.
     page_url = ""
     last_obj = None
-    for line in r.stdout.splitlines():
-        line = line.strip()
-        if line.startswith("{") and line.endswith("}"):
-            try:
-                last_obj = json.loads(line)
-            except Exception:
-                continue
+    decoder = json.JSONDecoder()
+    text = r.stdout
+    i = text.find("{")
+    while i != -1:
+        try:
+            obj, end = decoder.raw_decode(text, i)
+        except json.JSONDecodeError:
+            i = text.find("{", i + 1)
+            continue
+        if isinstance(obj, dict):
+            last_obj = obj
+        i = text.find("{", end)
     if last_obj and last_obj.get("success") and last_obj.get("page_url"):
         page_url = last_obj["page_url"]
     if not page_url:
-        # Surface the last few stdout lines for debug.
         print("[gen] no page_url in stdout; tail=", flush=True)
         print(r.stdout[-2000:], flush=True)
         return ("", "no_page_url")
     return (page_url, "seo_page")
 
 
-def resolve_link(candidate: dict, projects: dict) -> tuple[str, str]:
+def resolve_link(candidate: dict, projects: dict, page_gen_rate: float) -> tuple[str, str]:
     """Decide the link URL for a single candidate.
 
-    Order of preference: SEO page (when applicable) -> plain project URL -> "".
+    Order of preference: SEO page (when applicable AND dice lands in gen lane)
+    -> plain project URL -> "".
+
+    The per-candidate dice roll (random.random() < page_gen_rate) only fires
+    for projects that actually support landing pages and where the LLM
+    supplied a keyword + slug. Eligible-but-lost candidates surface as
+    link_source='plain_url_ab_skip' so post-hoc engagement analysis can
+    compare the two lanes apples-to-apples.
     """
     proj_name = candidate.get("matched_project") or ""
     proj = projects.get(proj_name) or {}
@@ -121,6 +155,15 @@ def resolve_link(candidate: dict, projects: dict) -> tuple[str, str]:
     slug = (candidate.get("link_slug") or "").strip()
 
     if has_lp and keyword and slug and proj.get("landing_pages"):
+        roll = random.random()
+        if roll >= page_gen_rate:
+            print(f"[gen] AB skip: roll={roll:.3f} >= rate={page_gen_rate:.3f}; "
+                  f"using plain URL", flush=True)
+            if plain_url:
+                return (plain_url, "plain_url_ab_skip")
+            return ("", "empty_ab_skip")
+        print(f"[gen] AB hit: roll={roll:.3f} < rate={page_gen_rate:.3f}; "
+              f"running generate_page.py", flush=True)
         page_url, source = run_generate(proj_name, keyword, slug)
         if page_url:
             return (page_url, "seo_page")
@@ -156,9 +199,12 @@ def main() -> int:
         return 0
 
     projects = load_projects()
+    page_gen_rate = _page_gen_rate()
+    print(f"[gen] page_gen_rate={page_gen_rate:.3f} "
+          f"(env TWITTER_PAGE_GEN_RATE)", flush=True)
 
     for c in candidates:
-        link_url, source = resolve_link(c, projects)
+        link_url, source = resolve_link(c, projects, page_gen_rate)
         c["link_url"] = link_url
         c["link_source"] = source
         print(f"[gen] candidate_id={c.get('candidate_id')} "
