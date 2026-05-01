@@ -253,7 +253,7 @@ Step 1: Query the database to get LinkedIn posts needing stats updates:
 ```bash
 source ~/social-autoposter/.env
 psql "$DATABASE_URL" -t -A -F '|' -c "
-    SELECT id, our_url, LEFT(our_content, 80) as content_prefix FROM posts
+    SELECT id, our_url, our_content as content_prefix FROM posts
     WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
       AND our_url LIKE '%linkedin.com/feed/update/%'
       AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days')
