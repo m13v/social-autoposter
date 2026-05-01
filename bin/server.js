@@ -9231,6 +9231,28 @@ function renderTopDms(payload) {
     // history despite the SQL aggregating it correctly.
     human_instructions: Array.isArray(d.human_instructions) ? d.human_instructions : [],
     flagged_at: d.flagged_at || null,
+    // Pre-DM public-context fields. Consumed by renderDmContextBlock (thread
+    // header) and buildDmBubbleStream (public bubbles inline with DMs). Were
+    // historically missing from this whitelist, which is why the context block
+    // and the public-bubble merge both rendered empty despite the SQL
+    // aggregating them correctly.
+    context_thread_title:  d.context_thread_title  || '',
+    context_thread_url:    d.context_thread_url    || '',
+    context_thread_content: d.context_thread_content || '',
+    context_thread_author: d.context_thread_author || '',
+    context_our_content:   d.context_our_content   || '',
+    context_our_url:       d.context_our_url       || '',
+    context_posted_at:     d.context_posted_at     || null,
+    context_is_fallback:   !!d.context_is_fallback,
+    trigger_comment_content: d.trigger_comment_content || '',
+    trigger_comment_url:     d.trigger_comment_url     || '',
+    trigger_comment_author:  d.trigger_comment_author  || '',
+    trigger_our_reply_content: d.trigger_our_reply_content || '',
+    trigger_our_reply_url:     d.trigger_our_reply_url     || '',
+    trigger_our_reply_at:      d.trigger_our_reply_at      || '',
+    seed_comment_context: d.seed_comment_context || '',
+    seed_their_content:   d.seed_their_content   || '',
+    seed_our_dm_content:  d.seed_our_dm_content  || '',
   }));
   window.__dmsById = Object.create(null);
   for (const r of normalized) { window.__dmsById[r.id] = r; }
