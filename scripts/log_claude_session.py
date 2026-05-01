@@ -160,6 +160,15 @@ def main():
                         help="ISO8601 timestamp; falls back to first transcript ts")
     parser.add_argument("--ended-at", default=None,
                         help="ISO8601 timestamp; falls back to last transcript ts")
+    parser.add_argument("--orchestrator-cost-usd", default=None, type=float,
+                        help="Native SDK cost (streamRes.total_cost_usd) for the "
+                             "orchestrator session, captured from claude -p stdout. "
+                             "Stored in claude_sessions.orchestrator_cost_usd. "
+                             "Authoritative (matches Anthropic billing for the "
+                             "orchestrator), but excludes Task subagent costs "
+                             "(see anthropics/claude-code #43945). When omitted, "
+                             "the column stays NULL and dashboards fall back to "
+                             "total_cost_usd (manual transcript-derived estimate).")
     args = parser.parse_args()
 
     transcript = find_transcript(args.session_id)
@@ -185,18 +194,31 @@ def main():
     except (ValueError, AttributeError):
         pass
 
+    # Orchestrator cost: prefer the native SDK value passed via flag (from
+    # streamRes.total_cost_usd in the caller); fall back to NULL so the column
+    # only holds authoritative values. Manual transcript-derived estimate goes
+    # into total_cost_usd unchanged.
+    orch_cost = (
+        round(args.orchestrator_cost_usd, 6)
+        if args.orchestrator_cost_usd is not None
+        else None
+    )
+
     dbmod.load_env()
     conn = dbmod.get_conn()
     conn.execute(
         """INSERT INTO claude_sessions (
             session_id, script, started_at, ended_at, duration_ms,
-            total_cost_usd, input_tokens, output_tokens,
+            total_cost_usd, orchestrator_cost_usd,
+            input_tokens, output_tokens,
             cache_read_tokens, cache_creation_tokens, model_breakdown, model
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
         ON CONFLICT (session_id) DO UPDATE SET
             ended_at = EXCLUDED.ended_at,
             duration_ms = EXCLUDED.duration_ms,
             total_cost_usd = EXCLUDED.total_cost_usd,
+            orchestrator_cost_usd = COALESCE(EXCLUDED.orchestrator_cost_usd,
+                                             claude_sessions.orchestrator_cost_usd),
             input_tokens = EXCLUDED.input_tokens,
             output_tokens = EXCLUDED.output_tokens,
             cache_read_tokens = EXCLUDED.cache_read_tokens,
@@ -207,6 +229,7 @@ def main():
         [
             args.session_id, args.script, started, ended, duration_ms,
             round(parsed["total_cost_usd"], 6),
+            orch_cost,
             parsed["totals"]["input"], parsed["totals"]["output"],
             parsed["totals"]["cache_read"], parsed["totals"]["cache_creation"],
             json.dumps(parsed["by_model"]),
@@ -239,6 +262,7 @@ def main():
         "session_id": args.session_id,
         "script": args.script,
         "total_cost_usd": round(parsed["total_cost_usd"], 6),
+        "orchestrator_cost_usd": orch_cost,
         "duration_ms": duration_ms,
         "model": parsed["primary_model"],
         "models": list(parsed["by_model"].keys()),
