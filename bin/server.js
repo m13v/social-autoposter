@@ -4426,6 +4426,16 @@ const HTML = `<!DOCTYPE html>
   .dm-exp-msg-author { font-weight: 600; }
   .dm-exp-msg-time   { font-variant-numeric: tabular-nums; }
   .dm-exp-msg-body   { white-space: pre-wrap; word-break: break-word; }
+  /* Public-comment bubbles: same direction-based alignment as DM bubbles, but
+     visually distinct (dashed purple border, translucent fill, "public" chip)
+     so the operator can tell at a glance which surface a turn happened on. */
+  .dm-exp-msg-public { border-style: dashed; }
+  .dm-exp-msg-public-inbound  { align-self: flex-start; background: rgba(139, 92, 246, 0.06); color: var(--text); border-color: rgba(139, 92, 246, 0.45); border-top-left-radius: 3px; }
+  .dm-exp-msg-public-outbound { align-self: flex-end;   background: rgba(139, 92, 246, 0.10); color: var(--text); border-color: rgba(139, 92, 246, 0.55); border-top-right-radius: 3px; }
+  .dm-exp-msg-public .dm-exp-msg-head { color: #6d28d9; opacity: 1; }
+  .dm-exp-msg-kind-chip { display: inline-block; padding: 0 5px; border-radius: 3px; font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; background: rgba(139, 92, 246, 0.18); color: #6d28d9; border: 1px solid rgba(139, 92, 246, 0.45); }
+  .dm-exp-msg-link { margin-left: auto; color: #6d28d9; text-decoration: none; font-weight: 500; font-size: 10px; }
+  .dm-exp-msg-link:hover { text-decoration: underline; }
   .dm-exp-ctx        { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px dashed var(--border); }
   .dm-exp-ctx-section { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; line-height: 1.45; }
   .dm-exp-ctx-head   { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; font-size: 10px; text-transform: lowercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 600; }
@@ -9347,10 +9357,13 @@ function renderTopDms(payload) {
 function buildDmExpansionRow(dm, colCount) {
   const msgs = Array.isArray(dm.messages) ? dm.messages : [];
   const total = msgs.length;
+  const bubbles = buildDmBubbleStream(dm);
+  const publicCount = bubbles.reduce((n, b) => n + (b.kind === 'public' ? 1 : 0), 0);
   const metaParts = [];
   if (dm.platform) metaParts.push('<span class="dm-exp-meta-chip">' + escapeHtml(String(dm.platform)) + '</span>');
   if (dm.their_author) metaParts.push('<span class="dm-exp-meta-chip">@' + escapeHtml(dm.their_author) + '</span>');
-  metaParts.push('<span class="dm-exp-meta-chip">' + total + ' message' + (total === 1 ? '' : 's') + '</span>');
+  metaParts.push('<span class="dm-exp-meta-chip">' + total + ' DM' + (total === 1 ? '' : 's') + '</span>');
+  if (publicCount > 0) metaParts.push('<span class="dm-exp-meta-chip">' + publicCount + ' public</span>');
   if (dm.conversation_status) metaParts.push('<span class="dm-exp-meta-chip">' + escapeHtml(dm.conversation_status) + '</span>');
   if (dm.interest_level) metaParts.push('<span class="dm-exp-meta-chip">' + escapeHtml(dm.interest_level) + '</span>');
   const linkInfo = dmOpenUrl(dm);
@@ -9359,11 +9372,11 @@ function buildDmExpansionRow(dm, colCount) {
   const escHtml = renderDmEscalationCard(dm);
   const contextHtml = renderDmContextBlock(dm);
   let bodyHtml;
-  if (!total) {
+  if (!bubbles.length) {
     bodyHtml = '<div class="dm-exp-empty">(no messages recorded)</div>';
   } else {
     bodyHtml = '<div class="dm-exp-thread">' +
-      msgs.map(m => renderDmExpansionMsg(m)).join('') +
+      bubbles.map(b => renderDmExpansionMsg(b)).join('') +
       '</div>';
   }
   return '<tr class="dm-exp-row" data-exp-for="' + Number(dm.id) + '">' +
@@ -9371,6 +9384,106 @@ function buildDmExpansionRow(dm, colCount) {
       '<div class="dm-exp-inner">' + metaHtml + escHtml + contextHtml + bodyHtml + '</div>' +
     '</td>' +
   '</tr>';
+}
+
+// Builds the unified, time-sorted bubble stream for a DM expansion. Mixes
+// real DM turns from dm_messages with the prior public-comment exchange
+// (their triggering comment + our public reply) and any later operator-driven
+// public follow-ups stamped on human_dm_replies.public_reply_id. Each item is
+// tagged with kind ('dm' | 'public') so the renderer can style them
+// distinctly while keeping chronological order.
+function buildDmBubbleStream(dm) {
+  if (!dm) return [];
+  const items = [];
+  // Sentinel sort keys for the pre-DM public pair when we have no real
+  // timestamp for "their comment" (the replies row only stores our_reply_at).
+  // Picked so they sort strictly before any real Date.parse(...) value but
+  // preserve their relative order (their comment, then our reply).
+  const PRE_THEIR_COMMENT = -1e15;
+  const PRE_OUR_REPLY     = -1e15 + 1;
+
+  const trigComment = String(dm.trigger_comment_content || '').trim();
+  const seedComment = String(dm.seed_comment_context || '').trim();
+  if (trigComment) {
+    items.push({
+      kind: 'public',
+      direction: 'inbound',
+      author: String(dm.trigger_comment_author || dm.their_author || 'them'),
+      content: trigComment,
+      url: String(dm.trigger_comment_url || ''),
+      at: '',
+      sortKey: PRE_THEIR_COMMENT,
+    });
+  } else if (seedComment) {
+    items.push({
+      kind: 'public',
+      direction: 'inbound',
+      author: String(dm.their_author || 'them'),
+      content: seedComment,
+      url: '',
+      at: '',
+      sortKey: PRE_THEIR_COMMENT,
+    });
+  }
+
+  const trigOurReply = String(dm.trigger_our_reply_content || '').trim();
+  const trigOurReplyAt = String(dm.trigger_our_reply_at || '');
+  if (trigOurReply) {
+    const parsed = trigOurReplyAt ? Date.parse(trigOurReplyAt) : NaN;
+    items.push({
+      kind: 'public',
+      direction: 'outbound',
+      author: 'us',
+      content: trigOurReply,
+      url: String(dm.trigger_our_reply_url || ''),
+      at: trigOurReplyAt,
+      sortKey: Number.isFinite(parsed) ? parsed : PRE_OUR_REPLY,
+    });
+  }
+
+  const msgs = Array.isArray(dm.messages) ? dm.messages : [];
+  for (const m of msgs) {
+    const at = m && m.message_at ? String(m.message_at) : '';
+    const parsed = at ? Date.parse(at) : NaN;
+    items.push({
+      kind: 'dm',
+      direction: m && m.direction === 'outbound' ? 'outbound' : 'inbound',
+      author: String((m && m.author) || (m && m.direction === 'outbound' ? 'us' : 'them')),
+      content: m && m.content ? String(m.content) : '',
+      url: '',
+      at,
+      sortKey: Number.isFinite(parsed) ? parsed : 0,
+    });
+  }
+
+  const human = Array.isArray(dm.human_instructions) ? dm.human_instructions : [];
+  const seenPublicUrls = new Set();
+  if (dm.trigger_our_reply_url) seenPublicUrls.add(String(dm.trigger_our_reply_url));
+  for (const it of human) {
+    if (!it) continue;
+    const text = String(it.public_reply || '').trim();
+    if (!text) continue;
+    const url = String(it.public_reply_url || '');
+    // Dedupe against the trigger our-reply (the same replies row often shows up
+    // both as r_link.our_reply_* and as human_dm_replies.public_reply_id).
+    if (url && seenPublicUrls.has(url)) continue;
+    if (!url && text === trigOurReply) continue;
+    if (url) seenPublicUrls.add(url);
+    const at = String(it.public_reply_at || it.sent_at || '');
+    const parsed = at ? Date.parse(at) : NaN;
+    items.push({
+      kind: 'public',
+      direction: 'outbound',
+      author: 'us',
+      content: text,
+      url,
+      at,
+      sortKey: Number.isFinite(parsed) ? parsed : Date.now(),
+    });
+  }
+
+  items.sort((a, b) => a.sortKey - b.sortKey);
+  return items;
 }
 
 // Renders the pre-DM context chain for any platform: the post we made, the
@@ -9580,15 +9693,30 @@ function renderDmEscalationCard(dm) {
 }
 
 function renderDmExpansionMsg(m) {
+  // Accepts either a raw dm_messages row (legacy: {direction, author, content, message_at})
+  // or a normalized bubble item from buildDmBubbleStream ({kind, direction, author, content, at, url}).
   const dir = m && m.direction === 'outbound' ? 'outbound' : 'inbound';
+  const kind = m && m.kind === 'public' ? 'public' : 'dm';
   const author = m && m.author ? m.author : (dir === 'outbound' ? 'us' : 'them');
   const content = m && m.content ? String(m.content) : '';
-  const ts = m && m.message_at ? m.message_at : '';
+  const ts = m && (m.at || m.message_at) ? (m.at || m.message_at) : '';
   const rel = ts ? relTime(ts) : '';
-  return '<div class="dm-exp-msg dm-exp-msg-' + dir + '">' +
+  const url = kind === 'public' ? String((m && m.url) || '') : '';
+  const cls = kind === 'public'
+    ? ('dm-exp-msg dm-exp-msg-public dm-exp-msg-public-' + dir)
+    : ('dm-exp-msg dm-exp-msg-' + dir);
+  const chip = kind === 'public'
+    ? '<span class="dm-exp-msg-kind-chip">public</span>'
+    : '';
+  const linkHtml = url
+    ? '<a class="dm-exp-msg-link" href="' + escapeHtml(url) + '" target="_blank" rel="noopener">open ↗</a>'
+    : '';
+  return '<div class="' + cls + '">' +
     '<div class="dm-exp-msg-head">' +
       '<span class="dm-exp-msg-author">' + escapeHtml(dir === 'outbound' ? 'us' : author) + '</span>' +
+      chip +
       '<span class="dm-exp-msg-time">' + escapeHtml(rel) + '</span>' +
+      linkHtml +
     '</div>' +
     '<div class="dm-exp-msg-body">' + escapeHtml(content) + '</div>' +
   '</div>';
