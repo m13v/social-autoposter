@@ -427,7 +427,7 @@ def main():
         thread = fetch_thread(owner, repo, number)
         if "_error" in thread:
             subprocess.run(["python3", REPLY_DB, "skipped", str(reply["id"]),
-                            f"fetch_error: {thread['_error'][:150]}"])
+                            f"fetch_error: {thread['_error']}"])
             print(f"[engage_github] #{reply['id']} skipped (fetch_error: {thread['_error'][:100]})")
             skipped += 1
             processed += 1
@@ -518,7 +518,7 @@ def main():
                               f"[${usage['cost_usd']:.4f}] -> {url_or_err or '(no url)'}")
                     else:
                         subprocess.run(["python3", REPLY_DB, "skipped", str(reply["id"]),
-                                        f"post_error: {url_or_err[:150]}"])
+                                        f"post_error: {url_or_err}"])
                         failed += 1
                         print(f"[engage_github] #{reply['id']} POST FAILED: {url_or_err}")
             else:
