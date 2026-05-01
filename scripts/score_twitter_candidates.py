@@ -104,7 +104,7 @@ def match_project(tweet_text, search_topic, config):
 
     for proj in projects:
         name = proj.get("name", "")
-        topics = [t.lower() for t in proj.get("topics", [])]
+        topics = [t.lower() for t in proj.get("search_topics", [])]
         # Direct topic match
         for t in topics:
             if t in topic_lower or t in text_lower:
