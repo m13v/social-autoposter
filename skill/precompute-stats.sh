@@ -17,6 +17,15 @@ REPO_DIR="$HOME/social-autoposter"
 
 cd "$REPO_DIR" || exit 2
 
+# Single-flight: launchd fires this every 300s, but a single run can take
+# 2-5+ min when PostHog 429s force per-query backoff. Without a lock, slow
+# runs stack into a stampede that saturates HogQL and surfaces as
+# posthog_throttle pills across every project on the dashboard. acquire_lock
+# with a 5s timeout exits 0 cleanly if a prior run is still active.
+# shellcheck source=lock.sh
+source "$REPO_DIR/skill/lock.sh"
+acquire_lock precompute-stats 5
+
 RUN_START=$(date +%s)
 python3 "$REPO_DIR/scripts/precompute_dashboard_stats.py"
 EXIT_CODE=$?
