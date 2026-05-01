@@ -577,7 +577,7 @@ log "Batch summary: $SUMMARY"
 # --- Persist to run_monitor.log so Job History picks up Twitter Post rows ---
 POSTED_CT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM twitter_candidates WHERE batch_id='$BATCH_ID' AND status='posted'" 2>/dev/null || echo 0)
 SKIPPED_CT=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM twitter_candidates WHERE batch_id='$BATCH_ID' AND status IN ('skipped','expired')" 2>/dev/null || echo 0)
-_COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "run-twitter-cycle-scan" "run-twitter-cycle-post" 2>/dev/null || echo "0.0000")
+_COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "run-twitter-cycle-scan" "run-twitter-cycle-prep" "run-twitter-cycle-post" 2>/dev/null || echo "0.0000")
 
 # --- Phase 2b failure-reason detection -------------------------------------
 # When POSTED_CT=0 but Phase 2b had candidates to work with, scan the cycle
