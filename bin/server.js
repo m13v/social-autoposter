@@ -1512,6 +1512,23 @@ async function handleApi(req, res) {
       if (!row.target_url) {
         return json(res, { error: 'no_target_url', dm_id: row.dm_id }, 404);
       }
+      // Click is treated as a first-class trigger to the engage-dm-replies
+      // pipeline. Insert a synthetic 'inbound' row in dm_messages so the
+      // existing PENDING_CONVOS query (last_in > last_out) surfaces this
+      // thread on the next polling tick. Idempotent in spirit: if multiple
+      // clicks land before we follow up, the LATEST synthetic row wins via
+      // ORDER BY message_at DESC LIMIT 1; we don't bother dedup'ing inserts
+      // because the engage pipeline only nudges once per cycle anyway.
+      // Failures here MUST NOT break the redirect — log + continue.
+      try {
+        await pool.query(
+          `INSERT INTO dm_messages (dm_id, direction, author, content, message_at, logged_at)
+           VALUES ($1, 'inbound', '__click_signal__', '[CLICK_SIGNAL] short link clicked', NOW(), NOW())`,
+          [row.dm_id]
+        );
+      } catch (e) {
+        console.error('[short-links] click_signal insert failed (non-fatal):', e.message);
+      }
       let platform = (row.platform || 'reddit').toLowerCase();
       if (platform === 'x') platform = 'twitter';
       return json(res, {
