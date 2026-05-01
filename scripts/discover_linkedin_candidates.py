@@ -323,139 +323,197 @@ _SEARCH_JS_PEOPLE = r"""
 }
 """
 
-# Content-search extractor: lifted verbatim (modulo JSON.stringify wrap) from
-# skill/run-linkedin.sh Phase A, which has been the production scraper since
-# the post-restriction rebuild. Richer than a basic title/href grab: pulls
-# activity URN with regex fallbacks, author follower count, post age in
-# hours, and reaction/comment/repost counts from social-details-social-counts.
-# Keep this in sync if either side changes.
+# Content-search extractor. Two layouts coexist in the wild:
+#
+#   New SDUI layout (post 2026-04-30 reconciliation): obfuscated class names,
+#   results wrapped in [data-sdui-screen*="SearchResultsContent"], each card
+#   [role="listitem"][componentkey]. The activity URN is GONE from the DOM
+#   for most cards: only cards that embed a quoted/reposted share keep a
+#   visible /feed/update/<urn> link. So post_url/activity_id can legitimately
+#   be null on the new layout — callers must dedupe by
+#   (author_profile_url, post_text hash) when activity_id is missing.
+#
+#   Legacy class layout (pre-rollout, may still appear): div.feed-shared-update-v2
+#   / div[data-urn=...] cards with full URNs.
+#
+# Tries the new layout first, falls back to legacy, returns the same shape
+# either way. Verified 2026-04-30 against
+# /search/results/content/?keywords=ai%20agent%20founder
+# 8/8 cards extracted (author_name + author_profile_url + post_text + age_text);
+# 1/8 had activity_id (the only embedded-share case).
 _SEARCH_JS_CONTENT = r"""
 () => {
   const out = [];
-  const containers = document.querySelectorAll(
-    'div.feed-shared-update-v2, '
-    + 'div[data-urn*="urn:li:activity"], '
-    + 'div[data-urn*="urn:li:share"], '
-    + 'div[data-urn*="urn:li:ugcPost"]'
-  );
-  const seenUrns = new Set();
-  const re = /(activity|share|ugcPost)[:_-](\d{16,19})/gi;
 
   function parseRelativeAge(txt) {
     if (!txt) return null;
-    const m = txt.match(/(\d+)\s*(s|m|h|d|w|mo|y)/i);
+    const m = txt.match(/(\d+)\s*(s|min|m|hr|h|d|w|mo|y)\b/i);
     if (!m) return null;
     const n = parseInt(m[1], 10);
-    const unit = m[2].toLowerCase();
+    let u = m[2].toLowerCase();
+    if (u === 'hr') u = 'h';
+    if (u === 'min') u = 'm';
     const map = { s: 1/3600, m: 1/60, h: 1, d: 24, w: 24*7, mo: 24*30, y: 24*365 };
-    return n * (map[unit] || 0);
+    return n * (map[u] || 0);
   }
   function parseCount(txt) {
     if (!txt) return 0;
-    const t = txt.replace(/,/g, '').trim();
+    const t = String(txt).replace(/,/g, '').trim();
     const m = t.match(/([\d.]+)\s*([KkMm]?)/);
     if (!m) return 0;
     const n = parseFloat(m[1]);
-    const mult = m[2].toLowerCase() === 'k' ? 1000
-      : (m[2].toLowerCase() === 'm' ? 1_000_000 : 1);
-    return Math.round(n * mult);
+    const u = (m[2] || '').toLowerCase();
+    return Math.round(n * (u === 'k' ? 1000 : u === 'm' ? 1_000_000 : 1));
   }
 
-  Array.from(containers).slice(0, 25).forEach(el => {
-    let activityId = null;
-    const urns = new Set();
-    const dataUrn = el.getAttribute('data-urn') || '';
-    let m;
-    re.lastIndex = 0;
-    while ((m = re.exec(dataUrn)) !== null) {
-      urns.add(m[2]);
-      if (m[1].toLowerCase() === 'activity' && !activityId) activityId = m[2];
+  // 1. New SDUI layout.
+  let items = [];
+  const screen = document.querySelector('[data-sdui-screen*="SearchResultsContent"]');
+  if (screen) {
+    items = Array.from(screen.querySelectorAll('[role="listitem"][componentkey]'));
+  }
+  // 2. Legacy fallback.
+  if (items.length === 0) {
+    items = Array.from(document.querySelectorAll(
+      'div.feed-shared-update-v2, '
+      + 'div[data-urn*="urn:li:activity"], '
+      + 'div[data-urn*="urn:li:share"], '
+      + 'div[data-urn*="urn:li:ugcPost"]'
+    ));
+  }
+
+  const seen = new Set();
+  const urnRe = /urn:li:(activity|share|ugcPost):(\d{16,19})/;
+  const urnReG = /urn:li:(activity|share|ugcPost):(\d{16,19})/g;
+
+  for (const item of items.slice(0, 25)) {
+    let urnType = null, activityId = null;
+    const allUrns = new Set();
+
+    const updateLink = item.querySelector('a[href*="/feed/update/"]');
+    if (updateLink) {
+      const m = (updateLink.href || '').match(urnRe);
+      if (m) { urnType = m[1]; activityId = m[2]; allUrns.add(m[2]); }
     }
     if (!activityId) {
-      el.querySelectorAll(
-        '[data-urn], a[href*="urn:li"], a[href*="/feed/update/"]'
-      ).forEach(d => {
-        const v = (d.getAttribute('data-urn') || d.getAttribute('href') || '');
-        re.lastIndex = 0;
-        let mm;
-        while ((mm = re.exec(v)) !== null) {
-          urns.add(mm[2]);
-          if (mm[1].toLowerCase() === 'activity' && !activityId) activityId = mm[2];
-        }
-      });
+      const dataUrn = item.getAttribute('data-urn') || '';
+      const m = dataUrn.match(urnRe);
+      if (m) { urnType = m[1]; activityId = m[2]; allUrns.add(m[2]); }
     }
-    if (!activityId || seenUrns.has(activityId)) return;
-    seenUrns.add(activityId);
+    if (!activityId) {
+      const html = item.outerHTML || '';
+      let mm;
+      urnReG.lastIndex = 0;
+      while ((mm = urnReG.exec(html)) !== null) {
+        allUrns.add(mm[2]);
+        if (!activityId) { urnType = mm[1]; activityId = mm[2]; }
+      }
+    }
+    if (activityId) {
+      if (seen.has(activityId)) continue;
+      seen.add(activityId);
+    }
 
-    const authorAnchor = el.querySelector(
-      'a[href*="/in/"], a[data-control-name*="actor"]'
-    );
-    const authorName = (el.querySelector(
-      '.update-components-actor__name, span.feed-shared-actor__name'
-    )?.textContent || '').trim();
-    const authorUrl = authorAnchor ? authorAnchor.href : null;
-    let authorFollowers = 0;
-    const supplementary = el.querySelector(
+    const authorLink = item.querySelector('a[aria-label*="profile" i][href*="/in/"]')
+      || item.querySelector('a[href*="/in/"]');
+    const authorUrl = authorLink ? (authorLink.href || '').split('?')[0] : null;
+    let authorName = null;
+    if (authorLink) {
+      const al = authorLink.getAttribute('aria-label') || '';
+      const m = al.match(/View\s+(.+?)['’]s\s+profile/i);
+      if (m) authorName = m[1].trim();
+    }
+    if (!authorName) {
+      const followBtn = item.querySelector('button[aria-label^="Follow "]');
+      if (followBtn) {
+        const m = (followBtn.getAttribute('aria-label') || '').match(/^Follow\s+(.+)$/i);
+        if (m) authorName = m[1].trim();
+      }
+    }
+    if (!authorName) {
+      const nameEl = item.querySelector(
+        '.update-components-actor__name, span.feed-shared-actor__name'
+      );
+      if (nameEl) authorName = (nameEl.textContent || '').trim();
+    }
+
+    let authorFollowers = null;
+    const supplementary = item.querySelector(
       '.update-components-actor__supplementary-actor-info, '
       + '.feed-shared-actor__sub-description'
     );
     if (supplementary) {
-      const fm = (supplementary.textContent || '').match(
-        /([\d.,]+[KkMm]?)\s*follower/
-      );
+      const fm = (supplementary.textContent || '').match(/([\d.,]+[KkMm]?)\s*follower/);
       if (fm) authorFollowers = parseCount(fm[1]);
     }
 
-    const textEl = el.querySelector(
-      '.update-components-text, .feed-shared-update-v2__description, '
-      + 'span.break-words'
+    let postText = '';
+    const textEl = item.querySelector(
+      '.update-components-text, .feed-shared-update-v2__description, span.break-words'
     );
-    const postText = (textEl ? textEl.textContent : '').trim();
+    if (textEl) {
+      postText = (textEl.textContent || '').replace(/\s+/g, ' ').trim();
+    } else {
+      let s = (item.textContent || '').replace(/\s+/g, ' ').trim();
+      s = s.replace(/^Feed post/, '').trim();
+      const idx = s.indexOf('• Follow');
+      if (idx >= 0) s = s.slice(idx + '• Follow'.length).trim();
+      postText = s;
+    }
 
-    const timeEl = el.querySelector(
+    let ageText = '';
+    const timeEl = item.querySelector(
       'time, .update-components-actor__sub-description, '
       + 'span.feed-shared-actor__sub-description'
     );
-    const ageText = timeEl ? timeEl.textContent.trim() : '';
+    if (timeEl) ageText = (timeEl.textContent || '').trim();
+    if (!ageText) {
+      const fullText = (item.textContent || '').replace(/\s+/g, ' ').trim();
+      const ageM = fullText.match(/(\d+\s*(?:s|min|m|hr|h|d|w|mo|y))\b/i);
+      if (ageM) ageText = ageM[1];
+    }
     const ageHours = parseRelativeAge(ageText);
 
-    const social = el.querySelector(
-      '.social-details-social-counts, .social-action-counts, '
-      + '.update-v2-social-activity'
-    );
     let reactions = 0, comments = 0, reposts = 0;
-    if (social) {
-      const reactEl = social.querySelector(
-        '[aria-label*="reaction" i], '
-        + '.social-details-social-counts__reactions-count'
-      );
-      if (reactEl) reactions = parseCount(
-        reactEl.textContent || reactEl.getAttribute('aria-label') || ''
-      );
-      const commentEl = social.querySelector(
-        '[aria-label*="comment" i], '
-        + 'li.social-details-social-counts__comments'
-      );
-      if (commentEl) comments = parseCount(
-        commentEl.textContent || commentEl.getAttribute('aria-label') || ''
-      );
-      const repostEl = social.querySelector(
-        '[aria-label*="repost" i], '
-        + 'li.social-details-social-counts__item--right-aligned'
-      );
-      if (repostEl) reposts = parseCount(
-        repostEl.textContent || repostEl.getAttribute('aria-label') || ''
-      );
+    const reactEl = item.querySelector(
+      '[aria-label*=" reaction" i], '
+      + '.social-details-social-counts__reactions-count'
+    );
+    if (reactEl) {
+      const m = (reactEl.getAttribute('aria-label') || reactEl.textContent || '')
+        .match(/([\d.,]+\s*[KkMm]?)\s*reaction/i);
+      if (m) reactions = parseCount(m[1]);
+    }
+    const commentEl = item.querySelector(
+      '[aria-label*=" comment" i], '
+      + 'li.social-details-social-counts__comments'
+    );
+    if (commentEl) {
+      const m = (commentEl.getAttribute('aria-label') || commentEl.textContent || '')
+        .match(/([\d.,]+\s*[KkMm]?)\s*comment/i);
+      if (m) comments = parseCount(m[1]);
+    }
+    const repostEl = item.querySelector(
+      '[aria-label*=" repost" i], '
+      + 'li.social-details-social-counts__item--right-aligned'
+    );
+    if (repostEl) {
+      const m = (repostEl.getAttribute('aria-label') || repostEl.textContent || '')
+        .match(/([\d.,]+\s*[KkMm]?)\s*repost/i);
+      if (m) reposts = parseCount(m[1]);
     }
 
+    if (!authorName && !authorUrl && !postText) continue;
+
     out.push({
-      post_url: 'https://www.linkedin.com/feed/update/urn:li:activity:'
-        + activityId + '/',
+      post_url: activityId
+        ? ('https://www.linkedin.com/feed/update/urn:li:' + urnType + ':' + activityId + '/')
+        : null,
       activity_id: activityId,
-      all_urns: Array.from(urns),
+      all_urns: Array.from(allUrns),
       author_name: authorName || null,
       author_profile_url: authorUrl,
-      author_followers: authorFollowers || null,
+      author_followers: authorFollowers,
       post_text: postText,
       age_hours: ageHours,
       reactions: reactions,
@@ -463,7 +521,7 @@ _SEARCH_JS_CONTENT = r"""
       reposts: reposts,
       age_text: ageText
     });
-  });
+  }
   return JSON.stringify(out);
 }
 """
