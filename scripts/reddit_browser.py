@@ -537,7 +537,7 @@ def reply_to_comment(comment_permalink, text, dm_id=None):
                         const perma = c.querySelector('a.bylink');
                         return {
                             already_replied: true,
-                            text: body ? body.textContent.trim().substring(0, 200) : '',
+                            text: body ? body.textContent.trim() : '',
                             url: perma ? perma.getAttribute('href') : '',
                         };
                     }
@@ -953,7 +953,7 @@ def unread_dms():
                         results.push({
                             author: author,
                             subject: subject,
-                            preview: body.substring(0, 200),
+                            preview_short: body.substring(0, 200),
                             time: time,
                             thread_url: threadUrl,
                             type: msgType,
@@ -1132,7 +1132,7 @@ def read_conversation(chat_url, max_messages=20):
 
                         messages.push({
                             sender: sender,
-                            content: content.substring(0, 2000),
+                            content: content,
                             time: time,
                             is_from_us: isFromUs,
                         });
@@ -1189,7 +1189,7 @@ def read_conversation(chat_url, max_messages=20):
                         if (content) {
                             messages.push({
                                 sender: sender,
-                                content: content.substring(0, 2000),
+                                content: content,
                                 time: time,
                                 is_from_us: isFromUs,
                             });
