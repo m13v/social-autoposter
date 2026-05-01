@@ -171,7 +171,7 @@ async (page) => {
           }
         }
         const tweetText = article.querySelector('[data-testid=\"tweetText\"]');
-        const text = tweetText ? tweetText.textContent.substring(0, 300) : '';
+        const text = tweetText ? tweetText.textContent : '';
         const timeEl = article.querySelector('time');
         const timeParent = timeEl ? timeEl.closest('a') : null;
         const tweetUrl = timeParent ? 'https://x.com' + timeParent.getAttribute('href') : '';
