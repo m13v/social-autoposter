@@ -4438,6 +4438,15 @@ const HTML = `<!DOCTYPE html>
   .dm-exp-msg-kind-chip { display: inline-block; padding: 0 5px; border-radius: 3px; font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; background: rgba(139, 92, 246, 0.18); color: #6d28d9; border: 1px solid rgba(139, 92, 246, 0.45); }
   .dm-exp-msg-link { margin-left: auto; color: #6d28d9; text-decoration: none; font-weight: 500; font-size: 10px; }
   .dm-exp-msg-link:hover { text-decoration: underline; }
+  /* Highlighted URL inside DM text bubbles + last-message preview. Readable on
+     both the muted card background (inbound) and the accent fill (outbound). */
+  .dm-link { background: rgba(34, 197, 94, 0.18); color: #15803d; border-bottom: 1px dotted #15803d; padding: 0 3px; border-radius: 3px; text-decoration: none; font-weight: 600; word-break: break-all; }
+  .dm-link:hover { background: rgba(34, 197, 94, 0.30); text-decoration: underline; }
+  .dm-exp-msg-outbound .dm-link { background: rgba(255,255,255,0.22); color: var(--accent-on); border-bottom-color: rgba(255,255,255,0.7); }
+  .dm-exp-msg-outbound .dm-link:hover { background: rgba(255,255,255,0.36); }
+  /* Last-message cell already uses muted text color; the highlighted link
+     should not inherit that. */
+  #top-dms-container .style-stats-table td[data-col-key="last_msg"] .dm-link { color: #15803d; }
   .dm-exp-ctx        { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px dashed var(--border); }
   .dm-exp-ctx-section { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; line-height: 1.45; }
   .dm-exp-ctx-head   { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; font-size: 10px; text-transform: lowercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 600; }
@@ -9059,13 +9068,44 @@ function renderDmThreadCell(dm) {
   return '<div class="top-post-content">' + nameHtml + (tier ? ' ' + tier : '') + (pillHtml ? '<div class="dm-thread-subline">' + pillHtml + '</div>' : '') + '</div>';
 }
 
+// Highlight URLs (full https://\u2026 and bare domain.tld/path forms) inside DM
+// text. Returns HTML-safe markup with each URL wrapped in a styled <a>; plain
+// text segments are escapeHtml'd. Backslashes in the regex are doubled because
+// this code lives inside the dashboard's HTML backtick template (the template
+// eats single backslashes \u2014 see feedback_server_js_template_regex).
+function linkifyDmText(s) {
+  const text = String(s || '');
+  if (!text) return '';
+  const re = /https?:\\/\\/\\S+|(?:[a-z0-9-]+\\.)+[a-z]{2,}\\/[\\w\\-./?#=&%+~:@!$,;*]+/gi;
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out += escapeHtml(text.slice(last, m.index));
+    let raw = m[0];
+    // Strip trailing punctuation that's almost never part of the URL.
+    let trail = '';
+    while (raw.length && '.,;:)]}>!?'.indexOf(raw.charAt(raw.length - 1)) !== -1) {
+      trail = raw.charAt(raw.length - 1) + trail;
+      raw = raw.slice(0, -1);
+    }
+    if (!raw) { out += escapeHtml(trail); last = m.index + m[0].length; continue; }
+    const href = /^https?:/i.test(raw) ? raw : ('https://' + raw);
+    out += '<a class="dm-link" href="' + escapeHtml(href) + '" target="_blank" rel="noopener">' + escapeHtml(raw) + '</a>';
+    if (trail) out += escapeHtml(trail);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out += escapeHtml(text.slice(last));
+  return out;
+}
+
 function renderDmLastMsgCell(dm) {
   const msg = String(dm.last_msg || '');
   if (!msg) return '<span style="color:var(--text-faint);">(no messages)</span>';
   const trimmed = msg.length > 300 ? msg.slice(0, 300) + '\u2026' : msg;
   const dirLabel = dm.last_dir === 'inbound' ? 'IN' : (dm.last_dir === 'outbound' ? 'OUT' : '');
   const dirHtml = dirLabel ? '<span class="dm-last-dir">' + dirLabel + '</span>' : '';
-  return dirHtml + escapeHtml(trimmed);
+  return dirHtml + linkifyDmText(trimmed);
 }
 
 function renderTopDms(payload) {
@@ -9704,7 +9744,7 @@ function renderDmExpansionMsg(m) {
       '<span class="dm-exp-msg-time">' + escapeHtml(rel) + '</span>' +
       linkHtml +
     '</div>' +
-    '<div class="dm-exp-msg-body">' + escapeHtml(content) + '</div>' +
+    '<div class="dm-exp-msg-body">' + linkifyDmText(content) + '</div>' +
   '</div>';
 }
 
