@@ -313,9 +313,9 @@ _SEARCH_JS_PEOPLE = r"""
     const location = locEl ? (locEl.textContent || "").trim() : "";
     if (!name && !profileUrl) continue;
     out.push({
-      name: name.replace(/\s+/g, " ").slice(0, 200),
-      headline: headline.replace(/\s+/g, " ").slice(0, 300),
-      location: location.replace(/\s+/g, " ").slice(0, 200),
+      name: name.replace(/\s+/g, " "),
+      headline: headline.replace(/\s+/g, " "),
+      location: location.replace(/\s+/g, " "),
       profile_url: profileUrl.split("?")[0],
     });
   }
@@ -410,7 +410,7 @@ _SEARCH_JS_CONTENT = r"""
       '.update-components-text, .feed-shared-update-v2__description, '
       + 'span.break-words'
     );
-    const postText = (textEl ? textEl.textContent : '').trim().slice(0, 500);
+    const postText = (textEl ? textEl.textContent : '').trim();
 
     const timeEl = el.querySelector(
       'time, .update-components-actor__sub-description, '
@@ -492,8 +492,8 @@ _SEARCH_JS_COMPANIES = r"""
     const tagline = taglineEl ? (taglineEl.textContent || "").trim() : "";
     if (!name && !url) continue;
     out.push({
-      company: name.replace(/\s+/g, " ").slice(0, 200),
-      tagline: tagline.replace(/\s+/g, " ").slice(0, 300),
+      company: name.replace(/\s+/g, " "),
+      tagline: tagline.replace(/\s+/g, " "),
       company_url: url.split("?")[0],
     });
   }
