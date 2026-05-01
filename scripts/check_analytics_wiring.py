@@ -81,6 +81,7 @@ CANONICAL_EVENTS = {
     "get_started_click",
     "schedule_click",
     "newsletter_subscribed",
+    "cross_product_click",
 }
 
 LEGACY_ALIASES = {
@@ -138,10 +139,16 @@ NEWSLETTER_SOURCE_MARKERS = [
 ]
 
 SOURCE_EXTENSIONS = (".tsx", ".jsx", ".ts", ".js")
-SKIP_DIR_NAMES = {"node_modules", ".next", "dist", "build", ".turbo", ".git"}
+SKIP_DIR_NAMES = {
+    "node_modules", ".next", "dist", "build", ".turbo", ".git",
+    "public", "out", ".vercel", ".vscode", ".idea",
+    "scripts", "local-scripts", "supabase", "migrations",
+    "docs", "storybook-static", ".storybook", "cypress", "e2e", "tests",
+    "__tests__", "playwright-report", "test-results",
+}
 
 CAPTURE_CALL_RE = re.compile(
-    r"""\b(?:posthog|ph|client|analytics)\??\.capture\s*\(\s*['"]([^'"]+)['"]""",
+    r"""\b(?:posthog|ph|client|analytics)\??\.capture\??\.?\s*\(\s*['"]([^'"]+)['"]""",
 )
 WINDOW_POSTHOG_ASSIGN_RE = re.compile(
     r"""window\s*\.\s*posthog\s*=|
@@ -226,20 +233,34 @@ def detect_window_posthog(repo: Path) -> bool | None:
         "src/components/posthog-provider.tsx",
         "src/components/posthog-provider.jsx",
         "src/components/PostHogProvider.tsx",
+        "app/providers.tsx",
+        "app/providers.jsx",
+        "src/app/providers.tsx",
+        "src/app/providers.jsx",
     ):
         p = repo / candidate
         if p.exists() and WINDOW_POSTHOG_ASSIGN_RE.search(p.read_text(errors="ignore")):
             return True
-    for file in iter_source_files(repo / "src") if (repo / "src").exists() else []:
-        if WINDOW_POSTHOG_ASSIGN_RE.search(file.read_text(errors="ignore")):
-            return True
+    # Walk both src/ and app/ trees - Next.js projects can use either layout.
+    roots: list[Path] = []
+    if (repo / "src").exists():
+        roots.append(repo / "src")
+    if (repo / "app").exists():
+        roots.append(repo / "app")
+    for root in roots:
+        for file in iter_source_files(root):
+            if WINDOW_POSTHOG_ASSIGN_RE.search(file.read_text(errors="ignore")):
+                return True
     return False
 
 
 def scan_repo(site: SiteReport) -> None:
-    src_root = site.path / "src" if (site.path / "src").exists() else site.path
+    # Walk the entire repo root. iter_source_files already skips
+    # node_modules, .next, scripts/, etc. via SKIP_DIR_NAMES, so this catches
+    # hybrid Next.js layouts where source lives across app/, src/, components/,
+    # contexts/, hooks/, lib/, etc. (e.g. Mediar).
     has_newsletter_form = False
-    for file in iter_source_files(src_root):
+    for file in iter_source_files(site.path):
         text = file.read_text(errors="ignore")
 
         for match in CAPTURE_CALL_RE.finditer(text):
@@ -323,7 +344,8 @@ def check_site(
             report.violations.append(
                 f"CTA-shaped event name(s) outside the canonical set: {named}. "
                 "Dashboard will not count these. Replace with "
-                "cta_click / get_started_click / schedule_click / newsletter_subscribed."
+                "cta_click / get_started_click / schedule_click / "
+                "newsletter_subscribed / cross_product_click."
             )
 
     effective_events = (
