@@ -42,17 +42,18 @@ function agentPath(job) {
 // Matrix: rows = job types, columns = platforms
 // Each cell is a job (or null if that combo doesn't exist)
 const PLATFORMS = ['Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
-const JOB_TYPES = ['Post', 'Engage', 'DM Outreach', 'DM Replies', 'Link Edit', 'Stats', 'Post Audit', 'Octolens'];
+const JOB_TYPES = ['Post Threads', 'Post Comments', 'Engage', 'DM Outreach', 'DM Replies', 'Link Edit', 'Stats', 'Post Audit', 'Octolens'];
 
 const JOBS = [
-  // Post row
-  { label: 'com.m13v.social-reddit-search', name: 'Reddit', type: 'Post', platform: 'Reddit', script: 'run-reddit-search.sh', logPrefix: 'run-reddit-search-', plist: 'com.m13v.social-reddit-search.plist' },
-  { label: 'com.m13v.social-reddit-threads', name: 'Reddit Threads', type: 'Post', platform: 'Reddit', script: 'run-reddit-threads.sh', logPrefix: 'run-reddit-threads-', plist: 'com.m13v.social-reddit-threads.plist' },
-  { label: 'com.m13v.social-twitter-cycle', name: 'Twitter', type: 'Post', platform: 'Twitter', script: 'run-twitter-cycle.sh', logPrefix: 'twitter-cycle-', plist: 'com.m13v.social-twitter-cycle.plist' },
-  { label: 'com.m13v.social-twitter-threads', name: 'Twitter Threads', type: 'Post', platform: 'Twitter', script: 'run-twitter-threads.sh', logPrefix: 'run-twitter-threads-', plist: 'com.m13v.social-twitter-threads.plist' },
-  { label: 'com.m13v.social-linkedin', name: 'LinkedIn', type: 'Post', platform: 'LinkedIn', script: 'run-linkedin.sh', logPrefix: 'run-linkedin-', plist: 'com.m13v.social-linkedin.plist' },
-  { label: 'com.m13v.social-moltbook', name: 'MoltBook', type: 'Post', platform: 'MoltBook', script: 'run-moltbook.sh', logPrefix: 'run-moltbook-', plist: 'com.m13v.social-moltbook.plist' },
-  { label: 'com.m13v.social-github', name: 'GitHub', type: 'Post', platform: 'GitHub', script: 'run-github.sh', logPrefix: 'run-github-', plist: 'com.m13v.social-github.plist' },
+  // Post Threads row (original threads/posts)
+  { label: 'com.m13v.social-reddit-threads', name: 'Reddit Threads', type: 'Post Threads', platform: 'Reddit', script: 'run-reddit-threads.sh', logPrefix: 'run-reddit-threads-', plist: 'com.m13v.social-reddit-threads.plist' },
+  { label: 'com.m13v.social-twitter-threads', name: 'Twitter Threads', type: 'Post Threads', platform: 'Twitter', script: 'run-twitter-threads.sh', logPrefix: 'run-twitter-threads-', plist: 'com.m13v.social-twitter-threads.plist' },
+  // Post Comments row (replies/comments on others' content)
+  { label: 'com.m13v.social-reddit-search', name: 'Reddit', type: 'Post Comments', platform: 'Reddit', script: 'run-reddit-search.sh', logPrefix: 'run-reddit-search-', plist: 'com.m13v.social-reddit-search.plist' },
+  { label: 'com.m13v.social-twitter-cycle', name: 'Twitter', type: 'Post Comments', platform: 'Twitter', script: 'run-twitter-cycle.sh', logPrefix: 'twitter-cycle-', plist: 'com.m13v.social-twitter-cycle.plist' },
+  { label: 'com.m13v.social-linkedin', name: 'LinkedIn', type: 'Post Comments', platform: 'LinkedIn', script: 'run-linkedin.sh', logPrefix: 'run-linkedin-', plist: 'com.m13v.social-linkedin.plist' },
+  { label: 'com.m13v.social-moltbook', name: 'MoltBook', type: 'Post Comments', platform: 'MoltBook', script: 'run-moltbook.sh', logPrefix: 'run-moltbook-', plist: 'com.m13v.social-moltbook.plist' },
+  { label: 'com.m13v.social-github', name: 'GitHub', type: 'Post Comments', platform: 'GitHub', script: 'run-github.sh', logPrefix: 'run-github-', plist: 'com.m13v.social-github.plist' },
   // Engage row (reply to comments on your posts)
   { label: 'com.m13v.social-engage-moltbook', name: 'Engage MoltBook', type: 'Engage', platform: 'MoltBook', script: 'engage-moltbook.sh', logPrefix: 'engage-moltbook-', plist: 'com.m13v.social-engage-moltbook.plist' },
   { label: 'com.m13v.social-engage-twitter', name: 'Engage Twitter', type: 'Engage', platform: 'Twitter', script: 'engage-twitter.sh', logPrefix: 'engage-twitter-', plist: 'com.m13v.social-engage-twitter.plist' },
@@ -431,8 +432,28 @@ const STANDALONE_JOBS = {
   precompute_stats: { job_type: 'report', job_label: 'Precompute Stats' },
 };
 
+// Wrapper-script names (as they appear in `ps` for running jobs, or as some
+// scripts historically wrote to run_monitor.log) that don't match the
+// classifier regexes below. Aliasing them here makes the platform/type
+// filter on the Job History tab include in-progress wrapper runs alongside
+// completed log_run.py entries that already use canonical names.
+const SCRIPT_ALIASES = {
+  run_twitter_cycle:         'post_twitter',
+  run_twitter_threads:       'thread_twitter',
+  run_linkedin:              'post_linkedin',
+  run_reddit_threads:        'thread_reddit',
+  run_reddit_threads_double: 'thread_reddit',
+  run_reddit_search:         'post_reddit',
+  run_github:                'post_github',
+  run_scan_moltbook_replies: 'scan_moltbook_replies',
+  github_engage:             'engage_github',
+  run_moltbook:              'post_moltbook',
+  run_moltbook_cycle:        'post_moltbook',
+};
+
 function classifyScript(script) {
-  const norm = script.replace(/-/g, '_').toLowerCase();
+  const rawNorm = script.replace(/-/g, '_').toLowerCase();
+  const norm = SCRIPT_ALIASES[rawNorm] || rawNorm;
   const standalone = STANDALONE_JOBS[norm];
   if (standalone) {
     return {
@@ -456,16 +477,22 @@ function classifyScript(script) {
       human_name: `${label} · ${platform}`,
     };
   };
+  // Mirrors the matrix at the top of the dashboard (PLATFORMS x JOB_TYPES).
+  // Distinct pipelines: Post Threads (thread_*), Post Comments (post_*),
+  // Engage (engage_*). Historically `post_*` was reused for "outbound" and
+  // `engage_*` for "inbound", but the matrix has long split these into 3
+  // separate rows; the classifier now matches the matrix.
   return (
     match(/^link_edit_(\w+)$/, 'link-edit', 'Link Edit') ||
+    match(/^thread_(\w+)$/, 'post', 'Post Threads') ||
+    match(/^post_(\w+)$/, 'post-comments', 'Post Comments') ||
     match(/^engage_(\w+)$/, 'engage', 'Engage') ||
-    match(/^post_(\w+)$/, 'post', 'Post') ||
     match(/^dm_outreach_(\w+)$/, 'dm-outreach', 'DM Outreach') ||
     match(/^dm_replies_(\w+)$/, 'dm-replies', 'DM Replies') ||
     match(/^scan_(\w+?)_(?:replies|followups|mentions)$/, 'check-replies', 'Check Replies') ||
     match(/^octolens_(\w+)$/, 'octolens', 'Octolens') ||
     match(/^stats_(\w+)$/, 'stats', 'Stats') ||
-    match(/^audit[-_]([\w-]+)$/, 'audit', 'Audit') ||
+    match(/^audit[-_]([\w-]+)$/, 'audit', 'Post Audit') ||
     { job_type: 'other', job_label: script, platform: null, platform_key: null, human_name: script }
   );
 }
@@ -528,6 +555,87 @@ function parseRunMonitorLog(maxLines) {
     });
   }
   return runs.reverse(); // newest first
+}
+
+// Live in-progress skill pipelines. We scan `ps` for any *.sh under
+// $REPO_DIR/skill that is currently alive and synthesize a job-run entry per
+// PID, so the dashboard's "Job history" view can render rows that haven't
+// reached run_monitor.log yet. Every entry carries `running: true` and a null
+// `finished_at`; the client uses these to render the animated "Running…"
+// badge and tick the elapsed counter every second.
+//
+// Multi-platform wrapper scripts (engage-dm-replies, octolens, audit) take
+// `--platform <plat>` so we splice that into the synthesized script name to
+// route through classifyScript correctly (e.g. dm-replies-reddit ->
+// dm_replies / Reddit row in the matrix).
+const RUNNING_SCRIPT_SKIP = new Set([
+  'lock.sh', 'cleanup.sh', 'release.sh', 'launchd.sh', 'stats.sh',
+]);
+function getRunningPipelines() {
+  const skillDir = path.join(DEST, 'skill') + '/';
+  let psOut;
+  try {
+    psOut = execSync('ps -axww -o pid=,lstart=,command=', {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      maxBuffer: 8 * 1024 * 1024,
+    }).toString();
+  } catch { return []; }
+  const result = [];
+  for (const rawLine of psOut.split('\n')) {
+    const line = rawLine.replace(/^\s+/, '');
+    if (!line) continue;
+    // ps lstart format: "Fri May  1 12:45:02 2026" (24 chars, fixed width)
+    const m = line.match(/^(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+(.+)$/);
+    if (!m) continue;
+    const pid = parseInt(m[1], 10);
+    const lstart = m[2];
+    const cmd = m[3];
+    const idx = cmd.indexOf(skillDir);
+    if (idx < 0) continue;
+    const after = cmd.slice(idx + skillDir.length);
+    const fnMatch = after.match(/^([^\s]+\.sh)(?:\s+(.*))?$/);
+    if (!fnMatch) continue;
+    const filename = fnMatch[1];
+    if (RUNNING_SCRIPT_SKIP.has(filename)) continue;
+    const args = fnMatch[2] || '';
+    const baseDashed = filename.replace(/\.sh$/, '');
+    let scriptDashed = baseDashed;
+    const platMatch = args.match(/--platform\s+(\w+)/);
+    if (platMatch) {
+      const plat = platMatch[1];
+      if (baseDashed === 'engage-dm-replies') scriptDashed = `dm-replies-${plat}`;
+      else if (baseDashed === 'octolens') scriptDashed = `octolens-${plat}`;
+      else if (baseDashed === 'audit') scriptDashed = `audit-${plat}`;
+      else scriptDashed = `${baseDashed}-${plat}`;
+    }
+    const startedMs = Date.parse(lstart);
+    if (!Number.isFinite(startedMs)) continue;
+    const cls = classifyScript(scriptDashed);
+    const elapsedSec = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+    result.push({
+      script: scriptDashed,
+      job_type: cls.job_type,
+      job_label: cls.job_label,
+      platform: cls.platform,
+      platform_key: cls.platform_key,
+      human_name: cls.human_name,
+      started_at: new Date(startedMs).toISOString(),
+      finished_at: null,
+      elapsed_s: elapsedSec,
+      pid,
+      running: true,
+      result: {
+        type: 'running',
+        running: true,
+        cost_usd: 0,
+        posted: 0,
+        skipped: 0,
+        failed: 0,
+      },
+    });
+  }
+  result.sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+  return result;
 }
 
 async function enrichLinkEditRuns(runs) {
@@ -710,6 +818,298 @@ async function enrichCheckRepliesRuns(runs) {
       found,
       pending_now: pendingByPlatform[dbPlatform] || 0,
       cost_usd: run.result && run.result.cost_usd ? run.result.cost_usd : 0,
+    };
+  }
+}
+
+// post_linkedin (run-linkedin.sh) is the engagement-comment pipeline. The
+// posted/skipped/failed counters from log_run.py only describe Phase B's
+// final outcome; they say nothing about how many SERP queries Phase A ran,
+// how many candidates survived the velocity floor, or how big the pending
+// linkedin_candidates queue is. Surface those four signals from the DB so
+// the operator can tell "no posting because every SERP candidate dropped
+// below the floor" apart from "pipeline crashed before discovery".
+async function enrichPostCommentsLinkedInRuns(runs) {
+  const liRuns = runs.filter(r =>
+    r.job_type === 'post-comments' && r.platform_key === 'linkedin'
+  );
+  if (!liRuns.length) return;
+  let oldestMs = Infinity;
+  for (const r of liRuns) {
+    const ms = new Date(r.started_at).getTime();
+    if (ms < oldestMs) oldestMs = ms;
+  }
+  const since = new Date(oldestMs - 2 * 60 * 1000).toISOString();
+  const searchRows = await pq(
+    "SELECT ran_at, candidates_found, candidates_dropped_below_floor " +
+    "FROM linkedin_search_attempts WHERE ran_at >= $1::timestamp",
+    [since]
+  ) || [];
+  const candidateRows = await pq(
+    "SELECT discovered_at, posted_at, status FROM linkedin_candidates " +
+    "WHERE discovered_at >= $1::timestamp OR posted_at >= $1::timestamp",
+    [since]
+  ) || [];
+  const pendingRow = await pq(
+    "SELECT COUNT(*)::int AS n FROM linkedin_candidates WHERE status='pending'"
+  );
+  const pendingNow = (pendingRow && pendingRow[0]) ? pendingRow[0].n : 0;
+
+  const toMs = (d) => {
+    if (!d) return null;
+    const dt = d instanceof Date ? d : new Date(d);
+    return dt.getTime();
+  };
+  const searchNorm = searchRows.map(r => ({
+    ms: toMs(r.ran_at),
+    found: r.candidates_found || 0,
+    dropped: r.candidates_dropped_below_floor || 0,
+  }));
+  const candNorm = candidateRows.map(r => ({
+    discoveredMs: toMs(r.discovered_at),
+    postedMs: toMs(r.posted_at),
+    status: r.status,
+  }));
+
+  for (const run of liRuns) {
+    const startMs = new Date(run.started_at).getTime();
+    const endMs = new Date(run.finished_at).getTime() + 60 * 1000;
+    let searches = 0, candidatesPassed = 0, candidatesDropped = 0, posted = 0;
+    for (const s of searchNorm) {
+      if (s.ms == null || s.ms < startMs || s.ms > endMs) continue;
+      searches++;
+      candidatesPassed += s.found;
+      candidatesDropped += s.dropped;
+    }
+    for (const c of candNorm) {
+      if (c.postedMs != null && c.postedMs >= startMs && c.postedMs <= endMs && c.status === 'posted') posted++;
+    }
+    const prior = run.result || {};
+    run.result = {
+      type: 'post-comments-linkedin',
+      searches,
+      candidates_raw: candidatesPassed + candidatesDropped,
+      candidates_passed: candidatesPassed,
+      candidates_dropped: candidatesDropped,
+      posted,
+      pending_queue: pendingNow,
+      cost_usd: prior.cost_usd || 0,
+      failed: prior.failed || 0,
+      failure_reasons: Array.isArray(prior.failure_reasons) ? prior.failure_reasons : [],
+    };
+  }
+}
+
+// post_twitter (run-twitter-cycle.sh) Phase 1 SERP scrape + Phase 2b post.
+// Pill naming mirrors enrichPostCommentsLinkedInRuns above:
+//   searches  = COUNT(*) twitter_search_attempts in run window
+//   raw       = SUM(tweets_found) (= tweets the LLM extracted from each SERP)
+//   passed    = COUNT(*) twitter_candidates with batch_id seen in window
+//                (= survived score_twitter_candidates: not already-posted, age<=18h)
+//   dropped   = raw - passed (already-posted threads + age>18h cuts at score time)
+//   expired   = COUNT(*) twitter_candidates status='expired' (Phase 2b Δ<1 floor —
+//                the Twitter-only equivalent of LinkedIn's velocity-floor cut, deferred
+//                until after the 5-min T1 re-poll, see run-twitter-cycle.sh:388)
+//   posted    = COUNT(*) twitter_candidates status='posted' in window
+//   pending   = global COUNT(*) status='pending' (small for Twitter; each cycle
+//                self-expires its own batch)
+async function enrichPostCommentsTwitterRuns(runs) {
+  const txRuns = runs.filter(r =>
+    r.job_type === 'post-comments' && r.platform_key === 'twitter'
+  );
+  if (!txRuns.length) return;
+  let oldestMs = Infinity;
+  for (const r of txRuns) {
+    const ms = new Date(r.started_at).getTime();
+    if (ms < oldestMs) oldestMs = ms;
+  }
+  const since = new Date(oldestMs - 2 * 60 * 1000).toISOString();
+  const searchRows = await pq(
+    "SELECT ran_at, tweets_found, batch_id FROM twitter_search_attempts " +
+    "WHERE ran_at >= $1::timestamp",
+    [since]
+  ) || [];
+  const candidateRows = await pq(
+    "SELECT discovered_at, posted_at, status, batch_id FROM twitter_candidates " +
+    "WHERE discovered_at >= $1::timestamp OR posted_at >= $1::timestamp",
+    [since]
+  ) || [];
+  const pendingRow = await pq(
+    "SELECT COUNT(*)::int AS n FROM twitter_candidates WHERE status='pending'"
+  );
+  const pendingNow = (pendingRow && pendingRow[0]) ? pendingRow[0].n : 0;
+
+  const toMs = (d) => {
+    if (!d) return null;
+    const dt = d instanceof Date ? d : new Date(d);
+    return dt.getTime();
+  };
+  const searchNorm = searchRows.map(r => ({
+    ms: toMs(r.ran_at),
+    found: r.tweets_found || 0,
+    batch_id: r.batch_id || '',
+  }));
+  const candNorm = candidateRows.map(r => ({
+    discoveredMs: toMs(r.discovered_at),
+    postedMs: toMs(r.posted_at),
+    status: r.status,
+    batch_id: r.batch_id || '',
+  }));
+
+  for (const run of txRuns) {
+    const startMs = new Date(run.started_at).getTime();
+    const endMs = new Date(run.finished_at).getTime() + 60 * 1000;
+    let searches = 0, candidatesRaw = 0, posted = 0, expired = 0;
+    const batchIds = new Set();
+    for (const s of searchNorm) {
+      if (s.ms == null || s.ms < startMs || s.ms > endMs) continue;
+      searches++;
+      candidatesRaw += s.found;
+      if (s.batch_id) batchIds.add(s.batch_id);
+    }
+    let candidatesPassed = 0;
+    for (const c of candNorm) {
+      if (!c.batch_id || !batchIds.has(c.batch_id)) continue;
+      candidatesPassed++;
+      if (c.status === 'posted') posted++;
+      else if (c.status === 'expired') expired++;
+    }
+    const candidatesDropped = Math.max(0, candidatesRaw - candidatesPassed);
+    const prior = run.result || {};
+    run.result = {
+      type: 'post-comments-twitter',
+      searches,
+      candidates_raw: candidatesRaw,
+      candidates_passed: candidatesPassed,
+      candidates_dropped: candidatesDropped,
+      candidates_expired: expired,
+      posted,
+      pending_queue: pendingNow,
+      cost_usd: prior.cost_usd || 0,
+      failed: prior.failed || 0,
+      failure_reasons: Array.isArray(prior.failure_reasons) ? prior.failure_reasons : [],
+    };
+  }
+}
+
+// post_reddit (run-reddit-search.sh) per-iteration plan+post pipeline.
+// Reddit has no search-attempts/candidates DB tables (unlike LinkedIn/Twitter),
+// so we parse the per-run shell log file at skill/logs/run-reddit-search-*.log.
+// The log carries:
+//   --- Iteration N/5 ---                                      (iterations)
+//   [post_reddit] tool: Bash | python3 .../reddit_tools.py search "..."   (searches)
+//   [reddit_search] q="..." raw=N returned=R                   (raw/returned per query —
+//                                                               emitted by reddit_tools.py
+//                                                               and forwarded by post_reddit.py
+//                                                               run_claude tool_result handler)
+//   [post_reddit] tool: Bash | python3 .../reddit_tools.py fetch "..."    (fetched threads)
+//   [post_reddit] Claude drafted N post(s)                     (drafted)
+//   [post_reddit] POSTED: <permalink>                          (posted)
+//   [post_reddit] phase=post project=... posted=N failed=N     (per-iter rollup)
+// Pill naming mirrors LinkedIn/Twitter:
+//   searches = `tool: Bash | ... reddit_tools.py search` count
+//   raw      = SUM(raw=N) from `[reddit_search]` markers
+//   passed   = SUM(returned=R) from `[reddit_search]` markers (= post API filtering:
+//              not blocked-sub, not archived, not locked, age<=180d)
+//   dropped  = raw - passed
+//   posted   = `POSTED:` count
+//   failed   = phase=post failed= sum + plan-phase exit-code-5 ("Claude failed")
+// Floor enforcement TBD — the [reddit_search] markers carry top_score/top_comments
+// for later threshold tuning. No queue depth (Reddit posts in same iteration).
+async function enrichPostCommentsRedditRuns(runs) {
+  const rdRuns = runs.filter(r =>
+    r.job_type === 'post-comments' && r.platform_key === 'reddit'
+  );
+  if (!rdRuns.length) return;
+  let logFiles;
+  try {
+    logFiles = fs.readdirSync(LOG_DIR).filter(f => f.startsWith('run-reddit-search-') && f.endsWith('.log'));
+  } catch { return; }
+  // Filename carries the run start: run-reddit-search-YYYY-MM-DD_HHMMSS.log
+  const fileTs = (name) => {
+    const m = name.match(/run-reddit-search-(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})(\d{2})\.log$/);
+    if (!m) return NaN;
+    const [, day, hh, mm, ss] = m;
+    return new Date(`${day}T${hh}:${mm}:${ss}`).getTime();
+  };
+  const searchRe = /reddit_tools\.py search /;
+  const fetchRe = /reddit_tools\.py fetch /;
+  const draftedRe = /\[post_reddit\] Claude drafted (\d+) post/;
+  const postedRe = /\[post_reddit\] POSTED:/;
+  const phaseRollupRe = /\[post_reddit\] phase=post .*? posted=(\d+) failed=(\d+)/;
+  const redditSearchMarkerRe = /^\[reddit_search\] .*? raw=(\d+) returned=(\d+)/;
+  const planFailedRe = /Plan phase: Claude failed/;
+  const planRateRe = /Plan phase: rate-limited/;
+  const iterationRe = /^\[\d{2}:\d{2}:\d{2}\] --- Iteration \d+\//;
+
+  for (const run of rdRuns) {
+    const startMs = new Date(run.started_at).getTime();
+    const endMs = new Date(run.finished_at).getTime() + 60 * 1000;
+    // Pick the log file whose start timestamp is closest to (and <=) the run's
+    // started_at. Tolerate up to 90s slack to absorb log_run.py wallclock skew.
+    let chosen = null;
+    let chosenTs = -Infinity;
+    for (const f of logFiles) {
+      const ts = fileTs(f);
+      if (!Number.isFinite(ts)) continue;
+      if (ts > endMs) continue;
+      if (ts < startMs - 90 * 1000) continue;
+      if (ts > chosenTs) { chosenTs = ts; chosen = f; }
+    }
+    if (!chosen) {
+      // No matching log file (rotated/cleaned). Surface what we can from the
+      // existing log_run posted/skipped/failed line so the row isn't blank.
+      const prior = run.result || {};
+      run.result = {
+        type: 'post-comments-reddit',
+        searches: 0, candidates_raw: 0, candidates_passed: 0, candidates_dropped: 0,
+        iterations: 0, drafted: 0,
+        posted: prior.posted || 0,
+        failed: prior.failed || 0,
+        cost_usd: prior.cost_usd || 0,
+        failure_reasons: Array.isArray(prior.failure_reasons) ? prior.failure_reasons : [],
+        log_missing: true,
+      };
+      continue;
+    }
+    let body;
+    try { body = fs.readFileSync(path.join(LOG_DIR, chosen), 'utf8'); } catch { body = ''; }
+    let iterations = 0, searches = 0, fetched = 0, raw = 0, passed = 0, drafted = 0;
+    let postedCount = 0, failedCount = 0, planFailed = 0;
+    for (const ln of body.split('\n')) {
+      if (iterationRe.test(ln)) iterations++;
+      if (searchRe.test(ln) && ln.includes('tool: Bash')) searches++;
+      if (fetchRe.test(ln) && ln.includes('tool: Bash')) fetched++;
+      const mm = ln.match(redditSearchMarkerRe);
+      if (mm) { raw += parseInt(mm[1], 10); passed += parseInt(mm[2], 10); }
+      const dm = ln.match(draftedRe);
+      if (dm) drafted += parseInt(dm[1], 10);
+      if (postedRe.test(ln)) postedCount++;
+      const pm = ln.match(phaseRollupRe);
+      if (pm) failedCount += parseInt(pm[2], 10);
+      if (planFailedRe.test(ln)) planFailed++;
+    }
+    const dropped = Math.max(0, raw - passed);
+    const prior = run.result || {};
+    // Trust the per-iter rollup `phase=post posted=N` over the bare POSTED:
+    // grep when both exist (POSTED: can fire mid-retry). Fall back to the
+    // grep when no rollup line was produced (e.g. all iterations failed plan).
+    const postedFinal = postedCount > 0 ? postedCount : (prior.posted || 0);
+    const failedFinal = failedCount + planFailed;
+    run.result = {
+      type: 'post-comments-reddit',
+      searches,
+      fetched,
+      candidates_raw: raw,
+      candidates_passed: passed,
+      candidates_dropped: dropped,
+      iterations,
+      drafted,
+      posted: postedFinal,
+      failed: failedFinal || (prior.failed || 0),
+      cost_usd: prior.cost_usd || 0,
+      failure_reasons: Array.isArray(prior.failure_reasons) ? prior.failure_reasons : [],
+      log_file: chosen,
     };
   }
 }
@@ -2106,7 +2506,15 @@ async function handleApi(req, res) {
       await enrichLinkEditRuns(runs);
       await enrichEngageRuns(runs);
       await enrichCheckRepliesRuns(runs);
+      await enrichPostCommentsLinkedInRuns(runs);
+      await enrichPostCommentsTwitterRuns(runs);
+      await enrichPostCommentsRedditRuns(runs);
       await enrichSeoRuns(runs);
+      // Prepend in-progress pipelines so they appear at the top of the table.
+      // Always included regardless of the hours window — a long-running job
+      // started before the window is still relevant right now.
+      const running = getRunningPipelines();
+      runs = running.concat(runs);
       return json(res, { runs });
     })().catch(e => json(res, { error: e.message }, 500));
   }
@@ -2205,19 +2613,19 @@ async function handleApi(req, res) {
         "FROM claude_sessions cs JOIN session_counts sc ON sc.claude_session_id = cs.session_id" +
       ") " +
       "SELECT json_agg(row_to_json(r)) FROM (" +
-      "SELECT * FROM (SELECT posted_at AS occurred_at, 'posted' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, engagement_style AS detail, our_url AS link, ('p' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd, sc.per_row_cost_orchestrator AS cost_usd_orchestrator, sc.per_row_cost_estimated AS cost_usd_estimated, c.name AS campaign_name FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id LEFT JOIN campaigns c ON c.id = posts.campaign_id WHERE posted_at IS NOT NULL AND our_content <> '(mention - no original post)' ORDER BY posted_at DESC LIMIT 150) x1 " +
-      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 140), LEFT(r2.their_content, 140)), CASE WHEN r2.is_recommendation THEN 'rec · ' || COALESCE(r2.engagement_style, '') ELSE r2.engagement_style END, r2.our_reply_url, ('r' || r2.id), p.project_name, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, c2.name FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id LEFT JOIN session_cost sc ON sc.session_id = r2.claude_session_id LEFT JOIN campaigns c2 ON c2.id = r2.campaign_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 150) x2 " +
-      "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, c3.name FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id LEFT JOIN session_cost sc ON sc.session_id = r3.claude_session_id LEFT JOIN campaigns c3 ON c3.id = r3.campaign_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 150) x3 " +
-      "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text, NULL::numeric, NULL::numeric, NULL::numeric, NULL::text FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
-      "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || dms.id), NULL::text, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
-      "UNION ALL SELECT * FROM (SELECT m.message_at, 'dm_reply_sent', d.platform, d.their_author, LEFT(m.content, 140), NULL::text, d.chat_url, ('dr' || m.id), NULL::text, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, c5.name FROM dm_messages m JOIN dms d ON d.id = m.dm_id LEFT JOIN session_cost sc ON sc.session_id = m.claude_session_id LEFT JOIN campaigns c5 ON c5.id = m.campaign_id WHERE m.direction = 'outbound' AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction = 'inbound' AND m2.message_at < m.message_at) ORDER BY m.message_at DESC LIMIT 150) x5b " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || sk.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM seo_keywords sk LEFT JOIN session_cost sc ON sc.session_id = sk.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page', 'roundup') ORDER BY completed_at DESC LIMIT 150) x6 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || gq.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM gsc_queries gq LEFT JOIN session_cost sc ON sc.session_id = gq.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || sk2.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM seo_keywords sk2 LEFT JOIN session_cost sc ON sc.session_id = sk2.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_top', 'seo', product, keyword, slug, page_url, ('kt' || sk3.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM seo_keywords sk3 LEFT JOIN session_cost sc ON sc.session_id = sk3.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'top_page' ORDER BY completed_at DESC LIMIT 150) x8b " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_roundup', 'seo', product, keyword, slug, page_url, ('kru' || sk4.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM seo_keywords sk4 LEFT JOIN session_cost sc ON sc.session_id = sk4.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'roundup' ORDER BY completed_at DESC LIMIT 150) x8r " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_improved', 'seo', product, LEFT(COALESCE(rationale, diff_summary, page_path), 140), page_path, page_url, ('pi' || spi.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM seo_page_improvements spi LEFT JOIN session_cost sc ON sc.session_id = spi.claude_session_id WHERE completed_at IS NOT NULL AND status = 'committed' ORDER BY completed_at DESC LIMIT 150) x8c " +
-      "UNION ALL SELECT * FROM (SELECT resurrected_at AS occurred_at, 'resurrected' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, NULL::text AS detail, our_url AS link, ('rr' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd, sc.per_row_cost_orchestrator AS cost_usd_orchestrator, sc.per_row_cost_estimated AS cost_usd_estimated, c9.name AS campaign_name FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id LEFT JOIN campaigns c9 ON c9.id = posts.campaign_id WHERE resurrected_at IS NOT NULL AND our_content <> '(mention - no original post)' ORDER BY resurrected_at DESC LIMIT 150) x9 " +
+      "SELECT * FROM (SELECT posted_at AS occurred_at, CASE WHEN thread_url = our_url AND (thread_author IS NULL OR thread_author = our_account) THEN 'posted_thread' ELSE 'posted_comment' END AS type, platform, our_account AS actor, CASE WHEN thread_url = our_url AND (thread_author IS NULL OR thread_author = our_account) THEN COALESCE(thread_title, LEFT(our_content, 280)) ELSE LEFT(our_content, 280) END AS summary, engagement_style AS detail, our_url AS link, ('p' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd, sc.per_row_cost_orchestrator AS cost_usd_orchestrator, sc.per_row_cost_estimated AS cost_usd_estimated, c.name AS campaign_name, CASE WHEN thread_url = our_url AND (thread_author IS NULL OR thread_author = our_account) THEN NULL ELSE thread_title END AS context_title, CASE WHEN thread_url = our_url AND (thread_author IS NULL OR thread_author = our_account) THEN NULL ELSE thread_url END AS context_url, LEFT(our_content, 3000) AS body FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id LEFT JOIN campaigns c ON c.id = posts.campaign_id WHERE posted_at IS NOT NULL AND our_content <> '(mention - no original post)' ORDER BY posted_at DESC LIMIT 150) x1 " +
+      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 280), LEFT(r2.their_content, 280)), CASE WHEN r2.is_recommendation THEN 'rec · ' || COALESCE(r2.engagement_style, '') ELSE r2.engagement_style END, r2.our_reply_url, ('r' || r2.id), p.project_name, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, c2.name, p.thread_title, p.thread_url, NULL::text FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id LEFT JOIN session_cost sc ON sc.session_id = r2.claude_session_id LEFT JOIN campaigns c2 ON c2.id = r2.campaign_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 150) x2 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, c3.name, p.thread_title, p.thread_url, NULL::text FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id LEFT JOIN session_cost sc ON sc.session_id = r3.claude_session_id LEFT JOIN campaigns c3 ON c3.id = r3.campaign_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 150) x3 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text, NULL::numeric, NULL::numeric, NULL::numeric, NULL::text, NULL::text, NULL::text, NULL::text FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
+      "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || dms.id), NULL::text, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text, NULL::text, NULL::text, NULL::text FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
+      "UNION ALL SELECT * FROM (SELECT m.message_at, 'dm_reply_sent', d.platform, d.their_author, LEFT(m.content, 140), NULL::text, d.chat_url, ('dr' || m.id), NULL::text, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, c5.name, NULL::text, NULL::text, NULL::text FROM dm_messages m JOIN dms d ON d.id = m.dm_id LEFT JOIN session_cost sc ON sc.session_id = m.claude_session_id LEFT JOIN campaigns c5 ON c5.id = m.campaign_id WHERE m.direction = 'outbound' AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction = 'inbound' AND m2.message_at < m.message_at) ORDER BY m.message_at DESC LIMIT 150) x5b " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || sk.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text, NULL::text, NULL::text, NULL::text FROM seo_keywords sk LEFT JOIN session_cost sc ON sc.session_id = sk.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page', 'roundup') ORDER BY completed_at DESC LIMIT 150) x6 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || gq.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text, NULL::text, NULL::text, NULL::text FROM gsc_queries gq LEFT JOIN session_cost sc ON sc.session_id = gq.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || sk2.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text, NULL::text, NULL::text, NULL::text FROM seo_keywords sk2 LEFT JOIN session_cost sc ON sc.session_id = sk2.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_top', 'seo', product, keyword, slug, page_url, ('kt' || sk3.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text, NULL::text, NULL::text, NULL::text FROM seo_keywords sk3 LEFT JOIN session_cost sc ON sc.session_id = sk3.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'top_page' ORDER BY completed_at DESC LIMIT 150) x8b " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_roundup', 'seo', product, keyword, slug, page_url, ('kru' || sk4.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text, NULL::text, NULL::text, NULL::text FROM seo_keywords sk4 LEFT JOIN session_cost sc ON sc.session_id = sk4.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'roundup' ORDER BY completed_at DESC LIMIT 150) x8r " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_improved', 'seo', product, LEFT(COALESCE(rationale, diff_summary, page_path), 140), page_path, page_url, ('pi' || spi.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text, NULL::text, NULL::text, NULL::text FROM seo_page_improvements spi LEFT JOIN session_cost sc ON sc.session_id = spi.claude_session_id WHERE completed_at IS NOT NULL AND status = 'committed' ORDER BY completed_at DESC LIMIT 150) x8c " +
+      "UNION ALL SELECT * FROM (SELECT resurrected_at AS occurred_at, 'resurrected' AS type, platform, our_account AS actor, CASE WHEN thread_url = our_url AND (thread_author IS NULL OR thread_author = our_account) THEN COALESCE(thread_title, LEFT(our_content, 280)) ELSE LEFT(our_content, 280) END AS summary, NULL::text AS detail, our_url AS link, ('rr' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd, sc.per_row_cost_orchestrator AS cost_usd_orchestrator, sc.per_row_cost_estimated AS cost_usd_estimated, c9.name AS campaign_name, CASE WHEN thread_url = our_url AND (thread_author IS NULL OR thread_author = our_account) THEN NULL ELSE thread_title END AS context_title, CASE WHEN thread_url = our_url AND (thread_author IS NULL OR thread_author = our_account) THEN NULL ELSE thread_url END AS context_url, LEFT(our_content, 3000) AS body FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id LEFT JOIN campaigns c9 ON c9.id = posts.campaign_id WHERE resurrected_at IS NOT NULL AND our_content <> '(mention - no original post)' ORDER BY resurrected_at DESC LIMIT 150) x9 " +
       "ORDER BY 1 DESC LIMIT 500) r";
     return (async () => {
       const rows = await pq(q);
@@ -2408,7 +2816,7 @@ async function handleApi(req, res) {
     const win = `INTERVAL '${windowHours} hours'`;
     const norm = "CASE WHEN LOWER(pl) = 'x' THEN 'twitter' ELSE LOWER(pl) END";
     const parts = [
-      "SELECT 'posted' AS type, platform AS pl FROM posts WHERE posted_at >= NOW() - " + win + postsPc.clause,
+      "SELECT CASE WHEN thread_url = our_url AND (thread_author IS NULL OR thread_author = our_account) THEN 'posted_thread' ELSE 'posted_comment' END AS type, platform AS pl FROM posts WHERE posted_at >= NOW() - " + win + postsPc.clause,
       "SELECT 'replied' AS type, platform AS pl FROM replies WHERE status='replied' AND replied_at >= NOW() - " + win + repliesPc.clause,
       "SELECT 'skipped' AS type, platform AS pl FROM replies WHERE status='skipped' AND COALESCE(processing_at, discovered_at) >= NOW() - " + win + repliesPc.clause,
     ];
@@ -2746,6 +3154,13 @@ async function handleApi(req, res) {
     if (idLookup != null) {
       whereParts.push("d.id = " + idLookup);
     }
+    // Hide public-comment artifacts from the default DM list. These rows exist
+    // in `dms` only so the cross-thread history block in engage_reddit can find
+    // prior public engagement; they're not actionable DMs and clutter the view.
+    // Always show them when the operator is doing an explicit id/search lookup.
+    if (idLookup == null && !searchTerm) {
+      whereParts.push("d.conversation_status <> 'public_only'");
+    }
     if (searchTerm) {
       // Escape single quotes for the LIKE literal (no params used elsewhere
       // in this endpoint; matches existing pattern). The 100-char cap above
@@ -3069,7 +3484,14 @@ async function handleApi(req, res) {
   // so the UI can sort by it.
   if (p === '/api/top' && req.method === 'GET') {
     const url = new URL(req.url, 'http://localhost');
-    const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get('limit') || '150', 10) || 150));
+    // Floor 1000 / cap 10000. The Top tab applies platform/kind/project/window
+    // filters in the SQL WHERE before ORDER BY upvotes DESC ... LIMIT, so the
+    // limit is the row cap on the FILTERED set. Earlier defaults (150 / cap
+    // 500) caused small-project tweets to drop out of "all-time" because the
+    // top 150 across all projects didn't include them. With a 1000 floor,
+    // studyly-class projects keep their full footprint visible regardless of
+    // window. Caller can request more via ?limit= up to 10k.
+    const limit = Math.max(1000, Math.min(10000, parseInt(url.searchParams.get('limit') || '1000', 10) || 1000));
     const WINDOW_HOURS = { '24h': 24, '7d': 24*7, '14d': 24*14, '30d': 24*30, '90d': 24*90, 'all': null };
     const rawWindow = String(url.searchParams.get('window') || '7d').toLowerCase();
     const windowKey = Object.prototype.hasOwnProperty.call(WINDOW_HOURS, rawWindow) ? rawWindow : '7d';
@@ -3096,9 +3518,9 @@ async function handleApi(req, res) {
       whereParts.push("LOWER(posts.platform) = '" + platformFilter + "'");
     }
     if (kindFilter === 'threads') {
-      whereParts.push("thread_url = our_url");
+      whereParts.push("thread_url = our_url AND (thread_author IS NULL OR thread_author = our_account)");
     } else if (kindFilter === 'comments') {
-      whereParts.push("(our_url IS NULL OR thread_url <> our_url)");
+      whereParts.push("(our_url IS NULL OR thread_url <> our_url OR (thread_author IS NOT NULL AND thread_author <> our_account))");
     }
     const pc = auth.projectClause(req.user, 'project_name', url.searchParams.get('project'));
     if (!pc.ok) return json(res, { posts: [], window: windowKey, platform: platformFilter || 'all', kind: kindFilter });
@@ -3122,7 +3544,7 @@ async function handleApi(req, res) {
             "THEN GREATEST(0, COALESCE(upvotes,0) - 1) * 5 " +
             "ELSE COALESCE(upvotes,0) * 5 END " +
           "+ COALESCE(views,0) / 100)::int AS score, " +
-        "(our_url IS NOT NULL AND thread_url = our_url) AS is_thread, " +
+        "(our_url IS NOT NULL AND thread_url = our_url AND (thread_author IS NULL OR thread_author = our_account)) AS is_thread, " +
         "posted_at, engagement_updated_at, our_content, our_url, thread_url, thread_title, " +
         "LEFT(COALESCE(thread_content, ''), 400) AS thread_content, " +
         "our_account, project_name, engagement_style, is_recommendation, " +
@@ -3557,6 +3979,26 @@ const HTML = `<!DOCTYPE html>
     box-shadow: 0 0 6px #ffffff;
     animation: runningDot 1.1s ease-in-out infinite;
   }
+  /* Job-history rows for in-progress pipelines: faint cyan tint plus a
+     left-edge stripe and slow shimmer so they stand out from finished rows. */
+  tr.sa-job-row-running td {
+    background: linear-gradient(
+      90deg,
+      rgba(34, 211, 238, 0.10) 0%,
+      rgba(14, 165, 233, 0.04) 60%,
+      rgba(14, 165, 233, 0.00) 100%
+    );
+    background-size: 200% 100%;
+    animation: runningRowShimmer 2.6s ease-in-out infinite;
+  }
+  tr.sa-job-row-running td:first-child {
+    box-shadow: inset 3px 0 0 0 #22d3ee;
+  }
+  @keyframes runningRowShimmer {
+    0%   { background-position: 0% 0%; }
+    50%  { background-position: 100% 0%; }
+    100% { background-position: 0% 0%; }
+  }
   .badge.blocked {
     background: linear-gradient(135deg, #b45309 0%, #f59e0b 100%);
     color: #fff7ed;
@@ -3636,26 +4078,6 @@ const HTML = `<!DOCTYPE html>
   /* Activity tab */
   .activity-controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
   .activity-filter-group { display: flex; gap: 6px; flex-wrap: wrap; }
-  .activity-chip {
-    padding: 4px 10px; border-radius: 999px; font-size: 12px; cursor: pointer;
-    border: 1px solid var(--border); background: var(--bg-card); color: var(--text);
-    transition: all 0.15s; user-select: none;
-  }
-  .activity-chip:hover { border-color: var(--border-hover); color: var(--text); }
-  .activity-chip.active { background: var(--bg-chip); border-color: var(--border-hover); color: var(--text); }
-  .activity-chip.active.ev-posted   { background: #064e3b; border-color: #10b981; color: #6ee7b7; }
-  .activity-chip.active.ev-replied  { background: #0c4a6e; border-color: #0ea5e9; color: #7dd3fc; }
-  .activity-chip.active.ev-skipped  { background: #422006; border-color: #d97706; color: #fbbf24; }
-  .activity-chip.active.ev-mention  { background: var(--bg-chip); border-color: var(--text-muted); color: var(--text); }
-  .activity-chip.active.ev-dm_sent  { background: #3b0764; border-color: #a855f7; color: #d8b4fe; }
-  .activity-chip.active.ev-dm_reply_sent { background: #500724; border-color: #ec4899; color: #f9a8d4; }
-  .activity-chip.active.ev-page_published_serp   { background: #422006; border-color: #f59e0b; color: #fcd34d; }
-  .activity-chip.active.ev-page_published_gsc    { background: #134e4a; border-color: #14b8a6; color: #5eead4; }
-  .activity-chip.active.ev-page_published_reddit { background: #7c2d12; border-color: #f97316; color: #fdba74; }
-  .activity-chip.active.ev-page_published_top    { background: #4a044e; border-color: #d946ef; color: #f5d0fe; }
-  .activity-chip.active.ev-page_published_roundup { background: #881337; border-color: #f43f5e; color: #fda4af; }
-  .activity-chip.active.ev-page_improved         { background: #365314; border-color: #84cc16; color: #bef264; }
-  .activity-chip.active.ev-resurrected { background: #1e3a8a; border-color: #3b82f6; color: #93c5fd; }
 
   .activity-status { display: flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: var(--cyan); }
   .activity-live-dot {
@@ -3687,6 +4109,7 @@ const HTML = `<!DOCTYPE html>
   .activity-platform svg { height: 1em; width: 1em; flex-shrink: 0; fill: currentColor; }
   .activity-platform .plat-mono { display: inline-flex; align-items: center; justify-content: center; height: 1em; width: 1em; border-radius: 4px; background: var(--bg-chip); color: var(--text); font-size: 0.7em; font-weight: 700; letter-spacing: 0; line-height: 1; }
   .activity-platform-cell { text-align: center; vertical-align: middle; }
+  .activity-platform-text { display: inline-flex; align-items: center; justify-content: center; color: var(--text); font-size: 12px; font-weight: 700; letter-spacing: 0.5px; }
   .activity-summary-url { color: var(--link); text-decoration: none; word-break: break-all; }
   .activity-summary-url:hover { text-decoration: underline; }
   .activity-project-cell { display: flex; flex-direction: column; gap: 3px; }
@@ -3697,24 +4120,47 @@ const HTML = `<!DOCTYPE html>
   .activity-summary-link:hover { opacity: 1; text-decoration: underline; }
   .activity-link { color: var(--link); text-decoration: none; font-size: 14px; opacity: 0.7; }
   .activity-link:hover { opacity: 1; }
+  .activity-card {
+    display: flex; flex-direction: column;
+    padding: 10px 12px;
+    background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px;
+    max-width: 640px;
+  }
+  .activity-card-body {
+    color: var(--text); font-size: 13px; line-height: 1.45;
+    text-decoration: none; word-break: break-word; white-space: pre-wrap;
+  }
+  .activity-card-body:hover { text-decoration: underline; }
+  .activity-card-thread {
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted); font-size: 12px; line-height: 1.35; word-break: break-word;
+  }
+  .activity-card-thread-label { color: var(--text-faint); margin-right: 4px; }
+  .activity-card-thread a { color: inherit; text-decoration: none; }
+  .activity-card-thread a:hover { text-decoration: underline; color: var(--text-secondary); }
+  .activity-thread-list { display: flex; flex-direction: column; gap: 6px; max-width: 640px; }
+  .activity-thread-header { font-size: 11px; color: var(--text-faint); letter-spacing: 0.02em; text-transform: lowercase; display: flex; align-items: center; gap: 8px; }
+  .activity-thread-header a { color: var(--link); text-decoration: none; opacity: 0.8; }
+  .activity-thread-header a:hover { opacity: 1; text-decoration: underline; }
+  .activity-thread-tweet {
+    display: flex; gap: 10px; padding: 8px 10px;
+    background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); font-size: 13px; line-height: 1.45; word-break: break-word;
+    white-space: pre-wrap;
+  }
+  .activity-thread-tweet-num {
+    flex-shrink: 0; width: 30px;
+    color: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums;
+    font-family: 'SF Mono', monospace; padding-top: 1px;
+  }
+  .activity-thread-tweet-text { flex: 1; }
 
   .ev-pill {
     display: inline-block; padding: 2px 8px; border-radius: 6px;
     font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: lowercase;
+    background: var(--bg-subtle); color: var(--text); border: 1px solid var(--border);
   }
-  .ev-pill.ev-posted  { background: #064e3b; color: #6ee7b7; }
-  .ev-pill.ev-replied { background: #0c4a6e; color: #7dd3fc; }
-  .ev-pill.ev-skipped { background: #422006; color: #fbbf24; }
-  .ev-pill.ev-mention { background: var(--bg-chip); color: var(--text); }
-  .ev-pill.ev-dm_sent { background: #3b0764; color: #d8b4fe; }
-  .ev-pill.ev-dm_reply_sent { background: #500724; color: #f9a8d4; }
-  .ev-pill.ev-page_published_serp   { background: #422006; color: #fcd34d; border: 1px solid #f59e0b; }
-  .ev-pill.ev-page_published_gsc    { background: #134e4a; color: #5eead4; border: 1px solid #14b8a6; }
-  .ev-pill.ev-page_published_reddit { background: #7c2d12; color: #fdba74; border: 1px solid #f97316; }
-  .ev-pill.ev-page_published_top    { background: #4a044e; color: #f5d0fe; border: 1px solid #d946ef; }
-  .ev-pill.ev-page_published_roundup { background: #881337; color: #fda4af; border: 1px solid #f43f5e; }
-  .ev-pill.ev-page_improved         { background: #365314; color: #bef264; border: 1px solid #84cc16; }
-  .ev-pill.ev-resurrected { background: #1e3a8a; color: #93c5fd; border: 1px solid #3b82f6; }
 
   .activity-search {
     flex: 1; min-width: 220px; max-width: 420px; background: var(--bg-subtle); border: 1px solid var(--border);
@@ -3881,6 +4327,9 @@ const HTML = `<!DOCTYPE html>
   .dm-class-sub      { color: var(--text-muted); font-size: 10px; margin-top: 2px; text-transform: lowercase; }
   .dm-thread-author  { color: var(--text); font-weight: 600; font-size: 13px; }
   .dm-thread-tier    { color: var(--text-muted); font-size: 11px; font-family: 'SF Mono', 'Fira Code', monospace; }
+  .dm-surface-pill   { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; vertical-align: baseline; margin-left: 4px; border: 1px solid; }
+  .dm-surface-public { background: rgba(139, 92, 246, 0.10); color: #6d28d9; border-color: rgba(139, 92, 246, 0.35); }
+  .dm-surface-dm     { background: rgba(34, 197, 94, 0.10); color: #15803d; border-color: rgba(34, 197, 94, 0.35); }
   .dm-last-dir       { display: inline-block; background: var(--pill-inverse-bg); color: var(--pill-inverse-text); font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 3px; margin-right: 6px; vertical-align: baseline; }
   .dm-thread-subline { margin-top: 4px; }
   .dm-last-ts        { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; }
@@ -4021,24 +4470,12 @@ const HTML = `<!DOCTYPE html>
   .sa-tooltip.visible { display: block; }
   .stat-card-count { font-size: 22px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1; }
   .stat-card.zero .stat-card-count { color: var(--text-very-faint); }
-  .stat-card.ev-posted              { border-left: 3px solid #10b981; }
-  .stat-card.ev-replied             { border-left: 3px solid #0ea5e9; }
-  .stat-card.ev-skipped             { border-left: 3px solid #d97706; }
-  .stat-card.ev-mention             { border-left: 3px solid var(--text-muted); }
-  .stat-card.ev-dm_sent             { border-left: 3px solid #a855f7; }
-  .stat-card.ev-dm_reply_sent       { border-left: 3px solid #ec4899; }
-  .stat-card.ev-page_published_serp   { border-left: 3px solid #f59e0b; }
-  .stat-card.ev-page_published_gsc    { border-left: 3px solid #14b8a6; }
-  .stat-card.ev-page_published_reddit { border-left: 3px solid #f97316; }
-  .stat-card.ev-page_published_top    { border-left: 3px solid #d946ef; }
-  .stat-card.ev-page_published_roundup { border-left: 3px solid #f43f5e; }
-  .stat-card.ev-page_improved         { border-left: 3px solid #84cc16; }
-  .stat-card.ev-resurrected         { border-left: 3px solid #3b82f6; }
   .stat-card-breakdown { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--text); }
   .stat-plat { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
   .stat-plat svg { height: 11px; width: 11px; fill: currentColor; }
   .stat-plat .plat-mono { height: 11px; width: 11px; border-radius: 2px; background: var(--bg-chip); color: var(--text); font-size: 9px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
   .stat-plat-count { color: var(--text); }
+  .stat-plat-text { color: var(--text); font-size: 10px; font-weight: 700; letter-spacing: 0.3px; }
 
   /* Status tab: engagement style breakdown (collapsed by default) */
   .style-stats-section { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 20px; overflow: hidden; }
@@ -4277,14 +4714,16 @@ const HTML = `<!DOCTYPE html>
         <div class="style-stats-pill-row" id="jobs-history-type-pills" data-selected="all" style="margin:0;">
           <span class="label" style="font-size:11px;color:var(--muted);margin-right:4px;">Job</span>
           <button type="button" class="style-stats-pill active" data-value="all">All</button>
-          <button type="button" class="style-stats-pill" data-value="post">Post</button>
+          <button type="button" class="style-stats-pill" data-value="post">Post Threads</button>
+          <button type="button" class="style-stats-pill" data-value="post-comments">Post Comments</button>
           <button type="button" class="style-stats-pill" data-value="engage">Engage</button>
-          <button type="button" class="style-stats-pill" data-value="link-edit">Link Edit</button>
           <button type="button" class="style-stats-pill" data-value="dm-outreach">DM Outreach</button>
           <button type="button" class="style-stats-pill" data-value="dm-replies">DM Replies</button>
+          <button type="button" class="style-stats-pill" data-value="link-edit">Link Edit</button>
+          <button type="button" class="style-stats-pill" data-value="audit">Post Audit</button>
           <button type="button" class="style-stats-pill" data-value="octolens">Octolens</button>
           <button type="button" class="style-stats-pill" data-value="stats">Stats</button>
-          <button type="button" class="style-stats-pill" data-value="audit">Audit</button>
+          <button type="button" class="style-stats-pill" data-value="check-replies">Check Replies</button>
           <button type="button" class="style-stats-pill" data-value="serp_seo">SERP SEO</button>
           <button type="button" class="style-stats-pill" data-value="gsc_seo">GSC SEO</button>
           <button type="button" class="style-stats-pill" data-value="seo_improve">SEO Improve</button>
@@ -4594,11 +5033,13 @@ const HTML = `<!DOCTYPE html>
 const INTERVALS = [
   { label: '5 min', value: 300 },
   { label: '10 min', value: 600 },
+  { label: '15 min', value: 900 },
   { label: '30 min', value: 1800 },
   { label: '1 hour', value: 3600 },
   { label: '2 hours', value: 7200 },
   { label: '4 hours', value: 14400 },
   { label: '6 hours', value: 21600 },
+  { label: '3 times a day', value: 28800 },
   { label: '12 hours', value: 43200 },
   { label: '24 hours', value: 86400 },
 ];
@@ -4774,7 +5215,7 @@ function fmtInterval(secs) {
 
 let _initialized = false;
 const PLATFORMS = ['Reddit', 'Twitter', 'LinkedIn', 'MoltBook', 'GitHub'];
-const JOB_TYPES = ['Post', 'Engage', 'DM Outreach', 'DM Replies', 'Link Edit', 'Stats', 'Post Audit', 'Octolens'];
+const JOB_TYPES = ['Post Threads', 'Post Comments', 'Engage', 'DM Outreach', 'DM Replies', 'Link Edit', 'Stats', 'Post Audit', 'Octolens'];
 
 function renderToggle(label, loaded) {
   return '<label class="toggle-switch" data-field="toggle" title="' + (loaded ? 'On — click to disable' : 'Off — click to enable') + '">' +
@@ -5043,6 +5484,158 @@ function renderResult(run) {
       (pending ? pill('queue', pending, 'var(--muted)') : '')
     );
   }
+  // post_linkedin (run-linkedin.sh) Phase A discovery + Phase B comment.
+  // Surfaces searches, raw SERP volume, post-floor candidates, posted, and
+  // queue depth so "every SERP candidate dropped below the 20.0 velocity
+  // floor" reads differently from "pipeline crashed before discovery".
+  // raw = candidates_found + candidates_dropped_below_floor; raw - passed
+  // is the count rejected by the floor.
+  if (r.type === 'post-comments-linkedin') {
+    const searches = r.searches || 0;
+    const raw = r.candidates_raw || 0;
+    const passed = r.candidates_passed || 0;
+    const dropped = r.candidates_dropped || 0;
+    const posted = r.posted || 0;
+    const queue = r.pending_queue || 0;
+    const failed = r.failed || 0;
+    const reasons = Array.isArray(r.failure_reasons) ? r.failure_reasons : [];
+    const renderFailedPill = () => {
+      if (!failed && !reasons.length) return '';
+      const top = reasons[0];
+      const tt = reasons.length
+        ? reasons.map(function (x) { return x.reason + ' x' + x.count; }).join(', ')
+        : 'failed (no reason logged)';
+      const label = top
+        ? ('failed: ' + top.reason + (reasons.length > 1 ? ' +' + (reasons.length - 1) : ''))
+        : 'failed';
+      const count = failed || (reasons[0] ? reasons[0].count : 0);
+      return '<span title="' + tt.replace(/"/g, '&quot;') + '" ' +
+        'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
+        label + (count ? ' <span style="color:#ef4444;font-weight:600;">' + count + '</span>' : '') + '</span>';
+    };
+    if (!searches && !posted && !queue && !failed && !reasons.length) {
+      return '<span style="color:var(--muted);font-size:12px;">no searches</span>';
+    }
+    const tooltip = 'searches: ' + searches +
+      ' / raw SERP candidates: ' + raw +
+      ' / passed 20.0 floor: ' + passed +
+      ' / dropped below floor: ' + dropped +
+      ' / posted: ' + posted +
+      ' / pending queue: ' + queue;
+    return (
+      '<span title="' + tooltip.replace(/"/g, '&quot;') + '" style="display:inline-block;">' +
+        pill('searches', searches, 'var(--text)') +
+        pill('raw', raw, raw > 0 ? 'var(--text)' : 'var(--muted)') +
+        pill('passed', passed, passed > 0 ? '#22c55e' : 'var(--muted)') +
+        (posted ? pill('posted', posted, '#22c55e') : '') +
+        (queue ? pill('queue', queue, 'var(--muted)') : '') +
+        renderFailedPill() +
+      '</span>'
+    );
+  }
+  // post_twitter (run-twitter-cycle.sh) Phase 1 SERP scrape + Phase 2b post.
+  // Same pill set as LinkedIn (searches/raw/passed/posted/queue) plus an
+  // expired pill for the Twitter-only delta>=1 floor that fires after the 5-min
+  // T1 re-poll. dropped = raw - passed (already-posted thread + age>18h cuts).
+  if (r.type === 'post-comments-twitter') {
+    const searches = r.searches || 0;
+    const raw = r.candidates_raw || 0;
+    const passed = r.candidates_passed || 0;
+    const dropped = r.candidates_dropped || 0;
+    const expired = r.candidates_expired || 0;
+    const posted = r.posted || 0;
+    const queue = r.pending_queue || 0;
+    const failed = r.failed || 0;
+    const reasons = Array.isArray(r.failure_reasons) ? r.failure_reasons : [];
+    const renderFailedPill = () => {
+      if (!failed && !reasons.length) return '';
+      const top = reasons[0];
+      const tt = reasons.length
+        ? reasons.map(function (x) { return x.reason + ' x' + x.count; }).join(', ')
+        : 'failed (no reason logged)';
+      const label = top
+        ? ('failed: ' + top.reason + (reasons.length > 1 ? ' +' + (reasons.length - 1) : ''))
+        : 'failed';
+      const count = failed || (reasons[0] ? reasons[0].count : 0);
+      return '<span title="' + tt.replace(/"/g, '&quot;') + '" ' +
+        'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
+        label + (count ? ' <span style="color:#ef4444;font-weight:600;">' + count + '</span>' : '') + '</span>';
+    };
+    if (!searches && !posted && !queue && !failed && !reasons.length) {
+      return '<span style="color:var(--muted);font-size:12px;">no searches</span>';
+    }
+    const tooltip = 'searches: ' + searches +
+      ' / raw tweets: ' + raw +
+      ' / passed score-time cuts: ' + passed +
+      ' / dropped pre-score (already-posted or age>18h): ' + dropped +
+      ' / expired (delta<1 floor): ' + expired +
+      ' / posted: ' + posted +
+      ' / pending queue: ' + queue;
+    return (
+      '<span title="' + tooltip.replace(/"/g, '&quot;') + '" style="display:inline-block;">' +
+        pill('searches', searches, 'var(--text)') +
+        pill('raw', raw, raw > 0 ? 'var(--text)' : 'var(--muted)') +
+        pill('passed', passed, passed > 0 ? '#22c55e' : 'var(--muted)') +
+        (expired ? pill('expired', expired, 'var(--muted)') : '') +
+        (posted ? pill('posted', posted, '#22c55e') : '') +
+        (queue ? pill('queue', queue, 'var(--muted)') : '') +
+        renderFailedPill() +
+      '</span>'
+    );
+  }
+  // post_reddit (run-reddit-search.sh) per-iteration plan+post.
+  // Same pill naming (searches/raw/passed/posted) but log-derived (no DB
+  // tables) and includes iterations + drafted to expose Reddit's per-iter
+  // funnel. raw/passed populated only for runs after reddit_tools.py was
+  // instrumented; older runs show "—".
+  if (r.type === 'post-comments-reddit') {
+    const iterations = r.iterations || 0;
+    const searches = r.searches || 0;
+    const fetched = r.fetched || 0;
+    const raw = r.candidates_raw || 0;
+    const passed = r.candidates_passed || 0;
+    const dropped = r.candidates_dropped || 0;
+    const drafted = r.drafted || 0;
+    const posted = r.posted || 0;
+    const failed = r.failed || 0;
+    const reasons = Array.isArray(r.failure_reasons) ? r.failure_reasons : [];
+    const renderFailedPill = () => {
+      if (!failed && !reasons.length) return '';
+      const top = reasons[0];
+      const tt = reasons.length
+        ? reasons.map(function (x) { return x.reason + ' x' + x.count; }).join(', ')
+        : 'failed (no reason logged)';
+      const label = top
+        ? ('failed: ' + top.reason + (reasons.length > 1 ? ' +' + (reasons.length - 1) : ''))
+        : 'failed';
+      const count = failed || (reasons[0] ? reasons[0].count : 0);
+      return '<span title="' + tt.replace(/"/g, '&quot;') + '" ' +
+        'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
+        label + (count ? ' <span style="color:#ef4444;font-weight:600;">' + count + '</span>' : '') + '</span>';
+    };
+    if (!iterations && !searches && !posted && !failed && !reasons.length) {
+      return '<span style="color:var(--muted);font-size:12px;">no iterations</span>';
+    }
+    const tooltip = 'iterations: ' + iterations +
+      ' / searches: ' + searches +
+      ' / raw API results: ' + raw +
+      ' / passed (post-API filter): ' + passed +
+      ' / dropped (blocked sub / archived / locked / age>180d): ' + dropped +
+      ' / fetched (model opened to read): ' + fetched +
+      ' / drafted: ' + drafted +
+      ' / posted: ' + posted;
+    return (
+      '<span title="' + tooltip.replace(/"/g, '&quot;') + '" style="display:inline-block;">' +
+        pill('iterations', iterations, 'var(--text)') +
+        pill('searches', searches, 'var(--text)') +
+        pill('raw', raw, raw > 0 ? 'var(--text)' : 'var(--muted)') +
+        pill('passed', passed, passed > 0 ? '#22c55e' : 'var(--muted)') +
+        (drafted ? pill('drafted', drafted, 'var(--text)') : '') +
+        (posted ? pill('posted', posted, '#22c55e') : '') +
+        renderFailedPill() +
+      '</span>'
+    );
+  }
   if (r.type === 'engage') {
     // Per-run DB-derived counts (see enrichEngageRuns in server.js).
     // Empty-queue runs show "queue empty" so the operator can tell a
@@ -5263,6 +5856,24 @@ function buildJobsHistoryTable(runs) {
     const caret = hasDetails
       ? '<span class="sa-job-caret" style="display:inline-block;width:12px;color:var(--muted);cursor:pointer;user-select:none;transition:transform 0.15s ease;">&#9656;</span> '
       : '<span style="display:inline-block;width:12px;"></span> ';
+    if (r.running) {
+      // In-progress row: animated badge in the Result column, live-ticking
+      // elapsed in the Finished column. data-started-ms drives the ticker.
+      const startedMs = r.started_at ? new Date(r.started_at).getTime() : Date.now();
+      return (
+        '<tr class="sa-job-row sa-job-row-running" data-run-idx="' + idx + '" data-started-ms="' + startedMs + '">' +
+          '<td style="text-align:left;padding-left:16px;">' + caret +
+            (r.job_label || r.script) +
+            (r.pid ? ' <span style="color:var(--muted);font-size:11px;">PID ' + r.pid + '</span>' : '') +
+          '</td>' +
+          '<td>' + (r.platform || '<span style="color:var(--muted);">—</span>') + '</td>' +
+          '<td>' + fmtLocalTime(r.started_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtRelTime(r.started_at) + ')</span></td>' +
+          '<td><span class="sa-running-elapsed" style="color:var(--muted);font-size:12px;">' + fmtElapsed(r.elapsed_s) + '</span></td>' +
+          '<td style="text-align:left;"><span class="badge running">Running…</span></td>' +
+          '<td style="color:var(--muted);font-size:12px;">—</td>' +
+        '</tr>'
+      );
+    }
     const rowClass = hasDetails ? 'sa-job-row sa-job-row-expandable' : 'sa-job-row';
     const main = (
       '<tr class="' + rowClass + '" data-run-idx="' + idx + '"' +
@@ -5311,6 +5922,28 @@ function applyJobsHistoryFilter() {
   });
   body.innerHTML = buildJobsHistoryTable(filtered);
   wireJobsHistoryExpansion(body);
+  ensureRunningElapsedTicker();
+}
+
+// One global 1Hz ticker that walks .sa-job-row-running rows and rewrites the
+// elapsed cell from data-started-ms. Cheaper than re-rendering the whole
+// table every second, and keeps the running animation/badge alive without
+// fighting the innerHTML rebuild on every filter change.
+let _runningElapsedTimer = null;
+function ensureRunningElapsedTicker() {
+  if (_runningElapsedTimer) return;
+  _runningElapsedTimer = setInterval(() => {
+    const rows = document.querySelectorAll('.sa-job-row-running');
+    if (!rows.length) return;
+    const now = Date.now();
+    rows.forEach(row => {
+      const startedMs = parseInt(row.getAttribute('data-started-ms') || '0', 10);
+      if (!startedMs) return;
+      const elapsedSec = Math.max(0, Math.floor((now - startedMs) / 1000));
+      const el = row.querySelector('.sa-running-elapsed');
+      if (el) el.textContent = fmtElapsed(elapsedSec);
+    });
+  }, 1000);
 }
 
 // Click-to-expand on rows that have a per-product breakdown (currently
@@ -5381,12 +6014,16 @@ function initJobsHistoryPills() {
 let _jobHistoryLoadedAt = 0;
 let _jobHistoryLoadedForHours = null;
 async function loadJobsHistory(force) {
-  // Throttle to once per 20s. Job history changes on the order of minutes,
-  // but loadStatus() polls every 5s. Bypass the throttle when the Status
-  // tab window changes so the operator sees the new range immediately.
+  // Throttle: 20s when no jobs are running, 5s when at least one is. The
+  // shorter cadence picks up newly-finished runs (so the running row drops
+  // off quickly) and newly-started ones, while idle dashboards still avoid
+  // hammering /api/job-runs. Bypass entirely when force=true (filter or
+  // window change).
   const hours = currentStatusWindow().hours;
   const sameHours = _jobHistoryLoadedForHours === hours;
-  if (!force && sameHours && Date.now() - _jobHistoryLoadedAt < 20000) return;
+  const hasRunning = (_jobHistoryRuns || []).some(r => r && r.running);
+  const minInterval = hasRunning ? 5000 : 20000;
+  if (!force && sameHours && Date.now() - _jobHistoryLoadedAt < minInterval) return;
   _jobHistoryLoadedAt = Date.now();
   _jobHistoryLoadedForHours = hours;
   try {
@@ -5724,12 +6361,13 @@ async function saveSettings() {
 }
 
 // Activity tab
-const EVENT_TYPES = ['posted', 'replied', 'skipped', 'mention', 'dm_sent', 'dm_reply_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit', 'page_published_top', 'page_published_roundup', 'page_improved', 'resurrected'];
-const EVENT_LABELS = { posted: 'posted', replied: 'replied', skipped: 'skipped', mention: 'mention', dm_sent: 'dm sent', dm_reply_sent: 'dm reply', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)', page_published_top: 'page (top)', page_published_roundup: 'page (roundup)', page_improved: 'page (improved)', resurrected: 'resurrected' };
+const EVENT_TYPES = ['posted_thread', 'posted_comment', 'replied', 'skipped', 'mention', 'dm_sent', 'dm_reply_sent', 'page_published_serp', 'page_published_gsc', 'page_published_reddit', 'page_published_top', 'page_published_roundup', 'page_improved', 'resurrected'];
+const EVENT_LABELS = { posted_thread: 'thread posted', posted_comment: 'comment posted', replied: 'engage replied', skipped: 'engage skipped', mention: 'mention', dm_sent: 'dm sent', dm_reply_sent: 'dm reply', page_published_serp: 'page (serp)', page_published_gsc: 'page (gsc)', page_published_reddit: 'page (reddit)', page_published_top: 'page (top)', page_published_roundup: 'page (roundup)', page_improved: 'page (improved)', resurrected: 'resurrected' };
 const EVENT_DESCRIPTIONS = {
-  posted: 'Original post the bot created on a platform (new thread, tweet, LinkedIn post, Reddit submission, etc.).',
-  replied: 'Comment or reply the bot left on someone else’s thread, tweet, or post.',
-  skipped: 'Candidate thread the bot reviewed but chose not to engage with (off-topic, already answered, low value, or filtered out by rules).',
+  posted_thread: 'Original thread the bot published (Post Threads job): a new top-level Reddit submission, tweet/X post, LinkedIn post, etc. Identified by thread_url = our_url AND thread_author is empty or matches our_account.',
+  posted_comment: 'Comment the bot left on someone else’s thread (Post Comments job): a Reddit/Twitter/LinkedIn/Moltbook/GitHub reply where thread_url ≠ our_url, or where thread_url = our_url but thread_author is someone else (LinkedIn comment job stores the parent URL in both columns).',
+  replied: 'Engage job: the bot responded to a reply someone left on our content.',
+  skipped: 'Engage job: candidate reply the bot reviewed but chose not to respond to (off-topic, already answered, low value, or filtered out).',
   mention: 'Someone mentioned one of our products on a tracked platform. Detection only, no engagement action.',
   dm_sent: 'New direct-message conversation the bot started with a prospect.',
   dm_reply_sent: 'Follow-up message sent inside an existing DM conversation.',
@@ -5742,13 +6380,14 @@ const EVENT_DESCRIPTIONS = {
   resurrected: 'Previously archived or unavailable item brought back into rotation (e.g., a removed post restored after reappearing).',
 };
 const ACTIVITY_PLATFORMS = ['reddit', 'twitter', 'linkedin', 'moltbook', 'github', 'seo'];
+const ACTIVITY_PLATFORM_LABELS = { reddit: 'Reddit', twitter: 'Twitter / X', linkedin: 'LinkedIn', moltbook: 'Moltbook', github: 'GitHub', seo: 'SEO' };
 const PROJECT_LABELS = { tenxats: '10xats' };
 const ACTIVITY_PROJECT_NONE = '(none)';
 const ACTIVITY_CAMPAIGN_ORGANIC = '(organic)';
 let _activitySeen = new Set();
 let _activityFirstLoad = true;
 // Activity-tab filters/sort/search are persisted across reloads.
-let _activityTypeFilter = saLoadSet('sa.activity.typeFilter.v1', EVENT_TYPES);
+let _activityTypeFilter = saLoadSet('sa.activity.typeFilter.v2', EVENT_TYPES);
 let _activityPlatformFilter = saLoadSet('sa.activity.platformFilter.v1', ACTIVITY_PLATFORMS);
 let _activityProjectFilter = saLoadSet('sa.activity.projectFilter.v1', []);
 let _activityKnownProjects = saLoad('sa.activity.knownProjects.v1', []);
@@ -5796,7 +6435,7 @@ function refreshActivityProjectPills(events) {
   saSave('sa.activity.knownProjects.v1', _activityKnownProjects);
   saSaveSet('sa.activity.projectFilter.v1', _activityProjectFilter);
   projEl.innerHTML = _activityKnownProjects.map(p =>
-    '<span class="activity-chip' + (_activityProjectFilter.has(p) ? ' active' : '') + '" data-project="' + escapeHtml(p) + '" title="' + escapeHtml(p) + '">' + escapeHtml(PROJECT_LABELS[p] || p) + '</span>'
+    '<button type="button" class="style-stats-pill' + (_activityProjectFilter.has(p) ? ' active' : '') + '" data-project="' + escapeHtml(p) + '" title="' + escapeHtml(p) + '">' + escapeHtml(PROJECT_LABELS[p] || p) + '</button>'
   ).join('');
 }
 
@@ -5823,7 +6462,7 @@ function refreshActivityCampaignPills(events) {
   saSave('sa.activity.knownCampaigns.v1', _activityKnownCampaigns);
   saSaveSet('sa.activity.campaignFilter.v1', _activityCampaignFilter);
   campEl.innerHTML = _activityKnownCampaigns.map(c =>
-    '<span class="activity-chip' + (_activityCampaignFilter.has(c) ? ' active' : '') + '" data-campaign="' + escapeHtml(c) + '" title="' + escapeHtml(c) + '">' + escapeHtml(c === ACTIVITY_CAMPAIGN_ORGANIC ? 'Organic' : c) + '</span>'
+    '<button type="button" class="style-stats-pill' + (_activityCampaignFilter.has(c) ? ' active' : '') + '" data-campaign="' + escapeHtml(c) + '" title="' + escapeHtml(c) + '">' + escapeHtml(c === ACTIVITY_CAMPAIGN_ORGANIC ? 'Organic' : c) + '</button>'
   ).join('');
 }
 
@@ -5834,10 +6473,10 @@ function buildActivityFilters() {
   const campEl = document.getElementById('activity-campaign-filters');
   if (!tEl || tEl.children.length) return;
   tEl.innerHTML = EVENT_TYPES.map(t =>
-    '<span class="activity-chip ev-' + t + ' active" data-type="' + t + '">' + EVENT_LABELS[t] + '</span>'
+    '<button type="button" class="style-stats-pill' + (_activityTypeFilter.has(t) ? ' active' : '') + '" data-type="' + t + '">' + escapeHtml(EVENT_LABELS[t] || t) + '</button>'
   ).join('');
   pEl.innerHTML = ACTIVITY_PLATFORMS.map(p =>
-    '<span class="activity-chip active" data-platform="' + p + '" title="' + p + '">' + (PLATFORM_ICONS[p] || p) + '</span>'
+    '<button type="button" class="style-stats-pill' + (_activityPlatformFilter.has(p) ? ' active' : '') + '" data-platform="' + p + '" title="' + p + '">' + escapeHtml(ACTIVITY_PLATFORM_LABELS[p] || p) + '</button>'
   ).join('');
   tEl.addEventListener('click', (ev) => {
     const el = ev.target.closest('[data-type]');
@@ -5845,7 +6484,7 @@ function buildActivityFilters() {
     const t = el.dataset.type;
     if (_activityTypeFilter.has(t)) { _activityTypeFilter.delete(t); el.classList.remove('active'); }
     else { _activityTypeFilter.add(t); el.classList.add('active'); }
-    saSaveSet('sa.activity.typeFilter.v1', _activityTypeFilter);
+    saSaveSet('sa.activity.typeFilter.v2', _activityTypeFilter);
     _activityPage = 0;
     renderActivity(_lastActivityEvents || []);
   });
@@ -5890,11 +6529,11 @@ function buildActivityFilters() {
       if (a === 'type-all') {
         _activityTypeFilter = new Set(EVENT_TYPES);
         tEl.querySelectorAll('[data-type]').forEach(c => c.classList.add('active'));
-        saSaveSet('sa.activity.typeFilter.v1', _activityTypeFilter);
+        saSaveSet('sa.activity.typeFilter.v2', _activityTypeFilter);
       } else if (a === 'type-none') {
         _activityTypeFilter = new Set();
         tEl.querySelectorAll('[data-type]').forEach(c => c.classList.remove('active'));
-        saSaveSet('sa.activity.typeFilter.v1', _activityTypeFilter);
+        saSaveSet('sa.activity.typeFilter.v2', _activityTypeFilter);
       } else if (a === 'platform-all') {
         _activityPlatformFilter = new Set(ACTIVITY_PLATFORMS);
         pEl.querySelectorAll('[data-platform]').forEach(c => c.classList.add('active'));
@@ -5954,7 +6593,7 @@ function buildActivityFilters() {
 
 function activityMatchesSearch(e, q) {
   if (!q) return true;
-  const hay = [e.type, e.platform, e.project, e.detail, e.summary, e.link, e.actor, e.occurred_at]
+  const hay = [e.type, e.platform, e.project, e.detail, e.summary, e.body, e.link, e.actor, e.occurred_at]
     .map(v => String(v || '').toLowerCase()).join(' | ');
   return hay.indexOf(q) !== -1;
 }
@@ -5982,19 +6621,22 @@ function fmtCost(c) {
 }
 
 // Wraps fmtCost in a span with a hover tooltip explaining how the displayed
-// cost was derived. The dashboard's global .sa-tooltip handler picks up
+// cost was derived. The dashboard global .sa-tooltip handler picks up
 // data-tooltip and renders the popover. We always render the wrapper (even
 // when both lanes are missing) so column alignment stays consistent.
 //
-// `displayed`     - the value rendered in the cell (already prefers SDK,
-//                   falls back to estimate). Source of truth for text.
-// `orchestrator`  - native SDK orchestrator cost (claude_sessions.
-//                   orchestrator_cost_usd / streamRes.total_cost_usd).
-//                   Authoritative for orchestrator billing, EXCLUDES Task
-//                   subagent costs (anthropics/claude-code #43945).
-// `estimated`     - manual transcript-derived estimate using local pricing
-//                   tables (claude_sessions.total_cost_usd via
-//                   log_claude_session.py).
+// Args (no backticks anywhere; this whole helper sits inside the dashboard
+// HTML template literal, see feedback_server_js_template_regex memory):
+//   displayed     value rendered in the cell. Already prefers SDK, falls
+//                 back to estimate. Source of truth for the text.
+//   orchestrator  native SDK orchestrator cost (claude_sessions.
+//                 orchestrator_cost_usd, captured from streamRes.
+//                 total_cost_usd). Authoritative for orchestrator billing
+//                 but EXCLUDES Task subagent costs (anthropics/claude-code
+//                 issue #43945).
+//   estimated     manual transcript-derived estimate using local pricing
+//                 tables (claude_sessions.total_cost_usd, written by
+//                 log_claude_session.py).
 function fmtCostCell(displayed, orchestrator, estimated) {
   const text = fmtCost(displayed);
   if (text === '') return '';
@@ -6014,7 +6656,7 @@ function fmtCostCell(displayed, orchestrator, estimated) {
     '',
     'Note: orchestrator cost EXCLUDES Task subagent spend (anthropics/claude-code #43945). The estimate uses our local pricing table over the parent transcript only and has the same exclusion.',
   ];
-  const tip = lines.join('\n');
+  const tip = lines.join('\\n');
   return '<span data-tooltip="' + escapeHtml(tip) +
     '" style="cursor:help;border-bottom:1px dotted var(--text-muted);">' +
     text + '</span>';
@@ -6073,10 +6715,10 @@ const PLATFORM_ICONS = {
   linkedin: '<svg viewBox="0 0 24 24" aria-label="linkedin"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.063 2.063 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>',
   github:   '<svg viewBox="0 0 24 24" aria-label="github"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>',
   moltbook: '<span class="plat-mono" aria-label="moltbook">M</span>',
-  seo:      '<svg viewBox="0 0 24 24" aria-label="seo"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 2c1.657 0 3 3.582 3 8s-1.343 8-3 8-3-3.582-3-8 1.343-8 3-8zm-6.708 5h13.416a7.99 7.99 0 010 6H5.292a7.99 7.99 0 010-6z"/></svg>',
 };
 function platformIconHtml(name) {
   const key = String(name || '').toLowerCase();
+  if (key === 'seo') return '<span class="activity-platform-text">SEO</span>';
   const icon = PLATFORM_ICONS[key] || '<span class="plat-mono" aria-label="' + key + '">' + (key[0] || '?').toUpperCase() + '</span>';
   return '<span class="activity-platform" title="' + key + '">' + icon + '</span>';
 }
@@ -6219,7 +6861,9 @@ function renderActivityStats(payload) {
     const plats = Object.keys(bucket.platforms).sort((a, b) => bucket.platforms[b] - bucket.platforms[a]);
     const platHtml = plats.length
       ? plats.map(p => {
-          const icon = PLATFORM_ICONS[p] || '<span class="plat-mono">' + escapeHtml((p[0] || '?').toUpperCase()) + '</span>';
+          const icon = p === 'seo'
+            ? '<span class="stat-plat-text">SEO</span>'
+            : (PLATFORM_ICONS[p] || '<span class="plat-mono">' + escapeHtml((p[0] || '?').toUpperCase()) + '</span>');
           return '<span class="stat-plat" title="' + escapeHtml(p) + '">' + icon + '<span class="stat-plat-count">' + bucket.platforms[p] + '</span></span>';
         }).join('')
       : '<span style="color:var(--text-very-faint);">\u2014</span>';
@@ -7141,7 +7785,7 @@ function renderFunnelStats(payload) {
         formatter: (v, r) => {
           if (r && r.amplitude_signups != null) {
             const n = Number(r.amplitude_signups) || 0;
-            const filt = r.amplitude_filter && Object.entries(r.amplitude_filter).map(([k,vv]) => k + '=' + vv).join(', ');
+            const filt = r.amplitude_filter && Object.entries(r.amplitude_filter).map(([k,vv]) => k + '=' + (Array.isArray(vv) ? vv.join('|') : vv)).join(', ');
             const tip = 'Amplitude-attributed end-product signups' + (filt ? ' (' + filt + ')' : '') + '. Falls back to CTA clicks when not configured.';
             return '<span data-tooltip="' + escapeHtml(tip) + '" style="color:var(--success);font-weight:600;font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
           }
@@ -7179,9 +7823,10 @@ function renderFunnelStats(payload) {
   // Must come after mountSortableTable, which replaces container innerHTML.
   body.insertAdjacentHTML('beforeend',
     '<div style="font-size:11px;color:var(--text-muted);padding:6px 2px 2px;">' +
-      'Pageviews, email signups, schedule, and get-started cells show ' +
-      '<b>scoped</b> (only traffic on pages generated in the selected window), ' +
-      'followed by <b>(domain-wide)</b> totals in parentheses when the two differ.' +
+      'Pageviews shows <b>scoped</b> (traffic on pages generated in the selected window) ' +
+      'followed by <b>(domain-wide)</b> totals in parens when they differ. ' +
+      'Email signups, schedule clicks, and get-started clicks are domain-wide ' +
+      '(those events fire on landing pages, not on freshly-generated SEO pages).' +
     '</div>');
 }
 
@@ -7343,7 +7988,7 @@ function renderCostStats(payload) {
       '',
       'Note: orchestrator cost EXCLUDES Task subagent spend (anthropics/claude-code #43945).',
     ];
-    totalEl.setAttribute('data-tooltip', tipLines.join('\n'));
+    totalEl.setAttribute('data-tooltip', tipLines.join('\\n'));
     totalEl.style.cursor = 'help';
     totalEl.style.borderBottom = '1px dotted var(--text-muted)';
   }
@@ -7361,7 +8006,7 @@ function renderCostStats(payload) {
       'Estimated (transcript): ' + (est != null ? fmtMoney(est) : 'n/a'),
       '',
       'Displayed value prefers SDK; falls back to transcript estimate. Subagent costs excluded (anthropics/claude-code #43945).',
-    ].join('\n');
+    ].join('\\n');
     return '<span data-tooltip="' + escapeHtml(tip) +
       '" style="cursor:help;border-bottom:1px dotted var(--text-muted);">' +
       fmtMoney(displayed) + '</span>';
@@ -7759,9 +8404,17 @@ async function loadTopPosts(force) {
   if (_topLoaded && !force) return;
   _topLoading = true;
   try {
-    const params = new URLSearchParams({ limit: '200', window: _topWindow });
+    // Pass platform/kind/project filters server-side so the LIMIT applies to
+    // the FILTERED rowset, not the global top-N. Without ?project, the server
+    // returns the global top 1000 ordered by upvotes; smaller projects then
+    // get truncated out of the cross-project view (studyly all-time was
+    // showing only 2 of 8 posts because the other 6 didn't crack the global
+    // top 1000). With ?project=studyly, the server returns up to 1000 studyly
+    // posts; client-side filtering still works for the "All" case.
+    const params = new URLSearchParams({ limit: '1000', window: _topWindow });
     if (_topPlatform && _topPlatform !== 'all') params.set('platform', _topPlatform);
     if (_topSubtab === 'threads' || _topSubtab === 'comments') params.set('kind', _topSubtab);
+    if (_topProject && _topProject !== 'all') params.set('project', _topProject);
     const container = document.getElementById('top-table-container');
     if (container && force) container.innerHTML = '<div class="style-stats-empty">Loading\u2026</div>';
     const res = await fetch('/api/top?' + params.toString());
@@ -7851,7 +8504,7 @@ function initTopFilters() {
     saSave('sa.top.project.v1', _topProject);
     if (_topSubtab === 'pages') renderTopPagesFromCache();
     else if (_topSubtab === 'dms') { if (_topDmsPayload) renderTopDms(_topDmsPayload); }
-    else { if (_topPostsPayload) renderTopPosts(_topPostsPayload); }
+    else loadTopPosts(true); // refetch so the SQL LIMIT applies AFTER project filter
   });
   wireTopPillRow('top-campaign-pills', (v) => {
     _topCampaign = v || 'all';
@@ -8319,6 +8972,17 @@ function renderDmThreadCell(dm) {
   const nameHtml = url
     ? '<a class="dm-thread-author top-post-link" href="' + url + '" target="_blank" rel="noopener">' + author + '</a>'
     : '<span class="dm-thread-author">' + author + '</span>';
+  // Surface pill: distinguish a real DM thread (chat_url set) from a public
+  // comment chain that got promoted into the dms table (chat_url null). The
+  // engage-dm-replies pipeline now keys off this same distinction; rendering
+  // it here lets the operator see at a glance which surface a row lives on.
+  const isPublic = !String(dm.chat_url || '').trim();
+  const surfaceLabel = isPublic ? 'public' : 'DM';
+  const surfaceCls = isPublic ? 'dm-surface-public' : 'dm-surface-dm';
+  const surfaceTitle = isPublic
+    ? 'Public comment chain (no DM channel). The public-reply pipeline owns it.'
+    : 'Real DM thread (private message channel).';
+  const surfaceHtml = '<span class="dm-surface-pill ' + surfaceCls + '" title="' + escapeHtml(surfaceTitle) + '">' + surfaceLabel + '</span>';
   let pillHtml = '';
   const hasProspect = dm.prospect_headline || dm.prospect_company || dm.prospect_role || dm.prospect_bio || dm.prospect_recent_activity || dm.prospect_notes;
   if (hasProspect) {
@@ -8326,7 +8990,7 @@ function renderDmThreadCell(dm) {
     const pillText = headlineRaw.length > 48 ? headlineRaw.slice(0, 48) + '\u2026' : headlineRaw;
     pillHtml = '<button class="dm-prospect-pill" type="button" onclick="__showProspect(' + Number(dm.id) + ')" title="' + escapeHtml(headlineRaw) + '">' + escapeHtml(pillText) + '</button>';
   }
-  return '<div class="top-post-content">' + nameHtml + (tier ? ' ' + tier : '') + (pillHtml ? '<div class="dm-thread-subline">' + pillHtml + '</div>' : '') + '</div>';
+  return '<div class="top-post-content">' + nameHtml + (tier ? ' ' + tier : '') + ' ' + surfaceHtml + (pillHtml ? '<div class="dm-thread-subline">' + pillHtml + '</div>' : '') + '</div>';
 }
 
 function renderDmLastMsgCell(dm) {
@@ -9297,9 +9961,58 @@ function renderActivity(events) {
       ? '<span class="activity-detail">(' + escapeHtml(e.detail) + ')</span>'
       : '';
     const summaryText = escapeHtml(e.summary || '');
-    const summaryLink = e.link
-      ? ' <a class="activity-summary-url" href="' + escapeHtml(e.link) + '" target="_blank" rel="noopener">' + escapeHtml(e.link) + '</a>'
-      : '';
+    const isCommentLike = (e.type === 'posted_comment' || e.type === 'replied') && e.context_title;
+    // Twitter "Post Threads" job stitches multiple tweets into our_content
+    // separated by blank lines. Render each tweet as its own numbered card so
+    // the activity feed shows a 4-tweet thread as 4 distinct entries instead of
+    // one truncated blob.
+    const bodyStr = String(e.body || '');
+    const threadParts = bodyStr.split(/\\n{2,}/).map(s => s.trim()).filter(s => s.length > 0);
+    const isTwitterThread = (e.type === 'posted_thread' || e.type === 'resurrected')
+      && (String(e.platform || '').toLowerCase() === 'twitter')
+      && threadParts.length >= 2;
+    let summaryHtml;
+    if (isTwitterThread) {
+      const total = threadParts.length;
+      const headerLink = e.link
+        ? '<a href="' + escapeHtml(e.link) + '" target="_blank" rel="noopener">' + escapeHtml(e.link) + '</a>'
+        : '';
+      const tweetsHtml = threadParts.map((seg, i) =>
+        '<div class="activity-thread-tweet">' +
+          '<span class="activity-thread-tweet-num">' + (i + 1) + '/' + total + '</span>' +
+          '<span class="activity-thread-tweet-text">' + escapeHtml(seg) + '</span>' +
+        '</div>'
+      ).join('');
+      summaryHtml =
+        '<div class="activity-thread-list">' +
+          '<div class="activity-thread-header">' +
+            'thread · ' + total + ' tweets' +
+            (headerLink ? ' · ' + headerLink : '') +
+          '</div>' +
+          tweetsHtml +
+        '</div>';
+    } else if (isCommentLike) {
+      const ourLink = e.link ? escapeHtml(e.link) : '';
+      const threadLink = e.context_url ? escapeHtml(e.context_url) : '';
+      const threadTitle = escapeHtml(e.context_title);
+      const bodyOpen = ourLink
+        ? '<a class="activity-card-body" href="' + ourLink + '" target="_blank" rel="noopener">'
+        : '<div class="activity-card-body">';
+      const bodyClose = ourLink ? '</a>' : '</div>';
+      const threadInner = threadLink
+        ? '<a href="' + threadLink + '" target="_blank" rel="noopener">' + threadTitle + '</a>'
+        : threadTitle;
+      summaryHtml =
+        '<div class="activity-card">' +
+          bodyOpen + summaryText + bodyClose +
+          '<div class="activity-card-thread"><span class="activity-card-thread-label">thread:</span>' + threadInner + '</div>' +
+        '</div>';
+    } else {
+      const summaryLink = e.link
+        ? ' <a class="activity-summary-url" href="' + escapeHtml(e.link) + '" target="_blank" rel="noopener">' + escapeHtml(e.link) + '</a>'
+        : '';
+      summaryHtml = summaryText + summaryLink;
+    }
     return '<tr' + (isNew ? ' class="activity-row-new"' : '') + ' data-key="' + escapeHtml(e.key) + '">' +
       '<td title="' + escapeHtml(timeAbs) + '">' +
         '<div class="activity-event-cell">' +
@@ -9314,7 +10027,7 @@ function renderActivity(events) {
           detailHtml +
         '</div>' +
       '</td>' +
-      '<td class="activity-summary">' + summaryText + summaryLink + '</td>' +
+      '<td class="activity-summary">' + summaryHtml + '</td>' +
       '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-secondary);">' + fmtCostCell(e.cost_usd, e.cost_usd_orchestrator, e.cost_usd_estimated) + '</td>' +
     '</tr>';
   }).join('');
