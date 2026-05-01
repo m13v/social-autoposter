@@ -4096,6 +4096,9 @@ const HTML = `<!DOCTYPE html>
 <div class="header">
   <h1>Social Autoposter</h1>
   <div style="display:flex;align-items:center;gap:12px;">
+    <button class="theme-toggle" id="global-refresh-btn" onclick="refreshAllData()" title="Refresh all data" aria-label="Refresh all data">
+      <span id="global-refresh-icon" style="font-size:14px;line-height:1;">↻</span>
+    </button>
     <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark theme" aria-label="Toggle theme">
       <span class="theme-icon moon-icon">\u{1F319}</span>
       <span class="theme-icon sun-icon">\u2600\uFE0F</span>
@@ -8998,6 +9001,28 @@ function renderProjectStatus(data) {
         '<tbody>' + bodyRows + footerHtml + '</tbody>' +
       '</table>' +
     '</div>' + legend;
+}
+async function refreshAllData() {
+  const icon = document.getElementById('global-refresh-icon');
+  if (icon) { icon.style.transition = 'transform 0.6s'; icon.style.transform = 'rotate(360deg)'; setTimeout(() => { icon.style.transition = ''; icon.style.transform = ''; }, 700); }
+  // Reset loading guards so force-refresh always fires
+  _projectStatusLoading = false;
+  // Reload everything for the active tab + status-tab sections
+  const activeTab = document.querySelector('.tab.active');
+  const tab = activeTab ? activeTab.dataset.tab : 'stats';
+  loadProjectStatus(true);
+  loadDeployHealth();
+  loadStatus();
+  loadActivityStats();
+  loadStyleStats();
+  loadDmStats(true);
+  loadAllPerDayCharts();
+  loadFunnelStats(true);
+  loadCostStats(true);
+  loadTopPosts(true);
+  loadTopPages(true);
+  loadTopDms(true);
+  loadActivity();
 }
 async function loadProjectStatus(force) {
   if (_projectStatusLoading) return;
