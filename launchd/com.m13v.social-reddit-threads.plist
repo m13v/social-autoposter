@@ -14,7 +14,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Users/matthewdi/social-autoposter/skill/run-reddit-threads.sh</string>
+		<string>/Users/matthewdi/social-autoposter/skill/run-reddit-threads-double.sh</string>
 	</array>
 	<key>RunAtLoad</key>
 	<false/>
