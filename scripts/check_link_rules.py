@@ -66,7 +66,7 @@ def check_sub(sub):
     else:
         data = about.get("data", {})
         desc = (data.get("public_description", "") or "") + "\n" + (data.get("description", "") or "")
-        result["description"] = desc[:2000]
+        result["description"] = desc
         for tag in classify(desc):
             result["tags"].add(tag)
         result["subreddit_type"] = data.get("subreddit_type", "")
