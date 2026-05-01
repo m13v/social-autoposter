@@ -501,6 +501,23 @@ def run_claude(prompt, timeout=600):
                             elif block.get("type") == "text" and block.get("text","").strip():
                                 txt = block["text"].strip()[:200]
                                 print(f"[post_reddit] {txt}", file=sys.stderr, flush=True)
+                    elif etype == "user":
+                        # Tool results land in user messages. reddit_tools.py
+                        # search emits a `[reddit_search] q=... raw=N returned=R`
+                        # line on its own stderr, which Claude Code's Bash tool
+                        # bundles into the tool_result content. Forward those
+                        # markers into our log so enrichPostCommentsRedditRuns
+                        # can derive raw/passed pills per run.
+                        msg = evt.get("message", {})
+                        for block in msg.get("content", []):
+                            if block.get("type") != "tool_result":
+                                continue
+                            content = block.get("content", "")
+                            if isinstance(content, list):
+                                content = "".join(c.get("text","") for c in content if isinstance(c, dict))
+                            for ln in str(content).splitlines():
+                                if ln.startswith("[reddit_search]"):
+                                    print(ln, file=sys.stderr, flush=True)
                     elif etype == "result":
                         print(f"[post_reddit] done: cost=${evt.get('total_cost_usd',0):.4f}", file=sys.stderr, flush=True)
                 except (json.JSONDecodeError, TypeError):
@@ -706,7 +723,8 @@ def _plan_iteration(args, config, reddit_username, already_picked):
         for line in output.strip().split("\n")[-10:]:
             print(f"  {line}")
 
-    return {"project_name": project_name, "decisions": decisions, "cost": usage["cost_usd"]}
+    return {"project_name": project_name, "decisions": decisions,
+            "cost": usage["cost_usd"], "session_id": usage.get("session_id")}
 
 
 def _post_iteration(plan, reddit_username):
@@ -716,6 +734,14 @@ def _post_iteration(plan, reddit_username):
 
     if not decisions:
         return 0, 0
+
+    # In two-phase mode (plan in process A, post in process B), the env var
+    # set by run_claude in process A is gone. Re-export here so log_post →
+    # reddit_tools.py log-post stamps posts.claude_session_id correctly and
+    # the dashboard activity feed can join to claude_sessions for cost.
+    plan_session_id = plan.get("session_id")
+    if plan_session_id:
+        os.environ["CLAUDE_SESSION_ID"] = plan_session_id
 
     active_campaigns = load_active_reddit_campaigns()
     if active_campaigns:
