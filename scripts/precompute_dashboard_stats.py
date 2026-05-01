@@ -125,7 +125,7 @@ def precompute_activity(hours=24):
     q = (
         "SELECT json_agg(row_to_json(r)) FROM ("
         "SELECT type, " + norm + " AS platform, COUNT(*)::int AS count FROM ("
-        "SELECT 'posted' AS type, platform AS pl FROM posts WHERE posted_at >= NOW() - " + win + " AND our_content <> '(mention - no original post)' "
+        "SELECT CASE WHEN thread_url = our_url AND (thread_author IS NULL OR thread_author = our_account) THEN 'posted_thread' ELSE 'posted_comment' END AS type, platform AS pl FROM posts WHERE posted_at >= NOW() - " + win + " AND our_content <> '(mention - no original post)' "
         "UNION ALL SELECT 'replied', platform FROM replies WHERE status='replied' AND replied_at >= NOW() - " + win + " "
         "UNION ALL SELECT 'skipped', platform FROM replies WHERE status='skipped' AND COALESCE(processing_at, discovered_at) >= NOW() - " + win + " "
         "UNION ALL SELECT 'mention', platform FROM octolens_mentions WHERE COALESCE(source_timestamp, received_at) >= NOW() - " + win + " "
