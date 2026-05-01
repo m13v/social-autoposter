@@ -327,8 +327,8 @@ TARGET PROJECT:
   name:        {target['product']}
   domain:      {target['domain']}
   website:     {target['website']}
-  positioning: {json.dumps(proj.get('qualification', {}), ensure_ascii=False)[:600]}
-  description: {proj.get('description', '')[:600]}
+  positioning: {json.dumps(proj.get('qualification', {}), ensure_ascii=False)}
+  description: {proj.get('description', '')}
 
 TOP 10 RANKING (for context across all projects):
 """
