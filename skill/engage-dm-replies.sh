@@ -119,7 +119,7 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
                (SELECT COUNT(*) FROM dm_messages WHERE dm_id = d.id) as total_messages,
                (SELECT json_agg(json_build_object(
                    'direction', m.direction,
-                   'content', LEFT(m.content, 300),
+                   'content', m.content,
                    'author', m.author
                ) ORDER BY m.message_at ASC)
                FROM dm_messages m WHERE m.dm_id = d.id) as conversation_history
@@ -403,7 +403,7 @@ fi
 HUMAN_REPLY_KB=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(json_build_object(
         'platform', platform, 'project', project_name,
-        'their_author', their_author, 'instructions', LEFT(instructions, 300)
+        'their_author', their_author, 'instructions', instructions
     ))
     FROM human_dm_replies
     WHERE status = 'sent'
@@ -428,7 +428,7 @@ counting (event_id dedup will block it but don't even try).
    ```bash
    cd ~/social-autoposter && python3 scripts/reddit_browser.py unread-dms
    ```
-   Returns JSON with: author, subject, preview, time, thread_url, type.
+   Returns JSON with: author, subject, preview_short, time, thread_url, type.
    Type = 'pm' or 'comment_reply' are the ones to handle here. Type='chat'
    entries from this script are unreliable (selector is stale) and should
    be IGNORED — chat rooms were already handled by Phase A.0.
@@ -496,7 +496,7 @@ CRITICAL: use mcp__linkedin-agent__* tools for ALL LinkedIn browser work. Do NOT
        items.push({
          thread_url: href.startsWith('http') ? href : ('https://www.linkedin.com' + href),
          partner,
-         preview: text.slice(0, 200),
+         preview: text.slice(0, 2000),
          unread: !!unreadBadge,
        });
      }
