@@ -3199,12 +3199,14 @@ async function handleApi(req, res) {
     if (idLookup != null) {
       whereParts.push("d.id = " + idLookup);
     }
-    // Hide public-comment artifacts from the default DM list. These rows exist
-    // in `dms` only so the cross-thread history block in engage_reddit can find
-    // prior public engagement; they're not actionable DMs and clutter the view.
-    // Always show them when the operator is doing an explicit id/search lookup.
+    // The DM subtab only shows threads where at least one real DM was
+    // actually exchanged (inbound or outbound). Rows in `dms` that exist only
+    // as public-comment artifacts (so the cross-thread history block in
+    // engage_reddit can find prior public engagement) have zero rows in
+    // dm_messages and are filtered out here. Always show them when the
+    // operator is doing an explicit id/search lookup.
     if (idLookup == null && !searchTerm) {
-      whereParts.push("d.conversation_status <> 'public_only'");
+      whereParts.push("EXISTS (SELECT 1 FROM dm_messages mfilter WHERE mfilter.dm_id = d.id)");
     }
     if (searchTerm) {
       // Escape single quotes for the LIKE literal (no params used elsewhere
@@ -5215,7 +5217,7 @@ function parseServerUtcTs(iso) {
   // The pg pool driver returns timestamps as "...+00:00", which is a valid offset
   // already; appending Z would corrupt it. Only legacy bare "...HH:MM:SS[.fff]"
   // strings (no offset) need the Z to be parsed as UTC.
-  const hasOffset = /(Z|[+-]\d{2}:?\d{2})$/i.test(s);
+  const hasOffset = /(Z|[+-]\\d{2}:?\\d{2})$/i.test(s);
   const d = new Date(hasOffset ? s : s + 'Z');
   return isNaN(d.getTime()) ? null : d;
 }
@@ -9062,17 +9064,6 @@ function renderDmThreadCell(dm) {
   const nameHtml = url
     ? '<a class="dm-thread-author top-post-link" href="' + url + '" target="_blank" rel="noopener">' + author + '</a>'
     : '<span class="dm-thread-author">' + author + '</span>';
-  // Surface pill: distinguish a real DM thread (chat_url set) from a public
-  // comment chain that got promoted into the dms table (chat_url null). The
-  // engage-dm-replies pipeline now keys off this same distinction; rendering
-  // it here lets the operator see at a glance which surface a row lives on.
-  const isPublic = !String(dm.chat_url || '').trim();
-  const surfaceLabel = isPublic ? 'public' : 'DM';
-  const surfaceCls = isPublic ? 'dm-surface-public' : 'dm-surface-dm';
-  const surfaceTitle = isPublic
-    ? 'Public comment chain (no DM channel). The public-reply pipeline owns it.'
-    : 'Real DM thread (private message channel).';
-  const surfaceHtml = '<span class="dm-surface-pill ' + surfaceCls + '" title="' + escapeHtml(surfaceTitle) + '">' + surfaceLabel + '</span>';
   let pillHtml = '';
   const hasProspect = dm.prospect_headline || dm.prospect_company || dm.prospect_role || dm.prospect_bio || dm.prospect_recent_activity || dm.prospect_notes;
   if (hasProspect) {
@@ -9080,7 +9071,7 @@ function renderDmThreadCell(dm) {
     const pillText = headlineRaw.length > 48 ? headlineRaw.slice(0, 48) + '\u2026' : headlineRaw;
     pillHtml = '<button class="dm-prospect-pill" type="button" onclick="__showProspect(' + Number(dm.id) + ')" title="' + escapeHtml(headlineRaw) + '">' + escapeHtml(pillText) + '</button>';
   }
-  return '<div class="top-post-content">' + nameHtml + (tier ? ' ' + tier : '') + ' ' + surfaceHtml + (pillHtml ? '<div class="dm-thread-subline">' + pillHtml + '</div>' : '') + '</div>';
+  return '<div class="top-post-content">' + nameHtml + (tier ? ' ' + tier : '') + (pillHtml ? '<div class="dm-thread-subline">' + pillHtml + '</div>' : '') + '</div>';
 }
 
 function renderDmLastMsgCell(dm) {
