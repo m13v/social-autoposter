@@ -62,14 +62,10 @@ def pick_project(config, platform=None, exclude=None):
     if platform:
         weighted = [p for p in weighted if platform not in (p.get("platforms_disabled") or [])]
 
-    # Filter by platform compatibility, skip projects that have no topics for this platform
-    platform_topic_key = {
-        "twitter": "twitter_topics",
-        "linkedin": "linkedin_topics",
-        "github": "github_search_topics",
-    }.get(platform)
-    if platform_topic_key:
-        weighted = [p for p in weighted if p.get(platform_topic_key)]
+    # Filter by platform compatibility: skip projects with no search_topics
+    # (the unified seed list, post 2026-04-30 legacy-field removal).
+    if platform in ("twitter", "linkedin", "github"):
+        weighted = [p for p in weighted if p.get("search_topics")]
 
     if not weighted:
         if exclude:
