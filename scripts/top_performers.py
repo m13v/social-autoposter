@@ -303,9 +303,9 @@ def format_post(row, include_thread_content=True):
     if thread_title:
         lines.append(f"  Thread: {thread_title[:150]}")
     if include_thread_content and thread_content:
-        snippet = thread_content[:200].replace('\n', ' ')
+        snippet = thread_content[:2000].replace('\n', ' ')
         lines.append(f"  Thread body: {snippet}")
-    lines.append(f"  Our comment: {our_content[:400]}")
+    lines.append(f"  Our comment: {our_content[:2000]}")
     return "\n".join(lines)
 
 
