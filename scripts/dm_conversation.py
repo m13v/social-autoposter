@@ -718,7 +718,7 @@ def _send_escalation_email(conn, dm_id, platform, their_author, reason):
         f"Keep the [DM #{dm_id}] token in the subject line so the pipeline can route it.\n"
     )
 
-    subject = _scrub_dashes(f"[DM #{dm_id}] {their_author} [{platform}]: {(reason or '')[:120]}")
+    subject = _scrub_dashes(f"[DM #{dm_id}] {their_author} [{platform}]: {(reason or '')}")
     body = _scrub_dashes(body)
 
     msg = MIMEText(body, "plain", "utf-8")
