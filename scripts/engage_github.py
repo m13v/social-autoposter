@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
+from engagement_styles import get_styles_prompt, get_anti_patterns
 
 REPO_DIR = os.path.expanduser("~/social-autoposter")
 CONFIG_PATH = os.path.join(REPO_DIR, "config.json")
@@ -171,12 +172,16 @@ Read it carefully before deciding anything.
 
 {thread_summary}
 {recent_context}
+{get_styles_prompt("github", context="replying")}
+
 ## Content rules
 - Write like a technical peer in the thread, not a marketer.
 - NO em dashes. Use commas, periods, or regular dashes.
 - Match the length and register of the thread. Short threads get short replies.
 - Never say "I built" / "we built" / "I'm working on". Do not promote.
 - Never link to your own repo or product in a thread that is a bug report for someone else's project. Ever.
+
+{get_anti_patterns()}
 
 ## Tiered link strategy (DEFAULT TO TIER 1)
 - Tier 1 (default): No link, no project mention. Just substance that helps the reader.
@@ -213,7 +218,7 @@ For skip:
 For reply:
 {{"action": "reply", "text": "YOUR_REPLY_TEXT", "project": null, "engagement_style": "STYLE_NAME"}}
 
-Set "engagement_style" to the style you chose: critic, storyteller, pattern_recognizer, curious_probe, contrarian, data_point_drop, or snarky_oneliner. Every reply MUST have an engagement_style.
+Set "engagement_style" to the style you chose from the list above. Every reply MUST have an engagement_style. If none of the listed styles fit, you may invent a new one: set engagement_style to your new name AND include a `new_style` block (description, example, note, why_existing_didnt_fit) inside the same JSON object, per the "Inventing a new style" instructions above.
 If you recommended a project from config.json in the reply text, set "project" to that project name.
 The orchestrator posts the reply via gh CLI and updates the database. You only decide and draft.
 """
