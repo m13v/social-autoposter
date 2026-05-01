@@ -14,7 +14,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Users/matthewdi/social-autoposter/skill/run-moltbook.sh</string>
+		<string>/Users/matthewdi/social-autoposter/skill/run-moltbook-launchd.sh</string>
 	</array>
 	<key>RunAtLoad</key>
 	<false/>
@@ -22,12 +22,7 @@
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-moltbook-stderr.log</string>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-moltbook-stdout.log</string>
-	<key>StartCalendarInterval</key>
-	<array>
-		<dict><key>Minute</key><integer>0</integer></dict>
-		<dict><key>Minute</key><integer>15</integer></dict>
-		<dict><key>Minute</key><integer>30</integer></dict>
-		<dict><key>Minute</key><integer>45</integer></dict>
-	</array>
+	<key>StartInterval</key>
+	<integer>900</integer>
 </dict>
 </plist>
