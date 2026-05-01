@@ -236,7 +236,7 @@ def generate_keywords_dataforseo(project):
 
     # 1. Keyword suggestions from topics
     # Use more specific seed phrases to avoid ambiguity (e.g. "playwright" the person)
-    topics = project.get("topics", [])
+    topics = project.get("search_topics", [])
     seed_suffixes = ["tool", "framework", "software", "automation"]
     print(f"\n  Fetching suggestions for {len(topics)} topics (min vol >= {min_vol})...")
     for topic in topics:
@@ -282,7 +282,7 @@ def generate_keywords_dataforseo(project):
         # Build relevance word set from topics, features, competitors, and industry terms
         if not hasattr(generate_keywords_dataforseo, '_relevance_words'):
             rw = set()
-            for t in project.get("topics", []):
+            for t in project.get("search_topics", []):
                 rw.update(w.lower() for w in t.split() if len(w) > 3)
             rw.add(project["name"].lower())
             for f in project.get("features", [])[:10]:
@@ -310,7 +310,7 @@ def generate_keyword_templates(project):
     """Fallback: generate keywords from templates (no API needed)."""
     name = project["name"]
     name_lower = name.lower()
-    topics = project.get("topics", [])
+    topics = project.get("search_topics", [])
     features = project.get("features", [])
     competitive = project.get("competitive_positioning", {})
 
@@ -445,7 +445,7 @@ def main():
         sys.exit(1)
 
     print(f"Generating keywords for: {project['name']}")
-    print(f"  Topics: {len(project.get('topics', []))}")
+    print(f"  Topics: {len(project.get('search_topics', []))}")
     print(f"  Competitors: {len(extract_competitor_domains(project))}")
     print(f"  Min volume: {project_min_volume(project)}")
 
