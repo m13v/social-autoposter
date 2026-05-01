@@ -1453,6 +1453,7 @@ def build_prompt(product: str, keyword: str, slug: str, trigger: str,
         "gsc": "This query is already driving impressions to the site in Google Search Console. Real users are searching for this. Capture the demand.",
         "manual": "This is an adhoc trigger. Treat the keyword as worth building.",
         "reddit": "This page is being created to drop into a high-performing Reddit thread. Match the thread audience's vocabulary and pain points; the page should genuinely help someone who landed on it from a Reddit comment.",
+        "twitter": "This page is being created to drop into the primary reply on a high-momentum X (Twitter) thread. Match the thread audience's vocabulary and pain points; the page should genuinely help someone who landed on it from an X reply. Keep it concise and skimmable, and assume the reader arrived via mobile.",
         "roundup": "This is a weekly best-of listicle for the host's niche. The SEO target is the freshness query 'best <host niche> <Month Year>'. Build it from real competitor research, not from the portfolio of products we run. Readers landing here expect a balanced, objective view of the actual category. The host product is included only when an honest reading of the chosen ranking criterion places it in the top results, and is never ranked #1 by default.",
     }.get(trigger, "")
 
@@ -2713,6 +2714,42 @@ def update_state(trigger: str, product: str, keyword: str, status: str,
         conn.commit()
         cur.close()
         conn.close()
+    elif trigger == "twitter":
+        # Per-thread SEO landing page generated synchronously inside
+        # run-twitter-cycle.sh Phase 2b-gen. The page is anchored on the
+        # essence of our reply text, not a pre-existing keyword backlog,
+        # so source='twitter' tags it as a reply-driven page rather than
+        # a SERP/GSC backlog item. Mirrors the reddit branch above.
+        conn = db_helpers.get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO seo_keywords (product, keyword, slug, source, status) "
+            "VALUES (%s, %s, %s, 'twitter', %s) "
+            "ON CONFLICT (product, keyword) DO NOTHING",
+            (product, keyword, slug or "", status),
+        )
+        sets = ["status = %s", "updated_at = NOW()"]
+        vals: list = [status]
+        if page_url is not None:
+            sets.append("page_url = %s"); vals.append(page_url)
+        if slug is not None:
+            sets.append("slug = %s"); vals.append(slug)
+        if notes is not None:
+            sets.append("notes = %s"); vals.append(notes)
+        if content_type is not None:
+            sets.append("content_type = %s"); vals.append(content_type)
+        if claude_session_id is not None:
+            sets.append("claude_session_id = %s"); vals.append(claude_session_id)
+        if status == "done":
+            sets.append("completed_at = NOW()")
+        vals.extend([product, keyword])
+        cur.execute(
+            f"UPDATE seo_keywords SET {', '.join(sets)} WHERE product = %s AND keyword = %s",
+            vals,
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
     elif trigger == "top_page":
         conn = db_helpers.get_conn()
         cur = conn.cursor()
@@ -3406,7 +3443,7 @@ def main() -> int:
     ap.add_argument("--product")
     ap.add_argument("--keyword")
     ap.add_argument("--slug")
-    ap.add_argument("--trigger", choices=["serp", "gsc", "manual", "reddit", "top_page", "roundup"], default="manual")
+    ap.add_argument("--trigger", choices=["serp", "gsc", "manual", "reddit", "twitter", "top_page", "roundup"], default="manual")
     ap.add_argument("--content-type", choices=list(CONTENT_TYPES.keys()), default=None,
                     help="Override the regex classifier. Default: auto-classify from keyword.")
     ap.add_argument("--force", action="store_true",
