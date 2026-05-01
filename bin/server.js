@@ -9140,6 +9140,24 @@ function renderTopDms(payload) {
         return arr.includes(_topCampaign);
       })
     : projectScoped;
+  // Detect a URL in any outbound dm_messages content. Catches both protocol
+  // links (https://x.com) and bare domains (github.com/foo) so threads where
+  // we sent a github/blog/repo link without minting a booking redirect still
+  // count as "link sent". Backslashes are doubled because this code lives
+  // inside the dashboard's HTML backtick template (the template eats single
+  // backslashes — see feedback_server_js_template_regex).
+  const __OUTBOUND_URL_RE = /https?:\\/\\/\\S+|(?:[a-z0-9-]+\\.)+[a-z]{2,}\\/[\\w\\-./?#=&%+~:@!$,;*]+/i;
+  function __outboundLinkInfo(messages) {
+    if (!Array.isArray(messages)) return null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m && m.direction === 'outbound' && m.content) {
+        const match = String(m.content).match(__OUTBOUND_URL_RE);
+        if (match) return { url: match[0], message_at: m.message_at || null };
+      }
+    }
+    return null;
+  }
   const dirScoped = _topDmDir === 'in'
     ? campaignScoped.filter(d => d.last_dir === 'inbound')
     : (_topDmDir === 'out'
@@ -9152,7 +9170,7 @@ function renderTopDms(payload) {
     if (_topDmQual !== 'all' && (d.qualification_status || '') !== _topDmQual) return false;
     if (_topDmStatus !== 'all' && (d.conversation_status || '') !== _topDmStatus) return false;
     if (_topDmLink !== 'all') {
-      const linkSent = !!(d.booking_link_sent_at || d.short_link_code);
+      const linkSent = !!(d.booking_link_sent_at || d.short_link_code || __outboundLinkInfo(d.messages));
       if (_topDmLink === 'yes' && !linkSent) return false;
       if (_topDmLink === 'no' && linkSent) return false;
     }
@@ -9205,6 +9223,7 @@ function renderTopDms(payload) {
     qualification_notes: d.qualification_notes || '',
     booking_link_sent_at: d.booking_link_sent_at || null,
     short_link_code: d.short_link_code || '',
+    outbound_link: __outboundLinkInfo(d.messages),
     short_link_clicks: Number(d.short_link_clicks) || 0,
     short_link_first_click_at: d.short_link_first_click_at || null,
     short_link_last_click_at: d.short_link_last_click_at || null,
@@ -9299,15 +9318,18 @@ function renderTopDms(payload) {
         return '<div class="dm-stat-stack">' + msgLine + clickLine + bookedLine + '</div>';
       } },
     { key: 'link_sent', label: 'Link sent', type: 'text', align: 'center', widthPct: 6,
-      accessor: r => (r.booking_link_sent_at || r.short_link_code) ? 'yes' : 'no',
+      accessor: r => (r.booking_link_sent_at || r.short_link_code || r.outbound_link) ? 'yes' : 'no',
       formatter: (_v, r) => {
-        const sent = !!(r.booking_link_sent_at || r.short_link_code);
+        const sent = !!(r.booking_link_sent_at || r.short_link_code || r.outbound_link);
         if (!sent) return '<span style="color:var(--text-faint);">No</span>';
-        const sentAt = r.booking_link_sent_at ? new Date(r.booking_link_sent_at).toLocaleString() : '';
-        const code = r.short_link_code ? ('/r/' + String(r.short_link_code)) : '';
         const tipParts = [];
-        if (sentAt) tipParts.push('sent: ' + sentAt);
-        if (code) tipParts.push(code);
+        if (r.booking_link_sent_at) tipParts.push('booking link sent: ' + new Date(r.booking_link_sent_at).toLocaleString());
+        if (r.short_link_code) tipParts.push('/r/' + String(r.short_link_code));
+        if (r.outbound_link && r.outbound_link.url) {
+          let url = String(r.outbound_link.url);
+          if (url.length > 80) url = url.slice(0, 77) + '…';
+          tipParts.push('outbound: ' + url);
+        }
         const tip = tipParts.join(' • ');
         const tipAttr = tip ? ' data-tooltip="' + escapeHtml(tip) + '"' : '';
         return '<span' + tipAttr + ' style="color:var(--success);font-weight:600;">Yes</span>';
