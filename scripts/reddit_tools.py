@@ -213,7 +213,7 @@ def _parse_search_results(data, already_posted, blocked_subs):
             "score": post.get("score", 0),
             "num_comments": post.get("num_comments", 0),
             "age_hours": round(age_hours, 1),
-            "selftext": post.get("selftext", "")[:300],
+            "selftext": post.get("selftext", ""),
             "already_posted": already,
         }
         if already:
@@ -318,7 +318,7 @@ def cmd_fetch(args):
     thread = {
         "title": thread_data.get("title", ""),
         "author": thread_data.get("author", ""),
-        "selftext": thread_data.get("selftext", "")[:1000],
+        "selftext": thread_data.get("selftext", ""),
         "score": thread_data.get("score", 0),
         "num_comments": thread_data.get("num_comments", 0),
         "subreddit": f"r/{thread_data.get('subreddit', '')}",
@@ -345,7 +345,7 @@ def cmd_fetch(args):
         comment = {
             "id": c.get("name", ""),  # full thing ID like t1_abc123
             "author": c.get("author", ""),
-            "body": c.get("body", "")[:1500],
+            "body": c.get("body", ""),
             "score": c.get("score", 0),
             "permalink": f"https://old.reddit.com{c.get('permalink', '')}",
         }
