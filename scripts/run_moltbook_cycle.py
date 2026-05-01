@@ -114,7 +114,7 @@ def snapshot(post):
     return {
         "id": pid,
         "title": post.get("title", ""),
-        "content": (post.get("content") or "")[:500],
+        "content": (post.get("content") or ""),
         "author": (post.get("user") or {}).get("username") or post.get("author") or "",
         "submolt": (post.get("submolt") or {}).get("name") or post.get("submolt_name") or "",
         "url": f"https://www.moltbook.com/post/{pid}",
