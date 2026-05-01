@@ -643,29 +643,25 @@ cd ~/social-autoposter && python3 scripts/dm_conversation.py pending
 Known conversations from the database that already need replies:
 $PENDING_CONVOS
 
-## TRIGGER FIELD — read this before composing any reply
+## CLICK_SIGNAL inbound rows — read this before composing any reply
 
-Every conversation in \$PENDING_CONVOS has a \`trigger\` field. It tells you why this row is in your queue:
+Some "inbound" rows in \`conversation_history\` are NOT typed messages from the prospect. They are backend signals inserted by the short-link redirector when the prospect silently clicks the booking URL we DM'd them. They look like:
 
-- \`trigger = "inbound"\` (default, classic case): they sent us a new message and we haven't replied yet. The "Should we reply at all?" check in Step 0 applies as written. The "ONE message per conversation per run" hard rule applies. Compose per Step 2.
-- \`trigger = "click"\` (click-driven follow-up): they clicked our short link recently AND we have not followed up about that click yet. The last message in the thread is usually OUTBOUND (we sent the booking link, they clicked, they didn't reply). This is a deliberate soft-nudge rail.
+\`\`\`json
+{ "direction": "inbound", "author": "__click_signal__", "content": "[CLICK_SIGNAL] short link clicked" }
+\`\`\`
 
-### When \`trigger = "click"\`, override these rules:
+If the LATEST inbound for a thread starts with \`[CLICK_SIGNAL]\`:
 
-1. Step 0's "Last message is already outbound -> SKIP" rule does NOT apply. The click is the trigger; outbound-last is the expected state for this row.
-2. **NEVER mention the click. NEVER reveal we track clicks.** The user must not know we know they clicked. Phrases like "saw you checked out the link", "noticed you opened", "in case you missed it" are BANNED.
-3. Send a soft, low-pressure Mode A nudge. 1-2 sentences max. The goal is to keep the conversation alive without pressure. Examples of acceptable shapes:
-   - A genuine follow-up question tied to something specific from their last inbound (if any inbound exists in conversation_history).
+1. Treat as a soft trigger to nudge, not a typed message. Do NOT quote the signal back, do NOT acknowledge it, do NOT mention you know they clicked. The prospect must not know the click is observable. Phrases like "saw you checked out the link", "noticed you opened", "in case you missed it" are BANNED.
+2. Compose a soft Mode A nudge, 1-2 sentences max, low-pressure. Acceptable shapes:
+   - A genuine follow-up question tied to something specific from an EARLIER real inbound in conversation_history.
    - A casual "how's it going with X" referencing context they shared earlier.
-   - If the conversation has zero inbound messages (we DM'd them, they clicked, never replied), either skip OR send one extremely soft check-in that doesn't ping the booking link again. When in doubt, skip.
-4. Do NOT re-share the booking link in a click follow-up. They already have it (they clicked it). Re-sending feels desperate and crosses into spam.
-5. Do NOT push for a call/meeting/demo in a click follow-up. Just keep the door open.
-6. After a verified send (after \`dm_send_log.py --verified\`), ALSO call:
-   \`\`\`bash
-   python3 scripts/mark_click_followup.py --dm-id DM_ID --verified --note "click-followup"
-   \`\`\`
-   This stamps \`last_click_followup_at = NOW()\` so the same click doesn't re-trigger on the next cycle. **Required for every \`trigger = "click"\` send. Skip it and the same row fires every 4h forever.**
-7. If you decide to skip a click-trigger row (e.g., conversation has no inbound and a soft check-in would feel weird), you do NOT need to call \`mark_click_followup.py\`. The skip just means "no nudge this time"; if a NEW click comes in later, it'll re-trigger naturally.
+   - If conversation_history has NO real inbound messages from them (we DM'd, they clicked, never replied), prefer SKIP. A cold-click nudge with no prior typed exchange reads as creepy.
+3. Do NOT re-share the booking link. They already clicked it. Re-sending crosses into spam.
+4. Do NOT push for a call, demo, or meeting in a click-driven nudge. Keep the door open, that's all.
+5. The "ONE message per conversation per run" hard rule still applies. The "Last message is outbound -> SKIP" rule in Step 0 does NOT apply when the latest inbound is a CLICK_SIGNAL (the synthetic inbound IS the new signal that puts this row in the queue).
+6. Idempotency is automatic: once you send your nudge, our outbound is newer than the click signal and the row drops out of the queue on the next cycle. If they click again later, a new \`[CLICK_SIGNAL]\` row is inserted and the thread re-enters the queue naturally.
 
 ## CORE PHILOSOPHY
 
