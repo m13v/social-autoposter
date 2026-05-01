@@ -44,6 +44,12 @@ def load_config():
 def daily_count_today():
     """Return the number of original Twitter threads posted in the current
     UTC calendar day (matching posted_at::date = CURRENT_DATE in Postgres).
+
+    Excludes engage-twitter mention-bookkeeping rows that share the
+    thread_url=our_url shape but aren't actually our threads. Those rows have
+    our_content like "(mention - no original post)" and source_summary IS
+    NULL, and exist because the notifications scanner stamps them as a
+    placeholder when it sees we were @mentioned without our own reply.
     """
     conn = dbmod.get_conn()
     row = conn.execute(
@@ -52,6 +58,7 @@ def daily_count_today():
         WHERE platform='twitter'
           AND thread_url = our_url
           AND posted_at::date = CURRENT_DATE
+          AND our_content NOT ILIKE '(mention%'
         """
     ).fetchone()
     conn.close()
@@ -111,7 +118,10 @@ def angle_recency(project_recents, angle_text):
 
 
 def recent_posts_by_project(days=7):
-    """Return dict: project_name -> count of original Twitter threads in last N days."""
+    """Return dict: project_name -> count of original Twitter threads in last N days.
+
+    Excludes mention-placeholder rows (see daily_count_today docstring).
+    """
     conn = dbmod.get_conn()
     rows = conn.execute(
         """
@@ -121,6 +131,7 @@ def recent_posts_by_project(days=7):
           AND thread_url = our_url
           AND posted_at > NOW() - INTERVAL '%s days'
           AND project_name IS NOT NULL
+          AND our_content NOT ILIKE '(mention%%'
         GROUP BY project_name
         """ % int(days)
     ).fetchall()
