@@ -3208,20 +3208,13 @@ async function handleApi(req, res) {
     // platforms_disabled is an explicit deny list (e.g. paperback-expert opts
     // out of moltbook because the HN audience isn't its ICP).
     const isDisabled = (p, plat) => Array.isArray(p.platforms_disabled) && p.platforms_disabled.includes(plat);
-    // After 2026-04-24 unified-topics migration, search_topics is the single
-    // source of truth fed to every platform pipeline. Legacy per-platform
-    // topic lists (github_search_topics / twitter_topics / linkedin_topics)
-    // remain as backward-compat fallbacks. A project is eligible for a
-    // platform if EITHER list is non-empty.
-    const hasTopics = (p, legacyKey) => {
-      const a = Array.isArray(p.search_topics) && p.search_topics.length > 0;
-      const b = Array.isArray(p[legacyKey]) && p[legacyKey].length > 0;
-      return a || b;
-    };
+    // search_topics is the single source of truth (post 2026-04-24 unified
+    // migration; legacy per-platform topic lists were removed 2026-04-30).
+    const hasSearchTopics = p => Array.isArray(p.search_topics) && p.search_topics.length > 0;
     const platformEligible = {
-      github:   p => !isDisabled(p, 'github')   && hasTopics(p, 'github_search_topics'),
-      twitter:  p => !isDisabled(p, 'twitter')  && hasTopics(p, 'twitter_topics'),
-      linkedin: p => !isDisabled(p, 'linkedin') && hasTopics(p, 'linkedin_topics'),
+      github:   p => !isDisabled(p, 'github')   && hasSearchTopics(p),
+      twitter:  p => !isDisabled(p, 'twitter')  && hasSearchTopics(p),
+      linkedin: p => !isDisabled(p, 'linkedin') && hasSearchTopics(p),
       reddit:   p => !isDisabled(p, 'reddit'),
       moltbook: p => !isDisabled(p, 'moltbook'),
     };
