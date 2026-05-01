@@ -36,43 +36,94 @@ RUN_START=$(date +%s)
 # from prior cycles into this batch.
 FRESHNESS_HOURS=6
 
-[ -f "$REPO_DIR/.env" ] && source "$REPO_DIR/.env"
+# `set -a` auto-exports every variable assigned by `source .env`, so DATABASE_URL
+# and friends propagate to subprocess env (python3 scripts use os.environ at
+# import time and would otherwise see empty strings — silently breaking
+# update_candidate_posted in twitter_post_plan.py and creating duplicate posts
+# under parallel cycles, observed 2026-05-01 batches 02-08).
+if [ -f "$REPO_DIR/.env" ]; then
+    set -a
+    source "$REPO_DIR/.env"
+    set +a
+fi
 
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 
 log "=== Twitter Cycle (batch=$BATCH_ID): $(date) ==="
 
-# Serialize with other twitter-agent consumers (engage-twitter,
-# dm-outreach-twitter, link-edit-twitter, engage-dm-replies --platform twitter,
-# stats.sh Step 3). Without this, concurrent pipelines collide on the shared
-# twitter-agent browser profile and scraping/posting aborts mid-run.
+# Source lock helpers (functions only, no lock acquired here). Phase 0 + the
+# project/queries setup below run lock-free against DB and config files;
+# the twitter-browser lock is acquired later, immediately before the Phase 1
+# Claude scan that actually drives the browser (line ~177). Pre-2026-05-01
+# this acquire was here at script start and held the lock through Phase 0
+# (~3-10s of pure DB/Python work that doesn't touch the browser), starving
+# peer cycles' Phase 2b-post under parallel-cycle contention.
 source "$REPO_DIR/skill/lock.sh"
-acquire_lock "twitter-browser" 3600
 
-# --- Phase 0: hard-expire stale pending + salvage recent orphans -------------
+# --- Phase 0: hard-expire stale pending + salvage truly-orphaned rows --------
 # Pending rows from prior cycles fall into two buckets:
 #   - tweet_posted_at older than FRESHNESS_HOURS  -> hard-expire (lost the
 #     replying window, no value in retrying)
-#   - still-fresh                                 -> re-assign to this batch
+#   - still-fresh AND owning batch is dead        -> re-assign to this batch
 #     so Phase 2a re-measures T1 and Phase 2b reconsiders them. This is the
 #     recovery path for cycles whose Phase 2b died on Anthropic org quota,
 #     X rate limit, browser crash, or any other infra failure.
-EXPIRED_STALE=$(psql "$DATABASE_URL" -t -A -c "
+#
+# Two safety guards make this safe under parallel cycles (post 2026-04-30
+# detach refactor: launchd no longer suppresses overlapping fires, so 2-3
+# run-twitter-cycle.sh can be in Phase 0/1/2 simultaneously):
+#
+#   1. pg_advisory_xact_lock(7472346) serializes Phase 0 transactions, so
+#      two cycles can't race on the salvage UPDATE.
+#
+#   2. SALVAGE_MIN_AGE_MIN guard: only salvage from batches older than this
+#      many minutes. Without this, a fresh cycle whose Phase 0 runs while a
+#      peer cycle is still in T1 sleep / Phase 2a / Phase 2b would STEAL all
+#      the peer's pending rows, breaking the peer's Phase 2a (which queries
+#      `WHERE batch_id='$BATCH_ID' AND status='pending'`). 20 min covers a
+#      normal cycle's Phase 0->2c span; only genuinely-dead batches stay
+#      pending past that.
+#
+# batch_id format is `twcycle-YYYYMMDD-HHMMSS` (assigned at script start
+# from `date +%Y%m%d-%H%M%S`, local time). Since the format is fixed-width
+# and lexicographically sortable, we compute the cutoff in the shell
+# (same TZ as batch_id) and do a string comparison in SQL — sidesteps the
+# Postgres session-TZ trap that would otherwise mis-interpret batch_id.
+SALVAGE_MIN_AGE_MIN=20
+SALVAGE_CUTOFF_BATCH_ID="twcycle-$(date -v-${SALVAGE_MIN_AGE_MIN}M +%Y%m%d-%H%M%S)"
+PHASE0_RESULT=$(psql "$DATABASE_URL" --single-transaction -t -A -c "
+SELECT pg_advisory_xact_lock(7472346);
+WITH expired AS (
     UPDATE twitter_candidates
     SET status='expired'
     WHERE status='pending' AND tweet_posted_at < NOW() - INTERVAL '$FRESHNESS_HOURS hours'
     RETURNING id
-" 2>/dev/null | wc -l | tr -d ' ')
-[ "${EXPIRED_STALE:-0}" -gt 0 ] && log "Phase 0: hard-expired $EXPIRED_STALE pending rows older than ${FRESHNESS_HOURS}h"
-
-SALVAGED=$(psql "$DATABASE_URL" -t -A -c "
+), salvaged AS (
     UPDATE twitter_candidates
     SET batch_id='$BATCH_ID'
     WHERE status='pending' AND batch_id != '$BATCH_ID'
     AND tweet_posted_at >= NOW() - INTERVAL '$FRESHNESS_HOURS hours'
+    AND batch_id LIKE 'twcycle-%'
+    AND batch_id < '$SALVAGE_CUTOFF_BATCH_ID'
+    -- Skip threads we already posted to. score_twitter_candidates.py applies
+    -- this filter on FRESH scrapes (line 124-142), but salvage previously
+    -- bypassed it. With Bug 1 (DATABASE_URL not exported) leaving every
+    -- successful post's candidate row stuck at status='pending', salvage was
+    -- re-claiming already-posted threads and Phase 2b-post was double-firing
+    -- the browser reply (observed 2026-05-01 batches: 4 real duplicate replies
+    -- on m13v_ timeline). Belt-and-suspenders even after Bug 1 is fixed.
+    AND tweet_url NOT IN (
+        SELECT thread_url FROM posts
+        WHERE platform='twitter' AND thread_url IS NOT NULL
+    )
     RETURNING id
-" 2>/dev/null | wc -l | tr -d ' ')
-[ "${SALVAGED:-0}" -gt 0 ] && log "Phase 0: salvaged $SALVAGED orphaned pending rows from prior cycles into $BATCH_ID"
+)
+SELECT (SELECT COUNT(*) FROM expired) || '|' || (SELECT COUNT(*) FROM salvaged);
+" 2>/dev/null | tail -1 | tr -d ' ')
+EXPIRED_STALE=$(echo "$PHASE0_RESULT" | cut -d'|' -f1)
+SALVAGED=$(echo "$PHASE0_RESULT" | cut -d'|' -f2)
+[ "${EXPIRED_STALE:-0}" -gt 0 ] && log "Phase 0: hard-expired $EXPIRED_STALE pending rows older than ${FRESHNESS_HOURS}h"
+[ "${SALVAGED:-0}" -gt 0 ] && log "Phase 0: salvaged $SALVAGED orphaned pending rows from dead batches (>${SALVAGE_MIN_AGE_MIN}m old) into $BATCH_ID"
 
 # --- Weighted project sample -------------------------------------------------
 PROJECTS_JSON=$(python3 - <<'PY'
@@ -121,6 +172,10 @@ log "Dud queries loaded: $DUD_COUNT (last 48h, 0-result)"
 # JSON schema forces structured output. Eliminates the prose-drift failure mode
 # where the scanner summarized instead of dumping the JSON array.
 SCAN_SCHEMA='{"type":"object","properties":{"tweets":{"type":"array","items":{"type":"object","properties":{"handle":{"type":"string"},"text":{"type":"string"},"tweetUrl":{"type":"string"},"datetime":{"type":"string"},"replies":{"type":"integer"},"retweets":{"type":"integer"},"likes":{"type":"integer"},"views":{"type":"integer"},"bookmarks":{"type":"integer"},"search_topic":{"type":"string"},"matched_project":{"type":"string"}},"required":["handle","text","tweetUrl","datetime","replies","retweets","likes","views","bookmarks","search_topic","matched_project"]}},"queries_used":{"type":"array","items":{"type":"object","properties":{"query":{"type":"string"},"project":{"type":"string"},"tweets_found":{"type":"integer"}},"required":["query","project","tweets_found"]}}},"required":["tweets","queries_used"]}'
+
+log "Acquiring twitter-browser lock for Phase 1 Claude scan..."
+acquire_lock "twitter-browser" 3600
+ensure_browser_healthy "twitter"
 
 log "Phase 1: drafting queries and scraping tweets..."
 
@@ -307,6 +362,10 @@ fi
 # acquire_lock timeout if another pipeline is mid-run.
 log "Releasing twitter-browser lock for the T1 wait window (5min sleep + HTTP fxtwitter poll)..."
 release_lock "twitter-browser"
+# Defense-in-depth: clear the hook-layer lockfile so the next cycle's
+# PreToolUse never sees a stale entry from us. run_claude.sh's exit trap
+# already does this; explicit repeat covers SIGKILL of the wrapper.
+rm -f "$HOME/.claude/twitter-agent-lock.json"
 
 # --- Sleep 5 min before T1 measurement --------------------------------------
 log "Sleeping 300s before T1 re-measurement..."
@@ -417,6 +476,15 @@ ensure_browser_healthy "twitter"
 
 log "Phase 2b-prep: Claude reading threads and drafting up to $POST_LIMIT replies..."
 
+# Pre-assign the prep session UUID in the parent shell so it survives the
+# command-substitution subshell run_claude.sh runs in. We write it into the
+# plan JSON below so Phase 2b-post can re-export it for log_post.py, which
+# stamps posts.claude_session_id and lets the dashboard activity feed join
+# to claude_sessions for cost. Without this, twitter posts get NULL session
+# ids and blank cost cells.
+CLAUDE_SESSION_ID="$(uuidgen | tr 'A-Z' 'a-z')"
+export CLAUDE_SESSION_ID
+
 PREP_SCHEMA='{"type":"object","properties":{"candidates":{"type":"array","items":{"type":"object","properties":{"candidate_id":{"type":"integer"},"candidate_url":{"type":"string"},"thread_author":{"type":"string"},"thread_text":{"type":"string"},"matched_project":{"type":"string"},"reply_text":{"type":"string"},"engagement_style":{"type":"string"},"language":{"type":"string"},"has_landing_pages":{"type":"boolean"},"link_keyword":{"type":"string"},"link_slug":{"type":"string"}},"required":["candidate_id","candidate_url","matched_project","reply_text","engagement_style","language","has_landing_pages"]}}},"required":["candidates"]}'
 
 PREP_OUTPUT=$("$REPO_DIR/scripts/run_claude.sh" "run-twitter-cycle-prep" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" -p --output-format json --json-schema "$PREP_SCHEMA" "You are the Social Autoposter prep step.
@@ -497,7 +565,7 @@ if isinstance(so, str):
     try: so = json.loads(so)
     except Exception: pass
 candidates = so.get('candidates', []) if isinstance(so, dict) else []
-json.dump({'candidates': candidates}, open('$PLAN_FILE', 'w'), indent=2)
+json.dump({'candidates': candidates, 'session_id': '$CLAUDE_SESSION_ID'}, open('$PLAN_FILE', 'w'), indent=2)
 print(f'prep: wrote {len(candidates)} candidates to $PLAN_FILE', file=sys.stderr)
 " <<< "$PREP_OUTPUT" 2>&1 | tee -a "$LOG_FILE"
 
@@ -520,6 +588,8 @@ log "Phase 2b-prep complete. plan_count=$PLAN_COUNT"
 # path we don't want to hold the browser lock through the early-exit cleanup.
 log "Releasing twitter-browser lock (gen step is lock-free)..."
 release_lock "twitter-browser"
+# Defense-in-depth: clear the hook-layer lockfile; see Phase 1 note.
+rm -f "$HOME/.claude/twitter-agent-lock.json"
 
 if [ "${PLAN_COUNT:-0}" = "0" ]; then
     log "Empty plan from prep step. Exiting cycle without posting (pending rows salvaged next cycle)."
