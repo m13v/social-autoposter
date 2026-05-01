@@ -23,7 +23,7 @@
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-reddit-threads-stdout.log</string>
 	<!--
-	  4 fires per local day, aligned with twitter-threads (8/12/17/22) so the
+	  3 fires per local day, aligned with twitter-threads (8/12/17) so the
 	  dashboard "Post Threads" row shows one unified cadence across platforms.
 	  Offset to :13 to avoid colliding with twitter-threads (:47).
 	-->
@@ -44,12 +44,6 @@
 		<dict>
 			<key>Hour</key>
 			<integer>17</integer>
-			<key>Minute</key>
-			<integer>13</integer>
-		</dict>
-		<dict>
-			<key>Hour</key>
-			<integer>22</integer>
 			<key>Minute</key>
 			<integer>13</integer>
 		</dict>
