@@ -242,6 +242,12 @@ def main():
                              "independent dimensions.")
     parser.add_argument("--language", default=None,
                         help="ISO 639-1 language code (e.g. en, ja, zh, es)")
+    parser.add_argument("--link-source", default=None,
+                        help="How the link in our_content was sourced: "
+                             "seo_page | plain_url_ab_skip | plain_url_no_lp | "
+                             "plain_url_fallback:<reason> | empty[_*]. "
+                             "Used to A/B compare engagement between the "
+                             "page-gen and plain-URL lanes on Twitter.")
     parser.add_argument("--urns", default=None,
                         help="LinkedIn-only: comma- or whitespace-separated list "
                              "of 16-19 digit URN IDs that identify this post "
@@ -324,13 +330,13 @@ def main():
             thread_title, thread_content, our_url, our_content, our_account,
             source_summary, project_name, status, posted_at,
             feedback_report_used, engagement_style, is_recommendation,
-            language, claude_session_id, urns
+            language, claude_session_id, urns, link_source
         ) VALUES (
             %s, %s, %s, %s,
             %s, '', %s, %s, %s,
             '', %s, 'active', NOW(),
             TRUE, %s, %s,
-            %s, %s, %s
+            %s, %s, %s, %s
         ) RETURNING id""",
         [
             args.platform, args.thread_url, args.thread_author, args.thread_author,
@@ -338,6 +344,7 @@ def main():
             args.project, args.engagement_style, bool(args.is_recommendation),
             args.language, claude_session_id,
             urn_ids if urn_ids else None,
+            args.link_source,
         ],
     )
     row = cur.fetchone()
