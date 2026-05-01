@@ -69,7 +69,12 @@ def fetch_signup_series(api_key, secret_key, signup_event, attribution_filter, s
             return json.loads(r.read())
 
     filters = [
-        {"subprop_type": "event", "subprop_key": k, "subprop_op": "is", "subprop_value": [v]}
+        {
+            "subprop_type": "event",
+            "subprop_key": k,
+            "subprop_op": "is",
+            "subprop_value": v if isinstance(v, list) else [v],
+        }
         for k, v in (attribution_filter or {}).items()
     ]
     filtered = call(filters)
