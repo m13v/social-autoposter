@@ -237,8 +237,16 @@ $DUD_QUERIES
        the URN before the engaged-id check runs again at Phase B.
 
 5. PICK THE SINGLE BEST CANDIDATE across all queries.
-   - Use velocity / SERP-quality / age as quantitative hints, but apply
-     your own judgment on fit, voice, and freshness too.
+   - Within each query's "results" array, candidates are PRE-SORTED by
+     velocity_score DESCENDING (top of list = strongest engagement signal).
+     Default to candidates near the top — the score already encodes
+     reactions/comments/reposts/age, so the top of each list is a real
+     prior. Walking past the top-3 of any query should require a clear
+     ICP-fit reason (off-target audience, wrong buyer persona, irrelevant
+     topic). Do not skip a #1 just because #4 looks "interesting".
+   - ICP fit overrides raw rank. A top-of-list student showcase is still a
+     bad pick for a Head-of-Talent ICP. But "ICP-mismatch" must be a real
+     judgment, not a vibe — name the persona mismatch in your rationale.
    - One winner. Not a ranked list. Not a top-3.
    - If the winner already has a non-null activity_id (rare: only the
      embedded-share case), skip step 5a/5b/5c — go straight to step 6.
