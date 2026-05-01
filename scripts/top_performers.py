@@ -301,11 +301,11 @@ def format_post(row, include_thread_content=True):
     lines.append(header)
 
     if thread_title:
-        lines.append(f"  Thread: {thread_title[:150]}")
+        lines.append(f"  Thread: {thread_title}")
     if include_thread_content and thread_content:
-        snippet = thread_content[:2000].replace('\n', ' ')
+        snippet = thread_content.replace('\n', ' ')
         lines.append(f"  Thread body: {snippet}")
-    lines.append(f"  Our comment: {our_content[:2000]}")
+    lines.append(f"  Our comment: {our_content}")
     return "\n".join(lines)
 
 
