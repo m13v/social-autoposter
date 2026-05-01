@@ -109,13 +109,13 @@ def render_row(row):
     parts = [
         f"DM #{row['id']} | platform={row['platform']} | target_project={row['target_project'] or 'none'}",
         "PROSPECT PROFILE:",
-        f"  headline: {(row['headline'] or '').strip()[:200]}",
-        f"  company: {(row['company'] or '').strip()[:120]}",
-        f"  role: {(row['role'] or '').strip()[:120]}",
-        f"  bio: {(row['bio'] or '').strip()[:2000]}",
+        f"  headline: {(row['headline'] or '').strip()}",
+        f"  company: {(row['company'] or '').strip()}",
+        f"  role: {(row['role'] or '').strip()}",
+        f"  bio: {(row['bio'] or '').strip()}",
         f"  followers: {row['follower_count'] if row['follower_count'] is not None else 'unknown'}",
-        f"  recent_activity: {(row['recent_activity'] or '').strip()[:2000]}",
-        f"  notes: {(row['notes'] or '').strip()[:1000]}",
+        f"  recent_activity: {(row['recent_activity'] or '').strip()}",
+        f"  notes: {(row['notes'] or '').strip()}",
         "CONVERSATION:",
         (row["convo"] or ""),
     ]
@@ -206,7 +206,7 @@ def main():
             if not v:
                 continue
             label = v.get("label")
-            notes = (v.get("notes") or "").strip()[:200]
+            notes = (v.get("notes") or "").strip()
             if label not in LABELS:
                 continue
             counts[label] += 1
