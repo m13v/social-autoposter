@@ -39,17 +39,39 @@ MODEL_ARGS=()
 if [ -n "${MODEL_OVERRIDE:-}" ]; then
     MODEL_ARGS=(--model "$MODEL_OVERRIDE")
 fi
-claude --session-id "$SESSION_ID" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} "$@"
-RC=$?
+
+# Tee claude's stdout to a side file so we can extract the native SDK cost
+# (streamRes.total_cost_usd) emitted in the final result event of stream-json /
+# json output. Stdout still flows unchanged to whoever piped this wrapper, so
+# downstream parsers see identical bytes. PIPESTATUS[0] preserves claude's
+# exit code through the tee.
+SIDE_LOG="$(mktemp -t sa_run_claude_stdout.XXXXXX)"
+trap 'rm -f "$SIDE_LOG"' EXIT
+claude --session-id "$SESSION_ID" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} "$@" | tee "$SIDE_LOG"
+RC=${PIPESTATUS[0]}
 
 END=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
 
+# Pull the LAST total_cost_usd in the stdout (the result event is emitted last
+# in both stream-json and json modes). Tolerant to spaces and floats; defaults
+# to empty when the format doesn't expose a result event (e.g. interactive runs
+# that crash before the result line) so log_claude_session.py just leaves the
+# DB column NULL.
+ORCH_COST="$(grep -oE '"total_cost_usd"[[:space:]]*:[[:space:]]*[0-9]+(\.[0-9]+)?' "$SIDE_LOG" 2>/dev/null \
+    | tail -1 \
+    | sed -E 's/.*:[[:space:]]*//')"
+
 # Best-effort cost logging. Never let logging failures mask the wrapped
 # command's exit code.
+ORCH_ARGS=()
+if [ -n "$ORCH_COST" ]; then
+    ORCH_ARGS=(--orchestrator-cost-usd "$ORCH_COST")
+fi
 python3 "$REPO_DIR/scripts/log_claude_session.py" \
     --session-id "$SESSION_ID" \
     --script "$SCRIPT_TAG" \
     --started-at "$START" \
-    --ended-at "$END" >&2 || true
+    --ended-at "$END" \
+    ${ORCH_ARGS[@]+"${ORCH_ARGS[@]}"} >&2 || true
 
 exit $RC
