@@ -454,33 +454,26 @@ def main():
         moltbook_key = os.environ.get("MOLTBOOK_API_KEY", "")
         threads.extend(fetch_moltbook_threads(moltbook_key))
 
+    # Unified search_topics is the single source of truth across platforms
+    # (post 2026-04-24 migration; legacy *_topics fields removed 2026-04-30).
+    project_search_topics = (project_config or {}).get("search_topics") or []
+
     if args.include_twitter:
-        # Use project-specific topics if available, fall back to global
-        twitter_topics = (
-            project_config.get("twitter_topics", config.get("twitter_topics", []))
-            if project_config else config.get("twitter_topics", [])
-        )
+        twitter_topics = list(project_search_topics)
         if args.topic:
             twitter_topics = [t for t in twitter_topics if args.topic.lower() in t.lower()]
         raw_excl = config.get("exclusions", {})
         threads.extend(generate_twitter_search_urls(twitter_topics, exclusions=raw_excl))
 
     if args.include_linkedin:
-        linkedin_topics = (
-            project_config.get("linkedin_topics", config.get("linkedin_topics", []))
-            if project_config else config.get("linkedin_topics", [])
-        )
+        linkedin_topics = list(project_search_topics)
         if args.topic:
             linkedin_topics = [t for t in linkedin_topics if args.topic.lower() in t.lower()]
         raw_excl = config.get("exclusions", {})
         threads.extend(generate_linkedin_search_urls(linkedin_topics, exclusions=raw_excl))
 
     if args.include_github:
-        github_topics = (
-            project_config.get("github_search_topics",
-                config.get("accounts", {}).get("github", {}).get("search_topics", []))
-            if project_config else config.get("accounts", {}).get("github", {}).get("search_topics", [])
-        )
+        github_topics = list(project_search_topics)
         if args.topic:
             github_topics = [t for t in github_topics if args.topic.lower() in t.lower()]
         raw_excl = config.get("exclusions", {})
