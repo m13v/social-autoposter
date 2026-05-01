@@ -913,7 +913,7 @@ def unread_dms():
 
                     // Body preview
                     const bodyEl = msg.querySelector('.md');
-                    const body = bodyEl ? bodyEl.textContent.trim().substring(0, 300) : '';
+                    const body = bodyEl ? bodyEl.textContent.trim() : '';
 
                     // Time
                     const timeEl = msg.querySelector('time, .live-timestamp');
@@ -953,7 +953,7 @@ def unread_dms():
                         results.push({
                             author: author,
                             subject: subject,
-                            preview_short: body.substring(0, 200),
+                            preview_short: body,
                             time: time,
                             thread_url: threadUrl,
                             type: msgType,
@@ -1009,7 +1009,7 @@ def unread_dms():
                         const m = t.match(/^(\\S+):\\s*(.+)/);
                         if (m && m[1].length < 30) {
                             author = m[1];
-                            preview = m[2].substring(0, 200);
+                            preview = m[2];
                             break;
                         }
                     }
@@ -1022,7 +1022,7 @@ def unread_dms():
                     if (topic.length > 1) {
                         results.push({
                             author: author || topic,
-                            subject: topic.substring(0, 100),
+                            subject: topic,
                             preview: preview,
                             time: '',
                             thread_url: threadUrl,
