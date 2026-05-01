@@ -48,6 +48,39 @@ def main():
                              "Result column so an operator can tell that work "
                              "from a previously-failed cycle is being retried "
                              "rather than lost. Optional; 0 = omit segment.")
+    # ---- Discovery-stage counters (Twitter cycle, mirrors LinkedIn) -----
+    # Twitter wires the same shape LinkedIn already exposes
+    # (queries / candidates_found / dropped_below_floor) so the dashboard can
+    # render a single 'discover' tooltip across platforms. Each is an
+    # independent integer flag; pass 0 / omit to skip the segment. Stay
+    # backward-compatible: emitted as `key=N` after `salvaged` and before
+    # the cost/elapsed pair so older log lines (no discovery info) still
+    # parse via the existing positional regex in bin/server.js.
+    parser.add_argument("--queries", type=int, default=0,
+                        help="Discovery: number of search queries the cycle "
+                             "actually ran (raw count, including duds). "
+                             "Twitter Phase 1 / LinkedIn Phase A.")
+    parser.add_argument("--duds", type=int, default=0,
+                        help="Discovery: subset of --queries that returned "
+                             "zero candidates. Used by the dashboard to show "
+                             "query-quality drift over time.")
+    parser.add_argument("--tweets-pulled", dest="tweets_pulled", type=int, default=0,
+                        help="Discovery: raw tweets/posts the scraper pulled "
+                             "before the floor filter. Twitter only — "
+                             "LinkedIn doesn't have a directly comparable "
+                             "raw-volume number.")
+    parser.add_argument("--candidates", type=int, default=0,
+                        help="Discovery: candidates that survived the "
+                             "post-floor filter (Twitter T0 snapshot rows / "
+                             "LinkedIn candidates_found). Includes salvaged "
+                             "rows from prior cycles.")
+    parser.add_argument("--above-floor", dest="above_floor", type=int, default=0,
+                        help="Discovery: candidates that cleared the "
+                             "review-cap floor — for Twitter this is "
+                             "Δ≥10 momentum (the same signal that flips "
+                             "POST_LIMIT 1→3); for LinkedIn this is the "
+                             "post-virality-floor count. Smaller than "
+                             "--candidates.")
     parser.add_argument("--failure-reasons", dest="failure_reasons", default="",
                         help="Optional comma-separated `reason:count` pairs "
                              "describing why a run reported failed>0 "
@@ -85,6 +118,26 @@ def main():
     # specific today, but any pipeline that retries pending work cross-cycle
     # can emit it.
     salvaged_segment = f" salvaged={args.salvaged}" if args.salvaged else ""
+    # `discover` segment carries Phase-1/discovery counters the dashboard
+    # surfaces as a tooltip on the Result column (queries / duds /
+    # tweets_pulled / candidates / above_floor). Each sub-key is only
+    # emitted when non-zero so old log lines without discovery info still
+    # parse via the existing positional regex. The whole segment is opt-in:
+    # if every counter is zero, no `discover=` token appears at all.
+    discover_parts = []
+    if args.queries:
+        discover_parts.append(f"queries={args.queries}")
+    if args.duds:
+        discover_parts.append(f"duds={args.duds}")
+    if args.tweets_pulled:
+        discover_parts.append(f"tweets_pulled={args.tweets_pulled}")
+    if args.candidates:
+        discover_parts.append(f"candidates={args.candidates}")
+    if args.above_floor:
+        discover_parts.append(f"above_floor={args.above_floor}")
+    discover_segment = (
+        " discover=" + ",".join(discover_parts) if discover_parts else ""
+    )
     # `failure_reasons` segment is appended after elapsed (and after the
     # optional model suffix) so the existing positional regex in bin/server.js
     # still parses old lines. Sanitize: strip whitespace and forbid the pipe
@@ -96,7 +149,7 @@ def main():
     line = (
         f"{timestamp} | {args.script} | "
         f"posted={args.posted} skipped={args.skipped} failed={args.failed}"
-        f"{replies_segment}{stats_segment}{salvaged_segment} "
+        f"{replies_segment}{stats_segment}{salvaged_segment}{discover_segment} "
         f"cost=${args.cost:.2f} elapsed={args.elapsed:.0f}s{model_suffix}{failure_segment}"
     )
 
