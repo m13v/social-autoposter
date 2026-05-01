@@ -394,29 +394,49 @@ TOP_REPORT=$(python3 "$REPO_DIR/scripts/top_performers.py" --platform twitter 2>
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block twitter posting)
 
-# Re-acquire the browser lock before Phase 2b posting. Blocks (up to the
-# acquire_lock timeout) if another twitter-agent consumer is mid-run; that is
-# the desired behavior, not a bug — we yield while they work and resume when
-# they're done. T1 measurements were already captured above via HTTP, so a
-# brief wait here doesn't invalidate the candidate scoring.
-log "Re-acquiring twitter-browser lock for Phase 2b posting..."
+# Phase 2b is split into three sub-phases so the twitter-browser lock is only
+# held during actual browser work. The killer in the old single-session flow
+# was generate_page.py running inside the Claude session: 10-40 minutes of
+# Cloud Run deploy chain time, all under the browser lock, blocking every
+# other twitter pipeline. The new flow:
+#   2b-prep (lock held): Claude reads threads, drafts replies, saves drafts,
+#                        emits a JSON plan listing chosen candidates.
+#   <release lock>
+#   2b-gen  (no lock):    twitter_gen_links.py runs generate_page.py per
+#                        candidate; falls back to plain project URL on failure.
+#   <re-acquire lock>
+#   2b-post (lock held): twitter_post_plan.py calls twitter_browser.py reply,
+#                        log_post.py, campaign_bump.py, marks link_edited_at.
+
+PLAN_FILE="/tmp/twitter_cycle_plan_${BATCH_ID}.json"
+
+# --- Phase 2b-prep: pick + draft + plan -------------------------------------
+log "Re-acquiring twitter-browser lock for Phase 2b-prep (read+draft only)..."
 acquire_lock "twitter-browser" 3600
 ensure_browser_healthy "twitter"
 
-log "Phase 2b: Claude reviewing top candidates and posting up to $POST_LIMIT..."
+log "Phase 2b-prep: Claude reading threads and drafting up to $POST_LIMIT replies..."
 
-"$REPO_DIR/scripts/run_claude.sh" "run-twitter-cycle-post" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" -p "You are the Social Autoposter.
+PREP_SCHEMA='{"type":"object","properties":{"candidates":{"type":"array","items":{"type":"object","properties":{"candidate_id":{"type":"integer"},"candidate_url":{"type":"string"},"thread_author":{"type":"string"},"thread_text":{"type":"string"},"matched_project":{"type":"string"},"reply_text":{"type":"string"},"engagement_style":{"type":"string"},"language":{"type":"string"},"has_landing_pages":{"type":"boolean"},"link_keyword":{"type":"string"},"link_slug":{"type":"string"}},"required":["candidate_id","candidate_url","matched_project","reply_text","engagement_style","language","has_landing_pages"]}}},"required":["candidates"]}'
 
-Read $SKILL_FILE for the full workflow, content rules, and platform details.
-Read $REPO_DIR/config.json for account handle.
+PREP_OUTPUT=$("$REPO_DIR/scripts/run_claude.sh" "run-twitter-cycle-prep" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/twitter-agent-mcp.json" -p --output-format json --json-schema "$PREP_SCHEMA" "You are the Social Autoposter prep step.
+
+Your ONLY job in THIS session:
+  1. Read each thread you decide to reply to (browser, mcp__twitter-agent__* read-only).
+  2. Draft a reply for each.
+  3. Persist each fresh draft via log_draft.py.
+  4. Emit a structured plan describing the chosen candidates, the reply text, and (when applicable) the SEO link keyword + slug.
+
+You will NOT post anything. You will NOT generate landing pages. You will NOT call log_post.py. The shell handles all of that AFTER your session ends, with the browser lock released for the long landing-page build.
+
+Read $SKILL_FILE for content rules and voice context.
+Read $REPO_DIR/config.json for project metadata.
 
 ## PRE-SCORED CANDIDATES (top by 5-min engagement velocity, best first)
-These are the top candidates from this cycle's scan, re-ranked by how much their engagement GREW during the last 5 minutes. Higher Delta = trending harder right now.
 $CANDIDATE_BLOCK
 
 ## PROJECT ROUTING (per-candidate)
-Each candidate has a 'Project match' field (the project whose query found it).
-Use that project for each reply, unless the thread content clearly better fits another project.
+Each candidate has a 'Project match' field. Use that project unless the thread content clearly better fits another project.
 All project configs: $ALL_PROJECTS_JSON
 
 ## FEEDBACK FROM PAST PERFORMANCE:
@@ -425,53 +445,120 @@ $TOP_REPORT
 $STYLES_BLOCK
 
 ## WORKFLOW
-Reply to AT MOST $POST_LIMIT candidate(s) this cycle (post limit). Pick the ones with the strongest combination of high delta + genuinely relevant thread. Skip any candidate whose thread is off-topic, toxic, or low-quality. If fewer than $POST_LIMIT candidates are truly on-brand, post fewer; do not force posts.
+Pick AT MOST $POST_LIMIT candidate(s) this cycle. Skip any candidate whose thread is off-topic, toxic, or low-quality. If fewer than $POST_LIMIT candidates are truly on-brand, return fewer; never force entries.
 
 For each chosen candidate:
-1. Navigate to the candidate URL via mcp__twitter-agent__browser_navigate (read-only, to understand context)
-2. Read the full thread
-3. DRAFT HANDLING (existing draft vs fresh):
-   - If the candidate block above shows an EXISTING DRAFT line AND the draft age is under 30 minutes, REUSE that draft text as-is. Skip drafting; jump to step 4 with YOUR_REPLY_TEXT = the existing draft. Reason: a prior cycle already paid the LLM cost; don't waste it. The draft was vetted at draft time; thread context rarely shifts meaningfully in 30 min.
-   - Otherwise (no draft, or draft age ≥ 30 min): draft a reply using the best engagement style. Keep it 1-2 sentences. NEVER use em dashes. Apply the matched project's \`voice\` block from ALL_PROJECTS_JSON above: follow \`voice.tone\`, never violate any item in \`voice.never\`, and mirror \`voice.examples\` / \`voice.examples_good\` when present.
-3a. PERSIST THE DRAFT BEFORE POSTING (only when you drafted fresh in step 3; skip when reusing an existing draft):
+1. Navigate to CANDIDATE_URL via mcp__twitter-agent__browser_navigate (READ-ONLY).
+2. Read the thread to understand context.
+3. DRAFT HANDLING (existing vs fresh):
+   - If the candidate block shows an EXISTING DRAFT line AND draft age < 30 minutes, REUSE the draft text verbatim. Set engagement_style to the existing style. Do NOT call log_draft.py; do NOT redraft. Reason: prior cycle paid the LLM cost.
+   - Otherwise: draft a reply using the best engagement style. 1-2 sentences. NEVER em dashes. Apply the matched project's \`voice\` block from ALL_PROJECTS_JSON: follow voice.tone, never violate voice.never, mirror voice.examples / voice.examples_good when present.
+3a. PERSIST FRESH DRAFTS (skip for reused drafts):
      python3 $REPO_DIR/scripts/log_draft.py --candidate-id CANDIDATE_ID --text 'YOUR_REPLY_TEXT' --style STYLE
-   This guarantees that if step 4 fails (CDP timeout, browser crash, monthly cap), the next cycle's Phase 2b sees the draft on the salvaged row and can post it without redrafting. Failure here is non-fatal: log a warning and continue to step 4.
-4. Resolve LINK_URL BEFORE posting (runs synchronously; wait for completion).
-   a. If the matched project has a landing_pages config in config.json (repo + base_url set):
-      i.  Decide a SHORT keyword phrase (3-6 words) that captures the ESSENCE OF YOUR REPLY, not just the thread topic. Think: what would the reader search to find a useful page about what you just said? Examples: "local ai agent macos", "screen capture accessibility api", "voice activity detection rust".
-      ii. Derive a URL slug: lowercase, kebab-case, alphanumeric and hyphens only, max 50 chars.
-      iii. Generate the SEO landing page now:
-               python3 $REPO_DIR/seo/generate_page.py --product PROJECT_NAME --keyword \"KEYWORD_PHRASE\" --slug \"url-slug\" --trigger twitter
-           Parse the JSON stdout. On success: LINK_URL = page_url from the JSON.
-           On failure (success:false): LINK_URL = plain project website URL from config.json (never leave LINK_URL empty if any URL is available).
-   b. If the matched project has NO landing_pages config: LINK_URL = plain project website URL from config.json.
-   c. If the project has no URL at all: LINK_URL = "" (empty; omit the link from the reply text in step 5).
-5. Post via the CDP script with the link embedded in the reply text:
-     python3 $REPO_DIR/scripts/twitter_browser.py reply \"CANDIDATE_URL\" \"YOUR_REPLY_TEXT LINK_URL\"
-   (Append LINK_URL to YOUR_REPLY_TEXT separated by a single space. Keep YOUR_REPLY_TEXT under 250 chars so the link fits within the 280-char limit. If LINK_URL is empty, post YOUR_REPLY_TEXT alone.)
-   It returns JSON. Parse reply_url. If reply_url is missing/invalid/doesn't match x.com/m13v_/status/, treat as FAILED: do NOT log, mark candidate 'failed' not 'posted'. NEVER use the parent URL as our_url.
-   The tool may append an active campaign suffix at sample_rate (tool-level enforcement, the literal text is guaranteed to land). Use the JSON's \`final_text\` (NOT your constructed text) for log_post.py in step 6 so the stored content matches what was posted, and use \`applied_campaigns\` (the array of campaign ids that fired) in step 6b.
-6. Log the primary reply. Parse post_id from the JSON output:
-     python3 $REPO_DIR/scripts/log_post.py --platform twitter --thread-url CANDIDATE_URL --our-url REPLY_URL --our-content 'FINAL_TEXT_FROM_REPLY_JSON' --project MATCHED_PROJECT --thread-author AUTHOR --thread-title 'TWEET_TEXT' --engagement-style STYLE --language LANG
-6b. Attribute the post to any campaigns that fired. For each \`cid\` in \`applied_campaigns\` from step 5's JSON (skip if the array is empty):
-     python3 $REPO_DIR/scripts/campaign_bump.py --table posts --id POST_ID --campaign-id cid
-   Mandatory when applied_campaigns is non-empty; otherwise the campaign counter does not advance and the campaign will over-post.
-6c. Mark link_edited_at immediately (the link is embedded in the primary reply; no separate self-reply will follow):
-     python3 $REPO_DIR/scripts/log_post.py --mark-self-reply --post-id POST_ID --self-reply-url REPLY_URL --self-reply-content 'FINAL_TEXT_FROM_REPLY_JSON'
-   This prevents any sweep from attempting a redundant self-reply on this post.
-7. Mark candidate:
-     UPDATE twitter_candidates SET status='posted', posted_at=NOW(), post_id=POST_ID WHERE id=CANDIDATE_ID
+   Failure here is non-fatal, log a warning and continue.
+4. EMIT one entry in the structured 'candidates' array with these fields:
+   - candidate_id (int): from the candidate block
+   - candidate_url (string): the parent tweet URL
+   - thread_author (string): the @handle (no leading @)
+   - thread_text (string): the parent tweet's text, condensed to <=500 chars if needed
+   - matched_project (string): the project name to attribute this post to
+   - reply_text (string): the FINAL reply text WITHOUT any URL appended (the shell appends the URL later). Keep <=250 chars so a 23-char t.co link fits inside the 280-char Twitter cap.
+   - engagement_style (string): style name applied (or 'reused' for an unchanged stale draft)
+   - language (string): ISO 639-1 code (en, ja, zh, es, ...)
+   - has_landing_pages (bool): true iff the matched project has BOTH landing_pages.repo AND landing_pages.base_url set in config.json. Otherwise false.
+   - link_keyword (string, REQUIRED when has_landing_pages=true; OMIT otherwise): a SHORT 3-6 word phrase that captures the ESSENCE OF YOUR REPLY (not just the thread topic). Think: what would a reader search to find a useful page about what you just said?
+   - link_slug (string, REQUIRED when has_landing_pages=true; OMIT otherwise): kebab-case, alphanumeric+hyphens only, max 50 chars.
 
-If a thread is unfit: UPDATE twitter_candidates SET status='skipped' WHERE id=CANDIDATE_ID
+If a thread is unfit: just OMIT it from the candidates array. Do NOT update twitter_candidates yourself; the shell marks unhandled rows as expired or salvages them next cycle.
 
 CRITICAL:
-- Reply in the SAME LANGUAGE as the parent tweet
-- NEVER use em dashes. Use commas, periods, or regular dashes (-)
-- Use twitter_browser.py for posting; mcp__twitter-agent__* ONLY for reading
-- our_url must always be our reply permalink (x.com/m13v_/status/...)
-- At most 3 replies this run
-- If a browser tool call is blocked or times out, wait 30 seconds and retry (up to 3 times)
-- EXCEPTION to the retry rule: if twitter_browser.py returns {ok:false} with error in {rate_limited, tweet_not_found, reply_box_not_found}, do NOT retry. Mark the candidate 'skipped' (reason=that error) and move on. Retrying a rate_limited burns more X-side budget; the next cycle handles its own backoff." 2>&1 | tee -a "$LOG_FILE"
+- DO NOT post anything. The shell handles posting.
+- DO NOT call twitter_browser.py.
+- DO NOT call generate_page.py (the shell runs it AFTER your session, outside the lock).
+- DO NOT call log_post.py or campaign_bump.py.
+- mcp__twitter-agent__* tools are READ-ONLY in this step.
+- NEVER use em dashes. Use commas, periods, or regular dashes (-).
+- Reply in the SAME LANGUAGE as the parent tweet." 2>&1)
+
+echo "$PREP_OUTPUT" >> "$LOG_FILE"
+
+# Parse the prep envelope and write the plan to \$PLAN_FILE.
+python3 -c "
+import json, sys
+text = sys.stdin.read().strip()
+try:
+    env, _ = json.JSONDecoder().raw_decode(text)
+except Exception as e:
+    print(f'prep: envelope parse error: {e}', file=sys.stderr); sys.exit(1)
+so = env.get('structured_output')
+if so is None:
+    so = env.get('result')
+if isinstance(so, str):
+    try: so = json.loads(so)
+    except Exception: pass
+candidates = so.get('candidates', []) if isinstance(so, dict) else []
+json.dump({'candidates': candidates}, open('$PLAN_FILE', 'w'), indent=2)
+print(f'prep: wrote {len(candidates)} candidates to $PLAN_FILE', file=sys.stderr)
+" <<< "$PREP_OUTPUT" 2>&1 | tee -a "$LOG_FILE"
+
+PREP_PARSE_EXIT=${PIPESTATUS[0]:-1}
+
+# Detect Anthropic monthly cap so the dashboard surfaces a reason rather than
+# a silent failure when prep returns no plan.
+PREP_REASON="prep_failed"
+if echo "$PREP_OUTPUT" | grep -qiE '"api_error_status":429|"hit your limit"|monthly usage limit'; then
+    PREP_REASON="monthly_limit"
+fi
+
+PLAN_COUNT=0
+if [ "$PREP_PARSE_EXIT" -eq 0 ] && [ -f "$PLAN_FILE" ]; then
+    PLAN_COUNT=$(python3 -c "import json; print(len(json.load(open('$PLAN_FILE')).get('candidates') or []))" 2>/dev/null || echo 0)
+fi
+log "Phase 2b-prep complete. plan_count=$PLAN_COUNT"
+
+# Always release the lock now: gen step is lock-free, and even on the empty
+# path we don't want to hold the browser lock through the early-exit cleanup.
+log "Releasing twitter-browser lock (gen step is lock-free)..."
+release_lock "twitter-browser"
+
+if [ "${PLAN_COUNT:-0}" = "0" ]; then
+    log "Empty plan from prep step. Exiting cycle without posting (pending rows salvaged next cycle)."
+    rm -f "$PLAN_FILE"
+    _COST=$(python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START" --scripts "run-twitter-cycle-scan" "run-twitter-cycle-prep" "run-twitter-cycle-post" 2>/dev/null || echo "0.0000")
+    if [ "$PREP_REASON" = "monthly_limit" ]; then
+        python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped "${CANDIDATE_COUNT:-0}" --failed 1 --salvaged "${SALVAGED:-0}" --failure-reasons "monthly_limit:1" --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
+    else
+        python3 "$REPO_DIR/scripts/log_run.py" --script "post_twitter" --posted 0 --skipped "${CANDIDATE_COUNT:-0}" --failed 0 --salvaged "${SALVAGED:-0}" --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
+    fi
+    exit 0
+fi
+
+# --- Phase 2b-gen: SEO landing pages (no browser lock) ----------------------
+log "Phase 2b-gen: generating SEO pages for $PLAN_COUNT candidate(s) without holding the browser lock..."
+python3 "$REPO_DIR/scripts/twitter_gen_links.py" --plan "$PLAN_FILE" 2>&1 | tee -a "$LOG_FILE"
+GEN_EXIT=${PIPESTATUS[0]:-1}
+if [ "$GEN_EXIT" -ne 0 ]; then
+    log "WARN: twitter_gen_links.py exited $GEN_EXIT, continuing with whatever links it set (per-candidate fallback to plain project URL on gen failure)."
+fi
+
+# --- Phase 2b-post: re-acquire browser lock and post ------------------------
+log "Re-acquiring twitter-browser lock for Phase 2b-post..."
+acquire_lock "twitter-browser" 3600
+ensure_browser_healthy "twitter"
+
+log "Phase 2b-post: posting $PLAN_COUNT candidate(s)..."
+POST_OUTPUT=$(python3 "$REPO_DIR/scripts/twitter_post_plan.py" --plan "$PLAN_FILE" 2>&1)
+echo "$POST_OUTPUT" >> "$LOG_FILE"
+
+# The post helper prints a JSON summary on its last stdout line.
+POST_SUMMARY=$(printf '%s\n' "$POST_OUTPUT" | tail -n 1)
+EXEC_POSTED=$(python3 -c "import json,sys; d=json.loads(sys.argv[1] or '{}'); print(d.get('posted', 0))" "$POST_SUMMARY" 2>/dev/null || echo 0)
+EXEC_SKIPPED=$(python3 -c "import json,sys; d=json.loads(sys.argv[1] or '{}'); print(d.get('skipped', 0))" "$POST_SUMMARY" 2>/dev/null || echo 0)
+EXEC_FAILED=$(python3 -c "import json,sys; d=json.loads(sys.argv[1] or '{}'); print(d.get('failed', 0))" "$POST_SUMMARY" 2>/dev/null || echo 0)
+EXEC_REASONS=$(python3 -c "import json,sys; d=json.loads(sys.argv[1] or '{}'); print(d.get('failure_reasons', ''))" "$POST_SUMMARY" 2>/dev/null || echo "")
+log "Phase 2b-post summary: posted=$EXEC_POSTED skipped=$EXEC_SKIPPED failed=$EXEC_FAILED reasons=$EXEC_REASONS"
+
+rm -f "$PLAN_FILE"
 
 # --- No end-of-cycle expire ------------------------------------------------
 # Pending rows are intentionally left alone. They are either:
