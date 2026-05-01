@@ -100,7 +100,11 @@ if [ -n "$PLATFORM" ]; then
     PLATFORM_SQL_FILTER="d.platform = '$P'"
 fi
 
-# Get conversations where the last message is inbound (they replied, we haven't responded)
+# Get conversations needing replies. Two trigger arms unioned into one set:
+#   1. inbound  — their reply is newer than our last outbound (classic case)
+#   2. click    — they clicked our short link recently and we haven't followed up
+#                 since that click (soft nudge rail; "last message outbound" is OK)
+# The agent prompt branches on the `trigger` field to pick reply style.
 PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT d.id as dm_id, d.platform, d.their_author, d.tier,
@@ -116,6 +120,17 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
                pr.notes as prospect_notes,
                last_in.content as last_inbound_msg,
                last_in.message_at as inbound_at,
+               d.short_link_clicks,
+               d.short_link_first_click_at,
+               d.short_link_last_click_at,
+               d.last_click_followup_at,
+               d.short_link_target_url,
+               CASE
+                   WHEN last_in.message_at IS NOT NULL
+                        AND (last_out.message_at IS NULL OR last_in.message_at > last_out.message_at)
+                       THEN 'inbound'
+                   ELSE 'click'
+               END as trigger,
                (SELECT COUNT(*) FROM dm_messages WHERE dm_id = d.id) as total_messages,
                (SELECT json_agg(json_build_object(
                    'direction', m.direction,
@@ -125,7 +140,7 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
                FROM dm_messages m WHERE m.dm_id = d.id) as conversation_history
         FROM dms d
         LEFT JOIN prospects pr ON pr.id = d.prospect_id
-        JOIN LATERAL (
+        LEFT JOIN LATERAL (
             SELECT content, message_at FROM dm_messages
             WHERE dm_id = d.id AND direction = 'inbound'
             ORDER BY message_at DESC LIMIT 1
@@ -139,10 +154,25 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
           AND d.conversation_status != 'needs_human'
           AND d.status = 'sent'
           AND $PLATFORM_SQL_FILTER
-          AND (last_out.message_at IS NULL OR last_in.message_at > last_out.message_at)
+          AND (
+                -- Arm 1: inbound trigger (their reply is newer than our last outbound)
+                (last_in.message_at IS NOT NULL
+                 AND (last_out.message_at IS NULL OR last_in.message_at > last_out.message_at))
+                OR
+                -- Arm 2: click trigger (recent click, not yet followed up)
+                (
+                    d.short_link_clicks > 0
+                    AND d.short_link_last_click_at IS NOT NULL
+                    AND d.short_link_last_click_at >= NOW() - INTERVAL '7 days'
+                    AND (d.last_click_followup_at IS NULL
+                         OR d.short_link_last_click_at > d.last_click_followup_at)
+                    AND (d.sent_at IS NULL
+                         OR d.short_link_last_click_at >= d.sent_at + INTERVAL '15 minutes')
+                )
+              )
         ORDER BY
             d.tier DESC,
-            last_in.message_at ASC
+            COALESCE(last_in.message_at, d.short_link_last_click_at) ASC
         LIMIT 30
     ) q;" 2>/dev/null || echo "null")
 
@@ -637,6 +667,30 @@ cd ~/social-autoposter && python3 scripts/dm_conversation.py pending
 
 Known conversations from the database that already need replies:
 $PENDING_CONVOS
+
+## TRIGGER FIELD — read this before composing any reply
+
+Every conversation in \$PENDING_CONVOS has a \`trigger\` field. It tells you why this row is in your queue:
+
+- \`trigger = "inbound"\` (default, classic case): they sent us a new message and we haven't replied yet. The "Should we reply at all?" check in Step 0 applies as written. The "ONE message per conversation per run" hard rule applies. Compose per Step 2.
+- \`trigger = "click"\` (click-driven follow-up): they clicked our short link recently AND we have not followed up about that click yet. The last message in the thread is usually OUTBOUND (we sent the booking link, they clicked, they didn't reply). This is a deliberate soft-nudge rail.
+
+### When \`trigger = "click"\`, override these rules:
+
+1. Step 0's "Last message is already outbound -> SKIP" rule does NOT apply. The click is the trigger; outbound-last is the expected state for this row.
+2. **NEVER mention the click. NEVER reveal we track clicks.** The user must not know we know they clicked. Phrases like "saw you checked out the link", "noticed you opened", "in case you missed it" are BANNED.
+3. Send a soft, low-pressure Mode A nudge. 1-2 sentences max. The goal is to keep the conversation alive without pressure. Examples of acceptable shapes:
+   - A genuine follow-up question tied to something specific from their last inbound (if any inbound exists in conversation_history).
+   - A casual "how's it going with X" referencing context they shared earlier.
+   - If the conversation has zero inbound messages (we DM'd them, they clicked, never replied), either skip OR send one extremely soft check-in that doesn't ping the booking link again. When in doubt, skip.
+4. Do NOT re-share the booking link in a click follow-up. They already have it (they clicked it). Re-sending feels desperate and crosses into spam.
+5. Do NOT push for a call/meeting/demo in a click follow-up. Just keep the door open.
+6. After a verified send (after \`dm_send_log.py --verified\`), ALSO call:
+   \`\`\`bash
+   python3 scripts/mark_click_followup.py --dm-id DM_ID --verified --note "click-followup"
+   \`\`\`
+   This stamps \`last_click_followup_at = NOW()\` so the same click doesn't re-trigger on the next cycle. **Required for every \`trigger = "click"\` send. Skip it and the same row fires every 4h forever.**
+7. If you decide to skip a click-trigger row (e.g., conversation has no inbound and a soft check-in would feel weird), you do NOT need to call \`mark_click_followup.py\`. The skip just means "no nudge this time"; if a NEW click comes in later, it'll re-trigger naturally.
 
 ## CORE PHILOSOPHY
 
