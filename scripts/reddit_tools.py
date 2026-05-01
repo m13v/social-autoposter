@@ -359,7 +359,7 @@ def cmd_already_posted(args):
     dbmod.load_env()
     conn = dbmod.get_conn()
     cur = conn.execute(
-        "SELECT id, LEFT(our_content, 100) FROM posts WHERE platform='reddit' AND thread_url = %s LIMIT 1",
+        "SELECT id, our_content FROM posts WHERE platform='reddit' AND thread_url = %s LIMIT 1",
         [args.url],
     )
     row = cur.fetchone()
@@ -377,7 +377,7 @@ def cmd_log_post(args):
 
     # Hard dedup: refuse to insert if we already posted in this thread
     cur = conn.execute(
-        "SELECT id, LEFT(our_content, 100) FROM posts WHERE platform='reddit' AND thread_url = %s LIMIT 1",
+        "SELECT id, our_content FROM posts WHERE platform='reddit' AND thread_url = %s LIMIT 1",
         [args.thread_url],
     )
     existing = cur.fetchone()
