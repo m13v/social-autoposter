@@ -134,13 +134,13 @@ def recent_github_posts_by_project(days=7):
 
 def pick_github_project(config, recent_counts):
     """Inverse-recent-share weighting. Eligibility: enabled, weight>0, has
-    a non-empty unified search_topics list (or legacy github_search_topics)."""
+    a non-empty unified search_topics list."""
     pool = [
         p for p in config.get("projects", [])
         if p.get("enabled", True)
         and p.get("weight", 0) > 0
         and "github" not in (p.get("platforms_disabled") or [])
-        and (p.get("search_topics") or p.get("github_search_topics"))
+        and p.get("search_topics")
     ]
     if not pool:
         return None
@@ -541,10 +541,7 @@ def main():
             f"(weight={project.get('weight', 0)}, posts_7d={recent_counts.get(project_name, 0)})")
 
     # ---- Phase 1: search topics, T0 snapshot -------------------------------
-    topics_pool = list(project.get("search_topics")
-                       or project.get("github_search_topics")
-                       or project.get("topics")
-                       or [])
+    topics_pool = list(project.get("search_topics") or [])
     if not topics_pool:
         log("Project has no topics to search. Exiting.")
         sys.exit(0)
