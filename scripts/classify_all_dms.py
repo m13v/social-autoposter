@@ -67,7 +67,7 @@ def render_conversation(dm, msgs):
     ]
     for d, a, c, t in msgs:
         prefix = "THEM" if d == "inbound" else "US"
-        lines.append(f"  {prefix} ({a}): {(c or '').strip()[:400]}")
+        lines.append(f"  {prefix} ({a}): {(c or '').strip()}")
     return "\n".join(lines)
 
 
