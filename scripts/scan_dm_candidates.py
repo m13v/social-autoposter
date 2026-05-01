@@ -84,14 +84,6 @@ PERMANENT_SKIP_REASON_PATTERNS = (
     "send_button_disabled%",
 )
 
-# config project topic fields to check per scan platform.
-TOPIC_FIELDS_BY_PLATFORM = {
-    "reddit": ["topics"],
-    "linkedin": ["linkedin_topics", "topics"],
-    "x": ["twitter_topics", "topics"],
-}
-
-
 def load_config():
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH) as f:
@@ -104,19 +96,20 @@ def word_count(text):
 
 
 def build_project_topic_index(config, platform):
-    """Return [(project_name, [topic_phrase_lower, ...]), ...] for topic matching."""
-    fields = TOPIC_FIELDS_BY_PLATFORM.get(platform, ["topics"])
+    """Return [(project_name, [topic_phrase_lower, ...]), ...] for topic matching.
+
+    Reads from the unified search_topics list (post 2026-04-30 legacy
+    cleanup); platform arg kept for callsite compatibility.
+    """
     out = []
     for p in config.get("projects", []) or []:
         name = p.get("name") or p.get("id")
         if not name:
             continue
         phrases = []
-        for field in fields:
-            vals = p.get(field) or []
-            for v in vals:
-                if isinstance(v, str) and v.strip():
-                    phrases.append(v.strip().lower())
+        for v in p.get("search_topics") or []:
+            if isinstance(v, str) and v.strip():
+                phrases.append(v.strip().lower())
         if phrases:
             out.append((name, phrases))
     return out
