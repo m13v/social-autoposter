@@ -1021,6 +1021,7 @@ async function enrichPostCommentsTwitterRuns(runs) {
     }
     const candidatesDropped = Math.max(0, candidatesRaw - candidatesPassed);
     const prior = run.result || {};
+    const priorDiscover = (prior.discover && typeof prior.discover === 'object') ? prior.discover : {};
     run.result = {
       type: 'post-comments-twitter',
       searches,
@@ -1028,6 +1029,7 @@ async function enrichPostCommentsTwitterRuns(runs) {
       candidates_passed: candidatesPassed,
       candidates_dropped: candidatesDropped,
       candidates_expired: expired,
+      above_floor: priorDiscover.above_floor || 0,
       posted,
       pending_queue: pendingNow,
       cost_usd: prior.cost_usd || 0,
@@ -5613,6 +5615,7 @@ function renderResult(run) {
     const passed = r.candidates_passed || 0;
     const dropped = r.candidates_dropped || 0;
     const expired = r.candidates_expired || 0;
+    const aboveFloor = r.above_floor || 0;
     const posted = r.posted || 0;
     const queue = r.pending_queue || 0;
     const failed = r.failed || 0;
@@ -5639,6 +5642,7 @@ function renderResult(run) {
       ' / passed score-time cuts: ' + passed +
       ' / dropped pre-score (already-posted or age>18h): ' + dropped +
       ' / expired (delta<1 floor): ' + expired +
+      ' / above review cap (delta>=10, gates POST_LIMIT=3): ' + aboveFloor +
       ' / posted: ' + posted +
       ' / pending queue: ' + queue;
     return (
@@ -5647,6 +5651,7 @@ function renderResult(run) {
         pill('raw', raw, raw > 0 ? 'var(--text)' : 'var(--muted)') +
         pill('passed', passed, passed > 0 ? '#22c55e' : 'var(--muted)') +
         (expired ? pill('expired', expired, 'var(--muted)') : '') +
+        (aboveFloor ? pill('Δ≥10', aboveFloor, '#a78bfa') : '') +
         (posted ? pill('posted', posted, '#22c55e') : '') +
         (queue ? pill('queue', queue, 'var(--muted)') : '') +
         renderFailedPill() +
