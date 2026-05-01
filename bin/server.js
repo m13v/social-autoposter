@@ -2870,7 +2870,12 @@ async function handleApi(req, res) {
     if (scopeList === null) {
       parts.push("SELECT 'mention' AS type, platform AS pl FROM octolens_mentions WHERE COALESCE(source_timestamp, received_at) >= NOW() - " + win);
     }
-    parts.push("SELECT 'dm_sent' AS type, platform AS pl FROM dms WHERE status='sent' AND sent_at >= NOW() - " + win + dmsPc.clause);
+    // dm_sent counts FIRST outbound message per dm_id (i.e., the moment we
+    // initiated the conversation). Counting via dm_messages instead of
+    // dms.sent_at avoids the public-comment artifact rows (conversation_status=
+    // 'public_only', no outbound messages) that ensure_dm creates for
+    // cross-thread prospect history. Symmetric with dm_reply_sent below.
+    parts.push("SELECT 'dm_sent' AS type, d.platform AS pl FROM dm_messages m JOIN dms d ON d.id = m.dm_id WHERE m.direction='outbound' AND m.message_at >= NOW() - " + win + " AND NOT EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction='inbound' AND m2.message_at < m.message_at)" + dmsAliasedPc.clause);
     parts.push("SELECT 'dm_reply_sent' AS type, d.platform AS pl FROM dm_messages m JOIN dms d ON d.id = m.dm_id WHERE m.direction='outbound' AND m.message_at >= NOW() - " + win + " AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction='inbound' AND m2.message_at < m.message_at)" + dmsAliasedPc.clause);
     parts.push("SELECT 'page_published_serp' AS type, 'seo' AS pl FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page', 'roundup')" + seoProdPc.clause);
     parts.push("SELECT 'page_published_gsc' AS type, 'seo' AS pl FROM gsc_queries WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL" + seoProdPc.clause);
