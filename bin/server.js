@@ -5037,6 +5037,12 @@ const HTML = `<!DOCTYPE html>
       <button type="button" class="style-stats-pill" data-value="stale">Stale</button>
       <button type="button" class="style-stats-pill" data-value="needs_human">Needs human</button>
     </div>
+    <div class="style-stats-pill-row hidden" id="top-dm-link-pills" data-selected="all">
+      <span class="label">Link sent</span>
+      <button type="button" class="style-stats-pill active" data-value="all">All</button>
+      <button type="button" class="style-stats-pill" data-value="yes">Yes</button>
+      <button type="button" class="style-stats-pill" data-value="no">No</button>
+    </div>
   </div>
   <div id="top-table-container">
     <div class="style-stats-empty">Loading\u2026</div>
@@ -8205,6 +8211,7 @@ let _topDmMode = saLoad('sa.top.dmMode.v1', 'all');
 let _topDmTier = saLoad('sa.top.dmTier.v1', 'all');
 let _topDmQual = saLoad('sa.top.dmQual.v1', 'all');
 let _topDmStatus = saLoad('sa.top.dmStatus.v1', 'all');
+let _topDmLink = saLoad('sa.top.dmLink.v1', 'all');
 // Server-side filtering for DMs sub-tab. When _topDmSearch is non-empty the
 // API drops its time-window filter so old threads can be located by author or
 // message text. _topDmOffset drives the "Load more" button.
@@ -8574,6 +8581,7 @@ function initTopFilters() {
   const tierRow = document.getElementById('top-dm-tier-pills');
   const qualRow = document.getElementById('top-dm-qual-pills');
   const statRow = document.getElementById('top-dm-status-pills');
+  const linkRow = document.getElementById('top-dm-link-pills');
   if (winRow) setTopPillActive(winRow, _topWindow);
   if (platRow) setTopPillActive(platRow, _topPlatform);
   if (projRow) setTopPillActive(projRow, _topProject);
@@ -8585,6 +8593,7 @@ function initTopFilters() {
   if (tierRow) setTopPillActive(tierRow, _topDmTier);
   if (qualRow) setTopPillActive(qualRow, _topDmQual);
   if (statRow) setTopPillActive(statRow, _topDmStatus);
+  if (linkRow) setTopPillActive(linkRow, _topDmLink);
   wireTopPillRow('top-window-pills', (v) => {
     _topWindow = coerceTopWindow(v);
     saveDashboardWindow(_topWindow);
@@ -8644,6 +8653,11 @@ function initTopFilters() {
   wireTopPillRow('top-dm-status-pills', (v) => {
     _topDmStatus = v || 'all';
     saSave('sa.top.dmStatus.v1', _topDmStatus);
+    if (_topDmsPayload) renderTopDms(_topDmsPayload);
+  });
+  wireTopPillRow('top-dm-link-pills', (v) => {
+    _topDmLink = v || 'all';
+    saSave('sa.top.dmLink.v1', _topDmLink);
     if (_topDmsPayload) renderTopDms(_topDmsPayload);
   });
   const searchEl = document.getElementById('top-search');
@@ -8706,7 +8720,7 @@ function applyTopSubtabState(sub, loadData) {
   const projRowEl = document.getElementById('top-project-pills');
   const campRowEl = document.getElementById('top-campaign-pills');
   const srcRowEl  = document.getElementById('top-pages-source-pills');
-  const dmOnlyRowIds = ['top-dm-dir-pills', 'top-dm-interest-pills', 'top-dm-mode-pills', 'top-dm-tier-pills', 'top-dm-qual-pills', 'top-dm-status-pills'];
+  const dmOnlyRowIds = ['top-dm-dir-pills', 'top-dm-interest-pills', 'top-dm-mode-pills', 'top-dm-tier-pills', 'top-dm-qual-pills', 'top-dm-status-pills', 'top-dm-link-pills'];
   const setDmRowsHidden = (hidden) => {
     dmOnlyRowIds.forEach(id => {
       const el = document.getElementById(id);
@@ -9137,6 +9151,11 @@ function renderTopDms(payload) {
     if (_topDmTier !== 'all' && String(Number(d.tier) || 1) !== _topDmTier) return false;
     if (_topDmQual !== 'all' && (d.qualification_status || '') !== _topDmQual) return false;
     if (_topDmStatus !== 'all' && (d.conversation_status || '') !== _topDmStatus) return false;
+    if (_topDmLink !== 'all') {
+      const linkSent = !!(d.booking_link_sent_at || d.short_link_code);
+      if (_topDmLink === 'yes' && !linkSent) return false;
+      if (_topDmLink === 'no' && linkSent) return false;
+    }
     return true;
   });
   const serverTotal = (payload && Number.isFinite(Number(payload.total))) ? Number(payload.total) : null;
@@ -9486,10 +9505,12 @@ function buildDmBubbleStream(dm) {
   return items;
 }
 
-// Renders the pre-DM context chain for any platform: the post we made, the
-// thread it lived in, the comment of theirs that triggered outreach, and our
-// public reply to that comment (if any). Each section is rendered only when
-// data exists, so cold DMs with no public-engagement trail stay empty.
+// Renders the pre-DM context header: just the thread and our post/reply that
+// the conversation grew out of. The "their comment" / "our public reply" /
+// seed opening DM blocks were here historically, but those turns now flow
+// into the bubble timeline (buildDmBubbleStream) styled distinctly from real
+// DM bubbles, so this block only keeps the framing context that doesn't fit
+// a chat-bubble layout.
 function renderDmContextBlock(dm) {
   if (!dm) return '';
   const sections = [];
@@ -9499,14 +9520,6 @@ function renderDmContextBlock(dm) {
   const threadUrl    = dm.context_thread_url || '';
   const threadText   = dm.context_thread_content || '';
   const threadAuthor = dm.context_thread_author || '';
-  const theirComment = dm.trigger_comment_content || '';
-  const theirCommentUrl = dm.trigger_comment_url || '';
-  const theirCommentAuthor = dm.trigger_comment_author || dm.their_author || '';
-  const ourReply = dm.trigger_our_reply_content || '';
-  const ourReplyUrl = dm.trigger_our_reply_url || '';
-  const ourReplyAt = dm.trigger_our_reply_at || '';
-  const rawCommentCtx = dm.seed_comment_context || '';
-  const seedOurDm = dm.seed_our_dm_content || '';
   const isFallback = !!dm.context_is_fallback;
   const fbChip = isFallback
     ? '<span class="dm-exp-ctx-fallback" title="DM row had no reply_id/post_id link; context inferred from most recent matching replies row for this (platform, author)">inferred</span>'
@@ -9530,41 +9543,6 @@ function renderDmContextBlock(dm) {
     sections.push('<div class="dm-exp-ctx-section">' +
       '<div class="dm-exp-ctx-head">' + head + '</div>' +
       '<div class="dm-exp-ctx-body">' + escapeHtml(ourContent) + '</div>' +
-    '</div>');
-  }
-
-  if (theirComment) {
-    const head = '<span class="dm-exp-ctx-label">their comment</span>' +
-      (theirCommentAuthor ? '<span class="dm-exp-ctx-author">@' + escapeHtml(theirCommentAuthor) + '</span>' : '') +
-      (theirCommentUrl ? '<a class="dm-exp-ctx-link" href="' + escapeHtml(theirCommentUrl) + '" target="_blank" rel="noopener">open comment</a>' : '');
-    sections.push('<div class="dm-exp-ctx-section">' +
-      '<div class="dm-exp-ctx-head">' + head + '</div>' +
-      '<div class="dm-exp-ctx-body">' + escapeHtml(theirComment) + '</div>' +
-    '</div>');
-  } else if (rawCommentCtx) {
-    sections.push('<div class="dm-exp-ctx-section">' +
-      '<div class="dm-exp-ctx-head"><span class="dm-exp-ctx-label">comment context</span></div>' +
-      '<div class="dm-exp-ctx-body">' + escapeHtml(rawCommentCtx) + '</div>' +
-    '</div>');
-  }
-
-  if (ourReply) {
-    const head = '<span class="dm-exp-ctx-label">our public reply</span>' +
-      (ourReplyAt ? '<span class="dm-exp-ctx-author">' + escapeHtml(relTime(ourReplyAt)) + '</span>' : '') +
-      (ourReplyUrl ? '<a class="dm-exp-ctx-link" href="' + escapeHtml(ourReplyUrl) + '" target="_blank" rel="noopener">open reply</a>' : '');
-    sections.push('<div class="dm-exp-ctx-section">' +
-      '<div class="dm-exp-ctx-head">' + head + '</div>' +
-      '<div class="dm-exp-ctx-body">' + escapeHtml(ourReply) + '</div>' +
-    '</div>');
-  }
-
-  // Only show the seed "our first DM" block if dm_messages is empty, otherwise
-  // it duplicates the thread view.
-  const hasMessages = Array.isArray(dm.messages) && dm.messages.length > 0;
-  if (!hasMessages && seedOurDm) {
-    sections.push('<div class="dm-exp-ctx-section">' +
-      '<div class="dm-exp-ctx-head"><span class="dm-exp-ctx-label">our opening dm (seed)</span></div>' +
-      '<div class="dm-exp-ctx-body">' + escapeHtml(seedOurDm) + '</div>' +
     '</div>');
   }
 
