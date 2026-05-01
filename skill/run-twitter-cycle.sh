@@ -93,11 +93,8 @@ for _ in range(min(k, len(remaining))):
             chosen.append({
                 'name': p.get('name'),
                 'description': p.get('description', ''),
-                # Unified search_topics (Phase 1 shared-seed migration); fall back
-                # to legacy per-platform lists for pre-migration safety.
-                'search_topics': p.get('search_topics') or (
-                    (p.get('twitter_topics') or []) + (p.get('topics') or [])
-                ),
+                # Unified search_topics (post 2026-04-30 legacy field cleanup).
+                'search_topics': p.get('search_topics') or [],
             })
             remaining.pop(i)
             break
