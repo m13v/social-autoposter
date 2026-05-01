@@ -5807,36 +5807,23 @@ function renderResult(run) {
     const tp = discover.tweets_pulled || 0;
     const c = discover.candidates || 0;
     const af = discover.above_floor || 0;
-    if (!q && !d && !tp && !c && !af) return '';
-    const tipParts = [];
-    if (q) tipParts.push(d ? (q + ' queries (' + d + ' duds)') : (q + ' queries'));
-    if (tp) tipParts.push(tp + ' tweets pulled');
-    if (c) tipParts.push(c + ' candidates after floor');
-    if (af) tipParts.push(af + ' cleared review cap');
-    const tip = tipParts.join(' \u2192 ');
-    // Compact label: queries -> candidates -> above_floor (skip duds/tweets
-    // in the visible string; they're in the tooltip). For LinkedIn-shape
-    // rows that only emit q/c/af, this still renders cleanly.
-    const visParts = [];
-    if (q) visParts.push(q);
-    if (c) visParts.push(c);
-    if (af) visParts.push(af);
-    const visStr = visParts.join('\u2192');
+    const tip = (q + ' queries' + (d ? ' (' + d + ' duds)' : '')) + ' \u2192 ' +
+      (tp + ' tweets pulled') + ' \u2192 ' +
+      (c + ' candidates after floor') + ' \u2192 ' +
+      (af + ' cleared review cap');
+    const visStr = q + '\u2192' + c + '\u2192' + af;
+    const color = (q || c || af) ? 'var(--text)' : 'var(--muted)';
     return '<span title="' + tip.replace(/"/g, '&quot;') + '" ' +
       'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
-      'scan <span style="color:var(--text);font-weight:600;">' + visStr + '</span></span>';
+      'scan <span style="color:' + color + ';font-weight:600;">' + visStr + '</span></span>';
   };
-  if (!posted && !skipped && !failed && !repliesRefreshed && !salvaged && !reasons.length
-      && !Object.keys(discover).length) {
-    return '<span style="color:var(--muted);font-size:12px;">—</span>';
-  }
   return (
-    (posted ? pill('posted', posted, '#22c55e') : '') +
-    (skipped ? pill('skipped', skipped, '#eab308') : '') +
+    pill('posted', posted, posted > 0 ? '#22c55e' : 'var(--muted)') +
+    pill('skipped', skipped, skipped > 0 ? '#eab308' : 'var(--muted)') +
     renderFailedPill() +
-    (salvaged ? pill('salvaged', salvaged, '#3b82f6') : '') +
+    pill('salvaged', salvaged, salvaged > 0 ? '#3b82f6' : 'var(--muted)') +
     renderDiscoverPill() +
-    (repliesRefreshed ? pill('replies refreshed', repliesRefreshed, '#3b82f6') : '')
+    pill('replies refreshed', repliesRefreshed, repliesRefreshed > 0 ? '#3b82f6' : 'var(--muted)')
   );
 }
 
