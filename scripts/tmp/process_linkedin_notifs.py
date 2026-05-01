@@ -36,7 +36,7 @@ def match_project_for_text(text: str) -> str:
     best_name = "general"
     best_score = 0
     for p in projects:
-        topics = p.get("topics", []) or []
+        topics = p.get("search_topics", []) or []
         score = 0
         for t in topics:
             if not t:
