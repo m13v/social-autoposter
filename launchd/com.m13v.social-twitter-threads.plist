@@ -23,10 +23,12 @@
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-twitter-threads-stdout.log</string>
 	<!--
-	  4 fires per local day. The DB picker enforces the hard cap of 3 posts per
-	  UTC calendar day, so the 4th fire is a safety retry slot in case one of
-	  the earlier slots fails. Times spread across LA waking hours, offset
-	  :47 to avoid colliding with reddit-threads (:13).
+	  3 fires per local day, aligned with reddit-threads (8/12/17) so the
+	  dashboard "Post Threads" row shows one unified cadence across platforms.
+	  Offset to :47 to avoid colliding with reddit-threads (:13).
+	  The DB picker still enforces a hard cap of 3 posts per UTC calendar day.
+	  Note: dropping from 4 fires to 3 removed the previous safety retry slot,
+	  so a failed slot now means one fewer post that day.
 	-->
 	<key>StartCalendarInterval</key>
 	<array>
@@ -45,12 +47,6 @@
 		<dict>
 			<key>Hour</key>
 			<integer>17</integer>
-			<key>Minute</key>
-			<integer>47</integer>
-		</dict>
-		<dict>
-			<key>Hour</key>
-			<integer>22</integer>
 			<key>Minute</key>
 			<integer>47</integer>
 		</dict>
