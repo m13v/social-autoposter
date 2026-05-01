@@ -184,7 +184,7 @@ def _render_brief_block(brief: dict) -> str:
     if hist_rows:
         hist = "\n".join(
             f"  - {h.get('at','?')} [{h.get('status','?')}] "
-            f"{(h.get('diff_summary') or '').strip()[:180]}"
+            f"{(h.get('diff_summary') or '').strip()}"
             for h in hist_rows
         )
     else:
@@ -463,11 +463,11 @@ def main():
         claude_session_id=session_id,
         run_log_path=str(log_path),
         tool_summary=result.get("tool_counts") or {},
-        final_result_text=(result.get("final_text") or "")[:20000],
+        final_result_text=(result.get("final_text") or ""),
         commit_sha=head_sha if committed else None,
         files_modified=changed_files or (final_json.get("files_modified") or []),
-        diff_summary=(final_json.get("diff_summary") or "")[:4000] if final_json else None,
-        rationale=(final_json.get("rationale") or "")[:4000] if final_json else None,
+        diff_summary=(final_json.get("diff_summary") or "") if final_json else None,
+        rationale=(final_json.get("rationale") or "") if final_json else None,
         status=status,
         error=err,
     )
