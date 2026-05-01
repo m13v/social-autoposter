@@ -201,7 +201,7 @@ def mentions_to_candidates(mentions, already_posted):
             "url": url,
             "title": m["title"],
             "author": m["author"],
-            "content": m["body"][:500],
+            "content": m["body"],
             "score": m.get("author_followers", 0),
             "num_comments": 0,
             "discovery_method": "octolens",
