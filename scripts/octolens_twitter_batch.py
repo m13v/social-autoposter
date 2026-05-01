@@ -95,7 +95,7 @@ def post_reply_and_log(browser, tweet, db_conn):
             return None
 
         thread_content = tweets_data[0]['text'] if tweets_data else ''
-        thread_title = thread_content[:100]
+        thread_title = thread_content
 
         # Click reply button on the main tweet
         reply_btn = page.query_selector('[data-testid="tweet"] [data-testid="reply"]')
@@ -146,7 +146,7 @@ def post_reply_and_log(browser, tweet, db_conn):
             tweet['author'],
             tweet['author'],
             thread_title,
-            thread_content[:500],
+            thread_content,
             our_url,
             reply_text,
             f"octolens: {tweet['keyword']}",
