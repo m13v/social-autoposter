@@ -199,6 +199,24 @@ def cmd_resolve(args):
                 "WHERE id = %s",
                 (dm['id'],),
             )
+            # Click is a first-class trigger to engage-dm-replies: insert a
+            # synthetic 'inbound' row in dm_messages so the existing
+            # PENDING_CONVOS query (last_in > last_out) picks the thread up
+            # naturally on the next polling tick. See bin/server.js redirector
+            # for the canonical comment. Non-fatal on failure (don't break
+            # the redirect just because logging stumbled).
+            try:
+                conn.execute(
+                    "INSERT INTO dm_messages (dm_id, direction, author, content, message_at, logged_at) "
+                    "VALUES (%s, 'inbound', '__click_signal__', "
+                    "        '[CLICK_SIGNAL] short link clicked', NOW(), NOW())",
+                    (dm['id'],),
+                )
+            except Exception as _click_signal_err:
+                print(
+                    f"[dm_short_links] click_signal insert failed (non-fatal): {_click_signal_err}",
+                    file=sys.stderr,
+                )
             conn.commit()
 
         print(json.dumps({
