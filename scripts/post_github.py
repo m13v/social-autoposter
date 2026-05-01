@@ -108,7 +108,7 @@ def get_recent_comments(limit=5):
     dbmod.load_env()
     conn = dbmod.get_conn()
     cur = conn.execute(
-        "SELECT LEFT(our_content, 150) FROM posts "
+        "SELECT our_content FROM posts "
         "WHERE platform='github' ORDER BY id DESC LIMIT %s",
         [limit],
     )
@@ -228,7 +228,7 @@ def gh_view_counts(repo, number):
         "comment_count": len(comments),
         "reaction_count": reaction_count,
         "title": data.get("title", ""),
-        "body": (data.get("body") or "")[:1500],
+        "body": (data.get("body") or ""),
         "author": (data.get("author") or {}).get("login", ""),
         "url": data.get("url", ""),
     }
