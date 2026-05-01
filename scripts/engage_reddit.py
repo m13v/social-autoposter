@@ -101,7 +101,7 @@ def get_next_pending(conn, platform):
         SELECT r.id, r.platform, r.their_author,
                r.their_content as their_content,
                r.their_comment_url, r.their_comment_id, r.depth,
-               LEFT(p.thread_title, 100) as thread_title,
+               p.thread_title as thread_title,
                p.thread_url, p.our_content as our_content, p.our_url,
                CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post,
                p.project_name, r.post_id
@@ -177,7 +177,7 @@ def check_cross_pipeline_history(conn, platform, author, post_id):
 
     prior_history_block: human-readable text summarizing other-thread dms
     history for this author (different post_id, last 5, message_count > 0,
-    plus the latest message direction + first 80 chars). Empty string if no
+    plus the latest message direction + content). Empty string if no
     prior history. Soft-surface for the LLM, never blocks.
 
     Both are best-effort: any DB failure returns (None, "") rather than
@@ -219,7 +219,7 @@ def check_cross_pipeline_history(conn, platform, author, post_id):
             SELECT d.id, d.post_id, d.interest_level, d.mode, d.tier,
                    d.conversation_status, d.target_project, d.message_count,
                    d.last_message_at,
-                   (SELECT direction || ': ' || LEFT(content, 80)
+                   (SELECT direction || ': ' || content
                     FROM dm_messages WHERE dm_id = d.id
                     ORDER BY message_at DESC LIMIT 1) AS last_msg
             FROM dms d
@@ -267,7 +267,7 @@ def check_cross_pipeline_history(conn, platform, author, post_id):
 def get_recent_archetypes(conn, platform, limit=3):
     """Fetch archetypes of last N replied replies for rotation context."""
     cur = conn.execute("""
-        SELECT LEFT(our_reply_content, 150)
+        SELECT our_reply_content
         FROM replies
         WHERE status='replied' AND our_reply_content IS NOT NULL
             AND platform = %s
