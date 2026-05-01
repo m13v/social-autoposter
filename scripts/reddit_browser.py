@@ -404,7 +404,7 @@ def post_comment(thread_url, text):
             try:
                 if error_el.is_visible():
                     error_text = error_el.text_content() or "unknown_error"
-                    return {"ok": False, "error": error_text.strip()[:200]}
+                    return {"ok": False, "error": error_text.strip()}
             except Exception:
                 pass
 
@@ -623,7 +623,7 @@ def reply_to_comment(comment_permalink, text, dm_id=None):
             try:
                 if error_el.is_visible():
                     error_text = error_el.text_content() or "unknown_error"
-                    return {"ok": False, "error": error_text.strip()[:200]}
+                    return {"ok": False, "error": error_text.strip()}
             except Exception:
                 pass
 
@@ -1567,7 +1567,7 @@ def compose_dm(recipient, subject, body):
                     if error_el.is_visible():
                         return {
                             "ok": False,
-                            "error": (error_el.text_content() or "")[:200],
+                            "error": (error_el.text_content() or ""),
                         }
                 except Exception:
                     pass
@@ -1712,7 +1712,7 @@ def compose_dm(recipient, subject, body):
                     if error_el.is_visible():
                         return {
                             "ok": False,
-                            "error": (error_el.text_content() or "")[:200],
+                            "error": (error_el.text_content() or ""),
                         }
                 except Exception:
                     pass
