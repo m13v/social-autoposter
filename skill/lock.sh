@@ -9,18 +9,23 @@
 # shellcheck source=lib/platform.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/platform.sh"
 
-# Stack of currently-held lock directories, cleaned up on exit.
-# Declared at source time so it survives across acquire_lock calls.
+# Stack of currently-held lock directories AND outstanding queue tickets,
+# both cleaned up on exit. Declared at source time so they survive across
+# acquire_lock calls.
 if [ -z "${_SA_LOCK_DIRS+x}" ]; then
   declare -a _SA_LOCK_DIRS=()
+  declare -a _SA_LOCK_TICKETS=()
   _sa_release_locks() {
-    local d
+    local d t
     # Safe for bash 3.2: ${arr[@]+"${arr[@]}"} expands to nothing when arr is
     # unset or empty, avoiding the "unbound variable" error with set -u.
     # The earlier if+for guard was insufficient because bash 3.2 treats even
     # ${#unset_arr[@]} as an "unbound variable" error in some exit-trap contexts.
     for d in ${_SA_LOCK_DIRS[@]+"${_SA_LOCK_DIRS[@]}"}; do
       rm -rf "$d"
+    done
+    for t in ${_SA_LOCK_TICKETS[@]+"${_SA_LOCK_TICKETS[@]}"}; do
+      rm -f "$t"
     done
   }
   trap _sa_release_locks EXIT INT TERM HUP
@@ -30,6 +35,7 @@ acquire_lock() {
   local name="$1"
   local timeout="${2:-3600}"
   local lock_dir="/tmp/social-autoposter-${name}.lock"
+  local queue_dir="${lock_dir}.queue"
   local waited=0
 
   # Platform-browser locks still get the orphan-Chrome sweep on acquire (after
@@ -44,50 +50,108 @@ acquire_lock() {
     reddit-browser|linkedin-browser|twitter-browser) is_browser_lock=true ;;
   esac
 
-  while ! mkdir "$lock_dir" 2>/dev/null; do
-    # Check if lock is stale: no pid file, or holder pid is dead, or lock older than 3 hours
-    local should_remove=false
-    if [ ! -f "$lock_dir/pid" ]; then
-      # No pid file - lock dir exists but incomplete, likely stale
-      should_remove=true
-    else
-      local holder_pid
-      holder_pid=$(cat "$lock_dir/pid" 2>/dev/null || echo "")
-      if [ -z "$holder_pid" ] || ! kill -0 "$holder_pid" 2>/dev/null; then
-        should_remove=true
-      fi
-    fi
+  # FIFO ticket queue (added 2026-05-01). Without this, mkdir-race acquisition
+  # starved long-waiters under parallel cycles: a fresh cycle entering Phase 1
+  # would race-win the lock the moment the prior holder released, ahead of a
+  # peer's Phase 2b-post that had been waiting 5+ min. Observed live: cycle
+  # 90205's Phase 2b-post waited 8+ min while three newer cycles cut in line
+  # for their own Phase 1 scrapes.
+  #
+  # Mechanism: each waiter writes a `<ns_timestamp>-<pid>` ticket into
+  # `${lock_dir}.queue/`. ls-sort gives FIFO order. Only the head-of-queue
+  # waiter races to mkdir the lock_dir, so post-release acquisition is
+  # deterministic by arrival time. Ticket is removed once the lock is held
+  # (and on EXIT trap as a safety net for SIGKILLed waiters).
+  mkdir -p "$queue_dir"
+  local ticket
+  ticket="$(python3 -c 'import time; print(time.time_ns())' 2>/dev/null)-$$"
+  if [ -z "${ticket%-$$}" ]; then
+    # python3 unavailable; fall back to seconds + microsecond approximation.
+    # PID disambiguates same-second collisions; loses sub-second FIFO ordering
+    # but maintains correctness (waiters in same second arbitrate by PID).
+    ticket="$(date +%s)000000000-$$"
+  fi
+  local ticket_file="$queue_dir/$ticket"
+  echo $$ > "$ticket_file"
+  _SA_LOCK_TICKETS+=("$ticket_file")
 
-    # Safety net: remove any lock older than 3 hours regardless. Watchdog's
-    # per-script caps (45m default, 120m for stats_reddit/github-engage) will
-    # SIGTERM a hung holder long before this fires; the bash trap then frees
-    # the lock. This 3h ceiling only kicks in if a holder dies uncleanly
-    # without the trap running and somehow keeps a live pid (rare).
-    if [ -d "$lock_dir" ]; then
-      local lock_age
-      lock_age=$(( $(date +%s) - $(stat_mtime "$lock_dir") ))
-      if [ "$lock_age" -gt 10800 ]; then
-        should_remove=true
+  while true; do
+    # GC stale tickets: any ticket whose owning PID is dead. Without this a
+    # SIGKILLed waiter (no trap fired) would block all newer waiters forever
+    # because its ticket would always be oldest.
+    local t tpid
+    for t in $(ls -1 "$queue_dir" 2>/dev/null); do
+      tpid=$(cat "$queue_dir/$t" 2>/dev/null || echo "")
+      if [ -n "$tpid" ] && ! kill -0 "$tpid" 2>/dev/null; then
+        rm -f "$queue_dir/$t"
       fi
-    fi
+    done
 
-    if $should_remove; then
-      echo "Removing stale $name lock"
-      rm -rf "$lock_dir"
-      continue
+    # Check our position. ls -1 + sort gives lexicographic (== numeric) order
+    # over fixed-width nanosecond timestamps, so head is the oldest waiter.
+    local oldest
+    oldest=$(ls -1 "$queue_dir" 2>/dev/null | sort | head -1)
+
+    if [ "$oldest" = "$ticket" ]; then
+      # We are the head. Try to acquire the lock.
+      if mkdir "$lock_dir" 2>/dev/null; then
+        # Won the lock. Write PID, register for trap-cleanup, drop our ticket,
+        # then break out into the post-acquire (Chrome sweep + return).
+        echo $$ > "$lock_dir/pid"
+        _SA_LOCK_DIRS+=("$lock_dir")
+        rm -f "$ticket_file"
+        # Remove our ticket from _SA_LOCK_TICKETS so the EXIT trap doesn't
+        # try to rm-f it again (harmless, but keeps the array honest).
+        local _new_t=()
+        local _existing
+        for _existing in ${_SA_LOCK_TICKETS[@]+"${_SA_LOCK_TICKETS[@]}"}; do
+          [ "$_existing" != "$ticket_file" ] && _new_t+=("$_existing")
+        done
+        _SA_LOCK_TICKETS=(${_new_t[@]+"${_new_t[@]}"})
+        break
+      fi
+
+      # We're head-of-queue but lock_dir exists. Either the holder is alive
+      # and active (normal — wait), or they died uncleanly. Apply the same
+      # stale-detection used pre-FIFO.
+      local should_remove=false
+      if [ ! -f "$lock_dir/pid" ]; then
+        should_remove=true
+      else
+        local holder_pid
+        holder_pid=$(cat "$lock_dir/pid" 2>/dev/null || echo "")
+        if [ -z "$holder_pid" ] || ! kill -0 "$holder_pid" 2>/dev/null; then
+          should_remove=true
+        fi
+      fi
+      # Safety net: remove any lock older than 3 hours regardless. Watchdog's
+      # per-script caps (45m default, 120m for stats_reddit/github-engage) will
+      # SIGTERM a hung holder long before this fires.
+      if [ -d "$lock_dir" ]; then
+        local lock_age
+        lock_age=$(( $(date +%s) - $(stat_mtime "$lock_dir") ))
+        if [ "$lock_age" -gt 10800 ]; then
+          should_remove=true
+        fi
+      fi
+      if $should_remove; then
+        echo "Removing stale $name lock"
+        rm -rf "$lock_dir"
+        continue
+      fi
     fi
 
     if [ "$waited" -ge "$timeout" ]; then
       echo "Previous $name run still active after $((timeout/60))min, skipping"
+      rm -f "$ticket_file"
       exit 0
     fi
-    sleep 10
-    waited=$((waited + 10))
+    # 2s poll keeps head-of-queue snappy after release without burning CPU.
+    # Pre-FIFO this was 10s, but FIFO means only the head actually contends —
+    # tighter polling here mostly affects the winner, not the racing pack.
+    sleep 2
+    waited=$((waited + 2))
   done
-
-  # Write PID immediately after acquiring lock
-  echo $$ > "$lock_dir/pid"
-  _SA_LOCK_DIRS+=("$lock_dir")
 
   # Platform-browser locks: sweep orphan Chromes holding the profile. A prior
   # run may have exited without cleanly closing Chrome (parent playwright-mcp
