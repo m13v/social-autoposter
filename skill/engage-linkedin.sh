@@ -197,10 +197,10 @@ else
     PENDING_DATA=$(psql "$DATABASE_URL" -t -A -c "
         SELECT json_agg(q) FROM (
             SELECT r.id, r.platform, r.their_author,
-                   LEFT(r.their_content, 300) as their_content,
+                   r.their_content as their_content,
                    r.their_comment_url, r.their_comment_id, r.depth,
                    LEFT(p.thread_title, 100) as thread_title,
-                   p.thread_url, LEFT(p.our_content, 200) as our_content, p.our_url,
+                   p.thread_url, p.our_content as our_content, p.our_url,
                    CASE WHEN p.thread_url = p.our_url THEN 1 ELSE 0 END as is_our_original_post,
                    p.project_name
             FROM replies r
