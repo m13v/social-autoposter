@@ -153,21 +153,41 @@ def calculate_velocity_score(cand):
 
 
 def _normalize_post_url(url):
-    """Normalize a LinkedIn post URL to the canonical activity-feed form.
+    """Normalize a LinkedIn post URL to the canonical /feed/update/<urn> form,
+    preserving the URN namespace (activity vs share vs ugcPost).
 
-    Mirrors the rebuild done in run-linkedin.sh Phase A: any URN form
-    (activity, share, ugcPost) collapses to
-    /feed/update/urn:li:activity:NUMERIC/ so dedupe via the UNIQUE
-    constraint on post_url survives the LinkedIn redirect maze.
+    Reality check (verified 2026-05-01 with Andreas Mautsch's "Apple Container"
+    post): activity / share / ugcPost URNs for the same logical post are
+    DIFFERENT numeric IDs and LinkedIn does NOT auto-redirect across them.
+    /feed/update/urn:li:activity:<share_id>/ returns "Post not found" if the
+    numeric is actually a share ID. So we MUST keep the original namespace,
+    not collapse to activity. See linkedin_url.py docstring for context.
+
+    Inputs accepted:
+      * /feed/update/urn:li:activity:NUMERIC/
+      * /feed/update/urn:li:share:NUMERIC/
+      * /feed/update/urn:li:ugcPost:NUMERIC/
+      * /posts/SLUG-activity-NUMERIC-RANDOM (3-dot-menu copy-link form)
+      * /posts/SLUG-share-NUMERIC-RANDOM
+      * /posts/SLUG-ugcPost-NUMERIC-RANDOM
     """
     if not url:
         return None
     m = re.search(r"urn:li:(activity|share|ugcPost):(\d{16,19})", url)
     if m:
-        # Canonicalize all forms to activity for dedup. LinkedIn redirects
-        # ugcPost-form / share-form URLs to the activity view anyway, so
-        # this matches the user-visible thread.
-        return f"https://www.linkedin.com/feed/update/urn:li:activity:{m.group(2)}/"
+        return f"https://www.linkedin.com/feed/update/urn:li:{m.group(1)}:{m.group(2)}/"
+    # Slug form from "Copy link to post" 3-dot menu. The URN type is
+    # encoded in the slug as -activity-NUM-, -share-NUM-, or -ugcPost-NUM-.
+    m = re.search(r"-(activity|share|ugcPost)-(\d{16,19})\b", url, re.IGNORECASE)
+    if m:
+        # Normalize the type token's case (LinkedIn always emits ugcPost
+        # camel-cased; activity/share lowercase).
+        urn_type = m.group(1)
+        if urn_type.lower() == "ugcpost":
+            urn_type = "ugcPost"
+        else:
+            urn_type = urn_type.lower()
+        return f"https://www.linkedin.com/feed/update/urn:li:{urn_type}:{m.group(2)}/"
     return url.strip().rstrip("/") + "/"
 
 
