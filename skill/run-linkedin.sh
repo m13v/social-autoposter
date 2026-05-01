@@ -2,7 +2,7 @@
 # Social Autoposter - LinkedIn posting (Phase A discover+score, Phase B post)
 #
 # Phase A (discovery + scoring, ~$10-15 target): pick a project, consult
-#   top/dud query history, draft 2-3 dynamic search queries, browse the
+#   top/dud query history, draft 4-6 dynamic search queries, browse the
 #   LinkedIn SERPs, extract engagement metrics (reactions/comments/reposts/
 #   age/author) for every visible candidate, score serp quality, write a
 #   structured JSON envelope to a tmp file, STOP. Bash then pipes the
@@ -86,7 +86,7 @@ PHASE_A_PROMPT=$(mktemp /tmp/sa-run-linkedin-phaseA-prompt-XXXXXX)
 cat > "$PHASE_A_PROMPT" <<PROMPT_EOF
 You are the Social Autoposter LinkedIn discovery + scoring scout (Phase A).
 
-Your job: pick ONE project, draft 2-3 DYNAMIC search queries informed by
+Your job: pick ONE project, draft 4-6 DYNAMIC search queries informed by
 historical performance, browse each query's LinkedIn SERP, extract
 engagement metrics for every visible candidate post, write a structured
 JSON envelope to $PHASE_A_OUT, and STOP. Do NOT draft a comment. Do NOT
@@ -117,16 +117,21 @@ $DUD_QUERIES
 1. Pick ONE underrepresented project from the distribution that has a
    plausible content fit. Do NOT iterate through many projects.
 
-2. Draft 1-2 search queries for the chosen project. Each query should:
+2. Draft 4-6 search queries for the chosen project. Each query should:
    - Be 2-4 words (LinkedIn search hates long phrases)
    - Target practitioners, not influencers (no "expert tips", "thought
      leadership", or buzzwordy phrasing)
    - Be FRESH — different from the dud list, different angle from the
      top-performers list (steal the recipe, change the dish)
    - Map to the project's search_topics
+   - Cover DIFFERENT facets / pains / personas of the ICP — not 4 reskins
+     of the same query. Wider net = higher chance of one ICP-fit hit.
 
-   Hard cap: at most 2 queries this run. The whole point is to converge
-   fast and stay under the LinkedIn search rate budget (40/24h, 150/30d).
+   Aim for 4-6 queries this run. More surface area beats narrow targeting:
+   most queries will return slop and get retired into the dud list, so the
+   2-3 that survive should reach the LLM with real candidates. The
+   LinkedIn rate budget (40/24h, 150/30d) accommodates this fine; rate
+   caps are not the bottleneck, candidate quality is.
 
 3. PRIME the linkedin-agent MCP browser ONCE before the per-query loop.
    The Playwright MCP server launches Chrome lazily on the first browser
@@ -160,8 +165,8 @@ $DUD_QUERIES
          "query": "<query>",
          "result_count": N,
          "dropped_below_virality_floor": M,
-         "virality_floor": 20.0,
-         "results": [
+         "virality_floor": 5.0,
+         "results": [   // SORTED by velocity_score DESC — top of list = highest score
            {
              "post_url":           "...|null",
              "activity_id":        "...|null",
