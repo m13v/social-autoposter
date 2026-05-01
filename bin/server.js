@@ -5732,29 +5732,13 @@ function renderResult(run) {
         'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
         label + ' <span style="color:var(--text);font-weight:600;">' + failed + '</span></span>';
     };
-    if (!processed && !pending && !failed) {
-      return '<span style="color:var(--muted);font-size:12px;">queue empty</span>';
-    }
-    if (!processed && failed) {
-      // Hard-failure run with no DB-side work landed (e.g. monthly_limit,
-      // AUP refusal). Surface failed pill with reason; suppress "queue empty"
-      // so the operator can tell broken runs from no-ops at a glance.
-      return (
-        renderFailedPill() +
-        (pending ? pill('queue', pending, 'var(--muted)') : '')
-      );
-    }
-    if (!processed) {
-      return pill('queue', pending, 'var(--text)') +
-        '<span style="color:var(--muted);font-size:12px;">nothing processed</span>';
-    }
     return (
-      pill('replied', replied, '#22c55e') +
-      (skipped ? pill('skipped', skipped, '#eab308') : '') +
-      (errored ? pill('errored', errored, '#ef4444') : '') +
+      pill('replied', replied, replied > 0 ? '#22c55e' : 'var(--muted)') +
+      pill('skipped', skipped, skipped > 0 ? '#eab308' : 'var(--muted)') +
+      pill('errored', errored, errored > 0 ? '#ef4444' : 'var(--muted)') +
       renderFailedPill() +
-      (pending ? pill('queue', pending, 'var(--muted)') : '') +
-      (cost ? '<span style="font-size:12px;color:var(--muted);">$' + cost.toFixed(2) + '</span>' : '')
+      pill('queue', pending, pending > 0 ? 'var(--text)' : 'var(--muted)') +
+      '<span style="font-size:12px;color:var(--muted);">$' + cost.toFixed(2) + '</span>'
     );
   }
   // Stats jobs (stats_reddit, stats_twitter, stats_linkedin, stats_moltbook):
