@@ -69,6 +69,20 @@ def get_booking_table(project_name: str) -> Optional[str]:
     return None
 
 
+def bookings_require_utm(project_name: str) -> bool:
+    """Whether to gate `real_bookings` on `utm_source IS NOT NULL`.
+
+    Default False: each cal.com booking page is product-specific, so any
+    non-test booking on it is by definition a prospect for that product, no
+    UTM needed. Set True for projects whose booking destination is a shared
+    surface (e.g. paperback-expert's calendly account hosts Michael DeLon's
+    whole business funnel, not just b00kd.com inbound)."""
+    p = _find(project_name)
+    if p is None:
+        return False
+    return bool(p.get("bookings_require_utm"))
+
+
 if __name__ == "__main__":
     # Smoke-test: print the derivation for every project in config.json.
     for p in _projects():
