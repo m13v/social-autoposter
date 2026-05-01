@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import project_stats as ps
+from project_slugs import bookings_require_utm as _bookings_require_utm
 
 
 _PAGE_FILENAMES = ("page.tsx", "page.ts", "page.jsx", "page.js", "page.mdx", "page.md")
@@ -616,7 +617,12 @@ def _amplitude_signups(proj, days, env):
     e = json.dumps({
         "event_type": amp.get("signup_event", "New User Sign Up"),
         "filters": [
-            {"subprop_type": "event", "subprop_key": k, "subprop_op": "is", "subprop_value": [v]}
+            {
+                "subprop_type": "event",
+                "subprop_key": k,
+                "subprop_op": "is",
+                "subprop_value": v if isinstance(v, list) else [v],
+            }
             for k, v in (amp.get("attribution_filter") or {}).items()
         ],
     })
@@ -697,11 +703,15 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
     # for errored domains, so scoping would silently collapse everything to
     # zero. Keep the funnel values as None below so the dashboard renders
     # 'err' instead of a misleading 0.
+    # Only pageviews get window-scoped to "traffic on pages we generated in
+    # this window". Conversion events (newsletter_subscribed, schedule_click,
+    # get_started_click) fire on dedicated landing pages (/, /use-case, /ig,
+    # etc.), almost never on the freshly-generated /blog/* and /t/* SEO pages
+    # we ship each cycle. Scoping those collapsed every project to 0 and made
+    # the dashboard's Email Signups / Schedule Clicks / Get Started columns
+    # useless. Domain-wide is the honest metric for those.
     if posthog is not None and not analytics_error:
         scoped_pv = 0
-        scoped_signups = 0
-        scoped_sched = 0
-        scoped_get_started = 0
         for d, detail in (posthog.get("pageview_details") or {}).items():
             created = {_norm_path(p) for p in created_by_domain.get((d or "").lower(), set())}
             if not created:
@@ -709,23 +719,11 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
             for path, cnt in (detail.get("top_pages") or {}).items():
                 if _norm_path(path) in created:
                     scoped_pv += int(cnt or 0)
-            for path, cnt in (detail.get("top_pages_signups") or {}).items():
-                if _norm_path(path) in created:
-                    scoped_signups += int(cnt or 0)
-            for path, cnt in (detail.get("top_pages_schedule") or {}).items():
-                if _norm_path(path) in created:
-                    scoped_sched += int(cnt or 0)
-            for path, cnt in (detail.get("top_pages_get_started") or {}).items():
-                if _norm_path(path) in created:
-                    scoped_get_started += int(cnt or 0)
         posthog["pageviews"] = scoped_pv
-        posthog["email_signups"] = scoped_signups
-        posthog["schedule_clicks"] = scoped_sched
-        posthog["get_started_clicks"] = scoped_get_started
 
     client_slug = ps.get_client_slug(name)
     booking_table = ps.get_booking_table(name)
-    require_utm = ps.bookings_require_utm(name)
+    require_utm = _bookings_require_utm(name)
     bookings = _bookings_shared(bookings_conn, client_slug, days, booking_table, require_utm) if client_slug else None
 
     # When the PostHog batch failed, the aggregate numbers on `posthog` are
