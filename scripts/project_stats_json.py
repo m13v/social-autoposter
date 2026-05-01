@@ -451,7 +451,8 @@ def _bookings_shared(bookings_conn, client_slug, days, table="cal_bookings"):
             "AND attendee_name NOT ILIKE '%%test%%' "
             "AND attendee_name NOT ILIKE '%%verification%%' "
             "AND attendee_name NOT ILIKE '%%delete-me%%' "
-            "AND attendee_name NOT ILIKE '%%john doe%%') "
+            "AND attendee_name NOT ILIKE '%%john doe%%' "
+            "AND utm_source IS NOT NULL) "
             "FROM " + table + " WHERE client_slug = %s "
             "AND created_at >= NOW() - INTERVAL '" + str(days) + " days'",
             (client_slug,),
