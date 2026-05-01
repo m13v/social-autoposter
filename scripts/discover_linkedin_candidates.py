@@ -52,8 +52,8 @@ Output (stdout, JSON):
         "query": "founder rag retrieval",
         "result_count": 10,
         "results": [...],
-        "rate_budget": {"daily_used": N, "daily_cap": N,
-                        "monthly_used": N, "monthly_cap": N},
+        "rate_budget": {"daily_used": N, "daily_cap": null,
+                        "monthly_used": N, "monthly_cap": null},
     }
 
 Failure shapes:
@@ -64,10 +64,10 @@ Failure shapes:
     {"ok": false, "error": "navigation_failed", "detail": "..."}
     {"ok": false, "error": "bad_vertical", "detail": "..."}
     {"ok": false, "error": "empty_query", "detail": ""}
-    {"ok": false, "error": "rate_limited",
-     "reason": "min_gap|daily_cap|monthly_cap",
-     "detail": "...", "retry_after_seconds": N}
-    {"ok": false, "error": "db_unavailable", "detail": "..."}
+
+Note: rate_limited and db_unavailable are no longer raised. All caps were
+removed 2026-05-01; the script logs to linkedin_browser_searches for
+visibility but never refuses based on volume or recency.
 
 Exits 0 on success, 1 on failure.
 """
@@ -90,17 +90,27 @@ from linkedin_browser import (  # noqa: E402
     _acquire_browser_lock,
     _is_login_or_checkpoint,
 )
+from score_linkedin_candidates import calculate_velocity_score  # noqa: E402
 
 DEVTOOLS_ACTIVE_PORT = os.path.join(PROFILE_DIR, "DevToolsActivePort")
 
-# Search rate-limit budget. Picked from 2026-04-29 research synthesis: vendor
-# consensus is 8-25s gap + 80-100 profile views/hour + <500/day at high-volume
-# scraping. We scale that down hard because we are using one real human
-# account, not a farm. The hard ceiling is LinkedIn's free-tier commercial-use
-# wall at ~300 people-searches/month — we target half of that.
-SEARCH_MIN_GAP_SECONDS = 30
-SEARCH_DAILY_CAP = 40         # 10 searches × ~4 sessions/day
-SEARCH_MONTHLY_CAP = 150      # 50% headroom under LinkedIn's ~300/month wall
+# Hard virality floor for content-vertical SERP candidates. Phase A's LLM
+# picker has historically chosen 1/0/0 fresh posts (virality ~1.0) over
+# stronger 4-19 reaction alternatives because the prompt told it to apply
+# judgment on top of raw signal. Filtering below this floor BEFORE the LLM
+# sees the list constrains the choice to candidates that already cleared a
+# real engagement bar. virality = velocity * reach_mult * age_decay *
+# (1 + disc_bonus); see score_linkedin_candidates.calculate_velocity_score.
+CONTENT_VIRALITY_FLOOR = 20.0
+
+# Search rate-limit budget removed 2026-05-01 per user instruction. The
+# linkedin_browser_searches table is kept so daily/monthly volumes remain
+# observable, but no min-gap, daily, or monthly cap is enforced. Caller is
+# responsible for cadence. The 2026-04-17 LinkedIn restriction (see CLAUDE.md
+# "LinkedIn: flagged patterns") came from behavioral fingerprinting, not raw
+# volume, so volume caps weren't the load-bearing protection anyway — but
+# back-to-back machine-cadence search hits are now structurally possible
+# from this script.
 SEARCH_VERTICALS = ("people", "content", "companies")
 SEARCH_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS linkedin_browser_searches (
@@ -124,85 +134,39 @@ def _open_db():
 
 
 def _check_rate_limit() -> dict:
-    """Return {"ok": True, ...} if a new search is allowed, else a failure shape.
+    """Always returns ok=True. Caps removed 2026-05-01 per user instruction.
 
-    Auto-creates linkedin_browser_searches on first use. Fails CLOSED on DB
-    errors: if we can't enforce the budget we don't perform the search.
-    Better to silently skip a cycle than to drift past the ~300/month wall
-    and trigger a restriction.
+    Still touches the DB to (a) create the linkedin_browser_searches table on
+    first use and (b) read current daily/monthly volume so the response shape
+    keeps the rate_budget block populated for the dashboard. A DB error here
+    is non-fatal — the search proceeds anyway since there's no cap to enforce.
     """
+    daily = monthly = 0
     try:
         conn = _open_db()
-    except Exception as e:
-        return {
-            "ok": False,
-            "error": "db_unavailable",
-            "detail": f"{type(e).__name__}: {e}",
-        }
-    try:
-        for stmt in [s.strip() for s in SEARCH_TABLE_DDL.split(";") if s.strip()]:
-            conn.execute(stmt)
-        conn.commit()
-
-        cur = conn.execute(
-            "SELECT EXTRACT(EPOCH FROM (NOW() - MAX(ran_at)))::INT AS gap "
-            "FROM linkedin_browser_searches"
-        )
-        row = cur.fetchone()
-        gap = row["gap"] if row and row["gap"] is not None else None
-        if gap is not None and gap < SEARCH_MIN_GAP_SECONDS:
-            return {
-                "ok": False,
-                "error": "rate_limited",
-                "reason": "min_gap",
-                "detail": (
-                    f"last search was {gap}s ago, "
-                    f"need {SEARCH_MIN_GAP_SECONDS}s gap"
-                ),
-                "retry_after_seconds": SEARCH_MIN_GAP_SECONDS - gap,
-            }
-
-        cur = conn.execute(
-            "SELECT COUNT(*) AS n FROM linkedin_browser_searches "
-            "WHERE ran_at >= NOW() - INTERVAL '24 hours'"
-        )
-        daily = cur.fetchone()["n"]
-        if daily >= SEARCH_DAILY_CAP:
-            return {
-                "ok": False,
-                "error": "rate_limited",
-                "reason": "daily_cap",
-                "detail": f"{daily} searches in last 24h, cap {SEARCH_DAILY_CAP}",
-                "retry_after_seconds": 3600,
-            }
-
-        cur = conn.execute(
-            "SELECT COUNT(*) AS n FROM linkedin_browser_searches "
-            "WHERE ran_at >= date_trunc('month', NOW())"
-        )
-        monthly = cur.fetchone()["n"]
-        if monthly >= SEARCH_MONTHLY_CAP:
-            return {
-                "ok": False,
-                "error": "rate_limited",
-                "reason": "monthly_cap",
-                "detail": (
-                    f"{monthly} searches this month, cap {SEARCH_MONTHLY_CAP}"
-                ),
-                "retry_after_seconds": 86400,
-            }
-        return {"ok": True, "daily_used": daily, "monthly_used": monthly}
-    except Exception as e:
-        return {
-            "ok": False,
-            "error": "db_unavailable",
-            "detail": f"{type(e).__name__}: {e}",
-        }
-    finally:
         try:
-            conn.close()
-        except Exception:
-            pass
+            for stmt in [s.strip() for s in SEARCH_TABLE_DDL.split(";") if s.strip()]:
+                conn.execute(stmt)
+            conn.commit()
+            cur = conn.execute(
+                "SELECT COUNT(*) AS n FROM linkedin_browser_searches "
+                "WHERE ran_at >= NOW() - INTERVAL '24 hours'"
+            )
+            daily = cur.fetchone()["n"]
+            cur = conn.execute(
+                "SELECT COUNT(*) AS n FROM linkedin_browser_searches "
+                "WHERE ran_at >= date_trunc('month', NOW())"
+            )
+            monthly = cur.fetchone()["n"]
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception:
+        # DB down? Not our problem — caps are off, search proceeds.
+        pass
+    return {"ok": True, "daily_used": daily, "monthly_used": monthly}
 
 
 def _log_search(query: str, vertical: str, ok: bool, error: Optional[str]) -> None:
@@ -642,15 +606,27 @@ _SEARCH_JS_BY_VERTICAL = {
 
 def _read_devtools_port() -> Optional[int]:
     """Return the CDP port the linkedin-agent MCP's Chrome is listening on,
-    or None if the file is missing/unreadable. Chrome writes the port on
-    line 1 of DevToolsActivePort when launched with --remote-debugging-port.
-    The file is removed when Chrome exits, so its absence means the MCP's
-    Chrome is not currently running."""
+    or None if the file is missing/unreadable/stale. Chrome writes the port
+    on line 1 of DevToolsActivePort when launched with --remote-debugging-port.
+
+    Chrome SHOULD remove the file when it exits, but doesn't always — a
+    crashed/killed Chrome leaves a stale file pointing at a port nothing's
+    listening on. We probe the port with a non-blocking TCP connect; if the
+    connection is refused, we treat the file as stale and return None so
+    callers report the cleaner mcp_not_running error rather than dragging
+    out to a noisy cdp_attach_failed."""
     try:
         with open(DEVTOOLS_ACTIVE_PORT) as f:
             port = int(f.readline().strip())
-            return port if port > 0 else None
+        if port <= 0:
+            return None
     except (OSError, ValueError):
+        return None
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return port
+    except (OSError, socket.timeout):
         return None
 
 
@@ -789,6 +765,20 @@ def search(vertical: str, query: str) -> dict:
             except json.JSONDecodeError:
                 results = []
 
+            dropped_below_floor = 0
+            if vertical == "content":
+                kept = []
+                for r in results:
+                    velocity, virality, age_clamped = calculate_velocity_score(r)
+                    r["engagement_velocity"] = velocity
+                    r["velocity_score"] = virality
+                    r["age_hours_clamped"] = age_clamped
+                    if virality < CONTENT_VIRALITY_FLOOR:
+                        dropped_below_floor += 1
+                        continue
+                    kept.append(r)
+                results = kept
+
             _log_search(query, vertical, ok=True, error=None)
             return {
                 "ok": True,
@@ -796,12 +786,14 @@ def search(vertical: str, query: str) -> dict:
                 "vertical": vertical,
                 "query": query,
                 "result_count": len(results),
+                "dropped_below_virality_floor": dropped_below_floor,
+                "virality_floor": CONTENT_VIRALITY_FLOOR if vertical == "content" else None,
                 "results": results,
                 "rate_budget": {
                     "daily_used": rate.get("daily_used"),
-                    "daily_cap": SEARCH_DAILY_CAP,
+                    "daily_cap": None,
                     "monthly_used": rate.get("monthly_used"),
-                    "monthly_cap": SEARCH_MONTHLY_CAP,
+                    "monthly_cap": None,
                 },
             }
 
@@ -821,7 +813,7 @@ def search(vertical: str, query: str) -> dict:
 
 def search_with_retry(vertical: str, query: str, max_attempts: int = 2) -> dict:
     """One retry on transient browser-target failures only. Do NOT retry on
-    rate_limited / session_invalid / db_*."""
+    session_invalid / mcp_not_running / serp_redirected."""
     last_result: dict = {"ok": False, "error": "no_attempts"}
     for attempt in range(1, max_attempts + 1):
         try:
