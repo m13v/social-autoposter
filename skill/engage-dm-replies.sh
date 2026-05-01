@@ -496,7 +496,7 @@ CRITICAL: use mcp__linkedin-agent__* tools for ALL LinkedIn browser work. Do NOT
        items.push({
          thread_url: href.startsWith('http') ? href : ('https://www.linkedin.com' + href),
          partner,
-         preview: text.slice(0, 2000),
+         preview: text,
          unread: !!unreadBadge,
        });
      }
