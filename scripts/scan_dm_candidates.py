@@ -271,8 +271,8 @@ def scan_platform(conn, config, platform, max_candidates, dry_run, max_age_days=
 
         # Build comment context for the DM
         context = f"Thread: {row['thread_title'] or 'N/A'}\n"
-        context += f"Their comment: {content[:500]}\n"
-        context += f"Our reply: {(row['our_reply_content'] or '')[:500]}"
+        context += f"Their comment: {content}\n"
+        context += f"Our reply: {(row['our_reply_content'] or '')}"
 
         # Pick target_project: inherit from post; fall back to topic match.
         target_project = row["post_project"]
