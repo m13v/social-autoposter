@@ -670,10 +670,11 @@ def search(vertical: str, query: str) -> dict:
                 }
 
             # Settle: search results lazy-render after DOMContentLoaded.
-            # Selectors reflect both the post-2023 layout (entity-result) and
-            # the older (reusable-search__result-container).
+            # Selectors cover the new SDUI layout (post 2026-04 rollout) AND
+            # the legacy class layout, in that order.
             try:
                 page.wait_for_selector(
+                    "[data-sdui-screen*='SearchResultsContent'], "
                     "div.search-results-container, "
                     "main[aria-label*='Search'], "
                     "div.feed-shared-update-v2",
@@ -682,9 +683,10 @@ def search(vertical: str, query: str) -> dict:
             except Exception:
                 pass  # extractor will return [] if nothing rendered
 
-            # Random 1-3s human-pacing delay before reading the DOM. Per
-            # 2026-04-29 research; not a fingerprint cure, but cheap.
-            page.wait_for_timeout(random.randint(1000, 3000))
+            # Random 2-4s human-pacing delay before reading the DOM. The new
+            # SDUI layout streams cards in after the screen container exists;
+            # 1-3s sometimes returned 6/8 cards. 2-4s reliably gets 8/8.
+            page.wait_for_timeout(random.randint(2000, 4000))
 
             cur_url = page.url
             if _is_login_or_checkpoint(cur_url):
