@@ -75,7 +75,7 @@ def bulk_insert_orphans(conn, platform):
                          comment_context, status, conversation_status, tier,
                          discovered_at)
         SELECT r.platform, r.their_author, r.id, r.post_id,
-               LEFT(r.their_content, 1000),
+               r.their_content,
                'sent', 'active', 1, NOW()
         FROM latest_per_author r
         WHERE NOT EXISTS (
