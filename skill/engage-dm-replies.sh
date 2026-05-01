@@ -110,6 +110,10 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT d.id as dm_id, d.platform, d.their_author, d.tier,
                d.chat_url, d.their_content as original_comment,
+               CASE WHEN d.chat_url IS NOT NULL THEN 'real_dm'
+                    ELSE 'public_comment_chain' END as surface,
+               r.their_comment_url as origin_public_comment_url,
+               r.our_reply_url as our_prior_public_reply_url,
                d.comment_context, d.project_name, d.target_project,
                d.qualification_status, d.qualification_notes,
                d.booking_link_sent_at, d.mode as current_mode,
@@ -130,6 +134,7 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
                FROM dm_messages m WHERE m.dm_id = d.id) as conversation_history
         FROM dms d
         LEFT JOIN prospects pr ON pr.id = d.prospect_id
+        LEFT JOIN replies r ON r.id = d.reply_id
         JOIN LATERAL (
             SELECT content, message_at FROM dm_messages
             WHERE dm_id = d.id AND direction = 'inbound'
@@ -144,6 +149,9 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
           AND d.conversation_status != 'needs_human'
           AND d.status = 'sent'
           AND $PLATFORM_SQL_FILTER
+          AND (d.chat_url IS NOT NULL
+               OR EXISTS (SELECT 1 FROM dm_messages mo
+                          WHERE mo.dm_id = d.id AND mo.direction = 'outbound'))
           AND (last_out.message_at IS NULL OR last_in.message_at > last_out.message_at)
         ORDER BY
             d.tier DESC,
@@ -642,6 +650,14 @@ cd ~/social-autoposter && python3 scripts/dm_conversation.py pending
 
 Known conversations from the database that already need replies:
 $PENDING_CONVOS
+
+## SURFACE — read the \`surface\` field on every row before composing
+
+Each conversation has a \`surface\` field that tells you what kind of channel the inbound actually came from. The composing rules and tool routing differ. Do not skip this check.
+
+- **\`surface\` = "real_dm"** — true private message thread (Reddit Chat, Reddit PM, LinkedIn Messages, X DM). \`chat_url\` is set. Replies go via the DM-send tool (Step 4). Treat this as a normal 1:1 DM conversation.
+
+- **\`surface\` = "public_comment_chain"** — the inbound is a PUBLIC comment on one of our threads, not a private message. \`chat_url\` is null. \`origin_public_comment_url\` points to the comment that started this exchange and \`our_prior_public_reply_url\` points to our last public reply on that same thread. The engage_reddit / engage_linkedin pipelines are the primary handler for these threads, not this one. By the time you see this row here, our most recent public reply already exists (\`our_prior_public_reply_url\` is set). Default action: SKIP, no message, no stale flip — the public-reply pipeline owns it. ONLY post here when there's a clear reason this loop should escalate to a private DM (e.g. obvious buying intent in a public reply that warrants moving to DM). When you do escalate, route via the platform's DM tool and set the new chat_url with backfill-urls; never reply publicly from this loop.
 
 ## CLICK_SIGNAL inbound rows — read this before composing any reply
 
