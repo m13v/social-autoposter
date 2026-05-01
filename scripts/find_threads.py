@@ -160,7 +160,7 @@ def fetch_reddit_threads(subreddits, sort="new", limit=10, user_agent="social-au
                 "score": post.get("score", 0),
                 "num_comments": post.get("num_comments", 0),
                 "age_hours": round(age_hours, 1),
-                "selftext": post.get("selftext", "")[:500],
+                "selftext": post.get("selftext", ""),
             })
 
         time.sleep(delay)
@@ -213,7 +213,7 @@ def fetch_moltbook_threads(api_key, limit=50):
                 "author": post.get("author", {}).get("name", ""),
                 "score": post.get("upvotes", 0),
                 "num_comments": post.get("comment_count", 0),
-                "content": content[:500],
+                "content": content,
             })
 
     return threads
@@ -495,7 +495,7 @@ def main():
         "project": project_config["name"] if project_config else None,
         "total_found": len(threads),
         "candidates": len(candidates),
-        "recent_post_snippets": [p[:100] if p else "" for p in recent_posts],
+        "recent_post_snippets": [p if p else "" for p in recent_posts],
         "threads": candidates,
     }
 
