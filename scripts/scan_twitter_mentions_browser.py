@@ -70,12 +70,8 @@ def guess_project(text, config):
     text_lower = (text or "").lower()
     for p in projects:
         name = p.get("name", "")
-        # Phase 1 unified seed list, with legacy fields as fallback for
-        # pre-migration safety.
-        topics = (
-            p.get("search_topics", [])
-            or (p.get("twitter_topics", []) + p.get("topics", []))
-        )
+        # Unified seed list (post 2026-04-30 legacy field removal).
+        topics = p.get("search_topics", [])
         for topic in topics:
             if topic.lower() in text_lower:
                 return name
