@@ -19,8 +19,6 @@ import db as dbmod
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
 
-THREAD_CHAR_CAP = 12000
-
 
 def _load_config():
     with open(CONFIG_PATH) as f:
@@ -97,7 +95,7 @@ def cmd_search(args):
             "repo": repo_full,
             "number": item.get("number"),
             "updated_at": item.get("updatedAt", ""),
-            "body_preview": (item.get("body") or "")[:400],
+            "body_preview": (item.get("body") or ""),
             "already_posted": already,
         }
         if already:
@@ -125,10 +123,10 @@ def cmd_view(args):
         return
 
     comments = []
-    for c in (thread.get("comments") or [])[:20]:
+    for c in (thread.get("comments") or []):
         comments.append({
             "author": (c.get("author") or {}).get("login", ""),
-            "body": (c.get("body") or "")[:1500],
+            "body": (c.get("body") or ""),
         })
 
     compact = {
@@ -136,13 +134,11 @@ def cmd_view(args):
         "title": thread.get("title", ""),
         "state": thread.get("state", ""),
         "author": (thread.get("author") or {}).get("login", ""),
-        "body": (thread.get("body") or "")[:4000],
+        "body": (thread.get("body") or ""),
         "comments": comments,
     }
 
     text = json.dumps(compact, indent=2)
-    if len(text) > THREAD_CHAR_CAP:
-        text = text[:THREAD_CHAR_CAP] + f"\n... [truncated {len(text) - THREAD_CHAR_CAP} chars]"
     print(text)
 
 
@@ -151,7 +147,7 @@ def cmd_already_posted(args):
     dbmod.load_env()
     conn = dbmod.get_conn()
     cur = conn.execute(
-        "SELECT id, LEFT(our_content, 100) FROM posts WHERE platform='github' AND thread_url = %s LIMIT 1",
+        "SELECT id, our_content FROM posts WHERE platform='github' AND thread_url = %s LIMIT 1",
         [args.url],
     )
     row = cur.fetchone()
