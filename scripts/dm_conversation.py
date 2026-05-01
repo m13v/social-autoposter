@@ -284,7 +284,7 @@ def ensure_dm(conn, platform, author, chat_url=None, lookback_hours=720):
     post_id = match["post_id"] if match else None
     comment_ctx = None
     if match and match.get("their_content"):
-        comment_ctx = match["their_content"][:1000]
+        comment_ctx = match["their_content"]
 
     row = conn.execute(
         """
@@ -627,7 +627,7 @@ def _send_escalation_email(conn, dm_id, platform, their_author, reason):
     if upstream.get("thread_url"):
         thread_lines.append(f"URL: {upstream['thread_url']}")
     if upstream.get("thread_content"):
-        thread_lines.append(f"Body: {upstream['thread_content'][:600]}")
+        thread_lines.append(f"Body: {upstream['thread_content']}")
     thread_card = _render_upstream_card(
         "PUBLIC THREAD" + (" (inferred via author match)" if upstream.get("is_fallback") else ""),
         thread_lines,
@@ -642,7 +642,7 @@ def _send_escalation_email(conn, dm_id, platform, their_author, reason):
     if upstream.get("our_top_url"):
         our_top_lines.append(f"URL: {upstream['our_top_url']}")
     if upstream.get("our_top_content"):
-        our_top_lines.append(f"Content: {upstream['our_top_content'][:600]}")
+        our_top_lines.append(f"Content: {upstream['our_top_content']}")
     our_top_card = _render_upstream_card("OUR TOP-LEVEL PUBLIC COMMENT", our_top_lines)
 
     # --- Card: their public comment that triggered outreach ----------------
@@ -652,7 +652,7 @@ def _send_escalation_email(conn, dm_id, platform, their_author, reason):
     if upstream.get("their_comment_url"):
         their_comment_lines.append(f"URL: {upstream['their_comment_url']}")
     if upstream.get("their_comment_content"):
-        their_comment_lines.append(f"Content: {upstream['their_comment_content'][:600]}")
+        their_comment_lines.append(f"Content: {upstream['their_comment_content']}")
     their_comment_card = _render_upstream_card(
         f"THEIR PUBLIC COMMENT (@{their_author})",
         their_comment_lines,
@@ -665,7 +665,7 @@ def _send_escalation_email(conn, dm_id, platform, their_author, reason):
     if upstream.get("our_reply_url"):
         our_reply_lines.append(f"URL: {upstream['our_reply_url']}")
     if upstream.get("our_reply_content"):
-        our_reply_lines.append(f"Content: {upstream['our_reply_content'][:600]}")
+        our_reply_lines.append(f"Content: {upstream['our_reply_content']}")
     our_reply_card = _render_upstream_card("OUR PUBLIC REPLY TO THEIR COMMENT", our_reply_lines)
 
     # --- Card: the DM tracker thread ---------------------------------------
@@ -692,7 +692,7 @@ def _send_escalation_email(conn, dm_id, platform, their_author, reason):
         if dm and dm.get("our_dm_content"):
             seed_lines.append(f"  >> (seed) us: {dm['our_dm_content']}")
         if dm and dm.get("comment_context") and not seed_lines:
-            seed_lines.append(f"  context: {dm['comment_context'][:600]}")
+            seed_lines.append(f"  context: {dm['comment_context']}")
         dm_card_body = "\n".join(seed_lines) if seed_lines else "(no messages logged)"
 
     # --- Assemble body -----------------------------------------------------
