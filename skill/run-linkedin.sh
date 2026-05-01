@@ -203,7 +203,7 @@ async (page) => {
 
       // Post text excerpt
       const textEl = el.querySelector('.update-components-text, .feed-shared-update-v2__description, span.break-words');
-      const postText = (textEl ? textEl.textContent : '').trim().slice(0, 500);
+      const postText = (textEl ? textEl.textContent : '').trim();
 
       // Age
       const timeEl = el.querySelector('time, .update-components-actor__sub-description, span.feed-shared-actor__sub-description');
@@ -417,7 +417,7 @@ else:
         'all_urns': row[2] or '',
         'author_name': row[3] or '',
         'author_profile_url': row[4] or '',
-        'post_text': (row[5] or '')[:500],
+        'post_text': (row[5] or ''),
         'language': row[6] or 'en',
         'project': row[7] or '$PA_PROJECT',
         'velocity_score': float(row[8] or 0),
@@ -433,7 +433,7 @@ PA_AUTHOR_NAME=$(echo "$PA_PICK" | python3 -c "import json,sys; print(json.load(
 PA_AUTHOR_URL=$(echo "$PA_PICK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('author_profile_url',''))")
 PA_EXCERPT=$(echo "$PA_PICK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('post_text',''))")
 PA_LANG=$(echo "$PA_PICK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('language','en'))")
-PA_TITLE_HINT=$(echo "$PA_PICK" | python3 -c "import json,sys; v=json.load(sys.stdin).get('post_text',''); print((v or '').split('\\n')[0][:80])")
+PA_TITLE_HINT=$(echo "$PA_PICK" | python3 -c "import json,sys; v=json.load(sys.stdin).get('post_text',''); print((v or '').split('\\n')[0])")
 PA_VELOCITY=$(echo "$PA_PICK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('velocity_score',0))")
 PA_QUERY=$(echo "$PA_PICK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('search_query',''))")
 [ -z "${PA_PROJECT:-}" ] && PA_PROJECT=$(echo "$PA_PICK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('project',''))")
