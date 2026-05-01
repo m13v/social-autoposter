@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/matthewdi</string>
+		<key>PATH</key>
+		<string>/Users/matthewdi/.nvm/versions/node/v20.19.4/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+	</dict>
+	<key>Label</key>
+	<string>com.m13v.social-twitter-threads</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/matthewdi/social-autoposter/skill/run-twitter-threads.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-twitter-threads-stderr.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-twitter-threads-stdout.log</string>
+	<!--
+	  4 fires per local day. The DB picker enforces the hard cap of 3 posts per
+	  UTC calendar day, so the 4th fire is a safety retry slot in case one of
+	  the earlier slots fails. Times spread across LA waking hours, offset
+	  :47 to avoid colliding with reddit-threads (:13).
+	-->
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict>
+			<key>Hour</key>
+			<integer>8</integer>
+			<key>Minute</key>
+			<integer>47</integer>
+		</dict>
+		<dict>
+			<key>Hour</key>
+			<integer>12</integer>
+			<key>Minute</key>
+			<integer>47</integer>
+		</dict>
+		<dict>
+			<key>Hour</key>
+			<integer>17</integer>
+			<key>Minute</key>
+			<integer>47</integer>
+		</dict>
+		<dict>
+			<key>Hour</key>
+			<integer>22</integer>
+			<key>Minute</key>
+			<integer>47</integer>
+		</dict>
+	</array>
+</dict>
+</plist>
