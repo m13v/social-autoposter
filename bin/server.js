@@ -410,7 +410,13 @@ const RUN_MONITOR_PATH = path.join(LOG_DIR, 'run_monitor.log');
 // Optional `salvaged=N` (added 2026-04-29) tails the not_found segment as its
 // own optional capture so older lines still parse. Used by the twitter cycle
 // (Phase 0 salvage) to surface pending work re-assigned from prior batches.
-const RUN_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*posted=(\d+)\s+skipped=(\d+)\s+failed=(\d+)(?:\s+replies_refreshed=(\d+))?(?:\s+checked=(\d+)\s+updated=(\d+)\s+removed=(\d+))?(?:\s+unavailable=(\d+))?(?:\s+not_found=(\d+))?(?:\s+salvaged=(\d+))?\s+cost=\$([\d.]+)\s+elapsed=(\d+)s(?:\s+failure_reasons=([^\s|]+))?/;
+// Optional `discover=key=N,key=N,...` (added 2026-05-01) tails the salvaged
+// segment with discovery-stage counters: queries / duds / tweets_pulled /
+// candidates / above_floor. The Twitter cycle wires every key, LinkedIn wires
+// queries+candidates+above_floor only. Each sub-key is omitted when zero, so
+// `discover=` itself is absent on lines from pipelines that don't emit it.
+// Old log lines without the segment still parse cleanly via the optional `?`.
+const RUN_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*posted=(\d+)\s+skipped=(\d+)\s+failed=(\d+)(?:\s+replies_refreshed=(\d+))?(?:\s+checked=(\d+)\s+updated=(\d+)\s+removed=(\d+))?(?:\s+unavailable=(\d+))?(?:\s+not_found=(\d+))?(?:\s+salvaged=(\d+))?(?:\s+discover=([^\s|]+))?\s+cost=\$([\d.]+)\s+elapsed=(\d+)s(?:\s+failure_reasons=([^\s|]+))?/;
 
 // posts.platform is lowercase; UI labels are capitalized.
 const PLATFORM_LABELS = {
@@ -507,7 +513,7 @@ function parseRunMonitorLog(maxLines) {
   for (const line of tail) {
     const m = line.match(RUN_LINE_RE);
     if (!m) continue;
-    const [, ts, script, posted, skipped, failed, repliesRefreshed, checked, updated, removed, unavailable, notFound, salvaged, cost, elapsed, failureReasonsStr] = m;
+    const [, ts, script, posted, skipped, failed, repliesRefreshed, checked, updated, removed, unavailable, notFound, salvaged, discoverStr, cost, elapsed, failureReasonsStr] = m;
     // log_run.py writes naive local-wallclock time (strftime without tz), so
     // `new Date(ts)` in node interprets it as local on the server. That is
     // correct since the dashboard server runs on the same host.
@@ -526,6 +532,21 @@ function parseRunMonitorLog(maxLines) {
         })
         .filter(x => x.reason && x.count > 0)
         .sort((a, b) => b.count - a.count);
+    }
+    // Parse "queries=5,duds=1,tweets_pulled=19,candidates=9,above_floor=2"
+    // into a flat object. The render layer (renderResultPills) uses these to
+    // surface a compact "Discovery" pill + tooltip on Job History rows so an
+    // operator can see search-pipeline health (how many queries ran, how
+    // many were duds, how many tweets/candidates survived each filter)
+    // without opening the cycle log file.
+    const discover = {};
+    if (discoverStr) {
+      for (const part of discoverStr.split(',')) {
+        const [k, v] = part.split('=');
+        if (!k || v == null) continue;
+        const n = parseInt(v, 10);
+        if (Number.isFinite(n) && n >= 0) discover[k.trim()] = n;
+      }
     }
     runs.push({
       script,
@@ -549,6 +570,7 @@ function parseRunMonitorLog(maxLines) {
         unavailable: unavailable ? parseInt(unavailable, 10) : 0,
         not_found: notFound ? parseInt(notFound, 10) : 0,
         salvaged: salvaged ? parseInt(salvaged, 10) : 0,
+        discover, // {} when no `discover=` segment was present on the line
         cost_usd: parseFloat(cost),
         failure_reasons: failureReasons,
       },
@@ -5746,7 +5768,41 @@ function renderResult(run) {
       'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
       label + (count ? ' <span style="color:#ef4444;font-weight:600;">' + count + '</span>' : '') + '</span>';
   };
-  if (!posted && !skipped && !failed && !repliesRefreshed && !salvaged && !reasons.length) {
+  // Discovery counters (Twitter cycle today, LinkedIn next): condense the
+  // queries/duds/tweets_pulled/candidates/above_floor breakdown into a single
+  // "scan: Q→C→A" pill where Q=queries, C=candidates that survived the
+  // post-floor filter, A=candidates that cleared the review-cap (Δ≥10 for
+  // Twitter / virality_floor for LinkedIn). Full breakdown lives in the
+  // hover tooltip so the row stays readable. Skipped entirely when the
+  // pipeline didn't emit any discovery counters.
+  const discover = (r.discover && typeof r.discover === 'object') ? r.discover : {};
+  const renderDiscoverPill = () => {
+    const q = discover.queries || 0;
+    const d = discover.duds || 0;
+    const tp = discover.tweets_pulled || 0;
+    const c = discover.candidates || 0;
+    const af = discover.above_floor || 0;
+    if (!q && !d && !tp && !c && !af) return '';
+    const tipParts = [];
+    if (q) tipParts.push(d ? (q + ' queries (' + d + ' duds)') : (q + ' queries'));
+    if (tp) tipParts.push(tp + ' tweets pulled');
+    if (c) tipParts.push(c + ' candidates after floor');
+    if (af) tipParts.push(af + ' cleared review cap');
+    const tip = tipParts.join(' \u2192 ');
+    // Compact label: queries -> candidates -> above_floor (skip duds/tweets
+    // in the visible string; they're in the tooltip). For LinkedIn-shape
+    // rows that only emit q/c/af, this still renders cleanly.
+    const visParts = [];
+    if (q) visParts.push(q);
+    if (c) visParts.push(c);
+    if (af) visParts.push(af);
+    const visStr = visParts.join('\u2192');
+    return '<span title="' + tip.replace(/"/g, '&quot;') + '" ' +
+      'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
+      'scan <span style="color:#a78bfa;font-weight:600;">' + visStr + '</span></span>';
+  };
+  if (!posted && !skipped && !failed && !repliesRefreshed && !salvaged && !reasons.length
+      && !Object.keys(discover).length) {
     return '<span style="color:var(--muted);font-size:12px;">—</span>';
   }
   return (
@@ -5754,6 +5810,7 @@ function renderResult(run) {
     (skipped ? pill('skipped', skipped, '#eab308') : '') +
     renderFailedPill() +
     (salvaged ? pill('salvaged', salvaged, '#3b82f6') : '') +
+    renderDiscoverPill() +
     (repliesRefreshed ? pill('replies refreshed', repliesRefreshed, '#3b82f6') : '')
   );
 }
