@@ -4152,6 +4152,7 @@ const HTML = `<!DOCTYPE html>
     <summary>
       <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="project-status-heading">Project Status (last 24h)</span></span>
       <span class="style-stats-total" id="project-status-total"></span>
+      <button id="project-status-refresh" onclick="event.preventDefault();event.stopPropagation();_projectStatusLoading=false;loadProjectStatus(true);" style="margin-left:8px;padding:2px 8px;font-size:11px;cursor:pointer;border:1px solid var(--border-color,#444);border-radius:4px;background:transparent;color:var(--text-muted,#aaa);" title="Refresh">↻</button>
     </summary>
     <div id="project-status-body">
       <div class="style-stats-empty">Loading…</div>
