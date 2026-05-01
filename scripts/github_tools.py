@@ -180,7 +180,7 @@ def cmd_log_post(args):
             return
 
     cur = conn.execute(
-        "SELECT id, LEFT(our_content, 100) FROM posts WHERE platform='github' AND thread_url = %s LIMIT 1",
+        "SELECT id, our_content FROM posts WHERE platform='github' AND thread_url = %s LIMIT 1",
         [args.thread_url],
     )
     existing = cur.fetchone()
