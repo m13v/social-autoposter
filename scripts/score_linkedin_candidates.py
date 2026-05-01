@@ -264,7 +264,7 @@ def upsert_candidates(candidates, batch_id=None):
             cand.get("author_name") or None,
             cand.get("author_profile_url") or None,
             int(cand.get("author_followers") or 0) or None,
-            (cand.get("post_text") or "")[:500] or None,
+            (cand.get("post_text") or "") or None,
             post_posted_at,
             age_clamped,
             int(cand.get("reactions") or 0),
