@@ -156,7 +156,7 @@ def _send_escalation_email(escalation_id, product, keyword, slug, reason,
     )
 
     subject = _scrub_dashes(
-        f"[SEO #{escalation_id}] {product}/{keyword}: {(reason or '')[:120]}"
+        f"[SEO #{escalation_id}] {product}/{keyword}: {(reason or '')}"
     )
     body = _scrub_dashes(body)
 
@@ -225,7 +225,7 @@ def cmd_open(args):
     )
     escalation_id = cur.fetchone()[0]
 
-    note = f"\n[escalated #{escalation_id} {args.trigger_kind}]: {args.reason[:200]}"
+    note = f"\n[escalated #{escalation_id} {args.trigger_kind}]: {args.reason}"
     _stamp_source_row(
         cur, args.source_table, args.source_id, escalation_id,
         args.product, args.keyword,
