@@ -60,8 +60,9 @@ Many pipeline scripts are locked with `chflags uchg` to prevent agents from "sim
 Locked files (do NOT unlock or edit without explicit user instruction):
 - `scripts/engagement_styles.py` (grounding rule, tier weights, platform weights)
 - `scripts/engage_reddit.py` (Moltbook context clearing, grounding rule in prompt)
-- `skill/run-reddit-search.sh`, `skill/run-twitter.sh`, `skill/run-github.sh`
+- `skill/run-reddit-search.sh`, `skill/run-twitter-cycle.sh`, `skill/run-github.sh`, `skill/run-linkedin.sh`
 - `scripts/top_performers.py`, `scripts/post_reddit.py`, `scripts/post_github.py`, `scripts/github_tools.py`
+- `scripts/linkedin_api.py`, `scripts/discover_linkedin_candidates.py`, `scripts/score_linkedin_candidates.py`, `scripts/linkedin_browser.py`, `scripts/linkedin_url.py`, `scripts/log_linkedin_search_attempts.py`, `scripts/top_linkedin_queries.py`, `scripts/top_dud_linkedin_queries.py`
 - `seo/generate_page.py`, `seo/escalate.py`, `seo/resume_escalations.py`
 - `scripts/ingest_human_seo_replies.py`, `scripts/scan_dm_candidates.py`
 - `skill/dm-outreach-reddit.sh`, `skill/dm-outreach-twitter.sh`, `skill/dm-outreach-linkedin.sh`
