@@ -7,10 +7,10 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Users/matthewdi/social-autoposter/skill/run-reddit-search.sh</string>
+		<string>/Users/matthewdi/social-autoposter/skill/run-reddit-search-launchd.sh</string>
 	</array>
 	<key>StartInterval</key>
-	<integer>1800</integer>
+	<integer>900</integer>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-reddit-search-stdout.log</string>
 	<key>StandardErrorPath</key>
