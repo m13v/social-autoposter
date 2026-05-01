@@ -806,7 +806,7 @@ def main():
                     if post_result and post_result.get("ok"):
                         # Check if already replied (dedup)
                         if post_result.get("already_replied"):
-                            existing = post_result.get("existing_text", "")[:200]
+                            existing = post_result.get("existing_text", "")
                             existing_url = post_result.get("existing_url", "")
                             cmd_args = ["python3", REPLY_DB, "replied", str(reply["id"]), existing]
                             if existing_url:
