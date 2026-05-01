@@ -240,13 +240,12 @@ function scheduleFromUnit(xml) {
     }
     if (dayMins.length === 1) return { intervalSecs: 86400, kind: 'calendar' };
     if (dayMins.length > 1) {
-      dayMins.sort((a, b) => a - b);
-      let minGap = Infinity;
-      for (let i = 1; i < dayMins.length; i++) {
-        minGap = Math.min(minGap, dayMins[i] - dayMins[i - 1]);
-      }
-      minGap = Math.min(minGap, 1440 - dayMins[dayMins.length - 1] + dayMins[0]);
-      return { intervalSecs: minGap * 60, kind: 'calendar' };
+      // Use the AVERAGE gap (86400/N) rather than the minimum gap. The min-gap
+      // representation lies for unevenly-spaced calendar schedules: e.g. fires
+      // at 8/12/17 have gaps of 4h/5h/15h, and labeling that "every 4h" implies
+      // 6 fires/day when there are actually 3. 86400/N round-trips cleanly to
+      // INTERVALS labels like "3 times a day".
+      return { intervalSecs: Math.round(86400 / dayMins.length), kind: 'calendar' };
     }
     return { intervalSecs: null, kind: null };
   } catch { return { intervalSecs: null, kind: null }; }
@@ -307,17 +306,35 @@ function nextRunFromUnit(xml) {
   } catch { return null; }
 }
 
-// In-place edit StartInterval on a plist. Returns true if updated, false if
-// the unit uses a calendar schedule (not settable here).
+// Set the schedule on a plist to a fixed StartInterval. Handles both forms:
+//   - StartInterval already present -> in-place edit the integer
+//   - StartCalendarInterval (array or single dict) -> replace the whole block
+//     with StartInterval. This is what makes the dashboard dropdown the true
+//     single source of truth across every Post Comments / Engage / etc. row,
+//     since most plists are calendar-form and used to silently fail to update.
+// Returns true on success.
 function updateInterval(unitPath, seconds) {
   const xml = fs.readFileSync(unitPath, 'utf8');
-  if (!/<key>StartInterval<\/key>/.test(xml)) return false;
-  const next = xml.replace(
-    /(<key>StartInterval<\/key>\s*<integer>)\d+(<\/integer>)/,
-    `$1${seconds}$2`
-  );
-  fs.writeFileSync(unitPath, next);
-  return true;
+  const replacement = `<key>StartInterval</key>\n\t<integer>${seconds}</integer>`;
+  if (/<key>StartInterval<\/key>/.test(xml)) {
+    const next = xml.replace(
+      /(<key>StartInterval<\/key>\s*<integer>)\d+(<\/integer>)/,
+      `$1${seconds}$2`
+    );
+    fs.writeFileSync(unitPath, next);
+    return true;
+  }
+  const arrM = /<key>StartCalendarInterval<\/key>\s*<array>[\s\S]*?<\/array>/;
+  if (arrM.test(xml)) {
+    fs.writeFileSync(unitPath, xml.replace(arrM, replacement));
+    return true;
+  }
+  const dictM = /<key>StartCalendarInterval<\/key>\s*<dict>[\s\S]*?<\/dict>/;
+  if (dictM.test(xml)) {
+    fs.writeFileSync(unitPath, xml.replace(dictM, replacement));
+    return true;
+  }
+  return false;
 }
 
 // Read the "start time" from a plist: for a single-dict calendar schedule,
