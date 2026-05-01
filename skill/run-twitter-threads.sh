@@ -25,6 +25,7 @@ mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/run-twitter-threads-$(date +%Y-%m-%d_%H%M%S).log"
 
 echo "=== Twitter Threads Run: $(date) ===" | tee "$LOG_FILE"
+RUN_START_EPOCH=$(date +%s)
 
 # Diagnostic trap (parallel to reddit version): log line + cmd before set -e exits.
 trap 'rc=$?; echo "SCRIPT DIED line=$LINENO cmd=\"$BASH_COMMAND\" exit=$rc" | tee -a "$LOG_FILE" >&2' ERR
@@ -198,6 +199,66 @@ export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
 acquire_lock "twitter-browser" 3600
 ensure_browser_healthy "twitter"
 
+# Campaign wiring: pre-submit suffix injection (Twitter has no edit API, so we
+# can't mirror reddit-threads' post-submit edit pattern; instead we instruct the
+# model to end the LAST tweet with the literal suffix and verify post-flight).
+# Dice are rolled in Python before Claude runs. campaigns.posts_made is bumped
+# only on a verified-suffix outcome (parallels reddit-threads' verified-edit
+# semantics). Multi-suffix concatenation matches post_reddit.py behavior.
+CAMPAIGN_ENV=$(/usr/bin/python3 <<'PYEOF'
+import json, os, random, sys
+sys.path.insert(0, os.path.join(os.environ.get("HOME",""), "social-autoposter", "scripts"))
+import db
+db.load_env()
+conn = db.get_conn()
+try:
+    cur = conn.execute(
+        """SELECT id, suffix, COALESCE(sample_rate, 1.000)
+           FROM campaigns
+           WHERE status = 'active'
+             AND (',' || platforms || ',') LIKE '%,twitter,%'
+             AND max_posts_total IS NOT NULL
+             AND posts_made < max_posts_total
+             AND suffix IS NOT NULL AND suffix <> ''
+           ORDER BY id"""
+    )
+    rows = cur.fetchall()
+finally:
+    conn.close()
+
+applied_ids = []
+suffix_parts = []
+for cid, suffix, rate in rows:
+    if random.random() < float(rate):
+        applied_ids.append(int(cid))
+        suffix_parts.append(suffix)
+
+print(json.dumps({
+    "ids_csv": ",".join(str(i) for i in applied_ids),
+    "suffix": "".join(suffix_parts),
+}))
+PYEOF
+)
+CAMPAIGN_IDS=$(/usr/bin/python3 -c "import json,sys; print(json.loads(sys.stdin.read())['ids_csv'])" <<< "$CAMPAIGN_ENV")
+CAMPAIGN_SUFFIX=$(/usr/bin/python3 -c "import json,sys; print(json.loads(sys.stdin.read())['suffix'])" <<< "$CAMPAIGN_ENV")
+
+if [ -n "$CAMPAIGN_IDS" ]; then
+  # Build the prompt block. The suffix is wrapped in backticks for the model's
+  # benefit but the model must NOT include the backticks in the actual tweet.
+  CAMPAIGN_BLOCK="## ACTIVE CAMPAIGN ATTRIBUTION (mandatory, non-negotiable)
+
+The LAST tweet of your thread MUST end with EXACTLY this literal suffix (preserve any leading whitespace, do not include the surrounding backticks):
+\`${CAMPAIGN_SUFFIX}\`
+
+Do not paraphrase, translate, capitalize, punctuate, or wrap it in quotes.
+Reserve enough characters in the LAST tweet so the suffix fits within the 280-char cap.
+The same text must appear (a) at the end of the last entry in your tweets array AND (b) at the end of the actual posted tweet (these will be verified)."
+  echo "[campaign-twitter-thread] applying campaign_ids=${CAMPAIGN_IDS} suffix='${CAMPAIGN_SUFFIX}'" | tee -a "$LOG_FILE"
+else
+  CAMPAIGN_BLOCK=""
+  echo "[campaign-twitter-thread] no active campaigns fired (or none active)" | tee -a "$LOG_FILE"
+fi
+
 # Capture Claude output to a temp file so non-zero exit doesn't swallow stderr.
 CLAUDE_TMP=$(mktemp)
 set +e
@@ -225,6 +286,8 @@ ${RECENT_STYLES}
 
 ## Top performing ${PROJECT} originals (match tone)
 ${TOP_POSTS}
+
+${CAMPAIGN_BLOCK}
 
 ## Workflow
 
@@ -314,8 +377,10 @@ if [ "$PERMALINK" != "null" ] && [ "$PERMALINK" != "" ] && [ "$PERMALINK" != "PA
   PROJECT_ENV="$PROJECT" \
   POST_ACCOUNT="$POST_ACCOUNT" \
   REPO_DIR="$REPO_DIR" \
+  CAMPAIGN_IDS="$CAMPAIGN_IDS" \
+  CAMPAIGN_SUFFIX="$CAMPAIGN_SUFFIX" \
   /usr/bin/python3 <<'PYEOF' 2>&1 | tee -a "$LOG_FILE" || true
-import json, os, sys
+import json, os, subprocess, sys
 sys.path.insert(0, os.path.join(os.environ["REPO_DIR"], "scripts"))
 import db as dbmod
 
@@ -368,7 +433,37 @@ row = conn.execute(
      session),
 ).fetchone()
 conn.commit()
-print(f"[db-insert] OK — inserted posts.id={row[0]} for {permalink}")
+post_id = row[0]
+print(f"[db-insert] OK — inserted posts.id={post_id} for {permalink}")
+
+# Campaign verification gate. Twitter has no edit API so we cannot fix the
+# tweet after posting; instead we verify the model honored the suffix
+# instruction and bump the counter only if it did. Mirrors the verified-edit
+# semantics in skill/run-reddit-threads.sh.
+campaign_ids_csv = (os.environ.get("CAMPAIGN_IDS") or "").strip()
+campaign_suffix  = os.environ.get("CAMPAIGN_SUFFIX") or ""
+if campaign_ids_csv and campaign_suffix:
+    last_tweet = (tweets[-1] or "").rstrip()
+    expected   = campaign_suffix.rstrip()
+    if last_tweet.endswith(expected):
+        bump = os.path.join(os.environ["REPO_DIR"], "scripts", "campaign_bump.py")
+        for cid in [c for c in campaign_ids_csv.split(",") if c.strip()]:
+            try:
+                subprocess.run(
+                    ["python3", bump,
+                     "--table", "posts", "--id", str(post_id),
+                     "--campaign-id", cid.strip()],
+                    capture_output=True, text=True, timeout=15,
+                )
+            except Exception as e:
+                print(f"[campaign-twitter-thread] WARNING: campaign_bump failed (id={post_id} c={cid}): {e}")
+        print(f"[campaign-twitter-thread] OK — last tweet ends with suffix, campaigns {campaign_ids_csv} bumped on post {post_id}")
+    else:
+        # Verification failed: model did not add the suffix as instructed.
+        # Leave the post untagged. campaign_id stays NULL, so the row joins
+        # the control bucket for A/B purposes (parallels reddit-threads'
+        # degraded path on edit-thread failure).
+        print(f"[campaign-twitter-thread] WARNING: last tweet does not end with expected suffix; post {post_id} stays untagged. last_tail={last_tweet[-80:]!r} expected={expected!r}")
 PYEOF
 
 elif [ -n "$ABORT_REASON" ] && [ "$ABORT_REASON" != "PARSE_ERROR" ]; then
@@ -376,6 +471,19 @@ elif [ -n "$ABORT_REASON" ] && [ "$ABORT_REASON" != "PARSE_ERROR" ]; then
 else
   echo "UNKNOWN OUTCOME (check JSON output above)" | tee -a "$LOG_FILE"
 fi
+
+# Surface this run in the dashboard's Job History under "Post Threads · Twitter".
+# Script name `thread_twitter` is what bin/server.js classifyScript() matches.
+ELAPSED=$(( $(date +%s) - RUN_START_EPOCH ))
+if [ "$PERMALINK" != "null" ] && [ "$PERMALINK" != "" ] && [ "$PERMALINK" != "PARSE_ERROR" ]; then
+  POSTED_CT=1; SKIPPED_CT=0; FAILED_CT=0
+elif [ -n "$ABORT_REASON" ] && [ "$ABORT_REASON" != "PARSE_ERROR" ]; then
+  POSTED_CT=0; SKIPPED_CT=1; FAILED_CT=0
+else
+  POSTED_CT=0; SKIPPED_CT=0; FAILED_CT=1
+fi
+_COST=$(/usr/bin/python3 "$REPO_DIR/scripts/get_run_cost.py" --since "$RUN_START_EPOCH" --scripts "run-twitter-threads" 2>/dev/null || echo "0.0000")
+/usr/bin/python3 "$REPO_DIR/scripts/log_run.py" --script "thread_twitter" --posted "$POSTED_CT" --skipped "$SKIPPED_CT" --failed "$FAILED_CT" --cost "$_COST" --elapsed "$ELAPSED" || true
 
 echo "=== Run complete: $(date) ===" | tee -a "$LOG_FILE"
 find "$LOG_DIR" -name "run-twitter-threads-*.log" -mtime +14 -delete 2>/dev/null || true
