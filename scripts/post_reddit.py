@@ -261,7 +261,7 @@ def get_recent_comments(limit=5):
     dbmod.load_env()
     conn = dbmod.get_conn()
     cur = conn.execute(
-        "SELECT LEFT(our_content, 150) FROM posts "
+        "SELECT our_content FROM posts "
         "WHERE platform='reddit' ORDER BY id DESC LIMIT %s",
         [limit],
     )
