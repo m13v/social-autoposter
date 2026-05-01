@@ -970,10 +970,12 @@ function _collectSeoDetails(run, phaseDir) {
           }
           errorMsg = (typeof streamRes.result === 'string' ? streamRes.result : '').slice(0, 200);
         }
-        // streamRes.total_cost_usd undercounts when the session spawned Task
-        // subagents (the SDK only sums the orchestrator's own turns). We keep
-        // it as a fallback and let enrichSeoRuns overwrite from claude_sessions
-        // by session_id when available.
+        // streamRes.total_cost_usd is the native SDK orchestrator cost
+        // (matches Anthropic billing for the orchestrator session). It
+        // EXCLUDES Task subagent costs (see anthropics/claude-code #43945).
+        // We display this value as the primary cost and surface a separate
+        // estimated total (from claude_sessions.total_cost_usd) in the UI
+        // tooltip so the user can see both side by side.
         if (typeof streamRes.total_cost_usd === 'number') cost = streamRes.total_cost_usd;
         if (typeof streamRes.num_turns === 'number') numTurns = streamRes.num_turns;
         if (typeof streamRes.session_id === 'string') sessionId = streamRes.session_id;
@@ -1016,11 +1018,23 @@ async function enrichSeoRuns(runs) {
         run.details = [];
       }
     }
-    // Overwrite per-row cost_usd from claude_sessions where we have a
-    // session_id. The stream JSONL's result.total_cost_usd only sums the
-    // orchestrator's own turns and excludes Task subagent token costs, so it
-    // can undercount by 5x+. The DB ingester sums the full session, matching
-    // what's already shown in the run-level total cost.
+    // Surface BOTH cost values per detail row so the UI can render the
+    // primary cost + a tooltip showing how it was calculated.
+    //   d.cost_usd               — native SDK orchestrator cost (from
+    //                              streamRes.total_cost_usd in the .log file).
+    //                              Authoritative for orchestrator billing,
+    //                              EXCLUDES Task subagent costs.
+    //   d.cost_usd_orchestrator  — same value as d.cost_usd, kept as an
+    //                              explicit name for the tooltip so the UI
+    //                              never has to guess which lane it is in.
+    //   d.cost_usd_estimated     — manual transcript-derived estimate from
+    //                              claude_sessions.total_cost_usd. Uses our
+    //                              local pricing table; useful as a sanity
+    //                              check / "what would the cost be if our
+    //                              prices are still right" reference.
+    // Display rule: prefer cost_usd (SDK), fall back to cost_usd_estimated
+    // when cost_usd is missing (e.g. older runs before run_claude.sh started
+    // capturing the SDK value).
     const sessionIds = [];
     for (const run of seoRuns) {
       for (const d of run.details || []) {
@@ -1029,18 +1043,38 @@ async function enrichSeoRuns(runs) {
     }
     if (sessionIds.length) {
       const rows = await pq(
-        'SELECT session_id, total_cost_usd FROM claude_sessions WHERE session_id = ANY($1::uuid[])',
+        'SELECT session_id, total_cost_usd, orchestrator_cost_usd FROM claude_sessions WHERE session_id = ANY($1::uuid[])',
         [sessionIds]
       );
       if (rows && rows.length) {
-        const costBySession = new Map(
-          rows.map(r => [String(r.session_id), Number(r.total_cost_usd)])
+        const bySession = new Map(
+          rows.map(r => [String(r.session_id), {
+            estimated: Number(r.total_cost_usd),
+            orchestrator: r.orchestrator_cost_usd != null
+              ? Number(r.orchestrator_cost_usd)
+              : null,
+          }])
         );
         for (const run of seoRuns) {
           for (const d of run.details || []) {
             if (!d.session_id) continue;
-            const dbCost = costBySession.get(String(d.session_id));
-            if (Number.isFinite(dbCost)) d.cost_usd = dbCost;
+            const row = bySession.get(String(d.session_id));
+            if (!row) continue;
+            // Native SDK orchestrator cost (column populated by the Apr-30
+            // run_claude.sh stdout capture). When the column is NULL (older
+            // sessions, locked callers that don't pass --orchestrator-cost-usd),
+            // keep whatever streamRes value _collectSeoDetails parsed from the
+            // .log file.
+            if (Number.isFinite(row.orchestrator)) {
+              d.cost_usd = row.orchestrator;
+              d.cost_usd_orchestrator = row.orchestrator;
+            } else if (Number.isFinite(d.cost_usd)) {
+              d.cost_usd_orchestrator = d.cost_usd;
+            }
+            // Manual estimate alongside (always populated by log_claude_session.py).
+            if (Number.isFinite(row.estimated)) {
+              d.cost_usd_estimated = row.estimated;
+            }
           }
         }
       }
