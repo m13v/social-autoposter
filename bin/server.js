@@ -2165,6 +2165,24 @@ async function handleApi(req, res) {
   // cost_usd: a Claude session typically produces N activity rows; we split the
   // session's total cost evenly across them so the sum across the feed matches
   // what was actually spent. Sources without a session_id (mentions, SEO) project NULL.
+  //
+  // We surface THREE cost fields per row so the dashboard can render the
+  // primary cost plus a hover tooltip explaining how it was derived:
+  //   cost_usd               - displayed value; prefers SDK orchestrator
+  //                            (claude_sessions.orchestrator_cost_usd, captured
+  //                            from streamRes.total_cost_usd in run_claude.sh)
+  //                            and falls back to the manual transcript estimate
+  //                            (claude_sessions.total_cost_usd) when the SDK
+  //                            value is NULL (older rows, locked callers that
+  //                            bypass run_claude.sh).
+  //   cost_usd_orchestrator  - SDK value only; NULL when not captured.
+  //                            Authoritative for orchestrator billing but
+  //                            EXCLUDES Task subagent costs (anthropics/
+  //                            claude-code #43945).
+  //   cost_usd_estimated     - manual transcript-derived estimate from
+  //                            log_claude_session.py using our local pricing
+  //                            table. Always populated when a transcript
+  //                            exists; useful as a sanity check.
   if (p === '/api/activity' && req.method === 'GET') {
     const q = "WITH src AS (" +
         "SELECT claude_session_id FROM posts WHERE claude_session_id IS NOT NULL AND posted_at IS NOT NULL " +
@@ -2178,23 +2196,26 @@ async function handleApi(req, res) {
       "), session_counts AS (" +
         "SELECT claude_session_id, COUNT(*)::int AS rows_in_session FROM src GROUP BY claude_session_id" +
       "), session_cost AS (" +
-        "SELECT cs.session_id, (cs.total_cost_usd / NULLIF(sc.rows_in_session, 0))::numeric(10,6) AS per_row_cost " +
+        "SELECT cs.session_id, " +
+          "(COALESCE(cs.orchestrator_cost_usd, cs.total_cost_usd) / NULLIF(sc.rows_in_session, 0))::numeric(10,6) AS per_row_cost, " +
+          "(cs.orchestrator_cost_usd / NULLIF(sc.rows_in_session, 0))::numeric(10,6) AS per_row_cost_orchestrator, " +
+          "(cs.total_cost_usd / NULLIF(sc.rows_in_session, 0))::numeric(10,6) AS per_row_cost_estimated " +
         "FROM claude_sessions cs JOIN session_counts sc ON sc.claude_session_id = cs.session_id" +
       ") " +
       "SELECT json_agg(row_to_json(r)) FROM (" +
-      "SELECT * FROM (SELECT posted_at AS occurred_at, 'posted' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, engagement_style AS detail, our_url AS link, ('p' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd, c.name AS campaign_name FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id LEFT JOIN campaigns c ON c.id = posts.campaign_id WHERE posted_at IS NOT NULL AND our_content <> '(mention - no original post)' ORDER BY posted_at DESC LIMIT 150) x1 " +
-      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 140), LEFT(r2.their_content, 140)), CASE WHEN r2.is_recommendation THEN 'rec · ' || COALESCE(r2.engagement_style, '') ELSE r2.engagement_style END, r2.our_reply_url, ('r' || r2.id), p.project_name, sc.per_row_cost, c2.name FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id LEFT JOIN session_cost sc ON sc.session_id = r2.claude_session_id LEFT JOIN campaigns c2 ON c2.id = r2.campaign_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 150) x2 " +
-      "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name, sc.per_row_cost, c3.name FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id LEFT JOIN session_cost sc ON sc.session_id = r3.claude_session_id LEFT JOIN campaigns c3 ON c3.id = r3.campaign_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 150) x3 " +
-      "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text, NULL::numeric, NULL::text FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
-      "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || dms.id), NULL::text, sc.per_row_cost, NULL::text FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
-      "UNION ALL SELECT * FROM (SELECT m.message_at, 'dm_reply_sent', d.platform, d.their_author, LEFT(m.content, 140), NULL::text, d.chat_url, ('dr' || m.id), NULL::text, sc.per_row_cost, c5.name FROM dm_messages m JOIN dms d ON d.id = m.dm_id LEFT JOIN session_cost sc ON sc.session_id = m.claude_session_id LEFT JOIN campaigns c5 ON c5.id = m.campaign_id WHERE m.direction = 'outbound' AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction = 'inbound' AND m2.message_at < m.message_at) ORDER BY m.message_at DESC LIMIT 150) x5b " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || sk.id), product, sc.per_row_cost, NULL::text FROM seo_keywords sk LEFT JOIN session_cost sc ON sc.session_id = sk.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page', 'roundup') ORDER BY completed_at DESC LIMIT 150) x6 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || gq.id), product, sc.per_row_cost, NULL::text FROM gsc_queries gq LEFT JOIN session_cost sc ON sc.session_id = gq.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || sk2.id), product, sc.per_row_cost, NULL::text FROM seo_keywords sk2 LEFT JOIN session_cost sc ON sc.session_id = sk2.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_top', 'seo', product, keyword, slug, page_url, ('kt' || sk3.id), product, sc.per_row_cost, NULL::text FROM seo_keywords sk3 LEFT JOIN session_cost sc ON sc.session_id = sk3.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'top_page' ORDER BY completed_at DESC LIMIT 150) x8b " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_roundup', 'seo', product, keyword, slug, page_url, ('kru' || sk4.id), product, sc.per_row_cost, NULL::text FROM seo_keywords sk4 LEFT JOIN session_cost sc ON sc.session_id = sk4.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'roundup' ORDER BY completed_at DESC LIMIT 150) x8r " +
-      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_improved', 'seo', product, LEFT(COALESCE(rationale, diff_summary, page_path), 140), page_path, page_url, ('pi' || spi.id), product, sc.per_row_cost, NULL::text FROM seo_page_improvements spi LEFT JOIN session_cost sc ON sc.session_id = spi.claude_session_id WHERE completed_at IS NOT NULL AND status = 'committed' ORDER BY completed_at DESC LIMIT 150) x8c " +
-      "UNION ALL SELECT * FROM (SELECT resurrected_at AS occurred_at, 'resurrected' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, NULL::text AS detail, our_url AS link, ('rr' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd, c9.name AS campaign_name FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id LEFT JOIN campaigns c9 ON c9.id = posts.campaign_id WHERE resurrected_at IS NOT NULL AND our_content <> '(mention - no original post)' ORDER BY resurrected_at DESC LIMIT 150) x9 " +
+      "SELECT * FROM (SELECT posted_at AS occurred_at, 'posted' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, engagement_style AS detail, our_url AS link, ('p' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd, sc.per_row_cost_orchestrator AS cost_usd_orchestrator, sc.per_row_cost_estimated AS cost_usd_estimated, c.name AS campaign_name FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id LEFT JOIN campaigns c ON c.id = posts.campaign_id WHERE posted_at IS NOT NULL AND our_content <> '(mention - no original post)' ORDER BY posted_at DESC LIMIT 150) x1 " +
+      "UNION ALL SELECT * FROM (SELECT r2.replied_at, 'replied', r2.platform, r2.their_author, COALESCE(LEFT(r2.our_reply_content, 140), LEFT(r2.their_content, 140)), CASE WHEN r2.is_recommendation THEN 'rec · ' || COALESCE(r2.engagement_style, '') ELSE r2.engagement_style END, r2.our_reply_url, ('r' || r2.id), p.project_name, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, c2.name FROM replies r2 LEFT JOIN posts p ON p.id = r2.post_id LEFT JOIN session_cost sc ON sc.session_id = r2.claude_session_id LEFT JOIN campaigns c2 ON c2.id = r2.campaign_id WHERE r2.status='replied' AND r2.replied_at IS NOT NULL ORDER BY r2.replied_at DESC LIMIT 150) x2 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(r3.processing_at, r3.discovered_at), 'skipped', r3.platform, r3.their_author, LEFT(r3.their_content, 140), r3.skip_reason, r3.their_comment_url, ('s' || r3.id), p.project_name, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, c3.name FROM replies r3 LEFT JOIN posts p ON p.id = r3.post_id LEFT JOIN session_cost sc ON sc.session_id = r3.claude_session_id LEFT JOIN campaigns c3 ON c3.id = r3.campaign_id WHERE r3.status='skipped' ORDER BY COALESCE(r3.processing_at, r3.discovered_at) DESC LIMIT 150) x3 " +
+      "UNION ALL SELECT * FROM (SELECT COALESCE(source_timestamp, received_at), 'mention', platform, author, COALESCE(title, LEFT(body, 140)), sentiment, url, ('m' || id), NULL::text, NULL::numeric, NULL::numeric, NULL::numeric, NULL::text FROM octolens_mentions ORDER BY COALESCE(source_timestamp, received_at) DESC LIMIT 150) x4 " +
+      "UNION ALL SELECT * FROM (SELECT sent_at, 'dm_sent', platform, their_author, LEFT(our_dm_content, 140), NULL::text, chat_url, ('d' || dms.id), NULL::text, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id WHERE status='sent' AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 150) x5 " +
+      "UNION ALL SELECT * FROM (SELECT m.message_at, 'dm_reply_sent', d.platform, d.their_author, LEFT(m.content, 140), NULL::text, d.chat_url, ('dr' || m.id), NULL::text, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, c5.name FROM dm_messages m JOIN dms d ON d.id = m.dm_id LEFT JOIN session_cost sc ON sc.session_id = m.claude_session_id LEFT JOIN campaigns c5 ON c5.id = m.campaign_id WHERE m.direction = 'outbound' AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction = 'inbound' AND m2.message_at < m.message_at) ORDER BY m.message_at DESC LIMIT 150) x5b " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_serp', 'seo', product, keyword, slug, page_url, ('k' || sk.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM seo_keywords sk LEFT JOIN session_cost sc ON sc.session_id = sk.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page', 'roundup') ORDER BY completed_at DESC LIMIT 150) x6 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_gsc', 'seo', product, query, page_slug, page_url, ('g' || gq.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM gsc_queries gq LEFT JOIN session_cost sc ON sc.session_id = gq.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL ORDER BY completed_at DESC LIMIT 150) x7 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_reddit', 'seo', product, keyword, slug, page_url, ('kr' || sk2.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM seo_keywords sk2 LEFT JOIN session_cost sc ON sc.session_id = sk2.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'reddit' ORDER BY completed_at DESC LIMIT 150) x8 " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_top', 'seo', product, keyword, slug, page_url, ('kt' || sk3.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM seo_keywords sk3 LEFT JOIN session_cost sc ON sc.session_id = sk3.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'top_page' ORDER BY completed_at DESC LIMIT 150) x8b " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_published_roundup', 'seo', product, keyword, slug, page_url, ('kru' || sk4.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM seo_keywords sk4 LEFT JOIN session_cost sc ON sc.session_id = sk4.claude_session_id WHERE completed_at IS NOT NULL AND page_url IS NOT NULL AND source = 'roundup' ORDER BY completed_at DESC LIMIT 150) x8r " +
+      "UNION ALL SELECT * FROM (SELECT completed_at, 'page_improved', 'seo', product, LEFT(COALESCE(rationale, diff_summary, page_path), 140), page_path, page_url, ('pi' || spi.id), product, sc.per_row_cost, sc.per_row_cost_orchestrator, sc.per_row_cost_estimated, NULL::text FROM seo_page_improvements spi LEFT JOIN session_cost sc ON sc.session_id = spi.claude_session_id WHERE completed_at IS NOT NULL AND status = 'committed' ORDER BY completed_at DESC LIMIT 150) x8c " +
+      "UNION ALL SELECT * FROM (SELECT resurrected_at AS occurred_at, 'resurrected' AS type, platform, our_account AS actor, COALESCE(thread_title, LEFT(our_content, 140)) AS summary, NULL::text AS detail, our_url AS link, ('rr' || posts.id) AS key, project_name AS project, sc.per_row_cost AS cost_usd, sc.per_row_cost_orchestrator AS cost_usd_orchestrator, sc.per_row_cost_estimated AS cost_usd_estimated, c9.name AS campaign_name FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id LEFT JOIN campaigns c9 ON c9.id = posts.campaign_id WHERE resurrected_at IS NOT NULL AND our_content <> '(mention - no original post)' ORDER BY resurrected_at DESC LIMIT 150) x9 " +
       "ORDER BY 1 DESC LIMIT 500) r";
     return (async () => {
       const rows = await pq(q);
@@ -2588,10 +2609,12 @@ async function handleApi(req, res) {
 
   // GET /api/cost/stats - per-activity-type count + total cost over a trailing
   // window. Types: thread (posts.posted_at), comment (replies.replied),
-  // page (seo_keywords + gsc_queries), dm_thread (dms.sent_at). Cost is
-  // session.total_cost_usd split evenly across rows_in_session, same model
-  // as /api/activity. Admin-only: cost is operator-internal, not exposed to
-  // scoped clients.
+  // page (seo_keywords + gsc_queries), dm_thread (dms.sent_at). Per-row cost is
+  // COALESCE(orchestrator_cost_usd, total_cost_usd) split evenly across
+  // rows_in_session, same model as /api/activity. We also surface the SDK and
+  // estimate lanes separately so the dashboard's "cost in last 24 hours" stat
+  // can render a tooltip explaining each calculation. Admin-only: cost is
+  // operator-internal, not exposed to scoped clients.
   if (p === '/api/cost/stats' && req.method === 'GET') {
     if (!req.user.admin) return json(res, { error: 'forbidden' }, 403);
     const url = new URL(req.url, 'http://localhost');
@@ -2622,23 +2645,30 @@ async function handleApi(req, res) {
       "SELECT claude_session_id FROM gsc_queries WHERE claude_session_id IS NOT NULL AND completed_at IS NOT NULL AND page_url IS NOT NULL",
     ];
     const rowQueries = [];
+    // Per row we expose three SUMs so the UI can render the headline cost
+    // (total_cost_usd, COALESCE-of-SDK-then-estimate) AND a tooltip showing the
+    // SDK orchestrator total and the manual estimate side-by-side.
+    const sumCols =
+      "COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) AS total_cost_usd, " +
+      "COALESCE(SUM(sc.per_row_cost_orchestrator), 0)::numeric(12,4) AS total_cost_usd_orchestrator, " +
+      "COALESCE(SUM(sc.per_row_cost_estimated), 0)::numeric(12,4) AS total_cost_usd_estimated";
     if (includeThread) {
       rowQueries.push(
-        "SELECT 'thread' AS type, COUNT(*)::int AS count, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) AS total_cost_usd " +
+        "SELECT 'thread' AS type, COUNT(*)::int AS count, " + sumCols + " " +
         "FROM posts LEFT JOIN session_cost sc ON sc.session_id = posts.claude_session_id " +
         "WHERE posted_at >= NOW() - " + win + platClause('posts.platform') + postsPc.clause
       );
     }
     if (includeComment) {
       rowQueries.push(
-        "SELECT 'comment' AS type, COUNT(*)::int AS count, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) AS total_cost_usd " +
+        "SELECT 'comment' AS type, COUNT(*)::int AS count, " + sumCols + " " +
         "FROM replies LEFT JOIN session_cost sc ON sc.session_id = replies.claude_session_id " +
         "WHERE replies.status='replied' AND replies.replied_at >= NOW() - " + win + platClause('replies.platform') + repliesPc.clause
       );
     }
     if (includePage) {
       rowQueries.push(
-        "SELECT 'page' AS type, COUNT(*)::int AS count, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) AS total_cost_usd " +
+        "SELECT 'page' AS type, COUNT(*)::int AS count, " + sumCols + " " +
         "FROM (" +
           "SELECT claude_session_id FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL" + seoProdPc.clause +
           " UNION ALL " +
@@ -2648,7 +2678,7 @@ async function handleApi(req, res) {
     }
     if (includeDm) {
       rowQueries.push(
-        "SELECT 'dm_thread' AS type, COUNT(*)::int AS count, COALESCE(SUM(sc.per_row_cost), 0)::numeric(12,4) AS total_cost_usd " +
+        "SELECT 'dm_thread' AS type, COUNT(*)::int AS count, " + sumCols + " " +
         "FROM dms LEFT JOIN session_cost sc ON sc.session_id = dms.claude_session_id " +
         "WHERE dms.status='sent' AND dms.sent_at >= NOW() - " + win + platClause('dms.platform') + dmsPc.clause
       );
@@ -2659,7 +2689,10 @@ async function handleApi(req, res) {
     const q =
       "WITH src AS (" + parts.join(' UNION ALL ') + "), " +
       "session_counts AS (SELECT claude_session_id, COUNT(*)::int AS rows_in_session FROM src GROUP BY claude_session_id), " +
-      "session_cost AS (SELECT cs.session_id, (cs.total_cost_usd / NULLIF(sc.rows_in_session, 0))::numeric(12,6) AS per_row_cost " +
+      "session_cost AS (SELECT cs.session_id, " +
+          "(COALESCE(cs.orchestrator_cost_usd, cs.total_cost_usd) / NULLIF(sc.rows_in_session, 0))::numeric(12,6) AS per_row_cost, " +
+          "(cs.orchestrator_cost_usd / NULLIF(sc.rows_in_session, 0))::numeric(12,6) AS per_row_cost_orchestrator, " +
+          "(cs.total_cost_usd / NULLIF(sc.rows_in_session, 0))::numeric(12,6) AS per_row_cost_estimated " +
         "FROM claude_sessions cs JOIN session_counts sc ON sc.claude_session_id = cs.session_id) " +
       "SELECT json_agg(row_to_json(r)) FROM (" + rowQueries.join(' UNION ALL ') + ") r";
     return (async () => {
