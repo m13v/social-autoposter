@@ -217,7 +217,7 @@ def upsert_candidates(tweets, config, batch_id=None):
                     url,
                     tweet.get("handle", ""),
                     tweet.get("author_followers", 0),
-                    (tweet.get("text", "") or "")[:500],
+                    (tweet.get("text", "") or ""),
                     posted_at,
                     tweet.get("likes", 0),
                     tweet.get("retweets", 0),
