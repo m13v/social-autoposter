@@ -100,11 +100,12 @@ if [ -n "$PLATFORM" ]; then
     PLATFORM_SQL_FILTER="d.platform = '$P'"
 fi
 
-# Get conversations needing replies. Two trigger arms unioned into one set:
-#   1. inbound  — their reply is newer than our last outbound (classic case)
-#   2. click    — they clicked our short link recently and we haven't followed up
-#                 since that click (soft nudge rail; "last message outbound" is OK)
-# The agent prompt branches on the `trigger` field to pick reply style.
+# Get conversations where the last message is inbound (they replied OR a backend
+# signal like a short-link click landed as a synthetic inbound row). Click signals
+# are inserted into dm_messages by the /r/<code> redirector with
+# direction='inbound', author='__click_signal__', content='[CLICK_SIGNAL] ...'.
+# That makes them surface here on the same `last_in > last_out` rail as typed
+# replies, with no special branching.
 PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
     SELECT json_agg(q) FROM (
         SELECT d.id as dm_id, d.platform, d.their_author, d.tier,
@@ -120,17 +121,6 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
                pr.notes as prospect_notes,
                last_in.content as last_inbound_msg,
                last_in.message_at as inbound_at,
-               d.short_link_clicks,
-               d.short_link_first_click_at,
-               d.short_link_last_click_at,
-               d.last_click_followup_at,
-               d.short_link_target_url,
-               CASE
-                   WHEN last_in.message_at IS NOT NULL
-                        AND (last_out.message_at IS NULL OR last_in.message_at > last_out.message_at)
-                       THEN 'inbound'
-                   ELSE 'click'
-               END as trigger,
                (SELECT COUNT(*) FROM dm_messages WHERE dm_id = d.id) as total_messages,
                (SELECT json_agg(json_build_object(
                    'direction', m.direction,
@@ -140,7 +130,7 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
                FROM dm_messages m WHERE m.dm_id = d.id) as conversation_history
         FROM dms d
         LEFT JOIN prospects pr ON pr.id = d.prospect_id
-        LEFT JOIN LATERAL (
+        JOIN LATERAL (
             SELECT content, message_at FROM dm_messages
             WHERE dm_id = d.id AND direction = 'inbound'
             ORDER BY message_at DESC LIMIT 1
@@ -154,25 +144,10 @@ PENDING_CONVOS=$(psql "$DATABASE_URL" -t -A -c "
           AND d.conversation_status != 'needs_human'
           AND d.status = 'sent'
           AND $PLATFORM_SQL_FILTER
-          AND (
-                -- Arm 1: inbound trigger (their reply is newer than our last outbound)
-                (last_in.message_at IS NOT NULL
-                 AND (last_out.message_at IS NULL OR last_in.message_at > last_out.message_at))
-                OR
-                -- Arm 2: click trigger (recent click, not yet followed up)
-                (
-                    d.short_link_clicks > 0
-                    AND d.short_link_last_click_at IS NOT NULL
-                    AND d.short_link_last_click_at >= NOW() - INTERVAL '7 days'
-                    AND (d.last_click_followup_at IS NULL
-                         OR d.short_link_last_click_at > d.last_click_followup_at)
-                    AND (d.sent_at IS NULL
-                         OR d.short_link_last_click_at >= d.sent_at + INTERVAL '15 minutes')
-                )
-              )
+          AND (last_out.message_at IS NULL OR last_in.message_at > last_out.message_at)
         ORDER BY
             d.tier DESC,
-            COALESCE(last_in.message_at, d.short_link_last_click_at) ASC
+            last_in.message_at ASC
         LIMIT 30
     ) q;" 2>/dev/null || echo "null")
 
