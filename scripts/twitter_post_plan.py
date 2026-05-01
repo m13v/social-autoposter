@@ -47,7 +47,7 @@ REPLY_URL_RE = re.compile(r"^https?://(?:x\.com|twitter\.com)/[^/]+/status/\d+")
 TOP_LEVEL_OBJ_RE = re.compile(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", re.DOTALL)
 
 
-def parse_last_json_object(text: str) -> dict | None:
+def parse_last_json_object(text):  # -> dict | None; bare hint kept off the signature for Python 3.9 compatibility (PEP 604 union requires 3.10+)
     """Extract the last balanced top-level JSON object from a string.
 
     twitter_browser.py prints log lines to stderr and one JSON object to
@@ -142,6 +142,7 @@ def post_one(c: dict) -> tuple[str, str]:
     thread_text = c.get("thread_text") or ""
     style = (c.get("engagement_style") or "").strip()
     language = (c.get("language") or "").strip()
+    link_source = (c.get("link_source") or "").strip()
 
     if not reply_text:
         print(f"[post] candidate {cid}: empty reply_text; skipping", flush=True)
@@ -178,10 +179,20 @@ def post_one(c: dict) -> tuple[str, str]:
     applied_campaigns = parsed.get("applied_campaigns") or []
 
     if not reply_url or not REPLY_URL_RE.match(reply_url):
+        # Reply was likely sent (browser action returned ok=True with verified)
+        # but the URL capture in twitter_browser.py couldn't pin it down — CDP
+        # network interception missed the CreateTweet response and the DOM diff
+        # found no new /m13v_/status link. Method 3 (profile-page scrape) was
+        # removed 2026-05-01 because it cross-contaminated under parallel
+        # cycles. Mark SKIPPED, not FAILED, so the candidate is NOT re-tried
+        # next cycle — re-trying when the prior reply already landed creates
+        # a duplicate on Twitter. Salvage's posts.thread_url guard would catch
+        # it eventually but only after the candidate sat through one more
+        # cycle of wasted Claude work.
         print(f"[post] candidate {cid} reply succeeded but reply_url invalid: {reply_url!r}",
               flush=True)
-        update_candidate(cid, "failed")
-        return ("failed", "invalid_reply_url")
+        update_candidate(cid, "skipped")
+        return ("skipped", "no_reply_url_captured")
 
     # Insert the post row.
     log_args = [
@@ -198,6 +209,8 @@ def post_one(c: dict) -> tuple[str, str]:
         log_args += ["--engagement-style", style]
     if language:
         log_args += ["--language", language]
+    if link_source:
+        log_args += ["--link-source", link_source]
 
     rc, out, err = run_subprocess(log_args, timeout_sec=60)
     if err:
@@ -265,6 +278,16 @@ def main() -> int:
         return 2
 
     candidates = plan.get("candidates") or []
+
+    # Re-export the prep session id into env so log_post.py stamps
+    # posts.claude_session_id and the dashboard activity feed can join to
+    # claude_sessions for cost. The parent shell pre-assigns this in Phase
+    # 2b-prep and writes it into the plan JSON; the env var doesn't survive
+    # the prep command-substitution subshell, so we restore it here.
+    plan_session_id = plan.get("session_id")
+    if plan_session_id:
+        os.environ["CLAUDE_SESSION_ID"] = plan_session_id
+
     posted = skipped = failed = 0
     reasons: dict[str, int] = {}
 
