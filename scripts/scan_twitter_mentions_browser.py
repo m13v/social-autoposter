@@ -172,7 +172,7 @@ def process_notifications(notifications, conn, config):
                     "twitter",
                     tweet_url,
                     handle,
-                    text[:100],
+                    text,
                     tweet_url,
                     "(mention - no original post)",
                     OUR_HANDLE,
