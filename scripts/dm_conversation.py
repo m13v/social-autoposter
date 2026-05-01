@@ -303,8 +303,8 @@ def ensure_dm(conn, platform, author, chat_url=None, lookback_hours=720):
         """
         INSERT INTO dms (platform, their_author, reply_id, post_id,
                          comment_context, chat_url, status, conversation_status,
-                         tier, discovered_at)
-        VALUES (%s, %s, %s, %s, %s, %s, 'sent', %s, 1, NOW())
+                         tier, discovered_at, sent_at)
+        VALUES (%s, %s, %s, %s, %s, %s, 'sent', %s, 1, NOW(), NOW())
         RETURNING id
         """,
         (platform, author, reply_id, post_id, comment_ctx, clean_chat_url, initial_status),
