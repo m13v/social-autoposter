@@ -73,7 +73,7 @@ def fetch_rows(conn, platform=None, limit=None, force=False):
                pr.follower_count, pr.recent_activity, pr.notes,
                (SELECT string_agg(
                     CASE WHEN m.direction = 'inbound' THEN 'THEM' ELSE 'US' END
-                    || ': ' || LEFT(COALESCE(m.content, ''), 300),
+                    || ': ' || COALESCE(m.content, ''),
                     E'\n' ORDER BY m.message_at ASC)
                 FROM dm_messages m WHERE m.dm_id = d.id) AS convo
         FROM dms d
@@ -112,12 +112,12 @@ def render_row(row):
         f"  headline: {(row['headline'] or '').strip()[:200]}",
         f"  company: {(row['company'] or '').strip()[:120]}",
         f"  role: {(row['role'] or '').strip()[:120]}",
-        f"  bio: {(row['bio'] or '').strip()[:400]}",
+        f"  bio: {(row['bio'] or '').strip()[:2000]}",
         f"  followers: {row['follower_count'] if row['follower_count'] is not None else 'unknown'}",
-        f"  recent_activity: {(row['recent_activity'] or '').strip()[:300]}",
-        f"  notes: {(row['notes'] or '').strip()[:200]}",
+        f"  recent_activity: {(row['recent_activity'] or '').strip()[:2000]}",
+        f"  notes: {(row['notes'] or '').strip()[:1000]}",
         "CONVERSATION:",
-        (row["convo"] or "")[:1800],
+        (row["convo"] or ""),
     ]
     return "\n".join(parts)
 
