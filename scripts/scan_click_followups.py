@@ -176,7 +176,7 @@ def fetch_recent_messages(db, dm_id):
     for r in reversed(rows):
         out.append({
             "direction": r["direction"],
-            "content": (r["content"] or "")[:500],
+            "content": (r["content"] or ""),
             "message_at": r["message_at"].isoformat() if r["message_at"] else None,
         })
     return out
@@ -241,9 +241,9 @@ def main():
             "qualification_status": r["qualification_status"],
             "interest_level": r["interest_level"],
             "message_count": r["message_count"],
-            "their_first_content": (r["their_first_content"] or "")[:500],
-            "comment_context": (r["comment_context"] or "")[:500],
-            "our_first_dm": (r["our_first_dm"] or "")[:500],
+            "their_first_content": (r["their_first_content"] or ""),
+            "comment_context": (r["comment_context"] or ""),
+            "our_first_dm": (r["our_first_dm"] or ""),
             "their_last_msg": their_last,
             "our_last_msg": our_last,
             "recent_messages": msgs,
