@@ -445,10 +445,13 @@ def _bookings_shared(bookings_conn, client_slug, days, table="cal_bookings"):
             "COUNT(*) FILTER (WHERE status = 'created'), "
             "COUNT(*) FILTER (WHERE status = 'cancelled'), "
             "COUNT(*) FILTER (WHERE status = 'rescheduled'), "
-            "COUNT(*) FILTER (WHERE attendee_email NOT LIKE '%%test%%' "
-            "AND attendee_email NOT LIKE '%%example%%' "
-            "AND attendee_name NOT LIKE '%%TEST%%' "
-            "AND attendee_name NOT LIKE '%%John Doe%%') "
+            "COUNT(*) FILTER (WHERE attendee_email NOT ILIKE '%%test%%' "
+            "AND attendee_email NOT ILIKE '%%example%%' "
+            "AND attendee_email NOT ILIKE '%%+%%verify%%' "
+            "AND attendee_name NOT ILIKE '%%test%%' "
+            "AND attendee_name NOT ILIKE '%%verification%%' "
+            "AND attendee_name NOT ILIKE '%%delete-me%%' "
+            "AND attendee_name NOT ILIKE '%%john doe%%') "
             "FROM " + table + " WHERE client_slug = %s "
             "AND created_at >= NOW() - INTERVAL '" + str(days) + " days'",
             (client_slug,),
