@@ -5204,7 +5204,7 @@ function buildSeoDetailRows(run) {
   if (!details.length) return '';
   const subRows = details.map(d => {
     const cost = (typeof d.cost_usd === 'number' && d.cost_usd > 0)
-      ? '$' + d.cost_usd.toFixed(2)
+      ? fmtCostCell(d.cost_usd, d.cost_usd_orchestrator, d.cost_usd_estimated)
       : '<span style="color:var(--muted);">—</span>';
     const turns = (typeof d.num_turns === 'number' && d.num_turns > 0)
       ? d.num_turns
@@ -5977,6 +5977,45 @@ function fmtCost(c) {
   if (n === 0) return '$0';
   if (n < 0.01) return '$' + n.toFixed(4);
   return '$' + n.toFixed(2);
+}
+
+// Wraps fmtCost in a span with a hover tooltip explaining how the displayed
+// cost was derived. The dashboard's global .sa-tooltip handler picks up
+// data-tooltip and renders the popover. We always render the wrapper (even
+// when both lanes are missing) so column alignment stays consistent.
+//
+// `displayed`     - the value rendered in the cell (already prefers SDK,
+//                   falls back to estimate). Source of truth for text.
+// `orchestrator`  - native SDK orchestrator cost (claude_sessions.
+//                   orchestrator_cost_usd / streamRes.total_cost_usd).
+//                   Authoritative for orchestrator billing, EXCLUDES Task
+//                   subagent costs (anthropics/claude-code #43945).
+// `estimated`     - manual transcript-derived estimate using local pricing
+//                   tables (claude_sessions.total_cost_usd via
+//                   log_claude_session.py).
+function fmtCostCell(displayed, orchestrator, estimated) {
+  const text = fmtCost(displayed);
+  if (text === '') return '';
+  const fmtLane = (v) => {
+    if (v == null) return 'n/a';
+    const n = Number(v);
+    if (!isFinite(n)) return 'n/a';
+    if (n === 0) return '$0';
+    if (n < 0.01) return '$' + n.toFixed(4);
+    return '$' + n.toFixed(4);
+  };
+  const lines = [
+    'Orchestrator (SDK): ' + fmtLane(orchestrator),
+    'Estimated (transcript): ' + fmtLane(estimated),
+    '',
+    'Displayed value prefers the SDK orchestrator cost (native streamRes.total_cost_usd, matches Anthropic billing for the orchestrator session) and falls back to the manual transcript-derived estimate when the SDK value is unavailable.',
+    '',
+    'Note: orchestrator cost EXCLUDES Task subagent spend (anthropics/claude-code #43945). The estimate uses our local pricing table over the parent transcript only and has the same exclusion.',
+  ];
+  const tip = lines.join('\n');
+  return '<span data-tooltip="' + escapeHtml(tip) +
+    '" style="cursor:help;border-bottom:1px dotted var(--text-muted);">' +
+    text + '</span>';
 }
 
 function renderSortArrows() {
@@ -7273,15 +7312,38 @@ function renderCostStats(payload) {
   const byType = {};
   rows.forEach(r => { byType[r.type] = r; });
   const merged = COST_TYPE_ORDER.map(t => {
-    const r = byType[t] || { count: 0, total_cost_usd: 0 };
+    const r = byType[t] || { count: 0, total_cost_usd: 0, total_cost_usd_orchestrator: 0, total_cost_usd_estimated: 0 };
     const count = Number(r.count) || 0;
     const total = Number(r.total_cost_usd) || 0;
-    return { type: t, label: COST_TYPE_LABELS[t], count: count, total: total, avg: count > 0 ? total / count : 0 };
+    const totalOrch = r.total_cost_usd_orchestrator != null ? Number(r.total_cost_usd_orchestrator) : null;
+    const totalEst  = r.total_cost_usd_estimated != null ? Number(r.total_cost_usd_estimated) : null;
+    return {
+      type: t, label: COST_TYPE_LABELS[t], count: count,
+      total: total, totalOrch: totalOrch, totalEst: totalEst,
+      avg: count > 0 ? total / count : 0,
+      avgOrch: count > 0 && totalOrch != null ? totalOrch / count : null,
+      avgEst:  count > 0 && totalEst  != null ? totalEst  / count : null,
+    };
   });
   const totalCount = merged.reduce(function (a, r) { return a + r.count; }, 0);
   const totalCost  = merged.reduce(function (a, r) { return a + r.total; }, 0);
+  const totalOrch  = merged.reduce(function (a, r) { return a + (r.totalOrch || 0); }, 0);
+  const totalEst   = merged.reduce(function (a, r) { return a + (r.totalEst  || 0); }, 0);
   if (totalEl) {
     totalEl.textContent = '$' + totalCost.toFixed(2) + ' · ' + totalCount.toLocaleString() + ' activit' + (totalCount === 1 ? 'y' : 'ies');
+    // Tooltip on the header pill so users can see both lanes for the
+    // headline figure without expanding the table.
+    const tipLines = [
+      'Orchestrator (SDK): $' + totalOrch.toFixed(4),
+      'Estimated (transcript): $' + totalEst.toFixed(4),
+      '',
+      'Displayed total prefers the SDK orchestrator cost (native streamRes.total_cost_usd) and falls back to the manual transcript estimate where the SDK value is missing.',
+      '',
+      'Note: orchestrator cost EXCLUDES Task subagent spend (anthropics/claude-code #43945).',
+    ];
+    totalEl.setAttribute('data-tooltip', tipLines.join('\n'));
+    totalEl.style.cursor = 'help';
+    totalEl.style.borderBottom = '1px dotted var(--text-muted)';
   }
   function fmtMoney(v) {
     var n = Number(v) || 0;
@@ -7290,20 +7352,42 @@ function renderCostStats(payload) {
     return '$' + n.toFixed(2);
   }
   function fmtCount(v) { return (Number(v) || 0).toLocaleString(); }
+  // Wraps a money cell in a span that exposes both cost lanes via tooltip.
+  function moneyCell(displayed, orch, est) {
+    const tip = [
+      'Orchestrator (SDK): ' + (orch != null ? fmtMoney(orch) : 'n/a'),
+      'Estimated (transcript): ' + (est != null ? fmtMoney(est) : 'n/a'),
+      '',
+      'Displayed value prefers SDK; falls back to transcript estimate. Subagent costs excluded (anthropics/claude-code #43945).',
+    ].join('\n');
+    return '<span data-tooltip="' + escapeHtml(tip) +
+      '" style="cursor:help;border-bottom:1px dotted var(--text-muted);">' +
+      fmtMoney(displayed) + '</span>';
+  }
   const rowsHtml = merged.map(function (r) {
+    const totalCellHtml = moneyCell(r.total, r.totalOrch, r.totalEst);
+    const avgCellHtml = r.count > 0
+      ? moneyCell(r.avg, r.avgOrch, r.avgEst)
+      : '&mdash;';
     return '<tr>' +
       '<td>' + escapeHtml(r.label) + '</td>' +
       '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + fmtCount(r.count) + '</td>' +
-      '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + fmtMoney(r.total) + '</td>' +
-      '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-muted);">' + (r.count > 0 ? fmtMoney(r.avg) : '&mdash;') + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + totalCellHtml + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-muted);">' + avgCellHtml + '</td>' +
     '</tr>';
   }).join('');
+  const footerTotalHtml = moneyCell(totalCost, totalOrch, totalEst);
+  const footerAvgHtml = totalCount > 0
+    ? moneyCell(totalCost / totalCount,
+                totalOrch / totalCount,
+                totalEst  / totalCount)
+    : '&mdash;';
   const footerHtml =
     '<tr style="border-top:2px solid var(--border);font-weight:600;background:var(--bg-subtle);">' +
       '<td>Total</td>' +
       '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + fmtCount(totalCount) + '</td>' +
-      '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + fmtMoney(totalCost) + '</td>' +
-      '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + (totalCount > 0 ? fmtMoney(totalCost / totalCount) : '&mdash;') + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + footerTotalHtml + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + footerAvgHtml + '</td>' +
     '</tr>';
   body.innerHTML =
     '<table class="style-stats-table">' +
@@ -9229,7 +9313,7 @@ function renderActivity(events) {
         '</div>' +
       '</td>' +
       '<td class="activity-summary">' + summaryText + summaryLink + '</td>' +
-      '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-secondary);">' + fmtCost(e.cost_usd) + '</td>' +
+      '<td style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-secondary);">' + fmtCostCell(e.cost_usd, e.cost_usd_orchestrator, e.cost_usd_estimated) + '</td>' +
     '</tr>';
   }).join('');
   body.innerHTML = rows;
