@@ -270,7 +270,7 @@ def ensure_dm(conn, platform, author, chat_url=None, lookback_hours=720):
 
     match = conn.execute(
         """
-        SELECT id, post_id, their_content, their_comment_url
+        SELECT id, post_id, their_content, their_comment_url, our_reply_content
         FROM replies
         WHERE platform = %s AND their_author = %s
           AND discovered_at >= NOW() - (%s || ' hours')::interval
@@ -286,15 +286,28 @@ def ensure_dm(conn, platform, author, chat_url=None, lookback_hours=720):
     if match and match.get("their_content"):
         comment_ctx = match["their_content"]
 
+    # No real DM channel + we already replied publicly = this row is a
+    # public-comment artifact, not an actionable DM. Mark it 'public_only' so
+    # the engage-dm-replies queue ignores it from day one. The row still exists
+    # for cross-thread history (engage_reddit.py soft context block).
+    has_public_reply = bool(
+        match and (match.get("our_reply_content") or "").strip()
+    )
+    initial_status = (
+        "public_only"
+        if (clean_chat_url is None and has_public_reply)
+        else "active"
+    )
+
     row = conn.execute(
         """
         INSERT INTO dms (platform, their_author, reply_id, post_id,
                          comment_context, chat_url, status, conversation_status,
                          tier, discovered_at)
-        VALUES (%s, %s, %s, %s, %s, %s, 'sent', 'active', 1, NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, 'sent', %s, 1, NOW())
         RETURNING id
         """,
-        (platform, author, reply_id, post_id, comment_ctx, clean_chat_url),
+        (platform, author, reply_id, post_id, comment_ctx, clean_chat_url, initial_status),
     ).fetchone()
     conn.commit()
     return row["id"], True, reply_id
@@ -347,7 +360,7 @@ def log_inbound(conn, dm_id, author, content, message_at=None, event_id=None):
     conn.execute("""
         UPDATE dms SET last_message_at = NOW(), message_count = message_count + 1,
                        conversation_status = CASE
-                           WHEN conversation_status IN ('needs_human','converted','closed') THEN conversation_status
+                           WHEN conversation_status IN ('needs_human','converted','closed','public_only') THEN conversation_status
                            ELSE 'needs_reply'
                        END
         WHERE id = %s
