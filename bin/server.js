@@ -597,21 +597,30 @@ function getRunningPipelines() {
   const skillDir = path.join(DEST, 'skill') + '/';
   let psOut;
   try {
-    psOut = execSync('ps -axww -o pid=,lstart=,command=', {
+    // ppid/pgid are read so we can dedupe bash subshells. When a script runs a
+    // pipeline (`cmd | tee`) or command substitution (`var=$(...)`), bash forks
+    // a child that inherits the script's argv until it execs. That child shows
+    // up in ps with the same `/bin/bash …/script.sh` command line and would
+    // otherwise be rendered as a second "Running…" row with its own PID. Both
+    // PIDs share a process group, so dedupe by (script, pgid) and keep the
+    // group leader (lowest PID in the pgid).
+    psOut = execSync('ps -axww -o pid=,ppid=,pgid=,lstart=,command=', {
       stdio: ['ignore', 'pipe', 'ignore'],
       maxBuffer: 8 * 1024 * 1024,
     }).toString();
   } catch { return []; }
-  const result = [];
+  const matches = [];
   for (const rawLine of psOut.split('\n')) {
     const line = rawLine.replace(/^\s+/, '');
     if (!line) continue;
     // ps lstart format: "Fri May  1 12:45:02 2026" (24 chars, fixed width)
-    const m = line.match(/^(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+(.+)$/);
+    const m = line.match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+(.+)$/);
     if (!m) continue;
     const pid = parseInt(m[1], 10);
-    const lstart = m[2];
-    const cmd = m[3];
+    const ppid = parseInt(m[2], 10);
+    const pgid = parseInt(m[3], 10);
+    const lstart = m[4];
+    const cmd = m[5];
     const idx = cmd.indexOf(skillDir);
     if (idx < 0) continue;
     const after = cmd.slice(idx + skillDir.length);
@@ -632,19 +641,33 @@ function getRunningPipelines() {
     }
     const startedMs = Date.parse(lstart);
     if (!Number.isFinite(startedMs)) continue;
-    const cls = classifyScript(scriptDashed);
-    const elapsedSec = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+    matches.push({ pid, ppid, pgid, scriptDashed, startedMs });
+  }
+  // Dedupe: per (scriptDashed, pgid), keep the leader (lowest PID, which is
+  // also the oldest process in the group). Concurrent runs of the same script
+  // come from launchd's double-fork wrapper and have distinct pgids, so they
+  // are preserved as separate rows.
+  const byKey = new Map();
+  for (const e of matches) {
+    const key = `${e.scriptDashed}\t${e.pgid}`;
+    const prev = byKey.get(key);
+    if (!prev || e.pid < prev.pid) byKey.set(key, e);
+  }
+  const result = [];
+  for (const e of byKey.values()) {
+    const cls = classifyScript(e.scriptDashed);
+    const elapsedSec = Math.max(0, Math.floor((Date.now() - e.startedMs) / 1000));
     result.push({
-      script: scriptDashed,
+      script: e.scriptDashed,
       job_type: cls.job_type,
       job_label: cls.job_label,
       platform: cls.platform,
       platform_key: cls.platform_key,
       human_name: cls.human_name,
-      started_at: new Date(startedMs).toISOString(),
+      started_at: new Date(e.startedMs).toISOString(),
       finished_at: null,
       elapsed_s: elapsedSec,
-      pid,
+      pid: e.pid,
       running: true,
       result: {
         type: 'running',
