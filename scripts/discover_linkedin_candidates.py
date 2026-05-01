@@ -101,7 +101,12 @@ DEVTOOLS_ACTIVE_PORT = os.path.join(PROFILE_DIR, "DevToolsActivePort")
 # sees the list constrains the choice to candidates that already cleared a
 # real engagement bar. virality = velocity * reach_mult * age_decay *
 # (1 + disc_bonus); see score_linkedin_candidates.calculate_velocity_score.
-CONTENT_VIRALITY_FLOOR = 20.0
+# 2026-05-01: lowered 20.0 -> 5.0. Niche projects (studyly med-school,
+# paperback-expert RIA, Cyrano multifamily security) routinely had ALL
+# SERP cards cut at 20 because their audiences don't push 20 engagement/hr.
+# Floor=5 keeps the worst slop out while letting niche posts through; the
+# Phase A LLM applies ICP judgment on top.
+CONTENT_VIRALITY_FLOOR = 5.0
 
 # Search rate-limit budget removed 2026-05-01 per user instruction. The
 # linkedin_browser_searches table is kept so daily/monthly volumes remain
@@ -777,6 +782,9 @@ def search(vertical: str, query: str) -> dict:
                         dropped_below_floor += 1
                         continue
                     kept.append(r)
+                # Sort survivors by velocity_score DESC so Phase A's LLM
+                # sees the strongest candidates at the top of the list.
+                kept.sort(key=lambda x: x.get("velocity_score") or 0, reverse=True)
                 results = kept
 
             _log_search(query, vertical, ok=True, error=None)
