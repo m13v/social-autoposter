@@ -2,14 +2,20 @@
 """
 log_linkedin_search_attempts.py
 
-Insert one row per (query, project, candidates_found, serp_quality_score)
-into linkedin_search_attempts. Reads a JSON array on stdin shaped like:
+Insert one row per (query, project, candidates_found, serp_quality_score,
+dropped_below_floor) into linkedin_search_attempts. Reads a JSON array on
+stdin shaped like:
 
     [
-      {"query": "...", "project": "fazm",   "candidates_found": 0, "serp_quality_score": 1.5},
-      {"query": "...", "project": "mediar", "candidates_found": 7, "serp_quality_score": 8.0},
+      {"query": "...", "project": "fazm",   "candidates_found": 0, "serp_quality_score": 1.5, "dropped_below_floor": 0},
+      {"query": "...", "project": "mediar", "candidates_found": 7, "serp_quality_score": 8.0, "dropped_below_floor": 3},
       ...
     ]
+
+candidates_found is the POST-floor count (cards that passed
+discover_linkedin_candidates.py's velocity floor). dropped_below_floor is
+the per-query count of cards that the SERP returned but the floor rejected;
+absent or 0 for queries the floor didn't run on.
 
 Used by run-linkedin.sh after Phase A scrape parses queries_used out of the
 LLM envelope. Logging zero-result AND low-quality SERP queries here is the
@@ -65,6 +71,11 @@ def main():
             candidates_found = int(candidates_found if candidates_found is not None else 0)
         except (TypeError, ValueError):
             candidates_found = 0
+        dropped = r.get("dropped_below_floor")
+        try:
+            dropped = int(dropped if dropped is not None else 0)
+        except (TypeError, ValueError):
+            dropped = 0
         serp = r.get("serp_quality_score")
         try:
             serp = float(serp) if serp is not None else None
@@ -75,10 +86,11 @@ def main():
         conn.execute(
             """
             INSERT INTO linkedin_search_attempts
-                (query, project_name, candidates_found, serp_quality_score, batch_id)
-            VALUES (%s, %s, %s, %s, %s)
+                (query, project_name, candidates_found, serp_quality_score,
+                 candidates_dropped_below_floor, batch_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            [query, project, candidates_found, serp, args.batch_id],
+            [query, project, candidates_found, serp, dropped, args.batch_id],
         )
         inserted += 1
     conn.commit()
