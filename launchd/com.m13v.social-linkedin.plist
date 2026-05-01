@@ -14,7 +14,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Users/matthewdi/social-autoposter/skill/run-linkedin.sh</string>
+		<string>/Users/matthewdi/social-autoposter/skill/run-linkedin-launchd.sh</string>
 	</array>
 	<key>RunAtLoad</key>
 	<false/>
@@ -22,10 +22,7 @@
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-linkedin-stderr.log</string>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-linkedin-stdout.log</string>
-	<key>StartCalendarInterval</key>
-	<array>
-		<dict><key>Minute</key><integer>10</integer></dict>
-		<dict><key>Minute</key><integer>40</integer></dict>
-	</array>
+	<key>StartInterval</key>
+	<integer>900</integer>
 </dict>
 </plist>
