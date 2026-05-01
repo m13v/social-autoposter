@@ -430,15 +430,19 @@ def _ph_combine(per_domain):
     return out
 
 
-def _bookings_shared(bookings_conn, client_slug, days, table="cal_bookings"):
+def _bookings_shared(bookings_conn, client_slug, days, table="cal_bookings", require_utm=False):
     """Same output shape as ps.get_booking_stats, but reuses a shared psycopg2
     connection instead of opening a fresh one per project.
-    `table` is `cal_bookings` (Cal.com) or `calendly_bookings` (Calendly)."""
+    `table` is `cal_bookings` (Cal.com) or `calendly_bookings` (Calendly).
+    `require_utm` gates `real_bookings` on `utm_source IS NOT NULL` for
+    projects whose booking destination is shared with non-marketing inbound
+    (set in config.json via `bookings_require_utm`)."""
     if not bookings_conn or not client_slug:
         return None
     try:
         if table not in {"cal_bookings", "calendly_bookings"}:
             raise ValueError(f"unsupported booking table: {table}")
+        utm_clause = " AND utm_source IS NOT NULL" if require_utm else ""
         cur = bookings_conn.cursor()
         cur.execute(
             "SELECT COUNT(*), "
@@ -451,8 +455,8 @@ def _bookings_shared(bookings_conn, client_slug, days, table="cal_bookings"):
             "AND attendee_name NOT ILIKE '%%test%%' "
             "AND attendee_name NOT ILIKE '%%verification%%' "
             "AND attendee_name NOT ILIKE '%%delete-me%%' "
-            "AND attendee_name NOT ILIKE '%%john doe%%' "
-            "AND utm_source IS NOT NULL) "
+            "AND attendee_name NOT ILIKE '%%john doe%%'"
+            + utm_clause + ") "
             "FROM " + table + " WHERE client_slug = %s "
             "AND created_at >= NOW() - INTERVAL '" + str(days) + " days'",
             (client_slug,),
@@ -721,7 +725,8 @@ def build_project_entry(conn, proj, days, api_key, ph_pid, bookings_conn, env, p
 
     client_slug = ps.get_client_slug(name)
     booking_table = ps.get_booking_table(name)
-    bookings = _bookings_shared(bookings_conn, client_slug, days, booking_table) if client_slug else None
+    require_utm = ps.bookings_require_utm(name)
+    bookings = _bookings_shared(bookings_conn, client_slug, days, booking_table, require_utm) if client_slug else None
 
     # When the PostHog batch failed, the aggregate numbers on `posthog` are
     # all 0 but that doesn't mean there are no events, it means we couldn't
