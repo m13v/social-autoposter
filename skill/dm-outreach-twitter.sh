@@ -56,8 +56,8 @@ DM_DATA=$(psql "$DATABASE_URL" -t -A -c "
                p.thread_title, p.our_content as our_post_content,
                (SELECT json_agg(e) FROM (
                    SELECT p2.thread_title,
-                          LEFT(r2.their_content, 600) AS their_content,
-                          LEFT(COALESCE(r2.our_reply_content, ''), 600) AS our_reply_content,
+                          r2.their_content AS their_content,
+                          COALESCE(r2.our_reply_content, '') AS our_reply_content,
                           r2.status,
                           r2.depth,
                           r2.their_comment_url,
