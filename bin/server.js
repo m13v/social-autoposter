@@ -5548,12 +5548,9 @@ function renderResult(run) {
   if (r.type === 'check-replies') {
     const found = r.found || 0;
     const pending = r.pending_now || 0;
-    if (!found && !pending) {
-      return '<span style="color:var(--muted);font-size:12px;">no new replies</span>';
-    }
     return (
-      pill('found', found, found > 0 ? '#22c55e' : 'var(--text)') +
-      (pending ? pill('queue', pending, 'var(--muted)') : '')
+      pill('found', found, found > 0 ? '#22c55e' : 'var(--muted)') +
+      pill('queue', pending, pending > 0 ? 'var(--text)' : 'var(--muted)')
     );
   }
   // post_linkedin (run-linkedin.sh) Phase A discovery + Phase B comment.
@@ -5585,9 +5582,6 @@ function renderResult(run) {
         'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
         label + (count ? ' <span style="color:var(--text);font-weight:600;">' + count + '</span>' : '') + '</span>';
     };
-    if (!searches && !posted && !queue && !failed && !reasons.length) {
-      return '<span style="color:var(--muted);font-size:12px;">no searches</span>';
-    }
     const tooltip = 'searches: ' + searches +
       ' / raw SERP candidates: ' + raw +
       ' / passed 20.0 floor: ' + passed +
@@ -5596,11 +5590,11 @@ function renderResult(run) {
       ' / pending queue: ' + queue;
     return (
       '<span title="' + tooltip.replace(/"/g, '&quot;') + '" style="display:inline-block;">' +
-        pill('searches', searches, 'var(--text)') +
+        pill('searches', searches, searches > 0 ? 'var(--text)' : 'var(--muted)') +
         pill('raw', raw, raw > 0 ? 'var(--text)' : 'var(--muted)') +
         pill('passed', passed, passed > 0 ? '#22c55e' : 'var(--muted)') +
-        (posted ? pill('posted', posted, '#22c55e') : '') +
-        (queue ? pill('queue', queue, 'var(--muted)') : '') +
+        pill('posted', posted, posted > 0 ? '#22c55e' : 'var(--muted)') +
+        pill('queue', queue, queue > 0 ? 'var(--text)' : 'var(--muted)') +
         renderFailedPill() +
       '</span>'
     );
@@ -5634,9 +5628,6 @@ function renderResult(run) {
         'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
         label + (count ? ' <span style="color:var(--text);font-weight:600;">' + count + '</span>' : '') + '</span>';
     };
-    if (!searches && !posted && !queue && !failed && !reasons.length) {
-      return '<span style="color:var(--muted);font-size:12px;">no searches</span>';
-    }
     const tooltip = 'searches: ' + searches +
       ' / raw tweets: ' + raw +
       ' / passed score-time cuts: ' + passed +
@@ -5647,13 +5638,13 @@ function renderResult(run) {
       ' / pending queue: ' + queue;
     return (
       '<span title="' + tooltip.replace(/"/g, '&quot;') + '" style="display:inline-block;">' +
-        pill('searches', searches, 'var(--text)') +
+        pill('searches', searches, searches > 0 ? 'var(--text)' : 'var(--muted)') +
         pill('raw', raw, raw > 0 ? 'var(--text)' : 'var(--muted)') +
         pill('passed', passed, passed > 0 ? '#22c55e' : 'var(--muted)') +
-        (expired ? pill('expired', expired, 'var(--muted)') : '') +
-        (aboveFloor ? pill('Δ≥10', aboveFloor, '#a78bfa') : '') +
-        (posted ? pill('posted', posted, '#22c55e') : '') +
-        (queue ? pill('queue', queue, 'var(--muted)') : '') +
+        pill('expired', expired, expired > 0 ? 'var(--text)' : 'var(--muted)') +
+        pill('Δ≥10', aboveFloor, aboveFloor > 0 ? '#a78bfa' : 'var(--muted)') +
+        pill('posted', posted, posted > 0 ? '#22c55e' : 'var(--muted)') +
+        pill('queue', queue, queue > 0 ? 'var(--text)' : 'var(--muted)') +
         renderFailedPill() +
       '</span>'
     );
@@ -5686,11 +5677,8 @@ function renderResult(run) {
       const count = failed || (reasons[0] ? reasons[0].count : 0);
       return '<span title="' + tt.replace(/"/g, '&quot;') + '" ' +
         'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
-        label + (count ? ' <span style="color:#ef4444;font-weight:600;">' + count + '</span>' : '') + '</span>';
+        label + (count ? ' <span style="color:var(--text);font-weight:600;">' + count + '</span>' : '') + '</span>';
     };
-    if (!iterations && !searches && !posted && !failed && !reasons.length) {
-      return '<span style="color:var(--muted);font-size:12px;">no iterations</span>';
-    }
     const tooltip = 'iterations: ' + iterations +
       ' / searches: ' + searches +
       ' / raw API results: ' + raw +
@@ -5701,12 +5689,12 @@ function renderResult(run) {
       ' / posted: ' + posted;
     return (
       '<span title="' + tooltip.replace(/"/g, '&quot;') + '" style="display:inline-block;">' +
-        pill('iterations', iterations, 'var(--text)') +
-        pill('searches', searches, 'var(--text)') +
+        pill('iterations', iterations, iterations > 0 ? 'var(--text)' : 'var(--muted)') +
+        pill('searches', searches, searches > 0 ? 'var(--text)' : 'var(--muted)') +
         pill('raw', raw, raw > 0 ? 'var(--text)' : 'var(--muted)') +
         pill('passed', passed, passed > 0 ? '#22c55e' : 'var(--muted)') +
-        (drafted ? pill('drafted', drafted, 'var(--text)') : '') +
-        (posted ? pill('posted', posted, '#22c55e') : '') +
+        pill('drafted', drafted, drafted > 0 ? 'var(--text)' : 'var(--muted)') +
+        pill('posted', posted, posted > 0 ? '#22c55e' : 'var(--muted)') +
         renderFailedPill() +
       '</span>'
     );
@@ -5742,7 +5730,7 @@ function renderResult(run) {
         : 'failed';
       return '<span title="' + tooltip.replace(/"/g, '&quot;') + '" ' +
         'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
-        label + ' <span style="color:#ef4444;font-weight:600;">' + failed + '</span></span>';
+        label + ' <span style="color:var(--text);font-weight:600;">' + failed + '</span></span>';
     };
     if (!processed && !pending && !failed) {
       return '<span style="color:var(--muted);font-size:12px;">queue empty</span>';
@@ -5819,7 +5807,7 @@ function renderResult(run) {
     const count = failed || (reasons[0] ? reasons[0].count : 0);
     return '<span title="' + tooltip.replace(/"/g, '&quot;') + '" ' +
       'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
-      label + (count ? ' <span style="color:#ef4444;font-weight:600;">' + count + '</span>' : '') + '</span>';
+      label + (count ? ' <span style="color:var(--text);font-weight:600;">' + count + '</span>' : '') + '</span>';
   };
   // Discovery counters (Twitter cycle today, LinkedIn next): condense the
   // queries/duds/tweets_pulled/candidates/above_floor breakdown into a single
@@ -5852,7 +5840,7 @@ function renderResult(run) {
     const visStr = visParts.join('\u2192');
     return '<span title="' + tip.replace(/"/g, '&quot;') + '" ' +
       'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
-      'scan <span style="color:#a78bfa;font-weight:600;">' + visStr + '</span></span>';
+      'scan <span style="color:var(--text);font-weight:600;">' + visStr + '</span></span>';
   };
   if (!posted && !skipped && !failed && !repliesRefreshed && !salvaged && !reasons.length
       && !Object.keys(discover).length) {
