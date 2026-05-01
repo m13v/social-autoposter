@@ -22,41 +22,16 @@
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-reddit-threads-stderr.log</string>
 	<key>StandardOutPath</key>
 	<string>/Users/matthewdi/social-autoposter/skill/logs/launchd-reddit-threads-stdout.log</string>
+	<!--
+	  4 fires per local day, aligned with twitter-threads (8/12/17/22) so the
+	  dashboard "Post Threads" row shows one unified cadence across platforms.
+	  Offset to :13 to avoid colliding with twitter-threads (:47).
+	-->
 	<key>StartCalendarInterval</key>
 	<array>
 		<dict>
 			<key>Hour</key>
-			<integer>0</integer>
-			<key>Minute</key>
-			<integer>13</integer>
-		</dict>
-		<dict>
-			<key>Hour</key>
-			<integer>2</integer>
-			<key>Minute</key>
-			<integer>13</integer>
-		</dict>
-		<dict>
-			<key>Hour</key>
-			<integer>4</integer>
-			<key>Minute</key>
-			<integer>13</integer>
-		</dict>
-		<dict>
-			<key>Hour</key>
-			<integer>6</integer>
-			<key>Minute</key>
-			<integer>13</integer>
-		</dict>
-		<dict>
-			<key>Hour</key>
 			<integer>8</integer>
-			<key>Minute</key>
-			<integer>13</integer>
-		</dict>
-		<dict>
-			<key>Hour</key>
-			<integer>10</integer>
 			<key>Minute</key>
 			<integer>13</integer>
 		</dict>
@@ -68,25 +43,7 @@
 		</dict>
 		<dict>
 			<key>Hour</key>
-			<integer>14</integer>
-			<key>Minute</key>
-			<integer>13</integer>
-		</dict>
-		<dict>
-			<key>Hour</key>
-			<integer>16</integer>
-			<key>Minute</key>
-			<integer>13</integer>
-		</dict>
-		<dict>
-			<key>Hour</key>
-			<integer>18</integer>
-			<key>Minute</key>
-			<integer>13</integer>
-		</dict>
-		<dict>
-			<key>Hour</key>
-			<integer>20</integer>
+			<integer>17</integer>
 			<key>Minute</key>
 			<integer>13</integer>
 		</dict>
