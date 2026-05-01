@@ -345,9 +345,8 @@ def build_prompt(project, config, limit, top_report, recent_comments, top_topics
     """Build prompt for Claude to search, evaluate, and draft replies (no posting)."""
     content_angle = build_content_angle(project, config)
 
-    # Prefer unified search_topics (shared across platforms); fall back to the
-    # legacy topics list for pre-migration safety.
-    topics_list = project.get("search_topics") or project.get("topics", [])
+    # Unified search_topics (post 2026-04-30 legacy field cleanup).
+    topics_list = project.get("search_topics") or []
 
     project_json = json.dumps({
         "name": project.get("name"),
