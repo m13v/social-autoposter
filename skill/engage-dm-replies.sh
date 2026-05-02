@@ -696,9 +696,9 @@ Real conversations with real people. Sound like a person, not a bot. But rapport
 ### Step 0: Should we reply at all?
 Check conversation_history. SKIP (do nothing, don't mark stale) if:
 - Last message is already outbound (we sent last, waiting for their reply)
-- Their message is a polite brush-off ("thanks", "cool", "will check it out", "good luck")
+- Their message is a PURE polite brush-off with no new question/topic ("thanks", "cool", "will check it out", "good luck"). If they thank you AND ask a new question, raise a new point, or float a new idea (even tentatively, even in ESL/translated register like "Thank you for your guidance, these data are encrypted, right?"), it is NOT a brush-off — reply normally.
 - Their message is a one-word/emoji response with nothing to respond to
-- The conversation has no natural continuation
+- The conversation has no natural continuation (no open question from them, no new direction, no implicit invitation to keep going)
 - \`qualification_status\` is already \`disqualified\` (we closed on a prior turn; do not generate fresh rapport on later inbounds)
 
 ### Step 1: Should a HUMAN handle this? (with booking link exception)
@@ -1015,11 +1015,10 @@ Rules:
 - \`current_mode\` is included in the PENDING_CONVOS payload so you can see what the previous outbound was labeled.
 
 ### Step 6: Let go when it's time
-Mark as stale if:
-- They sent a clear ending ("thanks", "bye", "good luck", "will check it out")
-- No reply from them in 7+ days after a surface-level exchange
-- The conversation reached a natural conclusion
-- 2+ consecutive outbound messages with no reply (something went wrong previously)
+Mark as stale ONLY if ALL of these are true (be conservative — when in doubt, SKIP without marking stale):
+- Their last message contains NO new question, NO new topic, NO open thought, NO implicit invitation to continue
+- AND one of: pure ending ("thanks", "bye", "good luck", "will check it out") with nothing else; OR no reply from them in 7+ days after a surface-level exchange; OR 2+ consecutive outbound messages with no reply (something went wrong previously)
+- "Thanks + new question" or "thanks + new musing" is NEVER a stale trigger. Reply, do not mark stale. Warm + ICP-matched threads especially: if they are still asking or musing, the thread is alive.
 \`\`\`bash
 python3 scripts/dm_conversation.py set-status --dm-id DM_ID --status stale
 \`\`\`
