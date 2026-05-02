@@ -182,6 +182,27 @@ EOF
         # spawns. PIPESTATUS is captured INSIDE the brace group so the
         # subshell's exit code IS claude's exit code (not tee's), giving us
         # the same exit semantics callers had before.
+        #
+        # BASH-VERSION CAVEAT: this whole pattern depends on bash putting each
+        # backgrounded job in its own process group when `set -m` is on, AND
+        # on `$!` returning the brace-group subshell's PID (which equals the
+        # new PGID). Verified on macOS bash 3.2 (the system default, 2026-05).
+        # If the system bash is ever upgraded (bash 5.x, ble.sh wrappers,
+        # `shopt -s lastpipe`, `set -o pipefail` toggles, the `inherit_errexit`
+        # option, or running under zsh-as-bash compatibility mode), re-verify
+        # the orphan sweep with /tmp/sa_pg_test.sh before assuming PGIDs still
+        # line up. Specifically check:
+        #   1. `pgrep -g $CLAUDE_PG` finds claude + grandchildren mid-run.
+        #   2. A `nohup ... &` grandchild that survives claude's exit still
+        #      shows up in pgrep -g $CLAUDE_PG until the EXIT trap fires.
+        #   3. `kill -- -$CLAUDE_PG` actually reaches reparented (PPID=1)
+        #      orphans — some shells silently strip job-control and put
+        #      everything in the parent shell's PG, which would make the
+        #      cleanup nuke the WRONG PG and either kill our own shell or
+        #      no-op while the orphan keeps running.
+        # The 2026-05-01 PID 3187 incident was the symptom we built this
+        # against; if it ever returns, this assumption breaking is the
+        # first thing to suspect.
         set -m
         { claude --session-id "$SESSION_ID" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} "$@" | tee -a "$SIDE_LOG"; exit "${PIPESTATUS[0]}"; } &
         CLAUDE_PG=$!
