@@ -4819,7 +4819,7 @@ const HTML = `<!DOCTYPE html>
   .daily-metrics-chart .axis-text { fill: var(--text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; }
   .daily-metrics-chart .series-line { fill: none; stroke-width: 1.75; stroke-linejoin: round; stroke-linecap: round; }
   .daily-metrics-chart .hover-line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0; pointer-events: none; }
-  .daily-metrics-tooltip { position: absolute; pointer-events: none; background: var(--bg-panel, #fff); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); min-width: 180px; opacity: 0; transform: translate(-50%, -100%); transition: opacity 0.08s; z-index: 5; }
+  .daily-metrics-tooltip { position: absolute; pointer-events: none; background: var(--bg-panel, #fff); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); min-width: 180px; max-width: 260px; opacity: 0; transition: opacity 0.08s; z-index: 5; left: 0; top: 0; }
   .daily-metrics-tooltip .tt-day { font-weight: 600; margin-bottom: 4px; color: var(--text); }
   .daily-metrics-tooltip .tt-row { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; color: var(--text); }
   .daily-metrics-tooltip .tt-row .swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
@@ -7501,11 +7501,35 @@ function renderDailyMetrics() {
                '<span class="val">' + escapeHtml(v.toLocaleString()) + '</span></div>';
       }).join('');
       tip.innerHTML = '<div class="tt-day">' + escapeHtml(_fmtDay(day)) + '</div>' + rows;
-      // Position the tooltip in CSS px relative to the chart container.
+      // Position the tooltip in CSS px relative to the chart container,
+      // clamped so it never overflows past the chart's left/right/top edges.
+      // The tooltip is centered horizontally on the snap line by default,
+      // and rendered above the plot area; if there's not enough room above
+      // (small padT), it flips below the hover point instead.
       const cssX = snapX / scale;
-      tip.style.left = (cssX) + 'px';
-      tip.style.top = (padT - 10) + 'px';
+      // Make tooltip measurable: clear transform so offsetWidth/Height are
+      // its natural box, not the translated rect.
+      tip.style.transform = 'none';
+      tip.style.visibility = 'hidden';
       tip.style.opacity = '1';
+      const tipW = tip.offsetWidth;
+      const tipH = tip.offsetHeight;
+      // SVG sits inside chartEl with horizontal padding (20px each side),
+      // so chartEl.clientWidth is the box we must clamp inside.
+      const cw = chartEl.clientWidth;
+      const margin = 4;
+      // Account for the SVG's left offset within chartEl: cssX is in SVG
+      // CSS-px space, but tip.style.left is relative to chartEl's padding box.
+      const svgOffsetLeft = svgEl.offsetLeft;
+      let leftPx = svgOffsetLeft + cssX - tipW / 2;
+      if (leftPx < margin) leftPx = margin;
+      if (leftPx + tipW > cw - margin) leftPx = cw - margin - tipW;
+      // Default: above the plot area. Flip below if it would clip the top.
+      let topPx = padT - 8 - tipH;
+      if (topPx < margin) topPx = padT + 16;
+      tip.style.left = leftPx + 'px';
+      tip.style.top = topPx + 'px';
+      tip.style.visibility = '';
     };
     const hide = () => { hoverLine.style.opacity = '0'; tip.style.opacity = '0'; };
     rect.addEventListener('mousemove', show);
