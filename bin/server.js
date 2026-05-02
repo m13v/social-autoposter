@@ -238,6 +238,64 @@ function pidsForLabelFromSnapshot(snap, label) {
   return pid ? [pid] : [];
 }
 
+const ACTIVE_CLAUDE_DIR = '/tmp/sa-active-claude';
+
+// Walk every active run_claude.sh sidecar, GC stale ones, and return a Map
+// keyed by every ancestor PID of the wrapper. Lookup-by-launchd-pid then
+// finds the live Claude session for that pipeline without anything in
+// run_claude.sh having to know its launchd label.
+//
+// /api/status calls this once per non-cached hit; the underlying ps -A is
+// the only added cost (a few ms). The 1.5s status cache absorbs the rest.
+function loadActiveClaudeSessionsByAncestor() {
+  const out = new Map(); // ancestor_pid -> session sidecar object
+  let entries;
+  try { entries = fs.readdirSync(ACTIVE_CLAUDE_DIR); } catch { return out; }
+  if (!entries.length) return out;
+
+  // Build PID -> PPID map. ps is the only portable API on macOS for this
+  // (no /proc). One call covers the whole tree.
+  const ppidByPid = new Map();
+  try {
+    const psOut = execSync('ps -A -o pid=,ppid=', {
+      stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000,
+    }).toString();
+    for (const line of psOut.split('\n')) {
+      const m = line.trim().match(/^(\d+)\s+(\d+)$/);
+      if (m) ppidByPid.set(parseInt(m[1], 10), parseInt(m[2], 10));
+    }
+  } catch { /* ps unavailable; sidecar lookup will still work for direct PIDs */ }
+
+  for (const f of entries) {
+    if (!f.endsWith('.json')) continue;
+    const fpath = path.join(ACTIVE_CLAUDE_DIR, f);
+    let obj;
+    try { obj = JSON.parse(fs.readFileSync(fpath, 'utf8')); } catch { continue; }
+    const wrapperPid = obj && Number(obj.wrapper_pid);
+    if (!Number.isFinite(wrapperPid) || wrapperPid <= 0) continue;
+    // GC dead sidecars: if the wrapper's PID is gone, the trap should have
+    // cleaned this up but didn't (likely SIGKILL). Remove now so /api/status
+    // doesn't keep surfacing a phantom live session.
+    try { process.kill(wrapperPid, 0); }
+    catch { try { fs.unlinkSync(fpath); } catch {} continue; }
+
+    // Index this session by every ancestor PID of the wrapper. The launchd
+    // job's PID will be one of them (typically the run-*.sh wrapper or its
+    // direct child); /api/status hands us pids[0] = that PID and the lookup
+    // resolves in O(1).
+    let pid = wrapperPid;
+    const seen = new Set();
+    let depth = 0;
+    while (pid && pid !== 1 && !seen.has(pid) && depth < 32) {
+      seen.add(pid);
+      out.set(pid, obj);
+      pid = ppidByPid.get(pid);
+      depth++;
+    }
+  }
+  return out;
+}
+
 function lastLogFromSnapshot(snap, job) {
   const logPrefix = job.logPrefix;
   const matches = snap.logFiles.filter(f => {
@@ -2051,6 +2109,21 @@ async function handleApi(req, res) {
     }
     return (async () => {
     const snap = buildBatchSnapshot();
+    const activeClaudeByPid = loadActiveClaudeSessionsByAncestor();
+    const liveSessionFor = (pids) => {
+      for (const pid of pids) {
+        const obj = activeClaudeByPid.get(pid);
+        if (obj && obj.session_id) {
+          return {
+            session_id: obj.session_id,
+            script_tag: obj.script_tag || null,
+            attempt: typeof obj.attempt === 'number' ? obj.attempt : null,
+            jsonl_url: '/api/claude-jsonl/' + obj.session_id,
+          };
+        }
+      }
+      return null;
+    };
     const jobs = JOBS.map(job => {
       const plistPath = unitSrcPath(job);
       const loaded = snap.loadedLabels.has(job.label);
@@ -2077,6 +2150,7 @@ async function handleApi(req, res) {
         lastRun: lastLog.time,
         lastLogFile: lastLog.file,
         plistFile: job.plist,
+        liveSession: running ? liveSessionFor(pids) : null,
       };
     });
 
