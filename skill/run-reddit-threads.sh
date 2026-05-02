@@ -275,14 +275,37 @@ ${TOP_POSTS}
        document.querySelector('textarea[name=\"title\"]').dispatchEvent(new Event('input',{bubbles:true}));
        document.querySelector('textarea[name=\"text\"]').value = BODY;
        document.querySelector('textarea[name=\"text\"]').dispatchEvent(new Event('input',{bubbles:true}));
-   - FLAIR HELPER (if flair required): click '.flairselector-button' OR the 'add flair' button, then in the flair dialog click the appropriate .flairoption matching the post type, then click the 'Save' button. If no suitable flair, ABORT.
-   - Click the submit button. Wait 3 seconds. Capture the permalink (document.location.href after submission).
+   - FLAIR HELPER (if flair required, old.reddit verified 2026-05-01 on r/AutoHotkey).
+     OLD.REDDIT SELECTORS ARE STALE in the wild: it is NOT '.flairselector-button',
+     NOT '.flairoption', and the confirm button is NOT 'Save'. Do not rely on those.
+     Use the visible text/structure described below.
+     a. After the post body is typed, look for a group labeled around 'choose a flair'.
+        Inside it is a button whose visible text is exactly 'select' (lowercase).
+        Click that button via mcp__reddit-agent__browser_click using its ref or text='select'.
+     b. A modal opens. Header is 'select flair'. Body is a <ul> of <li> rows; each <li>
+        is a clickable flair option (cursor: pointer). There is no .flairoption class.
+        Find the <li> whose text matches the right flair (e.g. 'Meta / Discussion',
+        'Question', 'Help', 'Showcase'). Click that <li>.
+     c. The confirm button is labeled 'apply' (lowercase). Click 'apply'. Do NOT look
+        for 'Save', 'OK', 'Confirm', or 'Submit' inside the modal — they don't exist.
+     d. Verify success by re-reading the snapshot: the '(none)' placeholder next to
+        the title should be replaced by the chosen flair name (typically rendered green).
+     If the 'select' button doesn't open a modal, OR no <li> matches a sensible flair,
+     OR the 'apply' button is missing: ABORT with abort_reason='flair_ui_unexpected'
+     or 'no_suitable_flair'. Do NOT loop or retry the click more than twice — repeated
+     clicks have crashed the chrome MCP child in past runs (2026-05-01 r/AutoHotkey).
+   - Click the submit button (visible text 'submit', lowercase on old.reddit).
+     Wait 3 seconds. Capture the permalink (document.location.href after submission).
    - Close the tab.
 
 7. DO NOT touch the database. The shell wrapper handles the INSERT after you return.
    IMPORTANT: source_summary, title, body, permalink, engagement_style in your
    JSON output ARE what get logged. Make source_summary rich and grounded in
    the specific files/details you read in step 1.
+   ABORT-SAFE: if you abort AFTER drafting (e.g. flair UI broke, MCP child died,
+   submit button vanished), still return the title + body you drafted in your
+   JSON. The shell wrapper will persist them to pending_threads so the next
+   pipeline run can retry the post WITHOUT re-paying for research/drafting.
 
 8. Return your structured JSON output. Every field in the schema is required. Fill permalink with the actual URL if posted, or null if aborted.
 
