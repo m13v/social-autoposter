@@ -487,25 +487,24 @@ def _bookings_shared(bookings_conn, client_slug, days, table="cal_bookings", req
 
 
 def _dm_short_link_stats(conn, name, days):
-    """Per-project DM short-link click + booking attribution.
+    """Per-project DM short-link click attribution.
 
-    `dm_clicks`: SUM(dms.short_link_clicks) for DMs targeting this project that
-    were last touched in the window. Captures every DM click (multi-clicks
-    bumped at the resolver) that is plausibly attributable to recent activity.
-
-    Booking count is computed by callers via _dm_booking_count which needs
-    bookings_conn; kept separate to avoid requiring it here.
+    `dm_clicks`: SUM(dm_links.clicks) JOIN dms d for DMs that reference this
+    project (target_project OR membership in target_projects[]) and were last
+    touched in the window. Captures every DM click — booking, github, website,
+    or kind=other — bumped at the resolver. Multi-link, multi-turn safe.
     """
     if not name:
         return 0
     try:
         cur = conn.execute(
-            "SELECT COALESCE(SUM(short_link_clicks), 0)::int "
-            "FROM dms "
-            "WHERE COALESCE(target_project, project_name) = %s "
-            "AND short_link_code IS NOT NULL "
-            "AND COALESCE(last_message_at, discovered_at) >= NOW() - INTERVAL '" + str(int(days)) + " days'",
-            (name,),
+            "SELECT COALESCE(SUM(l.clicks), 0)::int "
+            "FROM dm_links l "
+            "JOIN dms d ON d.id = l.dm_id "
+            "WHERE (COALESCE(d.target_project, d.project_name) = %s "
+            "       OR %s = ANY(d.target_projects)) "
+            "AND COALESCE(d.last_message_at, d.discovered_at) >= NOW() - INTERVAL '" + str(int(days)) + " days'",
+            (name, name),
         )
         return int((cur.fetchone() or (0,))[0])
     except Exception as e:
