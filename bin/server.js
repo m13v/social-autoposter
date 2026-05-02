@@ -4856,7 +4856,10 @@ const HTML = `<!DOCTYPE html>
   .sa-login-card input { width: 100%; padding: 10px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--bg-subtle, #f9fafb); color: var(--text); font: inherit; margin-bottom: 10px; box-sizing: border-box; }
   .sa-login-card button { width: 100%; padding: 10px; background: #2563eb; color: #fff; border: none; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer; }
   .sa-login-card button:hover { background: #1d4ed8; }
+  .sa-login-card .sa-login-link { display: block; width: 100%; margin-top: 10px; padding: 8px; background: transparent; color: var(--text-muted, #6b7280); border: none; font: inherit; font-size: 12px; cursor: pointer; text-align: center; }
+  .sa-login-card .sa-login-link:hover { color: var(--text, #111827); background: transparent; }
   .sa-login-error { color: #dc2626; font-size: 13px; min-height: 18px; margin-top: 6px; }
+  .sa-login-info { color: #059669; font-size: 13px; min-height: 18px; margin-top: 6px; }
   body.sa-non-admin .sa-admin-only { display: none !important; }
   body.sa-cloud .sa-local-only { display: none !important; }
   body.sa-authed-pending .header, body.sa-authed-pending .tabs, body.sa-authed-pending .content { visibility: hidden; }
@@ -4887,11 +4890,14 @@ const HTML = `<!DOCTYPE html>
 <div class="sa-login-overlay" id="sa-login-overlay">
   <div class="sa-login-card">
     <h1>Sign in</h1>
-    <p id="sa-login-desc">Enter your email and we'll send you a sign-in link.</p>
+    <p id="sa-login-desc">Enter your email and password.</p>
     <form id="sa-login-form">
       <input type="email" id="sa-login-email" placeholder="Email" autocomplete="username" required>
-      <button type="submit" id="sa-login-submit">Send sign-in link</button>
+      <input type="password" id="sa-login-password" placeholder="Password" autocomplete="current-password">
+      <button type="submit" id="sa-login-submit">Sign in</button>
+      <button type="button" class="sa-login-link" id="sa-login-magic">Email me a sign-in link instead</button>
       <div class="sa-login-error" id="sa-login-error"></div>
+      <div class="sa-login-info" id="sa-login-info"></div>
     </form>
   </div>
 </div>
@@ -10900,16 +10906,21 @@ window.saStartApp = saStartApp;
   var fbAuth = firebase.auth();
   var overlay = document.getElementById('sa-login-overlay');
   var errEl = document.getElementById('sa-login-error');
+  var infoEl = document.getElementById('sa-login-info');
   var form = document.getElementById('sa-login-form');
   var descEl = document.getElementById('sa-login-desc');
   var submitBtn = document.getElementById('sa-login-submit');
+  var magicBtn = document.getElementById('sa-login-magic');
   var emailInput = document.getElementById('sa-login-email');
-  var descDefault = "Enter your email and we'll send you a sign-in link.";
+  var passwordInput = document.getElementById('sa-login-password');
+  var descDefault = 'Enter your email and password.';
 
   var actionCodeSettings = {
     url: window.location.origin + '/',
     handleCodeInApp: true
   };
+
+  function clearMessages() { errEl.textContent = ''; infoEl.textContent = ''; }
 
   // If user landed here by clicking a magic link, finish the sign-in.
   if (fbAuth.isSignInWithEmailLink(window.location.href)) {
@@ -10932,20 +10943,44 @@ window.saStartApp = saStartApp;
     });
   }
 
+  // Primary flow: email + password.
   form.addEventListener('submit', function(e) {
     e.preventDefault();
-    errEl.textContent = '';
+    clearMessages();
     var email = emailInput.value.trim();
+    var password = passwordInput.value;
     if (!email) return;
+    if (!password) {
+      errEl.textContent = 'Enter a password, or use the magic-link option below.';
+      return;
+    }
     submitBtn.disabled = true;
-    fbAuth.sendSignInLinkToEmail(email, actionCodeSettings).then(function() {
-      window.localStorage.setItem('saEmailForSignIn', email);
-      form.style.display = 'none';
-      descEl.textContent = 'Check your email for a sign-in link. You can close this tab; the link will open it back up signed in.';
-    }).catch(function(err) {
-      errEl.textContent = err.message || 'Could not send link';
+    fbAuth.signInWithEmailAndPassword(email, password).catch(function(err) {
+      errEl.textContent = (err && err.message) || 'Sign-in failed';
     }).finally(function() {
       submitBtn.disabled = false;
+    });
+  });
+
+  // Fallback: magic link.
+  magicBtn.addEventListener('click', function() {
+    clearMessages();
+    var email = emailInput.value.trim();
+    if (!email) {
+      errEl.textContent = 'Enter your email, then click the link option.';
+      return;
+    }
+    magicBtn.disabled = true;
+    fbAuth.sendSignInLinkToEmail(email, actionCodeSettings).then(function() {
+      window.localStorage.setItem('saEmailForSignIn', email);
+      passwordInput.style.display = 'none';
+      submitBtn.style.display = 'none';
+      magicBtn.style.display = 'none';
+      descEl.textContent = 'Check your email for a sign-in link. You can close this tab; the link will open it back up signed in.';
+    }).catch(function(err) {
+      errEl.textContent = (err && err.message) || 'Could not send link';
+    }).finally(function() {
+      magicBtn.disabled = false;
     });
   });
   window.saSignOut = function() {
