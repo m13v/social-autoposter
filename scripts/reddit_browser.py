@@ -481,6 +481,27 @@ def reply_to_comment(comment_permalink, text, dm_id=None):
             "auto_closed": auto_closed,
         }
 
+    # Tool-level URL wrap pass: every URL in the model's reply gets minted
+    # through dm_short_links.wrap_text so clicks attribute to this DM. Runs
+    # BEFORE campaign-suffix injection so suffixes (which are short literals,
+    # not URLs) aren't fed back through the wrapper. Refuses if any URL points
+    # at a project not in dms.target_projects[]; the engage pipeline is expected
+    # to set-target-project --append and retry.
+    minted_link_codes = []
+    if dm_id is not None:
+        from dm_short_links import wrap_text as _wrap_text  # local import: avoid import cost when dm_id is None
+        wrap_res = _wrap_text(dm_id=dm_id, text=text)
+        if not wrap_res.get("ok"):
+            return {
+                "ok": False,
+                "error": "link_wrap_failed",
+                "wrap_error": wrap_res.get("error"),
+                "needed_project": wrap_res.get("needed_project"),
+                "url": wrap_res.get("url"),
+            }
+        text = wrap_res["text"]
+        minted_link_codes = wrap_res.get("minted_codes", [])
+
     # Tool-level campaign suffix injection (mirrors send_dm), gated on dm_id.
     # The DM-replies pipeline passes dm_id and relies on this layer to
     # guarantee the suffix is delivered. The standalone reply pipeline
@@ -500,7 +521,7 @@ def reply_to_comment(comment_permalink, text, dm_id=None):
         for cid, suffix, _ in _load_active_reddit_campaigns_for_dm():
             if suffix and text.endswith(suffix):
                 applied_campaigns.append(cid)
-    _diag_msg = f"[reply_to_comment] applied_campaigns={applied_campaigns} text_len={len(text)} dm_id={dm_id}"
+    _diag_msg = f"[reply_to_comment] applied_campaigns={applied_campaigns} minted_links={minted_link_codes} text_len={len(text)} dm_id={dm_id}"
     print(_diag_msg, file=sys.stderr)
     _diag_log(_diag_msg)
 
@@ -639,7 +660,7 @@ def reply_to_comment(comment_permalink, text, dm_id=None):
             # the outbound through the canonical CLI so dm_messages.campaign_id
             # auto-attributes via the suffix-detection path. Mirrors send_dm.
             if verified and dm_id is not None:
-                _log_dm_outbound("", text, dm_id=dm_id)
+                _log_dm_outbound("", text, dm_id=dm_id, minted_codes=minted_link_codes)
 
             return {
                 "ok": True,
@@ -647,6 +668,7 @@ def reply_to_comment(comment_permalink, text, dm_id=None):
                 "comment_permalink": comment_permalink,
                 "reply_text": text,
                 "applied_campaigns": applied_campaigns,
+                "minted_link_codes": minted_link_codes,
             }
 
         finally:
@@ -1239,14 +1261,16 @@ def _load_active_reddit_campaigns_for_dm():
         return []
 
 
-def _log_dm_outbound(chat_url, content, dm_id=None):
+def _log_dm_outbound(chat_url, content, dm_id=None, minted_codes=None):
     """After a successful send, log via the canonical CLI so the suffix-
     detection path attributes the message to the active campaign.
 
     If `dm_id` is provided (preferred), skip the lookup. Otherwise fall back
     to looking up the most recent dms row by chat_url. Many production rows
     have an empty `dms.chat_url`, so the dm_id path is the reliable one.
-    Returns True if log-outbound was invoked."""
+    `minted_codes` is the list of dm_links codes minted for this outbound's
+    URLs; passed through env so log-outbound can backfill dm_links.message_id
+    after RETURNING id. Returns True if log-outbound was invoked."""
     try:
         if dm_id is None:
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1266,10 +1290,13 @@ def _log_dm_outbound(chat_url, content, dm_id=None):
                       file=sys.stderr)
                 return False
             dm_id = row["id"] if hasattr(row, "__getitem__") else row[0]
+        env = os.environ.copy()
+        if minted_codes:
+            env["WRAP_MINTED_CODES"] = ",".join(minted_codes)
         subprocess.run(
             ["python3", os.path.join(os.path.dirname(os.path.abspath(__file__)), "dm_conversation.py"),
              "log-outbound", "--dm-id", str(dm_id), "--content", content, "--verified"],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True, text=True, timeout=20, env=env,
         )
         return True
     except Exception as e:
