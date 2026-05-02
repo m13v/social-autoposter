@@ -819,17 +819,24 @@ Then decide whether to switch \`target_project\`:
 
 The qualification funnel in Step 2.5 then runs against the (possibly updated) target_project.
 
-### Step 2.5: Qualification funnel (only for DMs whose target_project has a qualifying_question)
+### Step 2.5: Qualification funnel (runs whenever target_project has a \`qualifying_question\` OR a \`must_have\` block)
 
-Goal: before we ever drop a booking link or pitch, know whether the prospect matches the project's must_have list and doesn't trigger the disqualify list. Do this as a natural conversational question, not a form.
+Goal: before we ever drop a booking link or pitch, OR before we disqualify a peer-shaped thread, know whether the prospect matches the project's must_have list and doesn't trigger the disqualify list. Do this as a natural conversational question, not a form.
 
 Pull the matched project's \`qualifying_question\`, \`must_have\`, and \`disqualify\` from the \$PROJECTS block. If the DM has no target_project (and no project_name) AND message_count < 4, skip this step entirely; Step 2 already produced a rapport reply. If message_count >= 4 and Step 2.4 couldn't assign a target_project, set \`qualification_status = disqualified\` here with a one-line reason like "no product fit after rescore" and send a short Mode A close in Step 2 — do NOT keep generating substantive rapport turn after turn.
+
+If the target project has \`must_have\` but no \`qualifying_question\` (current state for every project in config.json as of 2026-05-01), **synthesize a single, conversational qualifier from the first \`must_have\` item** and treat it identically to a configured one for status-flipping purposes. Examples:
+- Assrt must_have "engineering team or solo founder shipping a web app with real users that needs end-to-end test coverage" → ask "you maintaining e2e tests on a web app that's already in front of real users, or skipping that layer right now?"
+- Cyrano must_have "property manager or HOA board running multifamily" → ask "you running operations across multiple units, or just looking out for your own place?"
+- Generic shape: take the first must_have, strip the role label, turn it into one casual yes/no-ish question.
+Never paste the must_have list verbatim. One sentence. One question. Texting voice.
 
 Branch on \`qualification_status\` of the DM row:
 
 1. \`pending\` → we have never asked yet.
    - If fewer than 2 total messages exist, do NOT ask yet. Stay in Mode A rapport from Step 2.
-   - Otherwise fold the project's \`qualifying_question\` into the reply in a natural, one-sentence form (paraphrase it; don't paste verbatim). Never interrogate; never list multiple questions. This typically happens on the Mode B pivot turn (message 3 or 4 per Step 2's TIMELINE RULE). By the 4th total message you MUST either ask the qualifier or, if nothing in \$PROJECTS plausibly fits this prospect, set \`qualification_status = disqualified\` with a one-line reason and stop pitching.
+   - Otherwise fold the project's \`qualifying_question\` (if configured) OR a one-sentence synthesized qualifier from the first \`must_have\` item (per Step 2.5 header) into the reply in a natural, one-sentence form. Never interrogate; never list multiple questions. This typically happens on the Mode B pivot turn (message 3 or 4 per Step 2's TIMELINE RULE). By the 4th total message you MUST either ask the qualifier or, if nothing in \$PROJECTS plausibly fits this prospect AND no must_have can be turned into a qualifier, set \`qualification_status = disqualified\` with a one-line reason and stop pitching.
+   - **Peer-pattern guard**: if the conversation reads as substantive peer-to-peer technical discussion in the project's domain (engineering war stories, ops/testing/AI workflow discussion, sharing their own setup), DO NOT auto-disqualify. Peers are often buyers in disguise. Ask the qualifier first; flip to \`disqualified\` only after their *answer* makes the no-fit clear (per the narrowed triggers in Step 2's TIMELINE RULE).
    - After sending, mark status as \`asked\`:
      \`\`\`bash
      python3 scripts/dm_conversation.py set-qualification --dm-id DM_ID --status asked --notes "ASKED: short paraphrase of what we asked"
