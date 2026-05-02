@@ -232,6 +232,68 @@ ensure_browser_healthy "reddit"
 # like "SCRIPT DIED line=283 exit=1" with zero context.
 CLAUDE_TMP=$(mktemp)
 set +e
+if [ "$RETRY_MODE" = "1" ]; then
+"$REPO_DIR/scripts/run_claude.sh" "run-reddit-threads" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" -p --output-format json --json-schema "$RESULT_SCHEMA" "You are RETRYING a previously-aborted thread for the ${PROJECT} project as u/${POST_ACCOUNT}.
+
+## CRITICAL: This is a RETRY. The title and body are PRE-WRITTEN and FINAL.
+DO NOT redraft. DO NOT research. DO NOT browse the subreddit. DO NOT pick a topic.
+You are ONLY driving the browser through the submit flow with the exact strings below.
+
+## Saved draft (USE EXACTLY AS-IS)
+Subreddit: ${SUBREDDIT}
+Title: ${PENDING_TITLE}
+
+Body:
+${PENDING_BODY}
+
+Topic angle (for log purposes only): ${PENDING_TOPIC}
+Engagement style (for log purposes only): ${PENDING_STYLE}
+Source summary (for log purposes only): ${PENDING_SOURCE}
+Flair target (if known from prior attempt): ${PENDING_FLAIR}
+
+## Workflow
+
+1. Navigate to https://old.reddit.com/${SUBREDDIT}/submit?selftext=true via mcp__reddit-agent__browser_navigate.
+
+2. Fill the title and body using the exact saved strings above. If the locator hits the
+   md-container wrapper div, fall back to browser_evaluate:
+     document.querySelector('textarea[name=\"title\"]').value = TITLE;
+     document.querySelector('textarea[name=\"title\"]').dispatchEvent(new Event('input',{bubbles:true}));
+     document.querySelector('textarea[name=\"text\"]').value = BODY;
+     document.querySelector('textarea[name=\"text\"]').dispatchEvent(new Event('input',{bubbles:true}));
+
+3. FLAIR HELPER (if flair required, old.reddit verified 2026-05-01 on r/AutoHotkey).
+   OLD.REDDIT SELECTORS ARE STALE in the wild: it is NOT '.flairselector-button',
+   NOT '.flairoption', and the confirm button is NOT 'Save'. Do not rely on those.
+   Use the visible text/structure described below.
+   a. Look for a group labeled around 'choose a flair'. Inside it is a button whose
+      visible text is exactly 'select' (lowercase). Click that button.
+   b. A modal opens. Header is 'select flair'. Body is a <ul> of <li> rows; each <li>
+      is a clickable flair option. Click the <li> matching the saved flair_target above
+      (or pick a sensible match if blank, e.g. 'Meta / Discussion', 'Question', 'Help').
+   c. Confirm by clicking 'apply' (lowercase, NOT 'Save').
+   d. Verify the chosen flair name appears next to the title (replacing '(none)').
+   If the 'select' button doesn't open a modal, OR no <li> matches, OR 'apply' is
+   missing: ABORT with abort_reason='flair_ui_unexpected' or 'no_suitable_flair'.
+   Do NOT loop or retry the click more than twice.
+
+4. Click the submit button (visible text 'submit', lowercase on old.reddit). Wait 3
+   seconds. Capture the permalink (document.location.href after submission). Close the tab.
+
+5. Return structured JSON. Use the saved title, body, topic_angle, engagement_style, and
+   source_summary as-is for the log fields. Fill permalink with the actual URL if posted,
+   or null if aborted. Set rules_checked=true (they were checked in the original attempt).
+   Set subreddit_browsed=false and hot_threads_seen=[] (we're not re-doing browse work).
+   Set research_files_read=[] (we're reusing prior research). Set permanent_block=false
+   unless the submit step itself returned a forbidden/403 error.
+
+CRITICAL: NEVER use em dashes.
+CRITICAL: Use ONLY mcp__reddit-agent__* tools.
+CRITICAL: Close browser tabs after each navigation (browser_tabs action 'close').
+CRITICAL: If a browser call times out, wait 30s and retry up to 3 times.
+CRITICAL: This is a RETRY of a $4-24 sunk-cost draft. Do NOT redraft, do NOT research." > "$CLAUDE_TMP" 2>&1
+CLAUDE_RC=$?
+else
 "$REPO_DIR/scripts/run_claude.sh" "run-reddit-threads" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/reddit-agent-mcp.json" -p --output-format json --json-schema "$RESULT_SCHEMA" "You are posting an ORIGINAL thread to ${SUBREDDIT} for the ${PROJECT} project as u/${POST_ACCOUNT}.
 
 ## Config & Rules
@@ -353,6 +415,7 @@ CRITICAL: Use ONLY mcp__reddit-agent__* tools.
 CRITICAL: Close browser tabs after each navigation (browser_tabs action 'close').
 CRITICAL: If a browser call times out, wait 30s and retry up to 3 times." > "$CLAUDE_TMP" 2>&1
 CLAUDE_RC=$?
+fi  # end RETRY_MODE branch
 set -e
 CLAUDE_OUTPUT=$(cat "$CLAUDE_TMP")
 rm -f "$CLAUDE_TMP"
@@ -414,10 +477,12 @@ if [ "$PERMALINK" != "null" ] && [ "$PERMALINK" != "PARSE_ERROR" ]; then
   PROJECT_ENV="$PROJECT" \
   POST_ACCOUNT="$POST_ACCOUNT" \
   REPO_DIR="$REPO_DIR" \
+  PENDING_ID_ENV="${PENDING_ID:-}" \
   /usr/bin/python3 <<'PYEOF' 2>&1 | tee -a "$LOG_FILE" || true
 import json, os, sys
 sys.path.insert(0, os.path.join(os.environ["REPO_DIR"], "scripts"))
 import db as dbmod
+import pending_threads as pt
 
 parsed = json.loads(os.environ.get("PARSED") or "{}")
 permalink = parsed.get("permalink") or ""
@@ -428,6 +493,7 @@ style     = parsed.get("engagement_style", "") or None
 session   = os.environ.get("CLAUDE_SESSION_ID") or None
 project   = os.environ.get("PROJECT_ENV", "")
 account   = os.environ.get("POST_ACCOUNT", "")
+pending_id_str = os.environ.get("PENDING_ID_ENV", "")
 
 if not permalink or not title:
     print("[db-insert] SKIP — empty permalink or title in structured_output")
