@@ -162,13 +162,14 @@ def log_outbound(conn, dm_id, content, author=None, verified=False):
     # this in-tool before typing; LinkedIn types via MCP browser without a
     # Python pre-pass, so this is the final gate. If an unwrapped project URL
     # slips through, refuse to log — the next cycle will resurface the thread
-    # and the model retypes a wrapped version.
+    # and the model retypes a wrapped version. Catches both schemed
+    # (https://github.com/...) and bare-domain (github.com/...) references.
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from dm_short_links import _classify_url, _load_projects, _URL_RE
+        from dm_short_links import _classify_url, _load_projects, _URL_RE, _TRAILING_PUNCT
         _wrap_check_projects = _load_projects()
         for m in _URL_RE.finditer(content or ""):
-            raw_url = m.group(0).rstrip('.,;:!?)]}>\'\"')
+            raw_url = m.group(0).rstrip(_TRAILING_PUNCT)
             # Allow already-wrapped /r/<code> short links on any of our domains
             if re.search(r'/r/[a-z0-9]{4,32}(?:[/?#]|$)', raw_url, re.IGNORECASE):
                 continue
