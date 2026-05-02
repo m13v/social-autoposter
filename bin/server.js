@@ -9192,6 +9192,26 @@ function linkifyDmText(s) {
   return out;
 }
 
+// Fallback "Link sent" detector: scans outbound message bodies for any URL
+// (full https://... or bare domain.tld/path) so we still surface threads
+// where the wrap pipeline was bypassed and no dm_links row was inserted
+// (e.g. reddit_browser.py reply called without dm_id - see PR fixing the
+// "Link sent: No despite github.com/... in the body" bug). Same regex as
+// linkifyDmText, doubled backslashes because this lives inside the HTML
+// backtick template (template literal eats single backslashes).
+function dmHasOutboundUrl(messages) {
+  if (!Array.isArray(messages) || !messages.length) return false;
+  const re = /https?:\\/\\/\\S+|(?:[a-z0-9-]+\\.)+[a-z]{2,}\\/[\\w\\-./?#=&%+~:@!$,;*]+/i;
+  for (const m of messages) {
+    if (!m) continue;
+    if (m.direction !== 'outbound') continue;
+    const content = m.content ? String(m.content) : '';
+    if (!content) continue;
+    if (re.test(content)) return true;
+  }
+  return false;
+}
+
 function renderDmLastMsgCell(dm) {
   const msg = String(dm.last_msg || '');
   if (!msg) return '<span style="color:var(--text-faint);">(no messages)</span>';
@@ -9237,11 +9257,13 @@ function renderTopDms(payload) {
         return arr.includes(_topCampaign);
       })
     : projectScoped;
-  // dm_links_count from the SQL aggregate is now the authoritative "did we
-  // send a tracked link" signal (every outbound URL goes through the wrapper
-  // pipeline). The legacy regex scan over message bodies was retired when
-  // wrap-text became universal; pre-wrap rows are still surfaced via the
-  // booking_link_sent_at OR backfilled dm_links rows.
+  // "Link sent" signal is OR of three sources: (1) dm_links_count from the
+  // SQL aggregate (authoritative tracked-link signal when wrap-text fires),
+  // (2) booking_link_sent_at (legacy / backfilled rows), (3) regex scan over
+  // outbound message bodies via dmHasOutboundUrl (catches pipeline bypasses
+  // where the model called reddit_browser.py reply / twitter / linkedin
+  // without dm_id and the URL went out raw). The third path is shown as
+  // amber "Yes*" since click tracking is missing - see formatter below.
   const dirScoped = _topDmDir === 'in'
     ? campaignScoped.filter(d => d.last_dir === 'inbound')
     : (_topDmDir === 'out'
@@ -9254,7 +9276,7 @@ function renderTopDms(payload) {
     if (_topDmQual !== 'all' && (d.qualification_status || '') !== _topDmQual) return false;
     if (_topDmStatus !== 'all' && (d.conversation_status || '') !== _topDmStatus) return false;
     if (_topDmLink !== 'all') {
-      const linkSent = !!(d.booking_link_sent_at || (Number(d.dm_links_count) || 0) > 0);
+      const linkSent = !!(d.booking_link_sent_at || (Number(d.dm_links_count) || 0) > 0 || dmHasOutboundUrl(d.messages));
       if (_topDmLink === 'yes' && !linkSent) return false;
       if (_topDmLink === 'no' && linkSent) return false;
     }
@@ -9308,6 +9330,7 @@ function renderTopDms(payload) {
     booking_link_sent_at: d.booking_link_sent_at || null,
     short_link_code: d.short_link_code || '',
     dm_links_count: Number(d.dm_links_count) || 0,
+    outbound_url_detected: dmHasOutboundUrl(d.messages),
     target_projects: Array.isArray(d.target_projects) ? d.target_projects : [],
     short_link_clicks: Number(d.short_link_clicks) || 0,
     short_link_first_click_at: d.short_link_first_click_at || null,
@@ -9403,18 +9426,23 @@ function renderTopDms(payload) {
         return '<div class="dm-stat-stack">' + msgLine + clickLine + bookedLine + '</div>';
       } },
     { key: 'link_sent', label: 'Link sent', type: 'text', align: 'center', widthPct: 6,
-      accessor: r => (r.booking_link_sent_at || (Number(r.dm_links_count) || 0) > 0) ? 'yes' : 'no',
+      accessor: r => (r.booking_link_sent_at || (Number(r.dm_links_count) || 0) > 0 || r.outbound_url_detected) ? 'yes' : 'no',
       formatter: (_v, r) => {
         const linkCount = Number(r.dm_links_count) || 0;
-        const sent = !!(r.booking_link_sent_at || linkCount > 0);
-        if (!sent) return '<span style="color:var(--text-faint);">No</span>';
+        const wrapped = !!(r.booking_link_sent_at || linkCount > 0);
+        const detected = !!r.outbound_url_detected;
+        if (!wrapped && !detected) return '<span style="color:var(--text-faint);">No</span>';
         const tipParts = [];
         if (r.booking_link_sent_at) tipParts.push('booking link sent: ' + new Date(r.booking_link_sent_at).toLocaleString());
         if (linkCount > 0) tipParts.push(linkCount + ' wrapped link' + (linkCount === 1 ? '' : 's'));
         if (r.short_link_code) tipParts.push('latest: /r/' + String(r.short_link_code));
+        if (!wrapped && detected) tipParts.push('raw URL detected in outbound text (wrap pipeline bypassed - no dm_links row, click tracking missing)');
+        else if (detected && wrapped) tipParts.push('also: raw URL in outbound text');
         const tip = tipParts.join(' • ');
         const tipAttr = tip ? ' data-tooltip="' + escapeHtml(tip) + '"' : '';
-        return '<span' + tipAttr + ' style="color:var(--success);font-weight:600;">Yes</span>';
+        const label = wrapped ? 'Yes' : 'Yes*';
+        const color = wrapped ? 'var(--success)' : '#b45309';
+        return '<span' + tipAttr + ' style="color:' + color + ';font-weight:600;">' + label + '</span>';
       } },
     { key: 'interest_level', label: 'Class',    type: 'text',    align: 'left',  widthPct: 11,
       formatter: (_v, r) => dmClassBadge(r) },
