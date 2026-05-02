@@ -60,6 +60,31 @@ log "=== Twitter Cycle (batch=$BATCH_ID): $(date) ==="
 # peer cycles' Phase 2b-post under parallel-cycle contention.
 source "$REPO_DIR/skill/lock.sh"
 
+# --- Phase tracking: start the twitter_batches row + chain into lock.sh trap -
+# Per-cycle phase row (twitter_batches.current_phase + phase_started_at) is
+# read by peer cycles' Phase 0 to decide salvage timing per-phase instead of
+# the old flat 20-min wall-clock cutoff. Phase 2b-gen (SEO landing-page build)
+# legitimately runs 10-40 min and was being salvaged out from under live
+# owners under the old rule. See migration 2026-05-01_twitter_batches.sql and
+# scripts/twitter_batch_phase.py.
+#
+# Trap design: lock.sh installs `_sa_release_locks` on EXIT/INT/TERM/HUP. We
+# wrap that into `_sa_combined_exit` so a clean exit ALSO deletes our
+# twitter_batches row. SIGKILL / OOM / hard crash bypasses traps and
+# intentionally leaves the row stale — that's the salvage recovery path.
+_sa_cleanup_batch_row() {
+    if [ -n "${BATCH_ID:-}" ] && [ -n "${DATABASE_URL:-}" ]; then
+        python3 "$REPO_DIR/scripts/twitter_batch_phase.py" end "$BATCH_ID" 2>/dev/null || true
+    fi
+}
+_sa_combined_exit() {
+    _sa_cleanup_batch_row
+    _sa_release_locks
+}
+trap _sa_combined_exit EXIT INT TERM HUP
+
+python3 "$REPO_DIR/scripts/twitter_batch_phase.py" start "$BATCH_ID" --phase phase0 2>&1 | tee -a "$LOG_FILE" || true
+
 # --- Phase 0: hard-expire stale pending + salvage truly-orphaned rows --------
 # Pending rows from prior cycles fall into two buckets:
 #   - tweet_posted_at older than FRESHNESS_HOURS  -> hard-expire (lost the
