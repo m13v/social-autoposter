@@ -55,10 +55,27 @@ CONFIG_PATH = os.path.join(REPO_DIR, 'config.json')
 CODE_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789'
 CODE_LEN = 8
 
-# Match http(s) URLs in arbitrary text. Greedy on the path; the trailing
-# punctuation strip below handles "...github.com/foo/bar.")
-_URL_RE = re.compile(r'https?://[^\s<>"\']+', re.IGNORECASE)
+# Match http(s) URLs AND bare-domain references with a path. The bare-domain
+# branch requires at least one path character so we don't match prose like
+# "i.e." or "S.F." or version numbers. Greedy on the path; trailing punctuation
+# is stripped by the caller. Both branches are normalized through
+# _ensure_scheme() before classification.
+_URL_RE = re.compile(
+    r'https?://[^\s<>"\']+'
+    r'|'
+    r'(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}/[^\s<>"\']*',
+    re.IGNORECASE,
+)
 _TRAILING_PUNCT = '.,;:!?)]}>\'"'
+
+
+def _ensure_scheme(url: str) -> str:
+    """Prepend https:// to bare-domain URLs so urlsplit and downstream consumers
+    have a fully qualified URL. https? matches first branch of _URL_RE; the
+    bare-domain branch (everything after the alternation) lacks a scheme."""
+    if url.startswith(('http://', 'https://')):
+        return url
+    return 'https://' + url
 
 
 def _load_projects():
@@ -82,9 +99,9 @@ def _classify_url(url: str, projects: list) -> tuple[str, str | None]:
 
     Priority: booking > github > website > other. Ties within a kind go to the
     longest matching prefix so e.g. cal.com/team/mediar/fazm beats a hypothetical
-    cal.com/team/mediar/ root.
+    cal.com/team/mediar/ root. Bare-domain inputs are normalized to https:// first.
     """
-    u = url.strip()
+    u = _ensure_scheme(url.strip())
     best_booking = ('', None)
     best_github = ('', None)
     best_website = ('', None)
@@ -197,8 +214,8 @@ def _mint_one(conn, *, dm_id: int, target_url: str, projects: list, projects_by_
       {ok: False, error: "target_project_required", needed_project, url}
       {ok: False, error: "no_primary_website", dm_id}
     """
-    target_url = (target_url or '').strip()
-    if not target_url:
+    target_url = _ensure_scheme((target_url or '').strip())
+    if not target_url or target_url == 'https://':
         return {'ok': False, 'error': 'empty_url'}
 
     platform = (dm.get('platform') or 'reddit').lower()
