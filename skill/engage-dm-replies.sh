@@ -712,13 +712,9 @@ The DM row carries \`target_project\` (set at outreach time, from post or topic 
 
 If the matched project has \`booking_link_auto_share: true\` AND they just asked outright for a call/meeting/demo/scheduled time AND \`qualification_status\` is already \`qualified\` (or the prospect's own message plus the conversation+prospect profile clearly satisfy the project's \`must_have\` list and don't trigger any \`disqualify\` item):
 - Do NOT flag for human.
-- **Mint a per-DM short link FIRST**, before composing the message:
-  \`\`\`bash
-  python3 scripts/dm_short_links.py mint --dm-id DM_ID
-  \`\`\`
-  This prints a URL like \`https://aiphoneordering.com/r/76wfdgt9\` that 302s to the project's Cal.com URL with \`metadata[utm_content]=dm_DM_ID\` baked in. Use the printed URL verbatim in your reply. **Do NOT paste the raw \`booking_link\` from \$PROJECTS** — the short link is what enables click + booking attribution per DM, and the raw cal.com URL bypasses it. Mint is idempotent: if a code already exists for this DM it returns the same one, so you can re-run safely.
-- Example shape: "yeah for sure, here's a link to grab a time: <short_url_from_mint>"
-- After sending, lock the project, raise tier, mark booking sent, and finalize qualification if it wasn't already:
+- Compose the reply with the project's raw \`booking_link\` URL pasted verbatim from \$PROJECTS. The send tool wraps it transparently into \`https://<website>/r/<code>\` before typing, so click + booking attribution is automatic. \`booking_link_sent_at\` auto-stamps on first wrap. Mint is idempotent — re-runs of the same DM + same URL reuse the existing code. (For LinkedIn DMs only, the wrap happens via an explicit pre-send step in Step 4; for Reddit/Twitter the browser tools wrap in-process.)
+- Example shape: "yeah for sure, here's a link to grab a time: <booking_link from config>"
+- After sending, lock the project and raise tier (booking_link_sent_at is already stamped by the wrap pipeline; explicit mark-booking-sent below is idempotent and serves as audit-trail belt-and-suspenders):
   \`\`\`bash
   python3 scripts/dm_conversation.py set-project --dm-id DM_ID --project "EXACT_PROJECT_NAME_FROM_CONFIG"
   python3 scripts/dm_conversation.py set-target-project --dm-id DM_ID --project "EXACT_PROJECT_NAME_FROM_CONFIG"
@@ -881,12 +877,19 @@ Pick the best-fit project from \$PROJECTS using the (possibly updated) target_pr
 Good: "yeah there's this tool terminator that does that, github.com/mediar-ai/terminator - the accessibility API approach avoids the screenshot reliability issues you mentioned"
 Bad: "btw I built a tool for that, check out github.com/mediar-ai/terminator if you're curious"
 
+**Universal link wrapping**: every URL you paste — booking links, GitHub repos, blog posts, our own website pages, third-party references — is auto-wrapped by the send tool into \`https://<website>/r/<code>\` for click attribution. You paste raw URLs in your reply (the GOOD/BAD examples above show raw URLs for readability); the tool replaces them with wrapped versions before typing. **Constraint**: if you mention a URL pointing at a project not currently in \`target_projects[]\`, the send tool refuses with \`link_wrap_failed\` / \`needed_project=X\`. Before retrying, append the project to the union:
+\`\`\`bash
+python3 scripts/dm_conversation.py set-target-project --dm-id DM_ID --append --project "X"
+\`\`\`
+This is by design: any link in a reply is, by definition, a target project for that thread. The union grows; we never remove projects.
+
 When you pivot to Mode B (with or without a booking link), stamp project and tier:
 \`\`\`bash
 python3 scripts/dm_conversation.py set-project --dm-id DM_ID --project "EXACT_PROJECT_NAME_FROM_CONFIG"
+python3 scripts/dm_conversation.py set-target-project --dm-id DM_ID --project "EXACT_PROJECT_NAME_FROM_CONFIG"
 python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier 2
 \`\`\`
-\`set-tier\` auto-stamps \`first_product_mention_at = NOW()\` on first transition to tier >= 2. Soft pivots (category named, product name deferred) stay at tier 1 until the next turn; see PIVOT EXAMPLES below.
+\`set-target-project\` always extends \`target_projects[]\` (deduped) so future link wraps for this project succeed without an extra \`--append\`. \`set-tier\` auto-stamps \`first_product_mention_at = NOW()\` on first transition to tier >= 2. Soft pivots (category named, product name deferred) stay at tier 1 until the next turn; see PIVOT EXAMPLES below.
 
 ### Step 2.8: Append the booking link (Mode B only, when eligible)
 
