@@ -79,8 +79,9 @@ for p in c.get('projects', []):
     if p.get('booking_link_auto_share'):
         line += ' | booking_link_auto_share: true'
     q = p.get('qualification') or {}
-    if q.get('question'):
-        line += f\" | qualifying_question: {q['question']}\"
+    qs = q.get('questions') or ([q['question']] if q.get('question') else [])
+    if qs:
+        line += ' | qualifying_questions: [' + ' || '.join(qs) + ']'
     if q.get('must_have'):
         line += f\" | must_have: {' ; '.join(q['must_have'])}\"
     if q.get('disqualify'):
@@ -819,17 +820,24 @@ Then decide whether to switch \`target_project\`:
 
 The qualification funnel in Step 2.5 then runs against the (possibly updated) target_project.
 
-### Step 2.5: Qualification funnel (runs whenever target_project has a \`qualifying_question\` OR a \`must_have\` block)
+### Step 2.5: Qualification funnel (runs whenever target_project has \`qualifying_questions\` OR a \`must_have\` block)
 
 Goal: before we ever drop a booking link or pitch, OR before we disqualify a peer-shaped thread, know whether the prospect matches the project's must_have list and doesn't trigger the disqualify list. Do this as a natural conversational question, not a form.
 
-Pull the matched project's \`qualifying_question\`, \`must_have\`, and \`disqualify\` from the \$PROJECTS block. If the DM has no target_project (and no project_name) AND message_count < 4, skip this step entirely; Step 2 already produced a rapport reply. If message_count >= 4 and Step 2.4 couldn't assign a target_project, set \`qualification_status = disqualified\` here with a one-line reason like "no product fit after rescore" and send a short Mode A close in Step 2 — do NOT keep generating substantive rapport turn after turn.
+Pull the matched project's \`qualifying_questions\` (list of 3 example questions, see below), \`must_have\`, and \`disqualify\` from the \$PROJECTS block. If the DM has no target_project (and no project_name) AND message_count < 4, skip this step entirely; Step 2 already produced a rapport reply. If message_count >= 4 and Step 2.4 couldn't assign a target_project, set \`qualification_status = disqualified\` here with a one-line reason like "no product fit after rescore" and send a short Mode A close in Step 2 — do NOT keep generating substantive rapport turn after turn.
 
-If the target project has \`must_have\` but no \`qualifying_question\` (current state for every project in config.json as of 2026-05-01), **synthesize a single, conversational qualifier from the first \`must_have\` item** and treat it identically to a configured one for status-flipping purposes. Examples:
-- Assrt must_have "engineering team or solo founder shipping a web app with real users that needs end-to-end test coverage" → ask "you maintaining e2e tests on a web app that's already in front of real users, or skipping that layer right now?"
-- Cyrano must_have "property manager or HOA board running multifamily" → ask "you running operations across multiple units, or just looking out for your own place?"
+**\`qualifying_questions\` are SUGGESTIONS, not mandates.** Each project ships 3 example questions hitting different angles (stack/setup, scale/scope, pain/intent). Your job is to:
+1. Pick the ONE that fits this specific conversation best (e.g. they already mentioned their stack → skip the stack question and pick the scale or pain one).
+2. Paraphrase it into your own texting voice — never paste verbatim.
+3. OR, if none of the 3 fits naturally given what's been said, write a different one-sentence qualifier that probes a must_have item.
+4. OR, if asking any qualifier right now would feel forced or interrogative (e.g. you have nothing concrete to anchor it to yet), DO NOT ask. Stay in Mode A rapport. Asking is encouraged but never required on a specific turn — the only hard rule is that you must have asked at least once before flipping to \`disqualified\`.
+
+If the target project has \`must_have\` but the \`qualifying_questions\` list is missing or empty, synthesize one from the first \`must_have\` item:
+- Assrt must_have "engineering team or solo founder shipping a web app with real users that needs end-to-end test coverage" → "you maintaining e2e tests on a web app that's already in front of real users, or skipping that layer right now?"
+- Cyrano must_have "property manager or HOA board running multifamily" → "you running operations across multiple units, or just looking out for your own place?"
 - Generic shape: take the first must_have, strip the role label, turn it into one casual yes/no-ish question.
-Never paste the must_have list verbatim. One sentence. One question. Texting voice.
+
+Never paste anything verbatim. One sentence. One question. Texting voice.
 
 Branch on \`qualification_status\` of the DM row:
 
