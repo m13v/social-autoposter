@@ -2184,6 +2184,7 @@ async function handleApi(req, res) {
         lastRun: lastLog.time,
         lastLogFile: lastLog.file,
         plistFile: job.plist,
+        liveSession: running ? liveSessionFor(pids) : null,
       };
     });
     const otherJobs = [
@@ -2220,6 +2221,7 @@ async function handleApi(req, res) {
             lastRun: lastLog.time,
             lastLogFile: lastLog.file,
             plistFile: d.plist,
+            liveSession: running ? liveSessionFor(pids) : null,
           };
         }),
     ].sort((a, b) => a.name.localeCompare(b.name));
@@ -2526,6 +2528,113 @@ async function handleApi(req, res) {
     const interval = setInterval(sendNew, 5000);
     req.on('close', () => { watcher.close(); clearInterval(interval); });
     return;
+  }
+
+  // GET /api/claude-active — list every in-flight run_claude.sh wrapper.
+  // Sidecars are written to /tmp/sa-active-claude/<wrapper_pid>.json by the
+  // wrapper at the start of each claude invocation and removed by its EXIT
+  // trap; the loader GCs sidecars whose owning PID is dead (covers SIGKILL).
+  if (p === '/api/claude-active' && req.method === 'GET') {
+    let entries = [];
+    try {
+      const files = fs.readdirSync(ACTIVE_CLAUDE_DIR).filter(f => f.endsWith('.json'));
+      for (const f of files) {
+        const fpath = path.join(ACTIVE_CLAUDE_DIR, f);
+        let obj;
+        try { obj = JSON.parse(fs.readFileSync(fpath, 'utf8')); } catch { continue; }
+        const wrapperPid = obj && Number(obj.wrapper_pid);
+        if (!Number.isFinite(wrapperPid) || wrapperPid <= 0) continue;
+        try { process.kill(wrapperPid, 0); }
+        catch { try { fs.unlinkSync(fpath); } catch {} continue; }
+        entries.push({
+          session_id: obj.session_id || null,
+          script_tag: obj.script_tag || null,
+          wrapper_pid: wrapperPid,
+          started_at: obj.started_at || null,
+          attempt: typeof obj.attempt === 'number' ? obj.attempt : null,
+          platform: obj.platform || null,
+          jsonl_url: obj.session_id ? '/api/claude-jsonl/' + obj.session_id : null,
+        });
+      }
+    } catch {}
+    return json(res, { sessions: entries });
+  }
+
+  // GET /api/claude-jsonl/:session_id — serve last 200KB of the live or
+  // archived Claude transcript so investigators can tail what the model
+  // was actually doing inside a watchdog-killed phase. Resolution order:
+  //   1) live transcript at ~/.claude/projects/<encoded-cwd>/<sid>.jsonl
+  //   2) archived transcript at skill/logs/claude-sessions/<date>/*<sid>.jsonl
+  //      (written by log_claude_session.py at session end)
+  // Returns text/plain with X-SA-Transcript-* headers exposing total file
+  // size and which path was served, so a curl wrapper can poll for new
+  // bytes without a separate HEAD request.
+  const jsonlMatch = p.match(/^\/api\/claude-jsonl\/([0-9a-fA-F-]{8,})$/);
+  if (jsonlMatch && req.method === 'GET') {
+    const sid = jsonlMatch[1];
+    let target = null;
+
+    // 1. Live transcript.
+    try {
+      const projRoot = path.join(os.homedir(), '.claude', 'projects');
+      for (const sub of fs.readdirSync(projRoot)) {
+        const candidate = path.join(projRoot, sub, sid + '.jsonl');
+        if (fs.existsSync(candidate)) { target = candidate; break; }
+      }
+    } catch {}
+
+    // 2. Archived transcript (recursive scan, bounded to the archive root).
+    if (!target) {
+      try {
+        const root = path.join(DEST, 'skill', 'logs', 'claude-sessions');
+        const stack = [root];
+        let visits = 0;
+        while (stack.length && visits < 5000) {
+          visits++;
+          const d = stack.pop();
+          let names;
+          try { names = fs.readdirSync(d); } catch { continue; }
+          for (const n of names) {
+            const full = path.join(d, n);
+            let st;
+            try { st = fs.statSync(full); } catch { continue; }
+            if (st.isDirectory()) stack.push(full);
+            else if (st.isFile() && full.endsWith(sid + '.jsonl')) {
+              target = full;
+              break;
+            }
+          }
+          if (target) break;
+        }
+      } catch {}
+    }
+
+    if (!target) return json(res, { error: 'transcript not found', session_id: sid }, 404);
+
+    try {
+      const stat = fs.statSync(target);
+      // Cap returned bytes to keep the wire size predictable and avoid
+      // pulling 50MB+ orchestrator transcripts into memory. ?full=1 lifts
+      // the cap for the rare deep-investigation case.
+      const wantsFull = url.searchParams.get('full') === '1';
+      const cap = wantsFull ? stat.size : 200 * 1024;
+      const start = Math.max(0, stat.size - cap);
+      const fd = fs.openSync(target, 'r');
+      const buf = Buffer.alloc(stat.size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      fs.closeSync(fd);
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'X-SA-Transcript-Path': target,
+        'X-SA-Transcript-Total-Bytes': String(stat.size),
+        'X-SA-Transcript-Returned-Bytes': String(buf.length),
+        'X-SA-Transcript-Truncated': wantsFull || start === 0 ? 'false' : 'true',
+      });
+      res.end(buf);
+      return;
+    } catch (e) {
+      return json(res, { error: e.message, path: target }, 500);
+    }
   }
 
   // GET /api/config. In CLIENT_MODE the container has no config.json
@@ -5418,6 +5527,22 @@ function renderToggle(label, loaded) {
   '</label>';
 }
 
+// Inline "📜 live" link to the active Claude session JSONL for this job.
+// Fires only while a wrapper is running and has registered an active sidecar
+// (run_claude.sh writes /tmp/sa-active-claude/<pid>.json on each invocation
+// and the sidecar gets reaped on EXIT or the next /api/status hit). Click
+// opens the last 200KB of the transcript in a new tab — no extra UI state,
+// no SSE, no ws — so we don't have to babysit a streaming connection per
+// pipeline.
+function renderLiveLink(job) {
+  const ls = job && job.liveSession;
+  if (!ls || !ls.session_id) return '<span data-field="live"></span>';
+  const tooltip = 'Live Claude transcript' + (ls.attempt && ls.attempt > 1 ? ' (attempt ' + ls.attempt + ')' : '');
+  return '<span data-field="live">' +
+    '<a class="btn" href="' + ls.jsonl_url + '" target="_blank" rel="noopener" data-tooltip="' + tooltip + '" style="text-decoration:none;font-size:11px;padding:3px 6px;">live</a>' +
+    '</span>';
+}
+
 function renderCell(job) {
   if (!job) return '<td><span class="matrix-cell-empty">-</span></td>';
   const statusLabel = job.status === 'running' ? 'Running' : job.status === 'blocked' ? 'Blocked' : job.status === 'scheduled' ? 'Scheduled' : 'Stopped';
@@ -5427,7 +5552,7 @@ function renderCell(job) {
 
   return '<td data-job="' + job.label + '"><div class="matrix-cell">' +
     '<span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span>' +
-    '<div class="cell-actions">' + renderToggle(job.label, job.loaded) + runStopBtn + '</div>' +
+    '<div class="cell-actions">' + renderToggle(job.label, job.loaded) + runStopBtn + renderLiveLink(job) + '</div>' +
   '</div></td>';
 }
 
@@ -5505,8 +5630,11 @@ function updateCell(td, job) {
     const runStopBtn = job.running
       ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
       : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
-    const currentBtn = actions.querySelector('.btn');
+    // Find the run/stop button specifically (not the live-link <a>).
+    const currentBtn = actions.querySelector('button.btn');
     if (currentBtn) currentBtn.outerHTML = runStopBtn;
+    const liveSlot = actions.querySelector('[data-field="live"]');
+    if (liveSlot) liveSlot.outerHTML = renderLiveLink(job);
   }
 }
 
@@ -5537,7 +5665,7 @@ function renderOtherJobRow(job) {
     '</td>' +
     '<td style="color:var(--text);font-size:12px;" data-field="lastrun">' + relTime(job.lastRun) + '</td>' +
     '<td><span class="badge ' + job.status + '" data-field="status">' + statusLabel + '</span></td>' +
-    '<td><div class="cell-actions" style="justify-content:center;">' + runStopBtn + '</div></td>' +
+    '<td><div class="cell-actions" style="justify-content:center;">' + runStopBtn + renderLiveLink(job) + '</div></td>' +
   '</tr>';
 }
 
@@ -5581,8 +5709,10 @@ function updateOtherJobsInPlace(jobs) {
       const runStopBtn = job.running
         ? '<button class="btn danger" onclick="stopJob(\\'' + job.label + '\\')">Stop</button>'
         : '<button class="btn" onclick="runJob(\\'' + job.label + '\\')">Run</button>';
-      const currentBtn = actions.querySelector('.btn');
+      const currentBtn = actions.querySelector('button.btn');
       if (currentBtn) currentBtn.outerHTML = runStopBtn;
+      const liveSlot = actions.querySelector('[data-field="live"]');
+      if (liveSlot) liveSlot.outerHTML = renderLiveLink(job);
     }
   }
   return true;
