@@ -365,7 +365,8 @@ Then say '## Phase A: envelope written' and STOP.
 CRITICAL: Use ONLY mcp__linkedin-agent__* tools. NEVER click the comment
 textbox. NEVER call createComment. NEVER navigate to a post-compose flow.
 Phase B does all of that.
-CRITICAL: Hard cap of 2 search queries. Quality > quantity.
+CRITICAL: Run 4-6 search queries this run. Wider net = better odds of
+one ICP-fit hit. The rate budget can absorb it.
 CRITICAL: NEVER use em dashes anywhere.
 PROMPT_EOF
 
