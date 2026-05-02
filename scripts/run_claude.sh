@@ -68,6 +68,26 @@ fi
 # exit code through the tee.
 SIDE_LOG="$(mktemp -t sa_run_claude_stdout.XXXXXX)"
 
+# Active-session sidecar. Lets the dashboard surface a live JSONL-tail link
+# for the in-flight `claude` invocation while the phase is running, and lets
+# investigators find the right transcript when run_claude.sh gets killed by
+# the watchdog before log_claude_session.py can archive it. The file name is
+# the wrapper PID so /api/claude-active can GC stale entries by checking
+# whether the owning process is still alive.
+ACTIVE_DIR="/tmp/sa-active-claude"
+mkdir -p "$ACTIVE_DIR" 2>/dev/null || true
+ACTIVE_FILE="$ACTIVE_DIR/$$.json"
+
+# Process-group ID of the most recent claude invocation. Set by the run loop
+# below (we run claude inside a `set -m` brace group + `&` so the forked
+# subshell PID == its PGID, and claude + any grandchildren it spawns inherit
+# that PGID). Used by _sa_cleanup to nuke orphan grandchildren that survive
+# claude itself (e.g. a `find /` claude launched in the background and never
+# waited on, which on 2026-05-01 burned CPU on PID 3187 long after the
+# orchestrator exited because nothing was responsible for cleaning up after
+# claude's kids).
+CLAUDE_PG=""
+
 # After-claude cleanup: explicitly remove the hook-layer lockfile for this
 # session so the NEXT pipeline cycle doesn't see a stale lock from us. The
 # unlock hook (PostToolUse) refreshes the lock timestamp to keep it alive
@@ -77,6 +97,24 @@ SIDE_LOG="$(mktemp -t sa_run_claude_stdout.XXXXXX)"
 # 2026-05-01 14:33 $8.91 empty-envelope run.
 _sa_cleanup() {
     rm -f "$SIDE_LOG"
+    rm -f "$ACTIVE_FILE"
+
+    # Sweep orphan claude descendants. Process groups survive the parent's
+    # death (kids reparented to launchd keep their PGID), so killing
+    # `kill -- -PGID` reaches every grandchild, including ones reparented
+    # to PID 1. Done before the lockfile cleanup so any orphan still
+    # holding a browser lock dies first.
+    if [ -n "$CLAUDE_PG" ]; then
+        local survivors
+        survivors=$(pgrep -g "$CLAUDE_PG" 2>/dev/null | grep -v "^$$\$" || true)
+        if [ -n "$survivors" ]; then
+            echo "[run_claude] sweeping orphan claude descendants in pg=$CLAUDE_PG: $(echo $survivors | tr '\n' ' ')" >&2
+            kill -TERM -- -"$CLAUDE_PG" 2>/dev/null || true
+            sleep 0.3
+            kill -KILL -- -"$CLAUDE_PG" 2>/dev/null || true
+        fi
+    fi
+
     if [ -n "${SA_PIPELINE_PLATFORM:-}" ]; then
         local lockfile="$HOME/.claude/${SA_PIPELINE_PLATFORM}-agent-lock.json"
         if [ -f "$lockfile" ]; then
@@ -89,7 +127,11 @@ _sa_cleanup() {
         fi
     fi
 }
-trap _sa_cleanup EXIT
+# Cover EXIT (normal/return from script), INT (Ctrl-C from interactive),
+# TERM (watchdog SIGTERM from scripts/watchdog_hung_runs.py), and HUP
+# (controlling-tty death). SIGKILL is uncatchable; the active sidecar
+# self-GCs on read in that case.
+trap _sa_cleanup EXIT INT TERM HUP
 
 # AUP-refusal retry loop. The Claude API safety filter occasionally refuses
 # Phase A / SERP-driven prompts non-deterministically (the same prompt that
@@ -118,8 +160,34 @@ while :; do
     transient_attempt=0
     while :; do
         : > "$SIDE_LOG"
-        claude --session-id "$SESSION_ID" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} "$@" | tee -a "$SIDE_LOG"
-        RC=${PIPESTATUS[0]}
+
+        # Refresh active-session sidecar each attempt — SESSION_ID rotates on
+        # AUP retries (line ~140), so the dashboard always points at the live
+        # transcript, not the abandoned one.
+        cat > "$ACTIVE_FILE" <<EOF
+{
+  "session_id": "$SESSION_ID",
+  "script_tag": "$SCRIPT_TAG",
+  "wrapper_pid": $$,
+  "started_at": "$START",
+  "attempt": $attempt,
+  "platform": "${SA_PIPELINE_PLATFORM:-}"
+}
+EOF
+
+        # Run claude in its own process group so we can kill orphans on exit.
+        # `set -m` makes background jobs each get their own PGID == job PID;
+        # the brace-group pipeline runs in a forked subshell whose PID is the
+        # PGID, and claude inherits that PGID along with any descendants it
+        # spawns. PIPESTATUS is captured INSIDE the brace group so the
+        # subshell's exit code IS claude's exit code (not tee's), giving us
+        # the same exit semantics callers had before.
+        set -m
+        { claude --session-id "$SESSION_ID" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} "$@" | tee -a "$SIDE_LOG"; exit "${PIPESTATUS[0]}"; } &
+        CLAUDE_PG=$!
+        set +m
+        wait "$CLAUDE_PG"
+        RC=$?
         if [ "$RC" -ne 127 ]; then
             break
         fi
