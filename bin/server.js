@@ -4856,8 +4856,10 @@ const HTML = `<!DOCTYPE html>
   .sa-login-card input { width: 100%; padding: 10px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--bg-subtle, #f9fafb); color: var(--text); font: inherit; margin-bottom: 10px; box-sizing: border-box; }
   .sa-login-card button { width: 100%; padding: 10px; background: #2563eb; color: #fff; border: none; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer; }
   .sa-login-card button:hover { background: #1d4ed8; }
-  .sa-login-card .sa-login-link { display: block; width: 100%; margin-top: 10px; padding: 8px; background: transparent; color: var(--text-muted, #6b7280); border: none; font: inherit; font-size: 12px; cursor: pointer; text-align: center; }
+  .sa-login-card .sa-login-link { display: block; width: 100%; margin-top: 10px; padding: 8px; background: transparent; color: var(--text-muted, #6b7280); border: none; font: inherit; font-size: 12px; cursor: pointer; text-align: center; text-decoration: underline; }
   .sa-login-card .sa-login-link:hover { color: var(--text, #111827); background: transparent; }
+  .sa-login-card #sa-login-password-submit { background: #6b7280; margin-top: 0; }
+  .sa-login-card #sa-login-password-submit:hover { background: #4b5563; }
   .sa-login-error { color: #dc2626; font-size: 13px; min-height: 18px; margin-top: 6px; }
   .sa-login-info { color: #059669; font-size: 13px; min-height: 18px; margin-top: 6px; }
   body.sa-non-admin .sa-admin-only { display: none !important; }
@@ -4890,12 +4892,15 @@ const HTML = `<!DOCTYPE html>
 <div class="sa-login-overlay" id="sa-login-overlay">
   <div class="sa-login-card">
     <h1>Sign in</h1>
-    <p id="sa-login-desc">Enter your email and password.</p>
+    <p id="sa-login-desc">Enter your email and we'll send you a sign-in link.</p>
     <form id="sa-login-form">
       <input type="email" id="sa-login-email" placeholder="Email" autocomplete="username" required>
-      <input type="password" id="sa-login-password" placeholder="Password" autocomplete="current-password">
-      <button type="submit" id="sa-login-submit">Sign in</button>
-      <button type="button" class="sa-login-link" id="sa-login-magic">Email me a sign-in link instead</button>
+      <button type="submit" id="sa-login-submit">Email me a sign-in link</button>
+      <div id="sa-login-password-row" style="display:none">
+        <input type="password" id="sa-login-password" placeholder="Password" autocomplete="current-password">
+        <button type="button" id="sa-login-password-submit">Sign in with password</button>
+      </div>
+      <button type="button" class="sa-login-link" id="sa-login-toggle-password">Use a password instead</button>
       <div class="sa-login-error" id="sa-login-error"></div>
       <div class="sa-login-info" id="sa-login-info"></div>
     </form>
@@ -10910,10 +10915,12 @@ window.saStartApp = saStartApp;
   var form = document.getElementById('sa-login-form');
   var descEl = document.getElementById('sa-login-desc');
   var submitBtn = document.getElementById('sa-login-submit');
-  var magicBtn = document.getElementById('sa-login-magic');
+  var passwordRow = document.getElementById('sa-login-password-row');
+  var passwordSubmitBtn = document.getElementById('sa-login-password-submit');
+  var togglePasswordBtn = document.getElementById('sa-login-toggle-password');
   var emailInput = document.getElementById('sa-login-email');
   var passwordInput = document.getElementById('sa-login-password');
-  var descDefault = 'Enter your email and password.';
+  var descDefault = "Enter your email and we'll send you a sign-in link.";
 
   var actionCodeSettings = {
     url: window.location.origin + '/',
@@ -10943,44 +10950,51 @@ window.saStartApp = saStartApp;
     });
   }
 
-  // Primary flow: email + password.
+  // Primary flow: magic link (form submit).
   form.addEventListener('submit', function(e) {
     e.preventDefault();
     clearMessages();
     var email = emailInput.value.trim();
-    var password = passwordInput.value;
     if (!email) return;
-    if (!password) {
-      errEl.textContent = 'Enter a password, or use the magic-link option below.';
-      return;
-    }
     submitBtn.disabled = true;
-    fbAuth.signInWithEmailAndPassword(email, password).catch(function(err) {
-      errEl.textContent = (err && err.message) || 'Sign-in failed';
+    fbAuth.sendSignInLinkToEmail(email, actionCodeSettings).then(function() {
+      window.localStorage.setItem('saEmailForSignIn', email);
+      submitBtn.style.display = 'none';
+      passwordRow.style.display = 'none';
+      togglePasswordBtn.style.display = 'none';
+      descEl.textContent = 'Check your email for a sign-in link. You can close this tab; the link will open it back up signed in.';
+    }).catch(function(err) {
+      errEl.textContent = (err && err.message) || 'Could not send link';
     }).finally(function() {
       submitBtn.disabled = false;
     });
   });
 
-  // Fallback: magic link.
-  magicBtn.addEventListener('click', function() {
+  // Toggle: reveal password fields for users who prefer that.
+  togglePasswordBtn.addEventListener('click', function() {
+    var showing = passwordRow.style.display !== 'none';
+    if (showing) {
+      passwordRow.style.display = 'none';
+      togglePasswordBtn.textContent = 'Use a password instead';
+    } else {
+      passwordRow.style.display = '';
+      togglePasswordBtn.textContent = 'Use a sign-in link instead';
+      passwordInput.focus();
+    }
+  });
+
+  // Fallback flow: email + password.
+  passwordSubmitBtn.addEventListener('click', function() {
     clearMessages();
     var email = emailInput.value.trim();
-    if (!email) {
-      errEl.textContent = 'Enter your email, then click the link option.';
-      return;
-    }
-    magicBtn.disabled = true;
-    fbAuth.sendSignInLinkToEmail(email, actionCodeSettings).then(function() {
-      window.localStorage.setItem('saEmailForSignIn', email);
-      passwordInput.style.display = 'none';
-      submitBtn.style.display = 'none';
-      magicBtn.style.display = 'none';
-      descEl.textContent = 'Check your email for a sign-in link. You can close this tab; the link will open it back up signed in.';
-    }).catch(function(err) {
-      errEl.textContent = (err && err.message) || 'Could not send link';
+    var password = passwordInput.value;
+    if (!email) { errEl.textContent = 'Enter your email.'; return; }
+    if (!password) { errEl.textContent = 'Enter a password.'; return; }
+    passwordSubmitBtn.disabled = true;
+    fbAuth.signInWithEmailAndPassword(email, password).catch(function(err) {
+      errEl.textContent = (err && err.message) || 'Sign-in failed';
     }).finally(function() {
-      magicBtn.disabled = false;
+      passwordSubmitBtn.disabled = false;
     });
   });
   window.saSignOut = function() {
