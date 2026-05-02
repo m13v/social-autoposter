@@ -11,11 +11,14 @@
 
 set -euo pipefail
 
-# Browser-profile lock first (shared with other linkedin pipelines), then pipeline lock.
+# 2026-05-01: lock policy changed from "hold the entire run" to "hold only
+# while a Claude phase is actively driving the browser" — same pattern as
+# run-linkedin.sh. The old policy held linkedin-browser for the whole 25-45min
+# cycle, starving peer pipelines (run-linkedin, dm-replies-linkedin) and
+# defeating launchd schedules. The browser is only used inside the two
+# run_claude.sh invocations (Phase A discovery, Phase B reply). Everything
+# between (DB cleanup, pending pull, top performers, styles) is pure DB/CPU.
 source "$(dirname "$0")/lock.sh"
-acquire_lock "linkedin-browser" 3600
-ensure_browser_healthy "linkedin"
-acquire_lock "linkedin" 3600
 
 # Load secrets
 # shellcheck source=/dev/null
@@ -170,7 +173,22 @@ Print:
 
 PROMPT_EOF
 
+# Acquire linkedin-browser ONLY around the Phase A Claude run. lock.sh is
+# FIFO-queued, so a peer pipeline (run-linkedin, dm-replies-linkedin) that's
+# mid-run blocks here rather than skipping. run_claude.sh auto-exports
+# SA_PIPELINE_LOCKED=1 + SA_PIPELINE_PLATFORM so the PreToolUse hook
+# (~/.claude/hooks/linkedin-agent-lock.sh) skips the cross-session block check.
+acquire_lock "linkedin-browser" 3600
+ensure_browser_healthy "linkedin"
+
 gtimeout 1800 "$REPO_DIR/scripts/run_claude.sh" "engage-linkedin-phaseA" --strict-mcp-config --mcp-config "$MCP_CONFIG" -p "$(cat "$PHASE_A_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase A claude exited with code $?"
+
+release_lock "linkedin-browser"
+# Defense-in-depth: explicitly clear the hook-layer lockfile so the next
+# pipeline cycle's PreToolUse never sees a stale entry from us. The
+# run_claude.sh exit trap already does this in the happy path; this
+# repeat is harmless and covers SIGKILL of run_claude.sh.
+rm -f "$HOME/.claude/linkedin-agent-lock.json"
 rm -f "$PHASE_A_PROMPT"
 
 # ═══════════════════════════════════════════════════════
