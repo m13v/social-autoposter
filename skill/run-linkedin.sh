@@ -2,7 +2,7 @@
 # Social Autoposter - LinkedIn posting (Phase A discover+score, Phase B post)
 #
 # Phase A (discovery + scoring, ~$10-15 target): pick a project, consult
-#   top/dud query history, draft 6 dynamic search queries, browse the
+#   top/dud query history, draft 8 dynamic search queries, browse the
 #   LinkedIn SERPs, extract engagement metrics (reactions/comments/reposts/
 #   age/author) for every visible candidate, score serp quality, write a
 #   structured JSON envelope to a tmp file, STOP. Bash then pipes the
@@ -86,7 +86,7 @@ PHASE_A_PROMPT=$(mktemp /tmp/sa-run-linkedin-phaseA-prompt-XXXXXX)
 cat > "$PHASE_A_PROMPT" <<PROMPT_EOF
 You are the Social Autoposter LinkedIn discovery + scoring scout (Phase A).
 
-Your job: pick ONE project, draft 6 DYNAMIC search queries informed by
+Your job: pick ONE project, draft 8 DYNAMIC search queries informed by
 historical performance, browse each query's LinkedIn SERP, extract
 engagement metrics for every visible candidate post, write a structured
 JSON envelope to $PHASE_A_OUT, and STOP. Do NOT draft a comment. Do NOT
@@ -117,7 +117,7 @@ $DUD_QUERIES
 1. Pick ONE underrepresented project from the distribution that has a
    plausible content fit. Do NOT iterate through many projects.
 
-2. Draft 6 search queries for the chosen project. Each query should:
+2. Draft 8 search queries for the chosen project. Each query should:
    - Be 2-4 words (LinkedIn search hates long phrases)
    - Target practitioners, not influencers (no "expert tips", "thought
      leadership", or buzzwordy phrasing)
@@ -127,7 +127,7 @@ $DUD_QUERIES
    - Cover DIFFERENT facets / pains / personas of the ICP — not 4 reskins
      of the same query. Wider net = higher chance of one ICP-fit hit.
 
-   Run 6 queries this run. More surface area beats narrow targeting:
+   Run 8 queries this run. More surface area beats narrow targeting:
    most queries will return slop and get retired into the dud list, so the
    2-3 that survive should reach the LLM with real candidates. The
    LinkedIn rate budget (40/24h, 150/30d) accommodates this fine; rate
@@ -399,7 +399,7 @@ Then say '## Phase A: envelope written' and STOP.
 CRITICAL: Use ONLY mcp__linkedin-agent__* tools. NEVER click the comment
 textbox. NEVER call createComment. NEVER navigate to a post-compose flow.
 Phase B does all of that.
-CRITICAL: Run exactly 6 search queries this run. Not 2, not 3, not 5. Six.
+CRITICAL: Run exactly 8 search queries this run. Not 2, not 4, not 6. Eight.
 Wider net = better odds of one ICP-fit hit. The rate budget can absorb it.
 CRITICAL: NEVER use em dashes anywhere.
 PROMPT_EOF
