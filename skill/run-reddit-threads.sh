@@ -532,6 +532,15 @@ conn.commit()
 post_id = row[0]
 print(f"[db-insert] OK — inserted posts.id={post_id} for {permalink}")
 
+# If this run came from a pending_threads retry, mark the pending row posted
+# so it stops being picked up by future retry cycles.
+if pending_id_str:
+    try:
+        pt.mark_posted(pending_id=int(pending_id_str), post_id=post_id, permalink=permalink)
+        print(f"[pending] OK — pending_threads.id={pending_id_str} marked posted")
+    except Exception as e:
+        print(f"[pending] WARNING — mark_posted failed for id={pending_id_str}: {e}")
+
 # Campaign wiring: post-submit edit pattern.
 # Threads can't apply the suffix at submit time (Claude drives the browser
 # directly via MCP), so we load active campaigns AFTER insert, roll the dice,
@@ -612,6 +621,8 @@ elif [ -n "$ABORT_REASON" ] && [ "$ABORT_REASON" != "PARSE_ERROR" ]; then
     SUBREDDIT_ENV="$SUBREDDIT" \
     POST_ACCOUNT="$POST_ACCOUNT" \
     ABORT_REASON_ENV="$ABORT_REASON" \
+    PENDING_ID_ENV="${PENDING_ID:-}" \
+    RETRY_MODE_ENV="${RETRY_MODE:-0}" \
     REPO_DIR="$REPO_DIR" \
     /usr/bin/python3 <<'PYEOF' 2>&1 | tee -a "$LOG_FILE" || true
 import json, os, sys
@@ -621,32 +632,65 @@ import pending_threads as pt
 parsed = json.loads(os.environ.get("PARSED") or "{}")
 title = (parsed.get("title") or "").strip()
 body  = (parsed.get("body") or "").strip()
-if not title or not body:
-    print("[pending] SKIP — no title/body in structured_output, nothing to persist")
-    sys.exit(0)
+abort_reason = os.environ.get("ABORT_REASON_ENV", "")
+retry_mode = os.environ.get("RETRY_MODE_ENV", "0") == "1"
+existing_pid = os.environ.get("PENDING_ID_ENV") or ""
 
-pid = pt.create(
-    project=os.environ["PROJECT_ENV"],
-    subreddit=os.environ["SUBREDDIT_ENV"],
-    account=os.environ["POST_ACCOUNT"],
-    title=title,
-    body=body,
-    flair_target=parsed.get("flair_applied"),
-    engagement_style=parsed.get("engagement_style"),
-    topic_angle=parsed.get("topic_angle"),
-    source_summary=parsed.get("source_summary"),
-    claude_session_id=os.environ.get("CLAUDE_SESSION_ID") or None,
-)
-# Bump attempts + record reason so retries can see prior failures.
-pt.mark_aborted(
-    pending_id=pid,
-    abort_reason=os.environ.get("ABORT_REASON_ENV", ""),
-    abort_stage="post_attempt_1",
-)
-print(f"[pending] OK — saved draft id={pid} for retry on next thread cycle")
+if retry_mode and existing_pid:
+    # We were retrying an existing pending row. Bump its attempts; if it just
+    # crossed the abandon threshold (3), mark it abandoned so the retry loop
+    # stops picking it up.
+    pid = int(existing_pid)
+    pt.mark_aborted(
+        pending_id=pid,
+        abort_reason=abort_reason,
+        abort_stage="retry_attempt",
+    )
+    rec = pt.get(pid) or {}
+    if (rec.get("attempts") or 0) >= 3:
+        pt.abandon(pending_id=pid, reason=f"max_retries_exceeded ({abort_reason})")
+        print(f"[pending] ABANDON — id={pid} attempts={rec.get('attempts')} >= 3, no further retries")
+    else:
+        print(f"[pending] BUMP — id={pid} attempts={rec.get('attempts')} (will retry next cycle)")
+elif not title or not body:
+    print("[pending] SKIP — no title/body in structured_output, nothing to persist")
+else:
+    # Fresh-draft abort: save it for retry on next cycle.
+    pid = pt.create(
+        project=os.environ["PROJECT_ENV"],
+        subreddit=os.environ["SUBREDDIT_ENV"],
+        account=os.environ["POST_ACCOUNT"],
+        title=title,
+        body=body,
+        flair_target=parsed.get("flair_applied"),
+        engagement_style=parsed.get("engagement_style"),
+        topic_angle=parsed.get("topic_angle"),
+        source_summary=parsed.get("source_summary"),
+        claude_session_id=os.environ.get("CLAUDE_SESSION_ID") or None,
+    )
+    pt.mark_aborted(
+        pending_id=pid,
+        abort_reason=abort_reason,
+        abort_stage="post_attempt_1",
+    )
+    print(f"[pending] OK — saved draft id={pid} for retry on next thread cycle")
 PYEOF
   else
     echo "[pending] SKIP — permanent_block=true, draft not retryable on this sub" | tee -a "$LOG_FILE"
+    # If we were retrying a pending row and the sub got permanently blocked,
+    # abandon the pending row so it stops blocking the queue.
+    if [ "$RETRY_MODE" = "1" ] && [ -n "${PENDING_ID:-}" ]; then
+      PENDING_ID_ENV="$PENDING_ID" \
+      ABORT_REASON_ENV="$ABORT_REASON" \
+      REPO_DIR="$REPO_DIR" \
+      /usr/bin/python3 -c "
+import os, sys
+sys.path.insert(0, os.path.join(os.environ['REPO_DIR'], 'scripts'))
+import pending_threads as pt
+pt.abandon(pending_id=int(os.environ['PENDING_ID_ENV']), reason='permanent_block: '+os.environ.get('ABORT_REASON_ENV',''))
+print(f'[pending] ABANDON — id={os.environ[\"PENDING_ID_ENV\"]} due to permanent_block on retry')
+" 2>&1 | tee -a "$LOG_FILE" || true
+    fi
   fi
   # Auto-block path:
   #   1. PRIMARY: trust the model's permanent_block boolean from structured_output
