@@ -893,20 +893,16 @@ python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier 2
 
 ### Step 2.8: Append the booking link (Mode B only, when eligible)
 
-If all of the following are true, append a per-DM **short link** to the Mode B reply you're about to send:
+If all of the following are true, append the project's booking link to the Mode B reply you're about to send:
 - \`qualification_status = qualified\` for this DM (set in Step 2.5 or earlier)
 - The matched project has \`booking_link\` AND \`booking_link_auto_share: true\` in config
 - \`booking_link_sent_at\` is NULL (we haven't already sent it)
 - The conversation is at a natural place to propose a call (they've surfaced pain or asked for more; not just "cool"). You do NOT need them to have explicitly asked for a call; see the updated COMMITMENT GUARDRAILS in Step 2.
 
-**Mint the short link FIRST**:
-\`\`\`bash
-python3 scripts/dm_short_links.py mint --dm-id DM_ID
-\`\`\`
-This prints \`https://<website>/r/<code>\` that redirects to Cal.com with \`metadata[utm_content]=dm_DM_ID\` baked in for click + booking attribution. Use the printed URL verbatim. **Do NOT paste the raw \`booking_link\` from \$PROJECTS** — that bypasses attribution and the dashboard funnel will be blind to which DM produced the booking. Mint is idempotent.
+Paste the raw \`booking_link\` from \$PROJECTS verbatim. The send tool wraps it into \`https://<website>/r/<code>\` automatically for click + booking attribution. \`booking_link_sent_at\` auto-stamps on first wrap; the legacy \`mark-booking-sent\` call below is idempotent (audit-trail belt + suspenders).
 
 Phrase it naturally, one sentence, link embedded:
-"makes sense, if you want to see how it'd work on your setup, grab a time here: <short_url_from_mint>"
+"makes sense, if you want to see how it'd work on your setup, grab a time here: <booking_link>"
 
 After sending, stamp project + tier 3 + mark booking sent (runs in addition to the Step 2.7 set-project/set-tier; set-tier 3 supersedes tier 2):
 \`\`\`bash
@@ -916,7 +912,7 @@ python3 scripts/dm_conversation.py set-tier --dm-id DM_ID --tier 3
 python3 scripts/dm_conversation.py mark-booking-sent --dm-id DM_ID
 \`\`\`
 
-Never send the booking link twice. If \`booking_link_sent_at\` is not NULL, Step 2.8 is a no-op; let Step 2.7 handle any tool mention normally.
+Never send the booking link twice. If \`booking_link_sent_at\` is not NULL, Step 2.8 is a no-op; let Step 2.7 handle any tool mention normally. (The wrap pipeline is also idempotent — re-wrapping the same URL for the same DM returns the existing code rather than minting a new one.)
 
 ### Step 4: Send the reply
 
@@ -942,9 +938,22 @@ If CDP returns {ok:false, error:"subreddit_blocked"}, the comment is in a sub on
 If CDP returns {ok:false} with any other non-recoverable error, fall back to mcp__reddit-agent__* browser to type the reply on the post page. On the MCP fallback path, the same Step-4 suffix rule applies — if $REDDIT_CAMPAIGN_SUFFIX_LITERAL is set, append it verbatim at $REDDIT_CAMPAIGN_SAMPLE_RATE before submitting; if $REDDIT_CAMPAIGN_SUFFIX_LITERAL is empty, do nothing extra.
 
 **LinkedIn Messages** (mcp__linkedin-agent__* tools ONLY, no Python CDP, no /voyager/api/):
+
+0. **Pre-send URL wrap (REQUIRED if YOUR_REPLY_TEXT contains any URL).** LinkedIn types via MCP without a Python pre-pass, so the wrap step that reddit/twitter handle in-process must happen explicitly here:
+   \`\`\`bash
+   WRAPPED_TEXT=\$(python3 scripts/dm_short_links.py wrap-text --dm-id DM_ID --text "YOUR_REPLY_TEXT" 2>/tmp/dm_wrap_err)
+   if [ \$? -ne 0 ]; then
+     cat /tmp/dm_wrap_err >&2
+     # Common failure: target_project_required. Append the project to the union and retry:
+     #   python3 scripts/dm_conversation.py set-target-project --dm-id DM_ID --append --project "X"
+     # Then re-run the wrap-text command above.
+     exit 1
+   fi
+   \`\`\`
+   Use \$WRAPPED_TEXT (NOT YOUR_REPLY_TEXT) as the input to browser_type AND as the \`--content\` for the post-send log-outbound. If YOUR_REPLY_TEXT has no URLs, wrap-text returns it unchanged; running it is still cheap and harmless, so always run it.
 1. mcp__linkedin-agent__browser_navigate to THREAD_URL.
 2. browser_snapshot. If you see login, captcha, or checkpoint, STOP and print SESSION_INVALID. Do not attempt to re-login.
-3. Find the message input by aria-label (typically "Write a message"). Use mcp__linkedin-agent__browser_type to enter YOUR_REPLY_TEXT.
+3. Find the message input by aria-label (typically "Write a message"). Use mcp__linkedin-agent__browser_type to enter \$WRAPPED_TEXT.
 4. Click the Send button (aria-label "Send", role=button) via mcp__linkedin-agent__browser_click. Do NOT press Enter to send (Enter inserts newline in LinkedIn's contenteditable).
 5. browser_snapshot and confirm the message appears in the thread as the newest outbound bubble. If not visible, mark this convo as failed (do not retry more than once per run).
 
