@@ -32,6 +32,46 @@ def _excluded_repos_and_authors(config):
     return repos, authors
 
 
+# Auto-blocklist: any owner where >= DYNAMIC_BLOCK_THRESHOLD of our github
+# posts under that owner have been moderated (status='deleted' OR
+# deletion_detect_count > 0) within the last DYNAMIC_BLOCK_WINDOW_DAYS days.
+# Two strikes = stop posting under that owner. The cost of one extra burned
+# comment is much higher than the cost of skipping a borderline-friendly
+# repo. Tuned 2026-05-01 after the antiwork/gumroad block: deletion of #4677
+# alone should have stopped us before #4915.
+DYNAMIC_BLOCK_THRESHOLD = 2
+DYNAMIC_BLOCK_WINDOW_DAYS = 90
+
+
+def _dynamic_owner_blocklist(conn, threshold=DYNAMIC_BLOCK_THRESHOLD,
+                              days=DYNAMIC_BLOCK_WINDOW_DAYS):
+    """Return lowercased owner names with >=threshold moderated posts in the
+    last `days` days. Caller unions with static config exclusions before
+    filtering candidates."""
+    try:
+        cur = conn.execute(
+            "SELECT thread_url FROM posts "
+            "WHERE platform='github' "
+            "  AND posted_at > NOW() - INTERVAL %s "
+            "  AND (status='deleted' OR COALESCE(deletion_detect_count, 0) > 0)",
+            [f"{int(days)} days"],
+        )
+        rows = cur.fetchall()
+    except Exception:
+        return set()
+    from collections import Counter
+    from urllib.parse import urlparse
+    counts = Counter()
+    for r in rows:
+        url = r[0] if not hasattr(r, "get") else r["thread_url"]
+        if not url:
+            continue
+        parts = urlparse(url).path.strip("/").split("/")
+        if parts and parts[0]:
+            counts[parts[0].lower()] += 1
+    return {owner for owner, n in counts.items() if n >= threshold}
+
+
 def _is_excluded_repo(repo_full, excluded_repos):
     """repo_full is 'owner/name'. Match if either owner or name or full is in excluded list."""
     if not repo_full:
@@ -66,6 +106,7 @@ def cmd_search(args):
 
     dbmod.load_env()
     conn = dbmod.get_conn()
+    excluded_repos = excluded_repos | _dynamic_owner_blocklist(conn)
     cur = conn.execute(
         "SELECT thread_url FROM posts WHERE platform='github' AND thread_url IS NOT NULL"
     )
