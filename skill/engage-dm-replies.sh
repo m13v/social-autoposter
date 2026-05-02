@@ -762,7 +762,17 @@ Every reply is one of two modes. Pick the mode based on the timeline rule and Mo
 
 **TIMELINE RULE (overrides the default):**
 - Total messages 1-3 in the thread: Mode A is the default. Switch to Mode B only if the Mode B triggers in Step 2.7 are already met.
-- Total messages 4+: you MUST be in Mode B. Either mention the best-fit product naturally OR, if no project in \$PROJECTS plausibly fits this prospect, set \`qualification_status = disqualified\` per Step 2.5 with a one-line reason and stay in Mode A permanently. Auto-disqualify triggers (set disqualified at turn 4 without trying to pivot): prospect is building a competing OSS tool in the same space and is soliciting our contributions (e.g. "you can help!", shares their own roadmap for feedback); prospect is a teacher, facilitator, coach, or session-giver running their own practice or community in that domain (peer, not buyer); target_project exists in \$PROJECTS but has no \`qualification\` block in config, so Step 2.5 cannot run. Do NOT let a thread drift past 3 outbound turns of pure rapport without either pitching or disqualifying. \`scripts/dm_conversation.py log-outbound\` enforces this with a TIMELINE BLOCKED error once msg_count >= 3 and both qualification_status=pending and icp_matches=[].
+- Total messages 4+: you MUST be in Mode B. Either mention the best-fit product naturally OR, if no project in \$PROJECTS plausibly fits this prospect, set \`qualification_status = disqualified\` per Step 2.5 with a one-line reason and stay in Mode A permanently.
+
+  **Auto-disqualify triggers — narrowed.** A "peer-shaped" or "technical-discussion" thread is NOT by itself a reason to disqualify. Engineers, hobbyist OSS contributors, teachers/coaches, and community runners can ALSO be buyers; we cannot tell from rapport alone. Before flipping to \`disqualified\`, you MUST have asked at least one qualifying question per Step 2.5 (configured \`qualifying_question\` if present, otherwise a one-sentence qualifier *synthesized from the project's first \`must_have\` item*) and seen their answer. Only flip to \`disqualified\` when one of these is unambiguously true on the *answered turn*:
+  - their reply explicitly confirms a config-level \`disqualify\` item (e.g. "I work at QA Wolf", "we ship native iOS only", "I'm a student with no production app");
+  - their reply explicitly disclaims the \`must_have\` (e.g. "no, I'm not actually shipping anything", "I just teach this, I don't build anymore");
+  - they're currently shipping a competing **commercial** product in the same space and asking for our contributions/roadmap input.
+  Otherwise: stay at \`asked\` or \`answered\` and either ask one short clarifier or stay in Mode A rapport. The default for ambiguous peer-pattern threads is **ask, don't dismiss**.
+
+  If target_project exists in \$PROJECTS and has no \`qualifying_question\` AND no \`must_have\` (truly empty qualification block), only then may you set \`disqualified\` here with reason "no qualification config — cannot ask"; this should be rare.
+
+  Do NOT let a thread drift past 3 outbound turns of pure rapport without either pitching, asking the qualifier, or disqualifying *post-answer*. \`scripts/dm_conversation.py log-outbound\` enforces this with a TIMELINE BLOCKED error once msg_count >= 3 and both qualification_status=pending and icp_matches=[].
 
 Total messages = inbound + outbound count in this thread (use conversation_history length). The message you're about to send counts, so by the time you send message 4 it must be a Mode B pivot (or a Mode A rapport reply after a disqualification has been recorded).
 
