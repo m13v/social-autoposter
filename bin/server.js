@@ -3214,14 +3214,32 @@ async function handleApi(req, res) {
     if (idLookup != null) {
       whereParts.push("d.id = " + idLookup);
     }
-    // The DM subtab only shows threads where at least one real DM was
-    // actually exchanged (inbound or outbound). Rows in `dms` that exist only
-    // as public-comment artifacts (so the cross-thread history block in
-    // engage_reddit can find prior public engagement) have zero rows in
-    // dm_messages and are filtered out here. Always show them when the
-    // operator is doing an explicit id/search lookup.
+    // The DM subtab only shows threads where a REAL DM channel exists. Two
+    // ways a row can prove it's a real DM thread:
+    //   (1) we sent at least one outbound dm_message (definitive: we actually
+    //       opened the chat and typed), OR
+    //   (2) chat_url is non-null AND validates per _valid_chat_url (the
+    //       INSERT path stores only validated URLs, so non-null implies valid).
+    //
+    // The earlier "any dm_messages row" filter was too loose: agent-driven
+    // engage-dm-replies cycles sometimes fire log-inbound with content scraped
+    // from a public comment notification, creating phantom rows that have an
+    // inbound dm_message but no outbound and no chat_url. Result: ~3% of dms
+    // (75/2315 as of 2026-05-01) are public-comment artifacts polluting the
+    // DM tab. See May 2026 investigation: 24 of 75 phantoms have inbound
+    // content that exactly matches the linked public reply, with timestamps
+    // that cluster (5 inserts in the same minute) — agent-batch fingerprint.
+    //
+    // Rationale for keeping rows where chat_url IS NOT NULL even with no
+    // outbound: that's a legitimate "we know how to reach them, haven't sent
+    // yet" state surfaced by reddit_chat_sync / linkedin/x sidebar scrapes.
+    //
+    // Always show all rows when the operator is doing an id/search lookup.
     if (idLookup == null && !searchTerm) {
-      whereParts.push("EXISTS (SELECT 1 FROM dm_messages mfilter WHERE mfilter.dm_id = d.id)");
+      whereParts.push(
+        "(EXISTS (SELECT 1 FROM dm_messages mfilter WHERE mfilter.dm_id = d.id AND mfilter.direction = 'outbound') " +
+        "OR d.chat_url IS NOT NULL)"
+      );
     }
     if (searchTerm) {
       // Escape single quotes for the LIKE literal (no params used elsewhere
