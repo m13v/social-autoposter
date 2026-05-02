@@ -156,6 +156,34 @@ def log_outbound(conn, dm_id, content, author=None, verified=False):
         print(f"  This is usually a scraper misattribution. If the URL really was sent, add a sentence of context before logging.")
         return False
 
+    # Link-wrap guard (LinkedIn safety net): every URL we send through the DM
+    # pipeline must be a wrapped /r/<code> short link OR a third-party URL the
+    # classifier maps to kind='other'. reddit_browser/twitter_browser enforce
+    # this in-tool before typing; LinkedIn types via MCP browser without a
+    # Python pre-pass, so this is the final gate. If an unwrapped project URL
+    # slips through, refuse to log — the next cycle will resurface the thread
+    # and the model retypes a wrapped version.
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from dm_short_links import _classify_url, _load_projects, _URL_RE
+        _wrap_check_projects = _load_projects()
+        for m in _URL_RE.finditer(content or ""):
+            raw_url = m.group(0).rstrip('.,;:!?)]}>\'\"')
+            # Allow already-wrapped /r/<code> short links on any of our domains
+            if re.search(r'/r/[a-z0-9]{4,32}(?:[/?#]|$)', raw_url, re.IGNORECASE):
+                continue
+            kind, matched = _classify_url(raw_url, _wrap_check_projects)
+            if kind != 'other':
+                # An unwrapped URL pointing at one of our projects.
+                print(f"  LINK BLOCKED: DM #{dm_id} content contains unwrapped {kind} URL "
+                      f"({raw_url[:80]}) for project {matched!r}. Re-send via the wrap-text "
+                      f"helper (python3 scripts/dm_short_links.py wrap-text --dm-id {dm_id} "
+                      f"--text '...').")
+                return False
+    except Exception as _wrap_err:
+        # Don't block on classifier import errors; surface and continue.
+        print(f"  WARNING: link-wrap guard skipped due to error: {_wrap_err}", file=sys.stderr)
+
     # Timeline gate: the Phase D prompt requires that by the 4th message in
     # a thread, qualification_status is not 'pending' (either 'asked',
     # 'answered', 'qualified', or 'disqualified'), and Step 2.4 has rescored
@@ -194,6 +222,25 @@ def log_outbound(conn, dm_id, content, author=None, verified=False):
         RETURNING id
     """, (dm_id, author, content, claude_session_id)).fetchone()
     new_msg_id = inserted["id"] if inserted else None
+
+    # Backfill dm_links.message_id for codes the calling browser tool minted in
+    # this turn. Set via WRAP_MINTED_CODES env var (comma-separated list) by
+    # _log_dm_outbound / _log_twitter_dm_outbound. Unknown/stale codes are
+    # silently ignored — the join in the dashboard tolerates NULL message_id.
+    if new_msg_id:
+        wrap_codes = (os.environ.get("WRAP_MINTED_CODES") or "").strip()
+        if wrap_codes:
+            codes = [c.strip() for c in wrap_codes.split(",") if c.strip()]
+            if codes:
+                try:
+                    conn.execute(
+                        "UPDATE dm_links SET message_id = %s "
+                        "WHERE dm_id = %s AND code = ANY(%s) AND message_id IS NULL",
+                        (new_msg_id, dm_id, codes),
+                    )
+                except Exception as _link_err:
+                    print(f"  WARNING: dm_links.message_id backfill failed: {_link_err}",
+                          file=sys.stderr)
 
     conn.execute("""
         UPDATE dms SET last_message_at = NOW(), message_count = message_count + 1,
@@ -1150,16 +1197,46 @@ def set_mode(conn, dm_id, mode):
     print(f"  Set mode={mode} for DM #{dm_id}")
 
 
-def set_project(conn, dm_id, project):
+def set_project(conn, dm_id, project, append=False):
+    """Set the canonical project_name for the DM. With --append, also adds to
+    target_projects[] (the union of every project this thread has pursued)."""
     conn.execute("UPDATE dms SET project_name = %s WHERE id = %s", (project, dm_id))
+    if append:
+        # Idempotent append: PostgreSQL array_append returns NULL on a NULL
+        # input but target_projects has DEFAULT '{}', so a simple
+        # array_append + dedup pattern is safe.
+        conn.execute(
+            "UPDATE dms SET target_projects = ("
+            "  SELECT ARRAY(SELECT DISTINCT unnest(target_projects || ARRAY[%s::text]))"
+            "  FROM dms WHERE id = %s"
+            ") WHERE id = %s",
+            (project, dm_id, dm_id),
+        )
     conn.commit()
-    print(f"  Set project_name={project} for DM #{dm_id}")
+    extra = " (appended to target_projects)" if append else ""
+    print(f"  Set project_name={project} for DM #{dm_id}{extra}")
 
 
-def set_target_project(conn, dm_id, project):
+def set_target_project(conn, dm_id, project, append=False):
+    """Set the canonical (primary) target_project AND extend target_projects[]
+    with the new project (idempotent dedup). The wrap-tool checks against
+    target_projects[] when deciding whether a URL's project is allowed.
+
+    `append` is accepted for explicit caller intent but is a semantic no-op:
+    the union always grows, the primary is always the latest set. We never
+    remove projects from the list — once a thread has pursued a project, links
+    for that project remain wrappable even after pivoting the primary.
+    """
     conn.execute("UPDATE dms SET target_project = %s WHERE id = %s", (project, dm_id))
+    conn.execute(
+        "UPDATE dms SET target_projects = ("
+        "  SELECT ARRAY(SELECT DISTINCT unnest(target_projects || ARRAY[%s::text]))"
+        "  FROM dms WHERE id = %s"
+        ") WHERE id = %s",
+        (project, dm_id, dm_id),
+    )
     conn.commit()
-    print(f"  Set target_project={project} for DM #{dm_id}")
+    print(f"  Set target_project={project} for DM #{dm_id} (target_projects union extended)")
 
 
 def set_qualification(conn, dm_id, status, notes=None):
@@ -1345,10 +1422,15 @@ def main():
     p_proj = sub.add_parser("set-project", help="Set project_name (project we recommended)")
     p_proj.add_argument("--dm-id", type=int, required=True)
     p_proj.add_argument("--project", required=True)
+    p_proj.add_argument("--append", action="store_true",
+                         help="Also add to target_projects[] (the union of pursued projects)")
 
-    p_tproj = sub.add_parser("set-target-project", help="Set target_project (project we're pursuing)")
+    p_tproj = sub.add_parser("set-target-project",
+                              help="Set primary target_project AND extend target_projects[] (always)")
     p_tproj.add_argument("--dm-id", type=int, required=True)
     p_tproj.add_argument("--project", required=True)
+    p_tproj.add_argument("--append", action="store_true",
+                         help="Explicit caller intent (semantic no-op: union always grows)")
 
     p_qual = sub.add_parser("set-qualification", help="Set qualification_status and optional notes")
     p_qual.add_argument("--dm-id", type=int, required=True)
@@ -1476,9 +1558,9 @@ def main():
             _send_escalation_email(conn, args.dm_id, row["platform"], row["their_author"],
                                    row["human_reason"] or "(no reason stored)")
     elif args.command == "set-project":
-        set_project(conn, args.dm_id, args.project)
+        set_project(conn, args.dm_id, args.project, append=getattr(args, "append", False))
     elif args.command == "set-target-project":
-        set_target_project(conn, args.dm_id, args.project)
+        set_target_project(conn, args.dm_id, args.project, append=getattr(args, "append", False))
     elif args.command == "set-qualification":
         set_qualification(conn, args.dm_id, args.status, args.notes)
     elif args.command == "mark-booking-sent":
