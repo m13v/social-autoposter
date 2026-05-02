@@ -341,16 +341,54 @@ For LinkedIn replies - use the OAuth API first:
    python3 $REPO_DIR/scripts/linkedin_api.py reply ACTIVITY_ID "PARENT_COMMENT_URN" "YOUR REPLY TEXT"
    \`\`\`
    This returns JSON with {ok, reply_urn, permalink}. Use permalink as the reply URL.
+   On {"ok": true}: skip step 3 (browser fallback) and skip the browser-based
+   verification in step 5 below — the API success response (with reply_urn) is
+   itself authoritative. Mark replied with the permalink. Do NOT navigate the
+   browser to verify; that would burn the linkedin-browser lock for no gain.
 3. If the API call fails (e.g., token expired, comment deleted), fall back to the linkedin-agent browser:
    - Navigate to their_comment_url via mcp__linkedin-agent__browser_navigate
    - browser_snapshot to find the comment, click Reply, type, submit
    - Do NOT aggressively scroll-and-expand comments; if the comment isn't visible after a normal scroll, mark as 'skipped' with reason 'comment_not_found'
 4. If both API and browser fail, mark as 'skipped' with reason 'comment_not_found'.
 
+5. POST-SUBMIT VERIFICATION (mandatory, BROWSER-FALLBACK PATH ONLY).
+   If you posted via the OAuth API in step 2 and got {"ok": true}, SKIP this
+   block entirely — the API response is the verification. Run this block ONLY
+   when step 3's browser fallback was used.
+   5a. mcp__linkedin-agent__browser_network_requests with:
+         filter: 'normCommentsCreate|normComments|contentcreation|socialActions'
+         requestBody: true
+         static: false
+       Save response verbatim as NETWORK_RESPONSE.
+   5b. mcp__linkedin-agent__browser_take_screenshot for the toast / submit feedback.
+   5c. mcp__linkedin-agent__browser_snapshot (depth 12). Check:
+         (a) reply count under their_comment went up by at least 1
+         (b) a fresh comment by 'Matthew Diakonov' / 'You' is rendered under their_comment
+         (c) NO 'could not be created' / 'try again' / 'something went wrong' toast
+         (d) reply editor textbox cleared
+   5d. SUCCESS = all four pass. REJECTED = toast present OR count unchanged
+       OR our reply not visible in DOM.
+6. If REJECTED, do NOT call reply_db.py replied. Mark soft-blocked:
+     python3 $REPO_DIR/scripts/reply_db.py skipped ID "soft_blocked: <verbatim toast or 'quiet_fail_count_unchanged'>"
+   Then STOP this row and move to the next pending reply.
+7. If step 5 SUCCESS (or step 2 OAuth success), mark replied via Step 5 of the
+   MANDATORY reply flow above (reply_db.py replied ID "text" [url] [style] [is_recommendation]).
+
 After every 10 replies, run: python3 $REPO_DIR/scripts/reply_db.py status
 PROMPT_EOF
 
+    # Re-acquire linkedin-browser ONLY for Phase B. The lock was released after
+    # Phase A so peer pipelines could use the browser during our DB-pull /
+    # styles-prep window (~1-3s). FIFO ticket queue in lock.sh ensures
+    # fairness if a peer or parallel cycle grabbed it in the meantime.
+    acquire_lock "linkedin-browser" 3600
+    ensure_browser_healthy "linkedin"
+
     gtimeout 5400 "$REPO_DIR/scripts/run_claude.sh" "engage-linkedin-phaseB" --strict-mcp-config --mcp-config "$MCP_CONFIG" -p "$(cat "$PHASE_B_PROMPT")" 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Phase B claude exited with code $?"
+
+    release_lock "linkedin-browser"
+    # Defense-in-depth: explicit hook-lockfile cleanup; see Phase A note.
+    rm -f "$HOME/.claude/linkedin-agent-lock.json"
     rm -f "$PHASE_B_PROMPT"
 fi
 
