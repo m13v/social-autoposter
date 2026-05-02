@@ -1325,13 +1325,33 @@ def send_dm(chat_url, message, dm_id=None):
     """
     from playwright.sync_api import sync_playwright
 
+    # Tool-level URL wrap pass: every URL in the model's message gets minted
+    # through dm_short_links.wrap_text so clicks attribute to this DM. Runs
+    # BEFORE campaign-suffix injection. Refuses if any URL points at a project
+    # not in dms.target_projects[]; the pipeline must set-target-project
+    # --append before retrying.
+    minted_link_codes = []
+    if dm_id is not None:
+        from dm_short_links import wrap_text as _wrap_text
+        wrap_res = _wrap_text(dm_id=dm_id, text=message)
+        if not wrap_res.get("ok"):
+            return {
+                "ok": False,
+                "error": "link_wrap_failed",
+                "wrap_error": wrap_res.get("error"),
+                "needed_project": wrap_res.get("needed_project"),
+                "url": wrap_res.get("url"),
+            }
+        message = wrap_res["text"]
+        minted_link_codes = wrap_res.get("minted_codes", [])
+
     # Tool-level campaign suffix injection (guaranteed delivery of literal text).
     applied_campaigns = []
     for cid, suffix, sample_rate in _load_active_reddit_campaigns_for_dm():
         if random.random() < sample_rate:
             message = message + suffix
             applied_campaigns.append(cid)
-    _diag_msg = f"[send_dm] applied_campaigns={applied_campaigns} message_len={len(message)} dm_id={dm_id}"
+    _diag_msg = f"[send_dm] applied_campaigns={applied_campaigns} minted_links={minted_link_codes} message_len={len(message)} dm_id={dm_id}"
     print(_diag_msg, file=sys.stderr)
     _diag_log(_diag_msg)
 
@@ -1401,7 +1421,7 @@ def send_dm(chat_url, message, dm_id=None):
                 }""", msg_start)
 
                 if verified:
-                    _log_dm_outbound(chat_url, message, dm_id=dm_id)
+                    _log_dm_outbound(chat_url, message, dm_id=dm_id, minted_codes=minted_link_codes)
 
                 return {
                     "ok": verified,
@@ -1409,6 +1429,7 @@ def send_dm(chat_url, message, dm_id=None):
                     "verified": verified,
                     "message_sent": message,
                     "applied_campaigns": applied_campaigns,
+                    "minted_link_codes": minted_link_codes,
                     "error": None if verified else "send_unverified_no_dom_confirmation",
                 }
 
@@ -1445,7 +1466,7 @@ def send_dm(chat_url, message, dm_id=None):
 
                 page.wait_for_timeout(4000)
 
-                _log_dm_outbound(chat_url, message, dm_id=dm_id)
+                _log_dm_outbound(chat_url, message, dm_id=dm_id, minted_codes=minted_link_codes)
 
                 return {
                     "ok": True,
@@ -1453,6 +1474,7 @@ def send_dm(chat_url, message, dm_id=None):
                     "verified": True,
                     "message_sent": message,
                     "applied_campaigns": applied_campaigns,
+                    "minted_link_codes": minted_link_codes,
                 }
 
         finally:
