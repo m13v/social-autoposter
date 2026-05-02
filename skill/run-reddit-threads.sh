@@ -37,17 +37,56 @@ acquire_lock "reddit-threads" 600
 source "$REPO_DIR/skill/styles.sh"
 STYLES_BLOCK=$(generate_styles_block reddit posting)
 
-# Pick target
-TARGET_JSON=$(/usr/bin/python3 "$REPO_DIR/scripts/pick_thread_target.py" --json 2>&1) || {
-  echo "NO_ELIGIBLE_TARGET: every eligible subreddit is inside its floor window. Stopping." | tee -a "$LOG_FILE"
-  exit 0
-}
+# RETRY-FROM-PENDING (added 2026-05-01 after r/AutoHotkey MCP-crash incident):
+# Before paying for fresh research+drafting, check if a previously-aborted draft
+# is sitting in pending_threads waiting for a retry. If so, pick it up and skip
+# the research/drafting phase entirely. This reuses sunk Claude cost on prior runs.
+RETRY_PAYLOAD=$(/usr/bin/python3 <<'PYEOF' 2>/dev/null
+import sys, os, json
+sys.path.insert(0, os.path.expanduser("~/social-autoposter/scripts"))
+import pending_threads as pt
+rows = pt.list_pending(project=None)
+# Cap at 3 attempts before abandoning, so a perpetually-broken draft doesn't
+# blackhole every run.
+rows = [r for r in rows if (r.get("attempts") or 0) < 3]
+if not rows:
+    print("")
+else:
+    # Oldest first.
+    r = rows[0]
+    print(json.dumps(r))
+PYEOF
+)
 
-PROJECT=$(echo "$TARGET_JSON" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['project']['name'])")
-SUBREDDIT=$(echo "$TARGET_JSON" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['subreddit'])")
-IS_OWN=$(echo "$TARGET_JSON" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['is_own_community'])")
+if [ -n "$RETRY_PAYLOAD" ]; then
+  RETRY_MODE=1
+  PENDING_ID=$(echo "$RETRY_PAYLOAD" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+  PROJECT=$(echo "$RETRY_PAYLOAD" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['project_name'])")
+  SUBREDDIT=$(echo "$RETRY_PAYLOAD" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['subreddit'])")
+  # Pull title, body, flair from the saved draft via the helper
+  PENDING_FULL=$(/usr/bin/python3 "$REPO_DIR/scripts/pending_threads.py" get --id "$PENDING_ID")
+  PENDING_TITLE=$(echo "$PENDING_FULL" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('title',''))")
+  PENDING_BODY=$(echo "$PENDING_FULL" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('body',''))")
+  PENDING_FLAIR=$(echo "$PENDING_FULL" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('flair_target') or '')")
+  PENDING_STYLE=$(echo "$PENDING_FULL" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('engagement_style') or '')")
+  PENDING_TOPIC=$(echo "$PENDING_FULL" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('topic_angle') or '')")
+  PENDING_SOURCE=$(echo "$PENDING_FULL" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('source_summary') or '')")
+  IS_OWN="False"  # default; not critical for retry
+  echo "RETRY_MODE: pending_id=$PENDING_ID project=$PROJECT subreddit=$SUBREDDIT" | tee -a "$LOG_FILE"
+else
+  RETRY_MODE=0
+  # Pick target
+  TARGET_JSON=$(/usr/bin/python3 "$REPO_DIR/scripts/pick_thread_target.py" --json 2>&1) || {
+    echo "NO_ELIGIBLE_TARGET: every eligible subreddit is inside its floor window. Stopping." | tee -a "$LOG_FILE"
+    exit 0
+  }
 
-echo "Target: project=$PROJECT subreddit=$SUBREDDIT own_community=$IS_OWN" | tee -a "$LOG_FILE"
+  PROJECT=$(echo "$TARGET_JSON" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['project']['name'])")
+  SUBREDDIT=$(echo "$TARGET_JSON" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['subreddit'])")
+  IS_OWN=$(echo "$TARGET_JSON" | /usr/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['is_own_community'])")
+
+  echo "Target: project=$PROJECT subreddit=$SUBREDDIT own_community=$IS_OWN" | tee -a "$LOG_FILE"
+fi
 SUB_SLUG=$(echo "$SUBREDDIT" | sed 's|^r/||I')
 
 # Posting account (hardcoded for now; the only configured reddit account)
@@ -494,6 +533,55 @@ PYEOF
 elif [ -n "$ABORT_REASON" ] && [ "$ABORT_REASON" != "PARSE_ERROR" ]; then
   echo "ABORTED: $ABORT_REASON" | tee -a "$LOG_FILE"
   echo "PERMANENT_BLOCK signal from model: $PERMANENT_BLOCK" | tee -a "$LOG_FILE"
+
+  # Persist the abandoned draft to pending_threads so we don't lose the
+  # research/drafting work (the original 2026-05-01 r/AutoHotkey crash burned
+  # ~$24 because a fully-drafted post evaporated when the chrome MCP child
+  # died at the flair-click step). Skip persistence on permanent_block — that
+  # sub will never accept this post anyway.
+  if [ "$PERMANENT_BLOCK" != "1" ]; then
+    PARSED="$PARSED" \
+    CLAUDE_SESSION_ID="$CLAUDE_SESSION_ID" \
+    PROJECT_ENV="$PROJECT" \
+    SUBREDDIT_ENV="$SUBREDDIT" \
+    POST_ACCOUNT="$POST_ACCOUNT" \
+    ABORT_REASON_ENV="$ABORT_REASON" \
+    REPO_DIR="$REPO_DIR" \
+    /usr/bin/python3 <<'PYEOF' 2>&1 | tee -a "$LOG_FILE" || true
+import json, os, sys
+sys.path.insert(0, os.path.join(os.environ["REPO_DIR"], "scripts"))
+import pending_threads as pt
+
+parsed = json.loads(os.environ.get("PARSED") or "{}")
+title = (parsed.get("title") or "").strip()
+body  = (parsed.get("body") or "").strip()
+if not title or not body:
+    print("[pending] SKIP — no title/body in structured_output, nothing to persist")
+    sys.exit(0)
+
+pid = pt.create(
+    project=os.environ["PROJECT_ENV"],
+    subreddit=os.environ["SUBREDDIT_ENV"],
+    account=os.environ["POST_ACCOUNT"],
+    title=title,
+    body=body,
+    flair_target=parsed.get("flair_applied"),
+    engagement_style=parsed.get("engagement_style"),
+    topic_angle=parsed.get("topic_angle"),
+    source_summary=parsed.get("source_summary"),
+    claude_session_id=os.environ.get("CLAUDE_SESSION_ID") or None,
+)
+# Bump attempts + record reason so retries can see prior failures.
+pt.mark_aborted(
+    pending_id=pid,
+    abort_reason=os.environ.get("ABORT_REASON_ENV", ""),
+    abort_stage="post_attempt_1",
+)
+print(f"[pending] OK — saved draft id={pid} for retry on next thread cycle")
+PYEOF
+  else
+    echo "[pending] SKIP — permanent_block=true, draft not retryable on this sub" | tee -a "$LOG_FILE"
+  fi
   # Auto-block path:
   #   1. PRIMARY: trust the model's permanent_block boolean from structured_output
   #      (added 2026-04-29). If true, add to thread_blocked unconditionally.
