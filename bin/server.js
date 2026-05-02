@@ -1979,13 +1979,19 @@ async function handleApi(req, res) {
     const pool = getPool();
     if (!pool) return json(res, { error: 'no_db' }, 500);
     try {
+      // Resolver reads from the dm_links child table (multi-link, multi-turn).
+      // The dms join hands back platform + target_project for the response
+      // envelope (kept identical to the legacy shape so /r/[code] frontends
+      // don't need to change).
       const r = await pool.query(
-        `UPDATE dms SET
-            short_link_clicks = short_link_clicks + 1,
-            short_link_first_click_at = COALESCE(short_link_first_click_at, NOW()),
-            short_link_last_click_at = NOW()
-          WHERE short_link_code = $1
-          RETURNING id AS dm_id, platform, target_project, project_name, short_link_target_url AS target_url`,
+        `UPDATE dm_links l SET
+            clicks = l.clicks + 1,
+            first_click_at = COALESCE(l.first_click_at, NOW()),
+            last_click_at = NOW()
+          FROM dms d
+          WHERE l.code = $1 AND d.id = l.dm_id
+          RETURNING l.dm_id, l.target_url, l.kind,
+                    d.platform, d.target_project, d.project_name`,
         [code]
       );
       if (!r.rows.length) {
@@ -2018,6 +2024,7 @@ async function handleApi(req, res) {
         dm_id: row.dm_id,
         platform,
         project: row.target_project || row.project_name || null,
+        kind: row.kind || null,
         target_url: row.target_url,
       });
     } catch (e) {
@@ -3242,8 +3249,15 @@ async function handleApi(req, res) {
           "d.human_reason, d.flagged_at, " +
           "d.target_project, d.icp_precheck, d.icp_matches, d.qualification_status, " +
           "d.qualification_notes, d.booking_link_sent_at, " +
-          "d.short_link_code, d.short_link_clicks, " +
-          "d.short_link_first_click_at, d.short_link_last_click_at, " +
+          // dm_links aggregates replace the legacy single-link columns. Latest
+          // code (by minted_at DESC) is what we display in tooltips; total clicks
+          // and first/last timestamps roll up across every minted link for the DM.
+          "(SELECT code FROM dm_links WHERE dm_id=d.id ORDER BY minted_at DESC LIMIT 1) AS short_link_code, " +
+          "(SELECT COALESCE(SUM(clicks), 0)::int FROM dm_links WHERE dm_id=d.id) AS short_link_clicks, " +
+          "(SELECT MIN(first_click_at) FROM dm_links WHERE dm_id=d.id) AS short_link_first_click_at, " +
+          "(SELECT MAX(last_click_at)  FROM dm_links WHERE dm_id=d.id) AS short_link_last_click_at, " +
+          "(SELECT COUNT(*) FROM dm_links WHERE dm_id=d.id)::int AS dm_links_count, " +
+          "d.target_projects, " +
           "COALESCE(p_direct.project_name, p_via_reply.project_name) AS project_name, " +
           "pr.headline AS prospect_headline, pr.bio AS prospect_bio, " +
           "pr.company AS prospect_company, pr.role AS prospect_role, " +
