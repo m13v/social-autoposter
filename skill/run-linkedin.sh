@@ -242,11 +242,45 @@ $DUD_QUERIES
      Default to candidates near the top — the score already encodes
      reactions/comments/reposts/age, so the top of each list is a real
      prior. Walking past the top-3 of any query should require a clear
-     ICP-fit reason (off-target audience, wrong buyer persona, irrelevant
-     topic). Do not skip a #1 just because #4 looks "interesting".
-   - ICP fit overrides raw rank. A top-of-list student showcase is still a
-     bad pick for a Head-of-Talent ICP. But "ICP-mismatch" must be a real
-     judgment, not a vibe — name the persona mismatch in your rationale.
+     ICP-fit reason. Do not skip a #1 just because #4 looks "interesting".
+
+   - LEAN TOWARD POSTING. The bar is "would commenting here be embarrassing
+     or off-message for the project?" — NOT "is this a perfect ICP fit?"
+     A mediocre but on-topic comment costs ~$0.20. A missed real fit costs
+     the entire cycle (~$15). Asymmetric — favor the post.
+
+   - HARD-REJECT (these are the only auto-disqualifiers):
+       1. Direct competitor: the author or their company sells a product
+          that competes with the project. Name the competing product in
+          your rationale ("logistify.ai builds the same RPA-replacement
+          agent Mediar does"). Vague competitor vibes are NOT enough.
+       2. Recruiter / job-ad post: post body is "we're hiring", "open
+          role", a job description, or a careers-page link. Engaging
+          drops us into a recruiting funnel, off-message.
+       3. Off-topic content: politics, personal milestones (weddings,
+          baby announcements), unrelated industry, news commentary not
+          tied to the project's domain.
+       4. Author is m13v / Matthew Diakonov. (Already filtered earlier.)
+
+   - SOFT SIGNALS (do NOT auto-reject on these alone):
+       * Author is on a brand/company page (author_profile_url null but
+         author_name present): engageable IF the post topic is on-message
+         for the project. Brand-page comments still get seen.
+       * Adjacent persona / not the perfect ICP buyer: a freelance dev
+         posting about ops automation is adjacent to Mediar's enterprise-
+         ops ICP, not on it. Adjacent is fine if the topic resonates with
+         the project's wedge — adjacent personas often spread the message
+         to actual buyers.
+       * Lower follower count / "no-name" author: irrelevant to whether
+         we should comment. Practitioners with smaller audiences are
+         often higher-quality engagement targets than influencers.
+       * Some buzzwords / hype framing: tolerable if the underlying
+         post-topic is a real practitioner pain.
+
+   - NAME THE VERDICT EXPLICITLY in your rationale: which hard-reject
+     category fired (1/2/3/4), or "soft fit, posting." Do not write
+     "ICP mismatch" without naming which category.
+
    - One winner. Not a ranked list. Not a top-3.
    - If the winner already has a non-null activity_id (rare: only the
      embedded-share case), skip step 5a/5b/5c — go straight to step 6.
