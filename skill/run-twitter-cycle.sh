@@ -101,21 +101,33 @@ python3 "$REPO_DIR/scripts/twitter_batch_phase.py" start "$BATCH_ID" --phase pha
 #   1. pg_advisory_xact_lock(7472346) serializes Phase 0 transactions, so
 #      two cycles can't race on the salvage UPDATE.
 #
-#   2. SALVAGE_MIN_AGE_MIN guard: only salvage from batches older than this
-#      many minutes. Without this, a fresh cycle whose Phase 0 runs while a
-#      peer cycle is still in T1 sleep / Phase 2a / Phase 2b would STEAL all
-#      the peer's pending rows, breaking the peer's Phase 2a (which queries
-#      `WHERE batch_id='$BATCH_ID' AND status='pending'`). 20 min covers a
-#      normal cycle's Phase 0->2c span; only genuinely-dead batches stay
-#      pending past that.
+#   2. PHASE-AWARE BUDGET (post 2026-05-01): salvage timing is per-phase,
+#      read from the owner's twitter_batches row:
+#        phase0        ->  5 min  (just the salvage SQL)
+#        phase1        -> 20 min  (Claude scan + scrape)
+#        phase2a       -> 20 min  (5 min sleep + HTTP T1 poll)
+#        phase2b-prep  -> 15 min  (Claude reads threads + drafts)
+#        phase2b-gen   -> 60 min  (SEO landing-page build, the slow phase)
+#        phase2b-post  -> 15 min  (browser reply + log)
+#      Pre-2026-05-01 the rule was a flat 20-min wall-clock cutoff against
+#      batch_id, which salvaged live cycles whose Phase 2b-gen step (10-40
+#      min in normal operation) hadn't finished. Observed 2026-05-01: cycle
+#      16:23's candidate 7994 was salvaged into 16:53 while 16:23 was still
+#      generating the SEO page; both cycles raced on the post and the
+#      late-arriving owner logged failed=1.
+#
+#   3. LEGACY FALLBACK: rows whose batch has no twitter_batches entry (any
+#      cycle that ran before this migration, OR a cycle whose start helper
+#      failed) fall back to the original flat 20-min batch_id heuristic.
+#      Self-cleans within FRESHNESS_HOURS of migration.
 #
 # batch_id format is `twcycle-YYYYMMDD-HHMMSS` (assigned at script start
 # from `date +%Y%m%d-%H%M%S`, local time). Since the format is fixed-width
 # and lexicographically sortable, we compute the cutoff in the shell
 # (same TZ as batch_id) and do a string comparison in SQL — sidesteps the
 # Postgres session-TZ trap that would otherwise mis-interpret batch_id.
-SALVAGE_MIN_AGE_MIN=20
-SALVAGE_CUTOFF_BATCH_ID="twcycle-$(date -v-${SALVAGE_MIN_AGE_MIN}M +%Y%m%d-%H%M%S)"
+LEGACY_SALVAGE_CUTOFF_MIN=20
+LEGACY_SALVAGE_CUTOFF_BATCH_ID="twcycle-$(date -v-${LEGACY_SALVAGE_CUTOFF_MIN}M +%Y%m%d-%H%M%S)"
 PHASE0_RESULT=$(psql "$DATABASE_URL" --single-transaction -t -A -c "
 SELECT pg_advisory_xact_lock(7472346);
 WITH expired AS (
@@ -124,23 +136,47 @@ WITH expired AS (
     WHERE status='pending' AND tweet_posted_at < NOW() - INTERVAL '$FRESHNESS_HOURS hours'
     RETURNING id
 ), salvaged AS (
-    UPDATE twitter_candidates
+    UPDATE twitter_candidates tc
     SET batch_id='$BATCH_ID'
-    WHERE status='pending' AND batch_id != '$BATCH_ID'
-    AND tweet_posted_at >= NOW() - INTERVAL '$FRESHNESS_HOURS hours'
-    AND batch_id LIKE 'twcycle-%'
-    AND batch_id < '$SALVAGE_CUTOFF_BATCH_ID'
-    -- Skip threads we already posted to. score_twitter_candidates.py applies
-    -- this filter on FRESH scrapes (line 124-142), but salvage previously
-    -- bypassed it. With Bug 1 (DATABASE_URL not exported) leaving every
-    -- successful post's candidate row stuck at status='pending', salvage was
-    -- re-claiming already-posted threads and Phase 2b-post was double-firing
-    -- the browser reply (observed 2026-05-01 batches: 4 real duplicate replies
-    -- on m13v_ timeline). Belt-and-suspenders even after Bug 1 is fixed.
-    AND tweet_url NOT IN (
-        SELECT thread_url FROM posts
-        WHERE platform='twitter' AND thread_url IS NOT NULL
-    )
+    WHERE tc.status='pending'
+      AND tc.batch_id != '$BATCH_ID'
+      AND tc.batch_id LIKE 'twcycle-%'
+      AND tc.tweet_posted_at >= NOW() - INTERVAL '$FRESHNESS_HOURS hours'
+      -- Skip threads we already posted to. score_twitter_candidates.py applies
+      -- this filter on FRESH scrapes; salvage must repeat it because Bug 1
+      -- (DATABASE_URL not exported, fixed 2026-05-01) left successful posts'
+      -- candidate rows stuck at status='pending', and salvage was re-claiming
+      -- already-posted threads, double-firing browser replies (4 observed
+      -- duplicates on m13v_ timeline 2026-05-01). Belt-and-suspenders.
+      AND tc.tweet_url NOT IN (
+          SELECT thread_url FROM posts
+          WHERE platform='twitter' AND thread_url IS NOT NULL
+      )
+      AND (
+          -- Phase-aware path: owner has a twitter_batches row, use the
+          -- per-phase budget. Owner's phase_started_at is reset by every
+          -- twitter_batch_phase.py advance call.
+          EXISTS (
+              SELECT 1 FROM twitter_batches tb
+              WHERE tb.batch_id = tc.batch_id
+                AND tb.phase_started_at < NOW() - CASE tb.current_phase
+                    WHEN 'phase0'        THEN INTERVAL '5 minutes'
+                    WHEN 'phase1'        THEN INTERVAL '20 minutes'
+                    WHEN 'phase2a'       THEN INTERVAL '20 minutes'
+                    WHEN 'phase2b-prep'  THEN INTERVAL '15 minutes'
+                    WHEN 'phase2b-gen'   THEN INTERVAL '60 minutes'
+                    WHEN 'phase2b-post'  THEN INTERVAL '15 minutes'
+                    ELSE INTERVAL '20 minutes'
+                END
+          )
+          -- Legacy fallback: no batches row, use the old 20-min batch_id
+          -- string-cutoff heuristic. Self-cleans within FRESHNESS_HOURS of
+          -- migration deploy.
+          OR (
+              NOT EXISTS (SELECT 1 FROM twitter_batches tb WHERE tb.batch_id = tc.batch_id)
+              AND tc.batch_id < '$LEGACY_SALVAGE_CUTOFF_BATCH_ID'
+          )
+      )
     RETURNING id
 )
 SELECT (SELECT COUNT(*) FROM expired) || '|' || (SELECT COUNT(*) FROM salvaged);
@@ -148,7 +184,12 @@ SELECT (SELECT COUNT(*) FROM expired) || '|' || (SELECT COUNT(*) FROM salvaged);
 EXPIRED_STALE=$(echo "$PHASE0_RESULT" | cut -d'|' -f1)
 SALVAGED=$(echo "$PHASE0_RESULT" | cut -d'|' -f2)
 [ "${EXPIRED_STALE:-0}" -gt 0 ] && log "Phase 0: hard-expired $EXPIRED_STALE pending rows older than ${FRESHNESS_HOURS}h"
-[ "${SALVAGED:-0}" -gt 0 ] && log "Phase 0: salvaged $SALVAGED orphaned pending rows from dead batches (>${SALVAGE_MIN_AGE_MIN}m old) into $BATCH_ID"
+[ "${SALVAGED:-0}" -gt 0 ] && log "Phase 0: salvaged $SALVAGED orphaned pending rows (phase-aware budget) into $BATCH_ID"
+
+# Advance our own batch row from phase0 -> phase1 now that the salvage SQL
+# committed. Subsequent phase transitions are stamped right before the work
+# they cover begins.
+python3 "$REPO_DIR/scripts/twitter_batch_phase.py" advance "$BATCH_ID" --phase phase1 2>&1 | tee -a "$LOG_FILE" || true
 
 # --- Weighted project sample -------------------------------------------------
 PROJECTS_JSON=$(python3 - <<'PY'
@@ -422,6 +463,10 @@ if [ "$BATCH_COUNT" = "0" ]; then
         --cost "$_COST" --elapsed $(( $(date +%s) - RUN_START ))
     exit 0
 fi
+
+# Stamp phase2a before releasing the lock so the budget covers the entire
+# 5-min wait + HTTP poll window (phase2a budget = 20 min).
+python3 "$REPO_DIR/scripts/twitter_batch_phase.py" advance "$BATCH_ID" --phase phase2a 2>&1 | tee -a "$LOG_FILE" || true
 
 # Release the twitter-browser lock during the 5-min T1 wait + HTTP-only Phase 2a.
 # Other pipelines (engage-twitter, dm-outreach-twitter, link-edit-twitter,
