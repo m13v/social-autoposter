@@ -5944,49 +5944,79 @@ function buildSeoDetailRows(run) {
   );
 }
 
+// Stable identity for a job-history row across polls. (script, started_at)
+// is unique in practice; pid is appended as a tiebreaker for the rare case
+// where two parallel fires of the same script land in the same second.
+function _jobHistoryRowKey(r) {
+  return (r.script || '') + '|' + (r.started_at || '') + '|' + (r.pid || '');
+}
+// Render-affecting fingerprint for a row, EXCLUDING relative-time strings
+// (those refresh on their own ticker without forcing a row replacement).
+// If sig matches between polls, the existing <tr> stays in place — which
+// preserves expansion state, hover, focus, and avoids the visible flash.
+function _jobHistoryRowSig(r) {
+  const res = r.result || {};
+  return [
+    r.running ? 1 : 0,
+    r.finished_at || '',
+    r.elapsed_s || 0,
+    r.pid || '',
+    res.cost_usd || 0,
+    res.type || '',
+    res.posted || 0,
+    res.skipped || 0,
+    res.failed || 0,
+    Array.isArray(r.details) ? r.details.length : 0,
+    r.job_label || r.script || '',
+    r.platform || '',
+  ].join('|');
+}
+function _buildJobHistoryRowGroup(r, idx) {
+  const cost = r.result && r.result.cost_usd;
+  const costCell = cost ? fmtCost(cost) : '<span style="color:var(--muted);">—</span>';
+  const hasDetails = Array.isArray(r.details) && r.details.length;
+  const caret = hasDetails
+    ? '<span class="sa-job-caret" style="display:inline-block;width:12px;color:var(--muted);cursor:pointer;user-select:none;transition:transform 0.15s ease;">&#9656;</span> '
+    : '<span style="display:inline-block;width:12px;"></span> ';
+  const rowKey = escapeHtml(_jobHistoryRowKey(r));
+  const rowSig = escapeHtml(_jobHistoryRowSig(r));
+  if (r.running) {
+    // In-progress row: animated badge in the Result column, live-ticking
+    // elapsed in the Finished column. data-started-ms drives the ticker.
+    const startedMs = r.started_at ? new Date(r.started_at).getTime() : Date.now();
+    return (
+      '<tr class="sa-job-row sa-job-row-running" data-run-idx="' + idx + '" data-row-key="' + rowKey + '" data-row-sig="' + rowSig + '" data-started-ms="' + startedMs + '">' +
+        '<td style="text-align:left;padding-left:16px;">' + caret +
+          (r.job_label || r.script) +
+          (r.pid ? ' <span style="color:var(--muted);font-size:11px;">PID ' + r.pid + '</span>' : '') +
+        '</td>' +
+        '<td>' + (r.platform || '<span style="color:var(--muted);">—</span>') + '</td>' +
+        '<td>' + fmtLocalTime(r.started_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtRelTime(r.started_at) + ')</span></td>' +
+        '<td><span class="sa-running-elapsed" style="color:var(--muted);font-size:12px;">' + fmtElapsed(r.elapsed_s) + '</span></td>' +
+        '<td style="text-align:left;"><span class="badge running">Running…</span></td>' +
+        '<td style="color:var(--muted);font-size:12px;">—</td>' +
+      '</tr>'
+    );
+  }
+  const rowClass = hasDetails ? 'sa-job-row sa-job-row-expandable' : 'sa-job-row';
+  const main = (
+    '<tr class="' + rowClass + '" data-run-idx="' + idx + '" data-row-key="' + rowKey + '" data-row-sig="' + rowSig + '"' +
+      (hasDetails ? ' style="cursor:pointer;"' : '') + '>' +
+      '<td style="text-align:left;padding-left:16px;">' + caret + (r.job_label || r.script) + '</td>' +
+      '<td>' + (r.platform || '<span style="color:var(--muted);">—</span>') + '</td>' +
+      '<td>' + fmtLocalTime(r.started_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtRelTime(r.started_at) + ')</span></td>' +
+      '<td>' + fmtLocalTime(r.finished_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtElapsed(r.elapsed_s) + ')</span></td>' +
+      '<td style="text-align:left;">' + renderResult(r) + '</td>' +
+      '<td style="color:var(--muted);font-size:12px;">' + costCell + '</td>' +
+    '</tr>'
+  );
+  return main + (hasDetails ? buildSeoDetailRows(r) : '');
+}
 function buildJobsHistoryTable(runs) {
   if (!runs || !runs.length) {
     return '<div class="style-stats-empty" style="padding:16px;">No runs match the current filters.</div>';
   }
-  const rowsHtml = runs.slice(0, 300).map((r, idx) => {
-    const cost = r.result && r.result.cost_usd;
-    const costCell = cost ? fmtCost(cost) : '<span style="color:var(--muted);">—</span>';
-    const hasDetails = Array.isArray(r.details) && r.details.length;
-    const caret = hasDetails
-      ? '<span class="sa-job-caret" style="display:inline-block;width:12px;color:var(--muted);cursor:pointer;user-select:none;transition:transform 0.15s ease;">&#9656;</span> '
-      : '<span style="display:inline-block;width:12px;"></span> ';
-    if (r.running) {
-      // In-progress row: animated badge in the Result column, live-ticking
-      // elapsed in the Finished column. data-started-ms drives the ticker.
-      const startedMs = r.started_at ? new Date(r.started_at).getTime() : Date.now();
-      return (
-        '<tr class="sa-job-row sa-job-row-running" data-run-idx="' + idx + '" data-started-ms="' + startedMs + '">' +
-          '<td style="text-align:left;padding-left:16px;">' + caret +
-            (r.job_label || r.script) +
-            (r.pid ? ' <span style="color:var(--muted);font-size:11px;">PID ' + r.pid + '</span>' : '') +
-          '</td>' +
-          '<td>' + (r.platform || '<span style="color:var(--muted);">—</span>') + '</td>' +
-          '<td>' + fmtLocalTime(r.started_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtRelTime(r.started_at) + ')</span></td>' +
-          '<td><span class="sa-running-elapsed" style="color:var(--muted);font-size:12px;">' + fmtElapsed(r.elapsed_s) + '</span></td>' +
-          '<td style="text-align:left;"><span class="badge running">Running…</span></td>' +
-          '<td style="color:var(--muted);font-size:12px;">—</td>' +
-        '</tr>'
-      );
-    }
-    const rowClass = hasDetails ? 'sa-job-row sa-job-row-expandable' : 'sa-job-row';
-    const main = (
-      '<tr class="' + rowClass + '" data-run-idx="' + idx + '"' +
-        (hasDetails ? ' style="cursor:pointer;"' : '') + '>' +
-        '<td style="text-align:left;padding-left:16px;">' + caret + (r.job_label || r.script) + '</td>' +
-        '<td>' + (r.platform || '<span style="color:var(--muted);">—</span>') + '</td>' +
-        '<td>' + fmtLocalTime(r.started_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtRelTime(r.started_at) + ')</span></td>' +
-        '<td>' + fmtLocalTime(r.finished_at) + ' <span style="color:var(--muted);font-size:11px;">(' + fmtElapsed(r.elapsed_s) + ')</span></td>' +
-        '<td style="text-align:left;">' + renderResult(r) + '</td>' +
-        '<td style="color:var(--muted);font-size:12px;">' + costCell + '</td>' +
-      '</tr>'
-    );
-    return main + (hasDetails ? buildSeoDetailRows(r) : '');
-  }).join('');
+  const rowsHtml = runs.slice(0, 300).map((r, idx) => _buildJobHistoryRowGroup(r, idx)).join('');
   return (
     '<table class="matrix-table" style="margin-top:0;">' +
       '<thead><tr>' +
@@ -6018,8 +6048,46 @@ function applyJobsHistoryFilter() {
     // seo_improve, seo_top_pages, seo_weekly_roundup).
     const scriptNorm = (r.script || '').replace(/-/g, '_').toLowerCase();
     return r.job_type === tf || scriptNorm === tf;
-  });
-  body.innerHTML = buildJobsHistoryTable(filtered);
+  }).slice(0, 300);
+
+  // Try a surgical update first: when the ordered list of row keys hasn't
+  // changed, only replace rows whose render-affecting sig changed. That
+  // keeps expansion state, hover, focus, and scroll position intact, and
+  // eliminates the visible flash on every 5s/20s poll. Full rebuild is
+  // still used for empty state, first paint, filter changes that reshuffle
+  // the row order, and any case where rows were added/removed.
+  const tbody = body.querySelector('tbody');
+  const existingRows = tbody ? Array.from(tbody.querySelectorAll('tr.sa-job-row[data-row-key]')) : [];
+  const existingKeys = existingRows.map(tr => tr.getAttribute('data-row-key'));
+  const newKeys = filtered.map(_jobHistoryRowKey);
+  const sameOrder = filtered.length > 0
+    && existingKeys.length === newKeys.length
+    && existingKeys.every((k, i) => k === newKeys[i]);
+
+  if (sameOrder && tbody) {
+    const tpl = document.createElement('template');
+    filtered.forEach((r, idx) => {
+      const tr = existingRows[idx];
+      const newSig = _jobHistoryRowSig(r);
+      if (tr.getAttribute('data-row-sig') === newSig) return; // unchanged
+      // Render replacement (main row + optional detail row), preserving the
+      // detail row's open/closed state for this specific row.
+      const detail = tr.nextElementSibling;
+      const hadDetail = detail && detail.classList && detail.classList.contains('sa-job-detail-row');
+      const wasOpen = hadDetail && detail.style.display !== 'none' && detail.style.display !== '';
+      tpl.innerHTML = '<table><tbody>' + _buildJobHistoryRowGroup(r, idx) + '</tbody></table>';
+      const fresh = tpl.content.querySelectorAll('tr');
+      if (!fresh.length) return;
+      tr.replaceWith(fresh[0]);
+      if (hadDetail) detail.remove();
+      if (fresh[1]) {
+        fresh[0].after(fresh[1]);
+        if (wasOpen) fresh[1].style.display = '';
+      }
+    });
+  } else {
+    body.innerHTML = buildJobsHistoryTable(filtered);
+  }
   wireJobsHistoryExpansion(body);
   ensureRunningElapsedTicker();
 }
