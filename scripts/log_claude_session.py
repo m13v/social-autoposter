@@ -27,6 +27,15 @@ import db as dbmod
 
 PROJECTS_ROOT = os.path.expanduser("~/.claude/projects")
 
+# Archive root for post-facto investigation. ~/.claude/projects/ is Claude
+# Code's own scratch — it survives normal runs but is not under our control
+# for retention or rotation, and the encoded-cwd subdirectory layout is
+# annoying to navigate after the fact. We hardlink each finished session's
+# transcript here so investigations of watchdog-killed phases are
+# `tail skill/logs/claude-sessions/<date>/<HHMMSS>_<script>_<sid>.jsonl`
+# instead of forensics across `~/.claude/projects/-/<sid>.jsonl` candidates.
+ARCHIVE_ROOT = os.path.expanduser("~/social-autoposter/skill/logs/claude-sessions")
+
 
 def find_transcript(session_id: str):
     """Locate the transcript .jsonl for a session id.
@@ -38,6 +47,55 @@ def find_transcript(session_id: str):
     """
     matches = glob.glob(os.path.join(PROJECTS_ROOT, "*", f"{session_id}.jsonl"))
     return matches[0] if matches else None
+
+
+def archive_transcript(transcript_path, session_id: str, script: str, started_iso):
+    """Hardlink (or copy) the live transcript into ARCHIVE_ROOT.
+
+    Best-effort: any failure returns None and the caller proceeds. The
+    archive lives under <date>/<HHMMSS>_<script>_<session_id>.jsonl so
+    investigators can navigate by day. Hardlink first (free, atomic, and
+    keeps the archive in sync if claude appends final bytes between our
+    archive call and parse_transcript); fall back to copy across volumes.
+    Idempotent: returns the existing path if already archived.
+    """
+    if not transcript_path or not os.path.exists(transcript_path):
+        return None
+    try:
+        dt = None
+        if started_iso:
+            try:
+                dt = datetime.fromisoformat(started_iso.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                dt = None
+        if dt is None:
+            try:
+                dt = datetime.utcfromtimestamp(os.path.getmtime(transcript_path))
+            except OSError:
+                dt = datetime.utcnow()
+
+        date_subdir = dt.strftime("%Y-%m-%d")
+        time_part = dt.strftime("%H%M%S")
+        safe_script = "".join(
+            c if (c.isalnum() or c in ("-", "_")) else "_"
+            for c in (script or "unknown")
+        ) or "unknown"
+
+        archive_dir = os.path.join(ARCHIVE_ROOT, date_subdir)
+        os.makedirs(archive_dir, exist_ok=True)
+        archive_path = os.path.join(
+            archive_dir, f"{time_part}_{safe_script}_{session_id}.jsonl"
+        )
+        if os.path.exists(archive_path):
+            return archive_path
+        try:
+            os.link(transcript_path, archive_path)
+        except OSError:
+            import shutil
+            shutil.copy2(transcript_path, archive_path)
+        return archive_path
+    except Exception:
+        return None
 
 # USD per 1M tokens. Cache_5m / cache_1h are the WRITE rates (Anthropic charges
 # a premium for caching writes); cache_read is the discounted re-read rate.
@@ -172,6 +230,13 @@ def main():
     args = parser.parse_args()
 
     transcript = find_transcript(args.session_id)
+    # Archive the transcript BEFORE parsing so even an empty/short session
+    # leaves a forensics trail. This is the only path that runs reliably on
+    # watchdog SIGTERM — once the wrapper's EXIT trap fires, log_claude_session
+    # is the last chance to capture what claude was doing before death.
+    archive_path = archive_transcript(
+        transcript, args.session_id, args.script, args.started_at
+    )
     parsed = parse_transcript(transcript) if transcript else None
 
     if parsed is None:
@@ -179,6 +244,7 @@ def main():
             "logged": False,
             "reason": "no-transcript-or-empty",
             "transcript": transcript,
+            "archive_path": archive_path,
             "session_id": args.session_id,
         }))
         return
@@ -267,6 +333,7 @@ def main():
         "model": parsed["primary_model"],
         "models": list(parsed["by_model"].keys()),
         "backfilled": backfill_counts,
+        "archive_path": archive_path,
     }))
 
 
