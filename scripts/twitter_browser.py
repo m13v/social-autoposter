@@ -86,20 +86,25 @@ def _load_active_twitter_campaigns():
         return []
 
 
-def _log_twitter_dm_outbound(dm_id, content):
+def _log_twitter_dm_outbound(dm_id, content, minted_codes=None):
     """After a verified send, log via dm_conversation.py log-outbound so the
     suffix-detection path attributes the message to the active campaign and
-    advances the counter. Best-effort; failures are non-fatal."""
+    advances the counter. `minted_codes` is the list of dm_links codes minted
+    for the URLs in this message; passed via env so log-outbound can backfill
+    dm_links.message_id after RETURNING id. Best-effort; failures are non-fatal."""
     if not dm_id:
         return False
     try:
+        env = os.environ.copy()
+        if minted_codes:
+            env["WRAP_MINTED_CODES"] = ",".join(minted_codes)
         subprocess.run(
             ["python3",
              os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "dm_conversation.py"),
              "log-outbound", "--dm-id", str(dm_id),
              "--content", content, "--verified"],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True, text=True, timeout=20, env=env,
         )
         return True
     except Exception as e:
@@ -1051,12 +1056,32 @@ def send_dm(thread_url, message, dm_id=None):
               "applied_campaigns": [...], "message_sent": "..."}
               or {"ok": false, "error": "..."}
     """
+    # Tool-level URL wrap pass: every URL in the model's message gets minted
+    # through dm_short_links.wrap_text so clicks attribute to this DM. Runs
+    # BEFORE campaign-suffix injection. Refuses if any URL points at a project
+    # not in dms.target_projects[]; the pipeline must set-target-project
+    # --append before retrying.
+    minted_link_codes = []
+    if dm_id is not None:
+        from dm_short_links import wrap_text as _wrap_text
+        wrap_res = _wrap_text(dm_id=dm_id, text=message)
+        if not wrap_res.get("ok"):
+            return {
+                "ok": False,
+                "error": "link_wrap_failed",
+                "wrap_error": wrap_res.get("error"),
+                "needed_project": wrap_res.get("needed_project"),
+                "url": wrap_res.get("url"),
+            }
+        message = wrap_res["text"]
+        minted_link_codes = wrap_res.get("minted_codes", [])
+
     applied_campaigns = []
     for cid, suffix, sample_rate in _load_active_twitter_campaigns():
         if random.random() < sample_rate:
             message = message + suffix
             applied_campaigns.append(cid)
-    print(f"[send_dm] applied_campaigns={applied_campaigns} message_len={len(message)} dm_id={dm_id}",
+    print(f"[send_dm] applied_campaigns={applied_campaigns} minted_links={minted_link_codes} message_len={len(message)} dm_id={dm_id}",
           file=sys.stderr)
 
     from playwright.sync_api import sync_playwright
@@ -1128,7 +1153,7 @@ def send_dm(thread_url, message, dm_id=None):
             }""", msg_start)
 
             if verified and dm_id is not None:
-                _log_twitter_dm_outbound(dm_id, message)
+                _log_twitter_dm_outbound(dm_id, message, minted_codes=minted_link_codes)
 
             return {
                 "ok": verified,
@@ -1136,6 +1161,7 @@ def send_dm(thread_url, message, dm_id=None):
                 "verified": verified,
                 "error": None if verified else "send_unverified_no_dom_confirmation",
                 "applied_campaigns": applied_campaigns,
+                "minted_link_codes": minted_link_codes,
                 "message_sent": message,
             }
 
