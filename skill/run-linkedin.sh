@@ -244,10 +244,11 @@ $DUD_QUERIES
      prior. Walking past the top-3 of any query should require a clear
      ICP-fit reason. Do not skip a #1 just because #4 looks "interesting".
 
-   - LEAN TOWARD POSTING. The bar is "would commenting here be embarrassing
-     or off-message for the project?" — NOT "is this a perfect ICP fit?"
-     A mediocre but on-topic comment costs ~$0.20. A missed real fit costs
-     the entire cycle (~$15). Asymmetric — favor the post.
+   - LEAN TOWARD POSTING. The bar is: "would commenting here be embarrassing
+     or off-message for the project?" NOT "is this a perfect ICP fit?"
+     A mediocre but on-topic comment costs around twenty cents; a missed
+     real fit costs the entire cycle (roughly fifteen dollars). The cost is
+     asymmetric, so favor the post.
 
    - HARD-REJECT (these are the only auto-disqualifiers):
        1. Direct competitor: the author or their company sells a product
