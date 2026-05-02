@@ -205,9 +205,6 @@ def _mint_one(conn, *, dm_id: int, target_url: str, projects: list, projects_by_
     if platform == 'x':
         platform = 'twitter'
 
-    # Idempotent: same dm_id + same target_url returns existing code.
-    existing = _existing_link(conn, dm_id, target_url)
-
     kind, matched_project = _classify_url(target_url, projects)
 
     # Target-project guard: if the URL maps to one of our projects, that project
@@ -243,6 +240,15 @@ def _mint_one(conn, *, dm_id: int, target_url: str, projects: list, projects_by_
         project=matched_project,
         platform=platform,
     )
+
+    # Idempotent: lookup against the FINAL target_url (post-UTM) since that's
+    # what the unique index (dm_id, target_url) is on. Looking up the bare URL
+    # would miss when a prior mint stored the UTM-stamped form.
+    existing = _existing_link(conn, dm_id, final_target)
+    if not existing and final_target != target_url:
+        # Also check the bare URL form, so a re-wrap that was minted before
+        # we started UTM-stamping a given kind still resolves to the same row.
+        existing = _existing_link(conn, dm_id, target_url)
 
     if existing:
         code = existing['code']
