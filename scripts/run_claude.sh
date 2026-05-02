@@ -101,12 +101,37 @@ trap _sa_cleanup EXIT
 : > "$SIDE_LOG"
 MAX_AUP_RETRIES=2
 AUP_BACKOFF=(30 60)
+# Transient-failure retry. The `claude` CLI gets reinstalled
+# periodically (npm/curl installer), and the install briefly removes
+# the old binary before writing the new one. Any invocation in that
+# window gets exit 127 (command not found). Retry up to 3 times with
+# 5s/10s/20s backoff before giving up. These retries do NOT count
+# against the AUP-refusal budget, since the binary never actually ran.
+# Caused two failed runs on 2026-05-01: 19:33 (engage-dm-replies, mid
+# v2.1.126 install) and again on a follow-up cycle.
+MAX_TRANSIENT_RETRIES=3
+TRANSIENT_BACKOFF=(5 10 20)
 RC=0
 attempt=0
 while :; do
     attempt=$((attempt + 1))
-    claude --session-id "$SESSION_ID" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} "$@" | tee -a "$SIDE_LOG"
-    RC=${PIPESTATUS[0]}
+    transient_attempt=0
+    while :; do
+        : > "$SIDE_LOG"
+        claude --session-id "$SESSION_ID" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} "$@" | tee -a "$SIDE_LOG"
+        RC=${PIPESTATUS[0]}
+        if [ "$RC" -ne 127 ]; then
+            break
+        fi
+        if [ "$transient_attempt" -ge "$MAX_TRANSIENT_RETRIES" ]; then
+            echo "[run_claude] claude binary still missing after $MAX_TRANSIENT_RETRIES retries; giving up with exit 127" >&2
+            break
+        fi
+        sleep_secs="${TRANSIENT_BACKOFF[$transient_attempt]:-20}"
+        transient_attempt=$((transient_attempt + 1))
+        echo "[run_claude] claude not found (exit 127, likely mid-reinstall); retrying in ${sleep_secs}s ($transient_attempt/$MAX_TRANSIENT_RETRIES)" >&2
+        sleep "$sleep_secs"
+    done
     if grep -qE "(API Error|Error).*Usage Policy|appears to violate our Usage Policy" "$SIDE_LOG"; then
         if [ "$attempt" -le "$MAX_AUP_RETRIES" ]; then
             sleep_secs="${AUP_BACKOFF[$((attempt - 1))]:-60}"
@@ -114,7 +139,7 @@ while :; do
             sleep "$sleep_secs"
             SESSION_ID="$(uuidgen | tr 'A-Z' 'a-z')"
             export CLAUDE_SESSION_ID="$SESSION_ID"
-            : > "$SIDE_LOG"
+            # SIDE_LOG reset is handled at the top of the inner transient loop.
             continue
         fi
         echo "[run_claude] AUP refusal on final attempt $attempt; giving up" >&2
