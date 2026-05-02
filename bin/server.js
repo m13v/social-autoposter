@@ -2973,6 +2973,13 @@ async function handleApi(req, res) {
       if (_stylesMetaCache.value && Date.now() - _stylesMetaCache.at < 3600000) {
         return json(res, { meta: _stylesMetaCache.value, cachedAt: _stylesMetaCache.at });
       }
+      // Cloud Run has no python runtime; the engagement_styles import will
+      // always fail. The frontend already tolerates an empty meta map (style
+      // table just renders without hover tooltips), so short-circuit here
+      // instead of throwing 500.
+      if (auth.CLIENT_MODE) {
+        return json(res, { meta: {}, error: 'unavailable_in_client_mode' });
+      }
       const code =
         "import json,sys; sys.path.insert(0,'scripts'); " +
         "from engagement_styles import get_all_styles; m = get_all_styles(); " +
@@ -3235,7 +3242,12 @@ async function handleApi(req, res) {
       return json(res, { days, rows: cached.value.rows || [], cachedAt: cached.at, error: cached.value.error });
     }
     if (auth.CLIENT_MODE) {
-      return json(res, { days, rows: [], error: 'snapshot_missing' }, 503);
+      // Return 200 with empty rows + error marker rather than 503. The
+      // frontend's loadDailyMetrics() does Promise.allSettled across 5
+      // endpoints, but a hard error here previously broke the entire
+      // daily-metrics chart on app.s4l.ai. Matches the cached-with-error
+      // shape returned a few lines above.
+      return json(res, { days, rows: [], error: 'snapshot_missing' });
     }
     const scriptPath = path.join(DEST, 'scripts', 'funnel_per_day.py');
     const argv = [scriptPath, '--days', String(days)];
@@ -7514,31 +7526,46 @@ async function loadDailyMetrics() {
   }
   _dailyMetricsDays = axis;
 
-  const fetchOne = async (url, mapRow) => {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('status ' + res.status);
-    return (await res.json()).rows || [];
+  // Each fetch is best-effort. Returning [] on failure means a single broken
+  // endpoint (e.g. /api/funnel/per-day intentionally degraded in CLIENT_MODE,
+  // or any transient 5xx) renders the affected series as flat zeros instead
+  // of killing the whole chart. The "Unable to load daily metrics" fallback
+  // below now only triggers when literally every fetch failed.
+  const fetchOne = async (url) => {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return { rows: [], failed: true, status: res.status };
+      const data = await res.json();
+      return { rows: data.rows || [], failed: false, error: data.error || null };
+    } catch (e) {
+      return { rows: [], failed: true, error: String(e && e.message || e) };
+    }
   };
   try {
     const qs = 'days=' + DAILY_METRICS_DAYS;
-    const [viewsRows, upvotesRows, commentsRows, bookingsRows, funnelRows] = await Promise.all([
+    const [views, upvotes, comments, bookings, funnel] = await Promise.all([
       fetchOne('/api/views/per-day?' + qs),
       fetchOne('/api/upvotes/per-day?' + qs),
       fetchOne('/api/comments/per-day?' + qs),
       fetchOne('/api/bookings/per-day?' + qs),
       fetchOne('/api/funnel/per-day?' + qs),
     ]);
+    const allFailed = [views, upvotes, comments, bookings, funnel].every(r => r.failed);
+    if (allFailed) {
+      if (chartEl) chartEl.innerHTML = '<div class="views-chart-empty">Unable to load daily metrics (all endpoints failed).</div>';
+      return;
+    }
     const intoSeries = (id, rows, key) => {
       const map = {};
       rows.forEach(r => { if (r && r.day) map[r.day] = Number(r[key]) || 0; });
       series[id] = map;
     };
-    intoSeries('views',    viewsRows,    'views_gained');
-    intoSeries('upvotes',  upvotesRows,  'upvotes_gained');
-    intoSeries('comments', commentsRows, 'comments_gained');
-    intoSeries('bookings', bookingsRows, 'bookings_gained');
+    intoSeries('views',    views.rows,    'views_gained');
+    intoSeries('upvotes',  upvotes.rows,  'upvotes_gained');
+    intoSeries('comments', comments.rows, 'comments_gained');
+    intoSeries('bookings', bookings.rows, 'bookings_gained');
     DAILY_METRICS.filter(m => m.funnel).forEach(m => {
-      intoSeries(m.id, funnelRows, m.valueKey);
+      intoSeries(m.id, funnel.rows, m.valueKey);
     });
     _dailyMetricsSeries = series;
     renderDailyMetrics();
