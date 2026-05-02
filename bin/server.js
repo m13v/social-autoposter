@@ -3714,6 +3714,7 @@ async function handleApi(req, res) {
         "SELECT COALESCE(p_direct.project_name, p_via_reply.project_name, d.target_project) AS name, " +
           "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'outbound' AND m.message_at >= NOW() - INTERVAL '" + windowHours + " hours'))::int AS sent, " +
           "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'inbound' AND m.message_at >= NOW() - INTERVAL '" + windowHours + " hours'))::int AS replied, " +
+          "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'outbound' AND m.message_at >= NOW() - INTERVAL '" + windowHours + " hours') AND EXISTS (SELECT 1 FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'inbound' AND m.message_at >= NOW() - INTERVAL '" + windowHours + " hours'))::int AS replied_in_sent, " +
           "COALESCE(SUM((SELECT COUNT(*) FROM dm_messages m WHERE m.dm_id = d.id AND m.direction = 'inbound' AND m.message_at >= NOW() - INTERVAL '" + windowHours + " hours')), 0)::int AS replied_messages, " +
           "COUNT(*) FILTER (WHERE d.interest_level = 'hot')::int AS hot, " +
           "COUNT(*) FILTER (WHERE d.interest_level = 'warm')::int AS warm, " +
@@ -7949,6 +7950,7 @@ function renderDmStats(payload) {
   const totals = projects.reduce((a, p) => {
     a.sent               += Number(p.sent)               || 0;
     a.replied            += Number(p.replied)            || 0;
+    a.replied_in_sent    += Number(p.replied_in_sent)    || 0;
     a.replied_messages   += Number(p.replied_messages)   || 0;
     a.hot                += Number(p.hot)                || 0;
     a.warm               += Number(p.warm)               || 0;
@@ -7969,13 +7971,13 @@ function renderDmStats(payload) {
     a.converted          += Number(p.converted)          || 0;
     a.needs_human        += Number(p.needs_human)        || 0;
     return a;
-  }, { sent: 0, replied: 0, replied_messages: 0, hot: 0, warm: 0, general_discussion: 0, cold: 0, not_our_prospect: 0, declined: 0, no_response: 0, icp_match: 0, icp_miss: 0, icp_disqualified: 0, icp_unknown: 0, asked: 0, answered: 0, qualified: 0, q_disqualified: 0, booking_sent: 0, converted: 0, needs_human: 0 });
+  }, { sent: 0, replied: 0, replied_in_sent: 0, replied_messages: 0, hot: 0, warm: 0, general_discussion: 0, cold: 0, not_our_prospect: 0, declined: 0, no_response: 0, icp_match: 0, icp_miss: 0, icp_disqualified: 0, icp_unknown: 0, asked: 0, answered: 0, qualified: 0, q_disqualified: 0, booking_sent: 0, converted: 0, needs_human: 0 });
   if (totalEl) totalEl.textContent = projects.length + ' project' + (projects.length === 1 ? '' : 's');
   const normalized = projects.map(p => ({
     name:               p.name || '',
     sent:               Number(p.sent)               || 0,
     replied:            Number(p.replied)            || 0,
-    reply_rate:         (Number(p.sent) || 0) > 0 ? (Number(p.replied) || 0) / Number(p.sent) : 0,
+    reply_rate:         (Number(p.sent) || 0) > 0 ? (Number(p.replied_in_sent) || 0) / Number(p.sent) : 0,
     hot:                Number(p.hot)                || 0,
     warm:               Number(p.warm)               || 0,
     general_discussion: Number(p.general_discussion) || 0,
@@ -7996,9 +7998,11 @@ function renderDmStats(payload) {
     needs_human:        Number(p.needs_human)        || 0,
   }));
   const pct = v => (Number(v) * 100).toFixed(0) + '%';
-  // Reply % must not sum per-row rates (that would produce nonsense like
-  // 380%). Recompute from the summed sent/replied in the synthetic totals row.
-  const replyRateFooter = (_rows, synth) => pct((synth.sent || 0) > 0 ? (synth.replied || 0) / synth.sent : 0);
+  // Reply % is per-thread: numerator counts threads that had BOTH an outbound
+  // and an inbound in the window (replied_in_sent), denominator is threads we
+  // sent to in the window. Guarantees <=100% even when prospects reply to
+  // outbounds we sent before the window (which inflates the Replied column).
+  const replyRateFooter = (_rows, synth) => pct((synth.sent || 0) > 0 ? (synth.replied_in_sent || 0) / synth.sent : 0);
   mountSortableTable({
     containerId: 'dm-stats-body',
     rows: normalized,
