@@ -7890,10 +7890,11 @@ function renderFunnelStats(payload) {
           return makeFunnelFmt('domain_get_started_clicks')(v, r);
         } },
       { key: 'bookings',         label: 'Bookings',        type: 'numeric', align: 'right', formatter: fmt },
-      // DM Clicks: SUM(dms.short_link_clicks) for DMs targeting this project
+      // DM Clicks: SUM(dm_links.clicks) joined to dms targeting this project
       // in the window. Counts every click on a /r/code short link that
-      // resolves to one of this project's DMs. NOT the same as Schedule
-      // Clicks (which is on-page CTA taps via withBookingAttribution).
+      // resolves to one of this project's DMs (booking, github, website, or
+      // other-kind links — all wrapped through dm_short_links). NOT the same
+      // as Schedule Clicks (which is on-page CTA taps via withBookingAttribution).
       { key: 'dm_clicks',        label: 'DM Clicks',       type: 'numeric', align: 'right',
         formatter: (v, r) => {
           const n = Number(v) || 0;
@@ -9164,24 +9165,11 @@ function renderTopDms(payload) {
         return arr.includes(_topCampaign);
       })
     : projectScoped;
-  // Detect a URL in any outbound dm_messages content. Catches both protocol
-  // links (https://x.com) and bare domains (github.com/foo) so threads where
-  // we sent a github/blog/repo link without minting a booking redirect still
-  // count as "link sent". Backslashes are doubled because this code lives
-  // inside the dashboard's HTML backtick template (the template eats single
-  // backslashes — see feedback_server_js_template_regex).
-  const __OUTBOUND_URL_RE = /https?:\\/\\/\\S+|(?:[a-z0-9-]+\\.)+[a-z]{2,}\\/[\\w\\-./?#=&%+~:@!$,;*]+/i;
-  function __outboundLinkInfo(messages) {
-    if (!Array.isArray(messages)) return null;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m && m.direction === 'outbound' && m.content) {
-        const match = String(m.content).match(__OUTBOUND_URL_RE);
-        if (match) return { url: match[0], message_at: m.message_at || null };
-      }
-    }
-    return null;
-  }
+  // dm_links_count from the SQL aggregate is now the authoritative "did we
+  // send a tracked link" signal (every outbound URL goes through the wrapper
+  // pipeline). The legacy regex scan over message bodies was retired when
+  // wrap-text became universal; pre-wrap rows are still surfaced via the
+  // booking_link_sent_at OR backfilled dm_links rows.
   const dirScoped = _topDmDir === 'in'
     ? campaignScoped.filter(d => d.last_dir === 'inbound')
     : (_topDmDir === 'out'
@@ -9194,7 +9182,7 @@ function renderTopDms(payload) {
     if (_topDmQual !== 'all' && (d.qualification_status || '') !== _topDmQual) return false;
     if (_topDmStatus !== 'all' && (d.conversation_status || '') !== _topDmStatus) return false;
     if (_topDmLink !== 'all') {
-      const linkSent = !!(d.booking_link_sent_at || d.short_link_code || __outboundLinkInfo(d.messages));
+      const linkSent = !!(d.booking_link_sent_at || (Number(d.dm_links_count) || 0) > 0);
       if (_topDmLink === 'yes' && !linkSent) return false;
       if (_topDmLink === 'no' && linkSent) return false;
     }
@@ -9247,7 +9235,8 @@ function renderTopDms(payload) {
     qualification_notes: d.qualification_notes || '',
     booking_link_sent_at: d.booking_link_sent_at || null,
     short_link_code: d.short_link_code || '',
-    outbound_link: __outboundLinkInfo(d.messages),
+    dm_links_count: Number(d.dm_links_count) || 0,
+    target_projects: Array.isArray(d.target_projects) ? d.target_projects : [],
     short_link_clicks: Number(d.short_link_clicks) || 0,
     short_link_first_click_at: d.short_link_first_click_at || null,
     short_link_last_click_at: d.short_link_last_click_at || null,
@@ -9342,18 +9331,15 @@ function renderTopDms(payload) {
         return '<div class="dm-stat-stack">' + msgLine + clickLine + bookedLine + '</div>';
       } },
     { key: 'link_sent', label: 'Link sent', type: 'text', align: 'center', widthPct: 6,
-      accessor: r => (r.booking_link_sent_at || r.short_link_code || r.outbound_link) ? 'yes' : 'no',
+      accessor: r => (r.booking_link_sent_at || (Number(r.dm_links_count) || 0) > 0) ? 'yes' : 'no',
       formatter: (_v, r) => {
-        const sent = !!(r.booking_link_sent_at || r.short_link_code || r.outbound_link);
+        const linkCount = Number(r.dm_links_count) || 0;
+        const sent = !!(r.booking_link_sent_at || linkCount > 0);
         if (!sent) return '<span style="color:var(--text-faint);">No</span>';
         const tipParts = [];
         if (r.booking_link_sent_at) tipParts.push('booking link sent: ' + new Date(r.booking_link_sent_at).toLocaleString());
-        if (r.short_link_code) tipParts.push('/r/' + String(r.short_link_code));
-        if (r.outbound_link && r.outbound_link.url) {
-          let url = String(r.outbound_link.url);
-          if (url.length > 80) url = url.slice(0, 77) + '…';
-          tipParts.push('outbound: ' + url);
-        }
+        if (linkCount > 0) tipParts.push(linkCount + ' wrapped link' + (linkCount === 1 ? '' : 's'));
+        if (r.short_link_code) tipParts.push('latest: /r/' + String(r.short_link_code));
         const tip = tipParts.join(' • ');
         const tipAttr = tip ? ' data-tooltip="' + escapeHtml(tip) + '"' : '';
         return '<span' + tipAttr + ' style="color:var(--success);font-weight:600;">Yes</span>';
