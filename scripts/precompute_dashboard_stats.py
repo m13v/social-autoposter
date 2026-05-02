@@ -129,7 +129,14 @@ def precompute_activity(hours=24):
         "UNION ALL SELECT 'replied', platform FROM replies WHERE status='replied' AND replied_at >= NOW() - " + win + " "
         "UNION ALL SELECT 'skipped', platform FROM replies WHERE status='skipped' AND COALESCE(processing_at, discovered_at) >= NOW() - " + win + " "
         "UNION ALL SELECT 'mention', platform FROM octolens_mentions WHERE COALESCE(source_timestamp, received_at) >= NOW() - " + win + " "
-        "UNION ALL SELECT 'dm_sent', platform FROM dms WHERE status='sent' AND sent_at >= NOW() - " + win + " "
+        # dm_sent: dms whose FIRST outbound dm_message landed in the window.
+        # Mirrors bin/server.js so the snapshot and live query agree. Counts
+        # via dm_messages avoids public_only artifact rows that ensure_dm
+        # creates with status='sent' for cross-thread prospect history.
+        "UNION ALL SELECT 'dm_sent', d.platform FROM dms d WHERE EXISTS ("
+        "SELECT 1 FROM dm_messages m WHERE m.dm_id = d.id AND m.direction='outbound' "
+        "AND m.message_at >= NOW() - " + win + " "
+        "AND NOT EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = d.id AND m2.direction='outbound' AND m2.message_at < m.message_at)) "
         "UNION ALL SELECT 'dm_reply_sent', d.platform FROM dm_messages m JOIN dms d ON d.id = m.dm_id WHERE m.direction='outbound' AND m.message_at >= NOW() - " + win + " AND EXISTS (SELECT 1 FROM dm_messages m2 WHERE m2.dm_id = m.dm_id AND m2.direction='inbound' AND m2.message_at < m.message_at) "
         "UNION ALL SELECT 'page_published_serp', 'seo' FROM seo_keywords WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL AND COALESCE(source, '') NOT IN ('reddit', 'top_page') "
         "UNION ALL SELECT 'page_published_gsc', 'seo' FROM gsc_queries WHERE completed_at >= NOW() - " + win + " AND page_url IS NOT NULL "
