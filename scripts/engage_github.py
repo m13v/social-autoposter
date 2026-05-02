@@ -371,6 +371,10 @@ def main():
     config = load_config()
     excluded_authors = {a.lower() for a in config.get("exclusions", {}).get("authors", [])}
     excluded_repos = {r.lower() for r in config.get("exclusions", {}).get("github_repos", [])}
+    # Auto-blocklist: owners with >=2 moderated posts in last 90 days. Same
+    # source of truth as github_tools.py cmd_search uses for new candidates.
+    from github_tools import _dynamic_owner_blocklist
+    excluded_repos = excluded_repos | _dynamic_owner_blocklist(conn)
     our_username = config.get("accounts", {}).get("github", {}).get("username", "m13v")
 
     start_time = time.time()
