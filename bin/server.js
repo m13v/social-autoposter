@@ -7501,11 +7501,14 @@ function renderDailyMetrics() {
                '<span class="val">' + escapeHtml(v.toLocaleString()) + '</span></div>';
       }).join('');
       tip.innerHTML = '<div class="tt-day">' + escapeHtml(_fmtDay(day)) + '</div>' + rows;
-      // Position the tooltip in CSS px relative to the chart container,
-      // clamped so it never overflows past the chart's left/right/top edges.
-      // The tooltip is centered horizontally on the snap line by default,
-      // and rendered above the plot area; if there's not enough room above
-      // (small padT), it flips below the hover point instead.
+      // Position the tooltip in CSS px relative to the chart container so it
+      // stays NEAR the cursor at all times. Default: centered horizontally on
+      // the snap line, rendered above the plot area. When the centered box
+      // would overflow the right edge, anchor its right edge near the cursor
+      // (tooltip sits to the LEFT of cursor with a small gap) instead of
+      // slamming it against the chart edge far from the hover. Mirror that
+      // for the left edge. Vertically: above by default, flip below if the
+      // top would clip.
       const cssX = snapX / scale;
       // Make tooltip measurable: clear transform so offsetWidth/Height are
       // its natural box, not the translated rect.
@@ -7514,16 +7517,26 @@ function renderDailyMetrics() {
       tip.style.opacity = '1';
       const tipW = tip.offsetWidth;
       const tipH = tip.offsetHeight;
-      // SVG sits inside chartEl with horizontal padding (20px each side),
-      // so chartEl.clientWidth is the box we must clamp inside.
+      // SVG sits inside chartEl with horizontal padding, so chartEl.clientWidth
+      // is the box we must clamp inside.
       const cw = chartEl.clientWidth;
       const margin = 4;
+      const gap = 12; // distance between hover line and tooltip edge when side-anchored
       // Account for the SVG's left offset within chartEl: cssX is in SVG
       // CSS-px space, but tip.style.left is relative to chartEl's padding box.
       const svgOffsetLeft = svgEl.offsetLeft;
-      let leftPx = svgOffsetLeft + cssX - tipW / 2;
-      if (leftPx < margin) leftPx = margin;
-      if (leftPx + tipW > cw - margin) leftPx = cw - margin - tipW;
+      const cursorPx = svgOffsetLeft + cssX;
+      // Default: center on cursor.
+      let leftPx = cursorPx - tipW / 2;
+      if (leftPx + tipW > cw - margin) {
+        // Overflows right: park tooltip to the LEFT of the cursor.
+        leftPx = cursorPx - tipW - gap;
+        if (leftPx < margin) leftPx = Math.max(margin, cw - margin - tipW);
+      } else if (leftPx < margin) {
+        // Overflows left: park tooltip to the RIGHT of the cursor.
+        leftPx = cursorPx + gap;
+        if (leftPx + tipW > cw - margin) leftPx = Math.max(margin, cw - margin - tipW);
+      }
       // Default: above the plot area. Flip below if it would clip the top.
       let topPx = padT - 8 - tipH;
       if (topPx < margin) topPx = padT + 16;
