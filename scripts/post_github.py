@@ -61,6 +61,17 @@ CLAUDE_CANDIDATE_LIMIT = 8     # show top N to Claude
 SEARCH_PER_TOPIC = 5            # gh search --limit per topic
 MAX_TOPICS_PER_PROJECT = 6
 
+# Maintainer-just-spoke gate. authorAssociation values that count as "maintainer".
+# If the most recent commenter on a candidate issue is one of these, we drop the
+# candidate to avoid piling on a maintainer who just set direction (root cause of
+# the antiwork/gumroad LOW_QUALITY minimization, posts #21826 + #22200).
+MAINTAINER_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+
+# Relevance gate. Claude returns relevance:0..3 per draft; we drop everything
+# below this floor before posting. 2 = "project's tools/audience could plausibly
+# help here." 0/1 = off-domain. Tunable.
+MIN_RELEVANCE = 2
+
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [post_github] {msg}", flush=True)
@@ -205,8 +216,14 @@ def gh_search(query, limit=SEARCH_PER_TOPIC):
 
 
 def gh_view_counts(repo, number):
-    """Return dict{comment_count, reaction_count, title, body, author, url} or
-    None if the issue is no longer open / unfetchable."""
+    """Return dict{comment_count, reaction_count, title, body, author, url,
+    maintainer_last_speaker, last_commenter, last_comment_assoc} or None if the
+    issue is no longer open / unfetchable.
+
+    `gh issue view --json comments` returns each comment with `authorAssociation`
+    (OWNER/MEMBER/COLLABORATOR/CONTRIBUTOR/NONE/...) and `createdAt`. We use the
+    most recent comment to detect "maintainer just spoke" so phase 1 can drop
+    those candidates without an extra API call."""
     try:
         out = subprocess.check_output(
             ["gh", "issue", "view", str(number), "-R", repo,
@@ -224,6 +241,30 @@ def gh_view_counts(repo, number):
         reaction_count += int(
             (g.get("users") or {}).get("totalCount", 0) or g.get("totalCount", 0) or 0
         )
+
+    # Maintainer-just-spoke gate. Sort comments by createdAt desc, look at the
+    # most recent one (regardless of timing). If the issue's last word came from
+    # someone with push access, the thread is being driven and we shouldn't pile
+    # on. The OP's authorAssociation is checked separately (issue.author isn't
+    # included in `comments`, only in the top-level `author` field).
+    maintainer_last_speaker = False
+    last_commenter = ""
+    last_comment_assoc = ""
+    if comments:
+        try:
+            sorted_c = sorted(
+                comments,
+                key=lambda c: c.get("createdAt", "") or "",
+                reverse=True,
+            )
+            last = sorted_c[0]
+            last_commenter = (last.get("author") or {}).get("login", "") or ""
+            last_comment_assoc = (last.get("authorAssociation") or "").upper()
+            if last_comment_assoc in MAINTAINER_ASSOCIATIONS:
+                maintainer_last_speaker = True
+        except Exception:
+            pass
+
     return {
         "comment_count": len(comments),
         "reaction_count": reaction_count,
@@ -231,6 +272,9 @@ def gh_view_counts(repo, number):
         "body": (data.get("body") or ""),
         "author": (data.get("author") or {}).get("login", ""),
         "url": data.get("url", ""),
+        "maintainer_last_speaker": maintainer_last_speaker,
+        "last_commenter": last_commenter,
+        "last_comment_assoc": last_comment_assoc,
     }
 
 
@@ -570,12 +614,24 @@ def main():
         sys.exit(0)
 
     candidates = []
+    skipped_maintainer = 0
     for item in raw[:CLAUDE_CANDIDATE_LIMIT * 3]:
         repo, number = parse_repo_number(item.get("url"))
         if not repo:
             continue
         counts = gh_view_counts(repo, number)
         if not counts:
+            continue
+        # Maintainer-just-spoke gate. If the most recent comment is from someone
+        # with push access (OWNER/MEMBER/COLLABORATOR), they are driving the
+        # thread, so piling on reads as noise and risks LOW_QUALITY hide.
+        if counts.get("maintainer_last_speaker"):
+            skipped_maintainer += 1
+            log(
+                f"  skip {repo}#{number}: maintainer-just-spoke "
+                f"(last={counts.get('last_commenter')}/"
+                f"{counts.get('last_comment_assoc')})"
+            )
             continue
         candidates.append({
             "repo": repo,
@@ -588,7 +644,10 @@ def main():
             "reaction_count_t0": counts["reaction_count"],
             "search_topic": item.get("search_topic"),
         })
-    log(f"Phase 1: {len(candidates)} candidates with T0 snapshot")
+    log(
+        f"Phase 1: {len(candidates)} candidates with T0 snapshot "
+        f"(skipped {skipped_maintainer} for maintainer-just-spoke)"
+    )
     if not candidates:
         log("No live open issues to re-poll. Exiting.")
         sys.exit(0)
@@ -599,12 +658,25 @@ def main():
 
     # ---- Phase 2a: re-poll T1 ---------------------------------------------
     log("Phase 2a: re-polling T1 counts...")
+    survivors = []
+    skipped_maintainer_phase2 = 0
     for c in candidates:
         counts = gh_view_counts(c["repo"], c["number"])
         if not counts:
             c["comment_count_t1"] = c["comment_count_t0"]
             c["reaction_count_t1"] = c["reaction_count_t0"]
             c["delta_score"] = 0.0
+            survivors.append(c)
+            continue
+        # Re-check maintainer-just-spoke gate. A maintainer may have arrived
+        # during the sleep window. If so, drop to avoid piling on.
+        if counts.get("maintainer_last_speaker"):
+            skipped_maintainer_phase2 += 1
+            log(
+                f"  phase2 skip {c['repo']}#{c['number']}: maintainer arrived "
+                f"during sleep (last={counts.get('last_commenter')}/"
+                f"{counts.get('last_comment_assoc')})"
+            )
             continue
         c["comment_count_t1"] = counts["comment_count"]
         c["reaction_count_t1"] = counts["reaction_count"]
@@ -612,6 +684,16 @@ def main():
             c["comment_count_t0"], c["reaction_count_t0"],
             c["comment_count_t1"], c["reaction_count_t1"],
         )
+        survivors.append(c)
+    if skipped_maintainer_phase2:
+        log(
+            f"Phase 2a: dropped {skipped_maintainer_phase2} candidates "
+            f"after maintainer comment during sleep"
+        )
+    candidates = survivors
+    if not candidates:
+        log("Phase 2a: no candidates left after maintainer recheck. Exiting.")
+        sys.exit(0)
 
     # ---- Phase 2b: adaptive cap -------------------------------------------
     high_delta = [c for c in candidates if c["delta_score"] >= DELTA_THRESHOLD]
