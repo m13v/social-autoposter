@@ -67,6 +67,11 @@ Locked files (do NOT unlock or edit without explicit user instruction):
 - `scripts/ingest_human_seo_replies.py`, `scripts/scan_dm_candidates.py`
 - `skill/dm-outreach-reddit.sh`, `skill/dm-outreach-twitter.sh`, `skill/dm-outreach-linkedin.sh`
 - `scripts/twitter_browser.py`, `scripts/scan_twitter_thread_followups.py`, `skill/scan-twitter-followups.sh`
+- `scripts/scan_twitter_mentions_browser.py` (browser-based mention discovery, replaces deprecated API path)
+- `scripts/_li_discover_pending.py`, `scripts/li_discover_insert.py` (LinkedIn DM discovery, hardcoded EXCLUDED_AUTHORS guardrail)
+- `scripts/reddit_chat_sync.py` (Reddit Chat IndexedDB reader, brittle external coupling)
+- `scripts/update_stats.py` (central stats engine; flips `posts.status='deleted'`; GraphQL isMinimized pre-pass for github)
+- `scripts/strike_alert.py`, `skill/strike-alert.sh` (strike escalation rail; emails i@m13v.com on every newly-detected `status='deleted'` or `'removed'` post)
 - `scripts/watchdog_hung_runs.py`, `skill/stats.sh`
 
 
