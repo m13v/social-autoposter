@@ -309,11 +309,18 @@ def build_prompt(project, config, candidates, cap, top_report, recent_comments,
     cand_block = []
     for i, c in enumerate(candidates, 1):
         seed_line = f"seed: {c['search_topic']}\n" if c.get("search_topic") else ""
+        last_speaker_line = ""
+        if c.get("last_commenter"):
+            last_speaker_line = (
+                f"last_commenter: {c['last_commenter']} "
+                f"({c.get('last_comment_assoc') or 'NONE'})\n"
+            )
         cand_block.append(
             f"--- #{i} {c['repo']}#{c['number']} delta={c['delta_score']:.1f} "
             f"(cm {c['comment_count_t0']}->{c['comment_count_t1']}, "
             f"rx {c['reaction_count_t0']}->{c['reaction_count_t1']}) ---\n"
             f"{seed_line}"
+            f"{last_speaker_line}"
             f"title: {c['title']}\n"
             f"author: {c['author']}\n"
             f"url: {c['url']}\n"
@@ -348,7 +355,9 @@ Prefer issues whose seed has a higher total/avg score when the fit is genuine.
 New seeds with 0 posts are fine, we still need to explore.
 """
 
-    return f"""You are the Social Autoposter drafting GitHub issue comments for project {project['name']}.
+    project_name = project["name"]
+    min_relevance = MIN_RELEVANCE
+    return f"""You are the Social Autoposter drafting GitHub issue comments for project {project_name}.
 
 Read {SKILL_FILE} for content rules (no em dashes, anti-AI tells, voice).
 
@@ -367,7 +376,6 @@ shown is the search_topic that surfaced the issue, echo it back verbatim in
 
 ## Targeting
 - Best topics: Agents, Accessibility, Voice/ASR, Tool Use. Prioritize when present.
-- Prefer small-to-mid repos (<1000 stars) where the maintainer is active.
 - Exclusions are already filtered, but for reference:
   - Excluded repos: {', '.join(excluded_repos) if excluded_repos else '(none)'}
   - Excluded authors: {', '.join(excluded_authors) if excluded_authors else '(none)'}
@@ -379,10 +387,41 @@ shown is the search_topic that surfaced the issue, echo it back verbatim in
 - Specific (file names, metrics, tradeoffs), not generic advice.
 - NO links. Links are added later by Phase D after the comment earns engagement.
 
+## Relevance scoring (REQUIRED, drop anything < {min_relevance})
+
+For every candidate you draft, also score `relevance` 0..3 vs. the project above:
+  - 3 = direct fit. The issue's problem is exactly what {project_name} solves.
+  - 2 = relevant. The project's tools, audience, or problem-space could plausibly help.
+  - 1 = tangential. Same abstractions, different problem (e.g. caching advice on a
+        copy-variation issue). Don't post these.
+  - 0 = unrelated. Don't post these.
+
+Scoring < {min_relevance} must go to "skipped" with reason "low_relevance".
+The pipeline drops these automatically; do not try to bypass.
+
+## Anti-spam guardrails (skip a candidate if ANY apply)
+
+Recent strikes were minimized as LOW_QUALITY because we drafted "expert"
+takes that ignored what the maintainer just said. Skip when:
+  - `last_commenter` is OWNER/MEMBER/COLLABORATOR (already pre-filtered, but
+    re-confirm: if the maintainer's most recent message sets a clear direction,
+    don't pile on with a counter-take).
+  - The issue is about content/copy/ux/business decisions and you'd have to
+    pivot to architecture/perf/caching to have something to say.
+  - You'd have to manufacture experience ("I ran this in production at scale...",
+    "I've seen this play out dozens of times...") to fill the 400-char budget.
+  - Other recent commenters are obviously pitching their own tool. You'll be
+    grouped with them by the maintainer.
+  - You'd cite a precedent you can't actually link to (Apple ?ppid, Stripe X,
+    Shopify Y, etc.). Hand-wavy precedent name-drops read as fake-expert.
+
 ## YOUR JOB
 
-Pick AT MOST {cap} candidates and draft one comment for each.
-Post fewer than {cap} if fewer are genuinely on-brand.
+Pick UP TO {cap} candidates worth commenting on and draft one comment for each.
+
+ZERO POSTS IS A VALID, FREQUENTLY CORRECT OUTCOME. Returning `"posts": []` and
+listing the candidates in `"skipped"` is preferred over forcing a comment on a
+mediocre fit. The pipeline runs every cycle; quiet cycles are healthy.
 
 ## Content rules
 {get_content_rules("github")}
@@ -401,16 +440,18 @@ Return ONLY a single JSON object. No prose, no markdown fencing, no Bash calls:
       "thread_url": "<issue url>",
       "thread_title": "<issue title>",
       "thread_author": "<issue author>",
-      "matched_project": "{project['name']}",
+      "matched_project": "{project_name}",
       "engagement_style": "<one of {', '.join(sorted(VALID_STYLES))}, or your invented snake_case name>",
       "new_style": null,
       "search_topic": "<the seed from the candidate block, copied verbatim>",
       "language": "<ISO 639-1 code matching the issue language: en, ja, zh, es, ...>",
+      "relevance": <int 0..3, see scoring rules above; must be >= {min_relevance} to post>,
+      "relevance_rationale": "<one short sentence: why this score>",
       "comment_text": "<the actual comment to post, 400-600 chars, NO links>"
     }}
   ],
   "skipped": [
-    {{ "url": "<issue url>", "reason": "<short reason>" }}
+    {{ "url": "<issue url>", "reason": "<short reason; use 'low_relevance' when relevance < {min_relevance}>" }}
   ]
 }}
 
@@ -748,6 +789,36 @@ def main():
     posts = decisions.get("posts", []) or []
     skipped = decisions.get("skipped", []) or []
     log(f"Claude picked {len(posts)}, skipped {len(skipped)}")
+
+    # Relevance gate. Anything Claude scored below MIN_RELEVANCE goes to the
+    # skipped bucket, NOT posted, regardless of how confident the comment_text
+    # reads. This is the programmatic backstop for the prompt rule.
+    relevance_dropped = []
+    kept_posts = []
+    for d in posts:
+        try:
+            rel = int(d.get("relevance", 0))
+        except (TypeError, ValueError):
+            rel = 0
+        if rel < MIN_RELEVANCE:
+            relevance_dropped.append({
+                "url": d.get("thread_url", ""),
+                "reason": (
+                    f"low_relevance (relevance={rel}, "
+                    f"rationale={(d.get('relevance_rationale') or '').strip()[:120]})"
+                ),
+            })
+        else:
+            kept_posts.append(d)
+    if relevance_dropped:
+        log(
+            f"Relevance gate dropped {len(relevance_dropped)}/{len(posts)} "
+            f"draft(s) below MIN_RELEVANCE={MIN_RELEVANCE}"
+        )
+        for r in relevance_dropped:
+            log(f"  drop {r['url']}: {r['reason']}")
+    skipped.extend(relevance_dropped)
+    posts = kept_posts
 
     if not posts:
         log("No valid post decisions. Last 500 chars of output:")
