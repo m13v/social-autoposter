@@ -65,7 +65,7 @@ _preflight_release_slots() {
 # install its own trap.
 _preflight_combined_exit() {
     _preflight_release_slots
-    if declare -F _sa_release_locks >/dev/null 2>&1; then
+    if command -v _sa_release_locks >/dev/null 2>&1; then
         _sa_release_locks
     fi
 }
