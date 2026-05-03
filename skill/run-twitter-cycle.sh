@@ -51,6 +51,40 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 
 log "=== Twitter Cycle (batch=$BATCH_ID): $(date) ==="
 
+# --- Preflight (added 2026-05-02) -----------------------------------------
+# Three early-exit gates BEFORE we open the DB, set up traps, or touch the
+# browser. Each gate emits a `[skipped: <reason>]` stderr line and exits 0
+# so launchd treats the slot as cleanly consumed and fires the next one
+# on schedule.
+#
+# 1. Memory pressure: 2026-05-01 a JetsamEvent at 19:26 swallowed two
+#    consecutive launchd fires (19:38, 19:53). The wrappers fired, but the
+#    grandchild bash never produced output — most likely jetsam-killed or
+#    starved during the system's crash-cleanup spike. Skipping when
+#    pressure_level >= 2 (warn) avoids piling more Chrome+Claude+Python
+#    work onto an already-thrashing system.
+#
+# 2. Claude quota stamp: prior run_claude.sh invocation hit a fatal cap
+#    (monthly cap, daily cap, context-window, credit balance, persistent
+#    429). Skip until the stamp expires (default 10 min). When the cap
+#    lifts and the next post-expiry fire succeeds, run_claude.sh clears
+#    the stamp automatically.
+#
+# 3. Parallel-cycle cap: max 4 concurrent run-twitter-cycle.sh. Post
+#    2026-04-30 the launchd wrapper double-forks and no longer suppresses
+#    overlapping fires; without this cap, sustained back-to-back cycles
+#    that each take 25-45 min wall-clock can stack 5-6 deep and trigger
+#    the same memory pressure that caused the 19:26 jetsam.
+#
+# preflight.sh exposes a small set of helpers; we call them in order
+# (cheapest first) so a fast-path skip (already-blocked) doesn't even
+# spend the sysctl read for the next check.
+source "$REPO_DIR/scripts/preflight.sh"
+SA_PREFLIGHT_SCRIPT="run-twitter-cycle"
+preflight_skip_if_claude_blocked
+preflight_skip_if_jetsam_pressure
+preflight_acquire_slot_or_skip "twitter-cycle" 4
+
 # Source lock helpers (functions only, no lock acquired here). Phase 0 + the
 # project/queries setup below run lock-free against DB and config files;
 # the twitter-browser lock is acquired later, immediately before the Phase 1
@@ -79,6 +113,13 @@ _sa_cleanup_batch_row() {
 }
 _sa_combined_exit() {
     _sa_cleanup_batch_row
+    # Release the parallel-cycle slot acquired by preflight.sh. Without this,
+    # this trap (which OVERWRITES the preflight trap installed at source-time)
+    # would leak the slot until the next launchd fire's GC pass — capping
+    # effective throughput at 1/cycle even though the slot pool is 4 wide.
+    if command -v _preflight_release_slots >/dev/null 2>&1; then
+        _preflight_release_slots
+    fi
     _sa_release_locks
 }
 trap _sa_combined_exit EXIT INT TERM HUP
