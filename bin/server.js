@@ -7524,7 +7524,9 @@ function renderDailyMetrics() {
       const gap = 12; // distance between hover line and tooltip edge when side-anchored
       // Account for the SVG's left offset within chartEl: cssX is in SVG
       // CSS-px space, but tip.style.left is relative to chartEl's padding box.
-      const svgOffsetLeft = svgEl.offsetLeft;
+      // NB: svg.offsetLeft is undefined on SVGGraphicsElement, use rects.
+      const chartBox = chartEl.getBoundingClientRect();
+      const svgOffsetLeft = box.left - chartBox.left;
       const cursorPx = svgOffsetLeft + cssX;
       // Default: center on cursor.
       let leftPx = cursorPx - tipW / 2;
