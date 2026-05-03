@@ -30,6 +30,14 @@ SCRIPT="$REPO_DIR/skill/run-github.sh"
 OUT="$LOG_DIR/launchd-github-stdout.log"
 ERR="$LOG_DIR/launchd-github-stderr.log"
 
+# Preflight (added 2026-05-02): skip cleanly if Claude is blocked on a
+# quota cap, or if the system is under memory pressure. See
+# scripts/preflight.sh for full design.
+SA_PREFLIGHT_SCRIPT="run-github"
+source "$REPO_DIR/scripts/preflight.sh"
+preflight_skip_if_claude_blocked
+preflight_skip_if_jetsam_pressure
+
 exec /usr/bin/python3 -c "
 import os, sys
 script  = '$SCRIPT'
