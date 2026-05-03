@@ -64,36 +64,11 @@ if [ -f "$SA_PREFLIGHT" ]; then
     # shellcheck source=/dev/null
     source "$SA_PREFLIGHT"
     SA_QUOTA_PREFLIGHT_OK=1
-    # Skip if a prior run stamped a still-valid block. preflight_skip_if_claude_blocked
-    # exit 0s with a skip log; we convert that to exit 79 here so callers can
-    # distinguish "claude blocked" from "claude succeeded with empty result".
-    if /usr/bin/python3 - "$SA_CLAUDE_BLOCK_STAMP" <<'PY' >/dev/null 2>&1
-import json, sys
-from datetime import datetime, timezone
-try:
-    with open(sys.argv[1]) as f:
-        d = json.load(f)
-    bu = d.get("blocked_until", "")
-    if not bu:
-        sys.exit(1)
-    until = datetime.fromisoformat(bu.replace("Z", "+00:00"))
-    now = datetime.now(timezone.utc)
-    sys.exit(0 if until > now else 1)
-except Exception:
-    sys.exit(1)
-PY
-    then
-        # Stamp present and unexpired — surface a [skipped:] line and exit 79.
-        SA_PREFLIGHT_SCRIPT="$SCRIPT_TAG" preflight_skip_if_claude_blocked
-        # preflight_skip_if_claude_blocked exits 0; we only reach here if it
-        # decided NOT to skip (race window). Continue normally.
-        :
-    fi
-    # Re-check exit-code path: if preflight_skip_if_claude_blocked decided to
-    # skip, it called exit 0. Override that exit code to 79 via a trap so the
-    # caller can distinguish skip from success. The simplest pattern is to
-    # re-implement the check here with our own exit code, since the helper
-    # itself can't know we want 79.
+    # If a prior run stamped a still-valid block, exit 79 with a [skipped:]
+    # log line. We don't reuse preflight_skip_if_claude_blocked verbatim
+    # because that helper exits 0 (suitable for launchd wrappers); here we
+    # want exit 79 so the *caller pipeline* can tell "claude blocked" from
+    # "claude ran cleanly but returned no candidates".
     if [ -f "$SA_CLAUDE_BLOCK_STAMP" ]; then
         SA_BLOCK_REMAINING=$(/usr/bin/python3 - "$SA_CLAUDE_BLOCK_STAMP" <<'PY'
 import json, sys
