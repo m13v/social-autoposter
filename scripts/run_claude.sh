@@ -31,6 +31,94 @@ SCRIPT_TAG="$1"; shift
 SESSION_ID="${CLAUDE_SESSION_ID:-$(uuidgen | tr 'A-Z' 'a-z')}"
 export CLAUDE_SESSION_ID="$SESSION_ID"
 
+# ---------------------------------------------------------------------------
+# Quota preflight + post-hoc detection (added 2026-05-02).
+#
+# Background: if claude is hitting an org-level cap (monthly usage cap,
+# daily token cap, context-window exceeded on every prompt, credit balance
+# zero, persistent 429), retrying every cadence-tick burns nothing useful —
+# it just guarantees an empty envelope back to the pipeline, which then
+# fails noisily downstream (cf. 2026-05-01 19:23 twitter-cycle that died
+# in Phase 1 on the org monthly limit and produced 0 tweets, then 2 more
+# cycles fired into the same wall).
+#
+# Mechanism (see scripts/preflight.sh for full design):
+#   - At start: check /tmp/sa-claude-blocked.json. If `blocked_until > now`,
+#     exit 79 immediately. The wrapper exits visibly (stderr `[skipped]`
+#     line) and the calling pipeline can either (a) abort gracefully on
+#     non-zero, or (b) check `$? == 79` and treat as "skip cycle" rather
+#     than "real failure".
+#   - After claude exits: scan SIDE_LOG for known fatal-quota patterns. On
+#     match, write a fresh stamp (10 min default) and force exit 79.
+#   - On a clean claude run, if a stamp is present, clear it — the cap has
+#     lifted and we shouldn't gate the next cycle.
+#
+# Block window = 10 min. The next launchd fire after expiry will retry
+# claude for real. If the underlying cap is still in place, we re-stamp
+# and skip again. This recovers automatically within 10 min of the cap
+# being lifted, without piling up backlog or burning cycles in the gap.
+# ---------------------------------------------------------------------------
+SA_PREFLIGHT="$(cd "$(dirname "$0")" && pwd)/preflight.sh"
+SA_QUOTA_PREFLIGHT_OK=0
+if [ -f "$SA_PREFLIGHT" ]; then
+    # shellcheck source=/dev/null
+    source "$SA_PREFLIGHT"
+    SA_QUOTA_PREFLIGHT_OK=1
+    # Skip if a prior run stamped a still-valid block. preflight_skip_if_claude_blocked
+    # exit 0s with a skip log; we convert that to exit 79 here so callers can
+    # distinguish "claude blocked" from "claude succeeded with empty result".
+    if /usr/bin/python3 - "$SA_CLAUDE_BLOCK_STAMP" <<'PY' >/dev/null 2>&1
+import json, sys
+from datetime import datetime, timezone
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+    bu = d.get("blocked_until", "")
+    if not bu:
+        sys.exit(1)
+    until = datetime.fromisoformat(bu.replace("Z", "+00:00"))
+    now = datetime.now(timezone.utc)
+    sys.exit(0 if until > now else 1)
+except Exception:
+    sys.exit(1)
+PY
+    then
+        # Stamp present and unexpired — surface a [skipped:] line and exit 79.
+        SA_PREFLIGHT_SCRIPT="$SCRIPT_TAG" preflight_skip_if_claude_blocked
+        # preflight_skip_if_claude_blocked exits 0; we only reach here if it
+        # decided NOT to skip (race window). Continue normally.
+        :
+    fi
+    # Re-check exit-code path: if preflight_skip_if_claude_blocked decided to
+    # skip, it called exit 0. Override that exit code to 79 via a trap so the
+    # caller can distinguish skip from success. The simplest pattern is to
+    # re-implement the check here with our own exit code, since the helper
+    # itself can't know we want 79.
+    if [ -f "$SA_CLAUDE_BLOCK_STAMP" ]; then
+        SA_BLOCK_REMAINING=$(/usr/bin/python3 - "$SA_CLAUDE_BLOCK_STAMP" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+    bu = d.get("blocked_until", "")
+    if not bu:
+        print(0); sys.exit(0)
+    until = datetime.fromisoformat(bu.replace("Z", "+00:00"))
+    now = datetime.now(timezone.utc)
+    print(int(max(0, (until - now).total_seconds())))
+except Exception:
+    print(0)
+PY
+)
+        if [ "${SA_BLOCK_REMAINING:-0}" -gt 0 ]; then
+            SA_BLOCK_REASON=$(/usr/bin/python3 -c "import json; print(json.load(open('$SA_CLAUDE_BLOCK_STAMP')).get('reason','unknown'))" 2>/dev/null)
+            echo "[run_claude] skipped: claude_blocked reason=$SA_BLOCK_REASON expires_in=${SA_BLOCK_REMAINING}s script=$SCRIPT_TAG; exit 79" >&2
+            exit 79
+        fi
+    fi
+fi
+
 # Auto-detect the platform agent from --mcp-config and signal the PreToolUse
 # hooks (~/.claude/hooks/<platform>-agent-lock.sh) to bypass the cross-session
 # block check. Rationale: every caller of run_claude.sh inside this repo is a
@@ -237,6 +325,51 @@ EOF
 done
 
 END=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+
+# ---------------------------------------------------------------------------
+# Post-hoc quota-error detection (added 2026-05-02).
+#
+# Scan claude's stdout for known fatal-quota signals. On match: stamp the
+# shared block file (so subsequent pipelines skip cleanly) and force exit 79.
+# On no match AND a successful claude run, clear any stale stamp — the cap
+# has lifted.
+#
+# Why post-hoc and not via streaming watchdog: claude already wrote the
+# bytes by the time we'd notice, and the orchestrator turn is one shot per
+# wrapper invocation. Stamping at exit + skipping the NEXT fire is cheaper
+# than racing to interrupt the current one. The current run paid for the
+# error already; we just protect the next 10 min of cadence-ticks.
+# ---------------------------------------------------------------------------
+if [ "$SA_QUOTA_PREFLIGHT_OK" = "1" ]; then
+    SA_QUOTA_REASON="$(preflight_classify_claude_error "$SIDE_LOG" 2>/dev/null | head -1 | tr -d '[:space:]')"
+    if [ -n "$SA_QUOTA_REASON" ]; then
+        # Stamp + force exit 79. Block window 600s (10 min). If the underlying
+        # cap is real, the next 10 min of fires skip cleanly. After 600s a
+        # fresh fire retries; success clears the stamp, repeat-failure
+        # refreshes it.
+        preflight_stamp_claude_blocked "$SA_QUOTA_REASON" 600 "$SCRIPT_TAG" "$SESSION_ID"
+        echo "[run_claude] quota error detected reason=$SA_QUOTA_REASON; skipping next 10 min of fires (exit 79)" >&2
+        # Still log the session for cost accounting before exiting.
+        ORCH_COST="$(grep -oE '"total_cost_usd"[[:space:]]*:[[:space:]]*[0-9]+(\.[0-9]+)?' "$SIDE_LOG" 2>/dev/null \
+            | tail -1 \
+            | sed -E 's/.*:[[:space:]]*//')"
+        ORCH_ARGS=()
+        if [ -n "$ORCH_COST" ]; then
+            ORCH_ARGS=(--orchestrator-cost-usd "$ORCH_COST")
+        fi
+        /usr/bin/python3 "$REPO_DIR/scripts/log_claude_session.py" \
+            --session-id "$SESSION_ID" \
+            --script "$SCRIPT_TAG" \
+            --started-at "$START" \
+            --ended-at "$END" \
+            ${ORCH_ARGS[@]+"${ORCH_ARGS[@]}"} >&2 || true
+        exit 79
+    fi
+    # Clean run AND no quota signal — clear any stale stamp (cap has lifted).
+    if [ "$RC" = "0" ] && [ -f "$SA_CLAUDE_BLOCK_STAMP" ]; then
+        preflight_clear_claude_block
+    fi
+fi
 
 # Pull the LAST total_cost_usd in the stdout (the result event is emitted last
 # in both stream-json and json modes). Tolerant to spaces and floats; defaults
