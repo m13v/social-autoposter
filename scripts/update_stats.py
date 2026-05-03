@@ -827,11 +827,130 @@ def update_moltbook(db, api_key, quiet=False):
             "skipped": skipped, "results": results}
 
 
+def _detect_minimized_github_comments(db, posts, quiet=False):
+    """Pre-pass: batch-query GitHub GraphQL for isMinimized on our active
+    comments and flip status='deleted' on matches.
+
+    Why this exists: REST `repos/{o}/{r}/issues/comments/{id}` returns 200
+    for a comment that's been hidden via "Hide -> low quality / off-topic /
+    spam". The reactions count zeroes out, the body is unchanged, and the
+    REST loop happily updates engagement as if the comment were still
+    visible. The antiwork/gumroad block on 2026-05-01 was found via inbound
+    notification email, not via our own pipeline. GraphQL exposes the
+    moderation state via `Issue.comments.nodes[].isMinimized`.
+
+    Cost is cheap: one GraphQL query fetches all comments on a thread (1
+    rate-limit point), and aliasing batches ~10 threads per query at the
+    same 1-point cost. Three thousand active threads -> ~300 points, well
+    inside the 5000/hr ceiling.
+
+    Defensive on purpose. Any failure here logs and returns; the REST loop
+    that follows is the established hot path and must not be blocked by a
+    GraphQL outage.
+    """
+    import subprocess
+    from collections import defaultdict
+
+    BATCH = 10
+    comment_re = re.compile(
+        r"https?://github\.com/([^/]+)/([^/]+)/(?:issues|pull)/(\d+)#issuecomment-(\d+)"
+    )
+
+    # Group: (owner, repo, number) -> [(post_id, comment_id), ...]
+    threads = defaultdict(list)
+    for post in posts:
+        m = comment_re.match((post[1] or ""))
+        if not m:
+            continue
+        owner, repo, number, cid = m.group(1), m.group(2), int(m.group(3)), int(m.group(4))
+        threads[(owner, repo, number)].append((post[0], cid))
+
+    if not threads:
+        return 0
+
+    keys = list(threads.keys())
+    minimized = 0
+    failures = 0
+
+    for batch_start in range(0, len(keys), BATCH):
+        batch = keys[batch_start:batch_start + BATCH]
+        parts = []
+        for i, (owner, repo, number) in enumerate(batch):
+            parts.append(
+                f't{i}: repository(owner: "{owner}", name: "{repo}") {{ '
+                f'issueOrPullRequest(number: {number}) {{ '
+                f'... on Issue {{ comments(first: 100) {{ nodes {{ databaseId isMinimized minimizedReason }} }} }} '
+                f'... on PullRequest {{ comments(first: 100) {{ nodes {{ databaseId isMinimized minimizedReason }} }} }} '
+                f'}} }}'
+            )
+        query = "{ " + " ".join(parts) + " rateLimit { remaining } }"
+        try:
+            proc = subprocess.run(
+                ["gh", "api", "graphql", "-f", f"query={query}"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except Exception as e:
+            failures += 1
+            if not quiet:
+                print(f"  github-minimize: graphql exec failed batch {batch_start}: {e}",
+                      flush=True)
+            continue
+        if proc.returncode != 0:
+            failures += 1
+            if not quiet:
+                print(f"  github-minimize: graphql rc={proc.returncode} batch {batch_start}: "
+                      f"{(proc.stderr or '')[:200]}", flush=True)
+            continue
+        try:
+            data = json.loads(proc.stdout).get("data", {}) or {}
+        except Exception:
+            failures += 1
+            continue
+
+        for i, key in enumerate(batch):
+            node = data.get(f"t{i}") or {}
+            iop = node.get("issueOrPullRequest")
+            if not iop:
+                continue
+            comments = (iop.get("comments") or {}).get("nodes") or []
+            min_set = {c["databaseId"]: c.get("minimizedReason")
+                       for c in comments if c.get("isMinimized")}
+            if not min_set:
+                continue
+            for post_id, cid in threads[key]:
+                if cid in min_set:
+                    reason = min_set[cid] or ""
+                    db.execute(
+                        "UPDATE posts SET status='deleted', "
+                        "deletion_detect_count=GREATEST(COALESCE(deletion_detect_count,0), 2), "
+                        "source_summary=COALESCE(NULLIF(source_summary,''), '') "
+                        "  || CASE WHEN COALESCE(source_summary,'')='' THEN '' ELSE ' ' END "
+                        "  || %s, "
+                        "status_checked_at=NOW() WHERE id=%s",
+                        [f"[minimized:{reason}]", post_id],
+                    )
+                    minimized += 1
+                    if not quiet:
+                        owner, repo, number = key
+                        print(f"MINIMIZED [{post_id}] {owner}/{repo}#{number} reason={reason}",
+                              flush=True)
+        db.commit()
+
+    if not quiet:
+        rl_note = f", failures={failures}" if failures else ""
+        print(f"  github-minimize: flipped {minimized} hidden comments "
+              f"across {len(threads)} threads{rl_note}", flush=True)
+    return minimized
+
+
 def update_github(db, quiet=False, limit=None):
     """Fetch engagement on our GitHub issue/PR comments via `gh api`.
 
     Stores reactions.total_count in posts.upvotes and the count of replies
     detected by scan_github_replies.py in posts.comments_count.
+
+    Runs a GraphQL `isMinimized` pre-pass before the REST loop so hidden
+    comments are flipped to status='deleted' and skipped by the REST select.
     """
     import subprocess
 
@@ -839,6 +958,16 @@ def update_github(db, quiet=False, limit=None):
            "AND status='active' AND our_url IS NOT NULL ORDER BY id")
     if limit:
         sql += f" LIMIT {int(limit)}"
+    posts = db.execute(sql).fetchall()
+
+    # Pre-pass: flag minimized (hidden) comments before REST. Wrapped
+    # defensively, a GraphQL flake must not block the REST hot path.
+    try:
+        _detect_minimized_github_comments(db, posts, quiet=quiet)
+    except Exception as e:
+        if not quiet:
+            print(f"  github-minimize: pre-pass crashed, skipping: {e}", flush=True)
+    # Re-select after the pre-pass so flipped rows drop out of the REST loop.
     posts = db.execute(sql).fetchall()
 
     total = updated = deleted = errors = 0
