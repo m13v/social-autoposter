@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.m13v.social-install-lane-digest</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/python3.11</string>
+        <string>/Users/matthewdi/social-autoposter/scripts/install_lane_digest.py</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/matthewdi</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/matthewdi/social-autoposter</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/matthewdi/social-autoposter/skill/logs/launchd-install-lane-digest-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/matthewdi/social-autoposter/skill/logs/launchd-install-lane-digest-stderr.log</string>
+</dict>
+</plist>
