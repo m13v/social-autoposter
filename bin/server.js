@@ -6560,6 +6560,7 @@ function toggleTheme() {
     const next = cur === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', next);
     localStorage.setItem('sa_theme', next);
+    try { window.posthog && window.posthog.capture('theme_toggle', { theme: next }); } catch (e2) {}
   } catch (e) { /* ignore */ }
 }
 
@@ -6575,6 +6576,7 @@ async function togglePause() {
     _paused = !!data.paused;
     updatePauseBtn();
     toast('All pipelines paused & processes killed');
+    try { window.posthog && window.posthog.capture('pause_all', { paused: _paused }); } catch (er) {}
     loadStatus();
   } catch(e) { toast('Error: ' + e.message, true); }
 }
@@ -6588,6 +6590,7 @@ async function toggleJob(label) {
     } else {
       toast(data.loaded ? 'Scheduled' : 'Unloaded');
     }
+    try { window.posthog && window.posthog.capture('job_toggle', { label: label, loaded: !!data.loaded }); } catch (er) {}
     loadStatus();
   } catch(e) { toast('Error: ' + e.message, true); }
 }
@@ -6596,6 +6599,7 @@ async function runJob(label) {
   try {
     await fetch('/api/jobs/' + encodeURIComponent(label) + '/run', { method: 'POST' });
     toast('Job started');
+    try { window.posthog && window.posthog.capture('job_run', { label: label }); } catch (er) {}
     loadStatus();
   } catch(e) { toast('Error: ' + e.message, true); }
 }
@@ -6604,6 +6608,7 @@ async function stopJob(label) {
   try {
     await fetch('/api/jobs/' + encodeURIComponent(label) + '/stop', { method: 'POST' });
     toast('Job stopped');
+    try { window.posthog && window.posthog.capture('job_stop', { label: label }); } catch (er) {}
     loadStatus();
   } catch(e) { toast('Error: ' + e.message, true); }
 }
@@ -6616,6 +6621,7 @@ async function setInterval_(label, value) {
       body: JSON.stringify({ interval: parseInt(value) }),
     });
     toast('Interval updated');
+    try { window.posthog && window.posthog.capture('job_interval_set', { label: label, interval: parseInt(value) }); } catch (er) {}
     loadStatus();
   } catch(e) { toast('Error: ' + e.message, true); }
 }
@@ -6638,6 +6644,7 @@ async function setStartTime(label, value) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'request failed');
     toast('Start time set to ' + value);
+    try { window.posthog && window.posthog.capture('job_start_time_set', { label: label, hour: hour, minute: minute }); } catch (er) {}
     loadStatus();
   } catch(e) { toast('Error: ' + e.message, true); }
 }
@@ -6650,6 +6657,7 @@ async function setPhaseInterval(jobType, value) {
       body: JSON.stringify({ interval: parseInt(value) }),
     });
     toast(jobType + ' interval updated to ' + fmtInterval(parseInt(value)));
+    try { window.posthog && window.posthog.capture('phase_interval_set', { job_type: jobType, interval: parseInt(value) }); } catch (er) {}
     loadStatus();
   } catch(e) { toast('Error: ' + e.message, true); }
 }
@@ -6762,6 +6770,7 @@ async function loadSettings() {
 
 async function saveSettings() {
   try {
+    try { window.posthog && window.posthog.capture('settings_save'); } catch (er) {}
     // Update config
     if (currentConfig) {
       const subs = document.getElementById('subreddits-input').value;
@@ -7146,12 +7155,21 @@ function renderPagination(totalFiltered) {
     _activityPageSize = parseInt(ps.value, 10) || 100;
     _activityPage = 0;
     try { localStorage.setItem('activityPageSize', String(_activityPageSize)); } catch {}
+    try { window.posthog && window.posthog.capture('pagination', { table: 'activity', action: 'page_size', value: _activityPageSize }); } catch (er) {}
     renderActivity(_lastActivityEvents || []);
   });
   const prev = document.getElementById('activity-prev');
-  if (prev) prev.addEventListener('click', () => { _activityPage -= 1; renderActivity(_lastActivityEvents || []); });
+  if (prev) prev.addEventListener('click', () => {
+    _activityPage -= 1;
+    try { window.posthog && window.posthog.capture('pagination', { table: 'activity', action: 'prev', page: _activityPage }); } catch (er) {}
+    renderActivity(_lastActivityEvents || []);
+  });
   const next = document.getElementById('activity-next');
-  if (next) next.addEventListener('click', () => { _activityPage += 1; renderActivity(_lastActivityEvents || []); });
+  if (next) next.addEventListener('click', () => {
+    _activityPage += 1;
+    try { window.posthog && window.posthog.capture('pagination', { table: 'activity', action: 'next', page: _activityPage }); } catch (er) {}
+    renderActivity(_lastActivityEvents || []);
+  });
 }
 
 function escapeHtml(s) {
@@ -9099,6 +9117,7 @@ function initTopFilters() {
       if (sub === _topSubtab) return;
       _topSubtab = sub;
       saSave('sa.top.subtab.v1', _topSubtab);
+      try { window.posthog && window.posthog.capture('top_subtab_change', { subtab: sub }); } catch (er) {}
       applyTopSubtabState(sub, /*loadData=*/true);
     });
     el._wired = true;
@@ -10529,6 +10548,7 @@ async function refreshAllData() {
   // Reload everything for the active tab + status-tab sections
   const activeTab = document.querySelector('.tab.active');
   const tab = activeTab ? activeTab.dataset.tab : 'stats';
+  try { window.posthog && window.posthog.capture('refresh_all', { from_tab: tab }); } catch (er) {}
   loadProjectStatus(true);
   loadDeployHealth();
   loadStatus();
@@ -10909,6 +10929,7 @@ document.querySelectorAll('.tab').forEach(tab => {
   const el = document.getElementById('funnel-stats');
   if (!el) return;
   el.addEventListener('toggle', () => {
+    try { window.posthog && window.posthog.capture('section_toggle', { section: 'funnel-stats', open: !!el.open }); } catch (er) {}
     if (el.open) loadFunnelStats();
   });
 })();
@@ -10917,6 +10938,7 @@ document.querySelectorAll('.tab').forEach(tab => {
   const el = document.getElementById('dm-stats');
   if (!el) return;
   el.addEventListener('toggle', () => {
+    try { window.posthog && window.posthog.capture('section_toggle', { section: 'dm-stats', open: !!el.open }); } catch (er) {}
     if (el.open) loadDmStats();
   });
 })();
@@ -10925,6 +10947,7 @@ document.querySelectorAll('.tab').forEach(tab => {
   const el = document.getElementById('cost-stats');
   if (!el) return;
   el.addEventListener('toggle', () => {
+    try { window.posthog && window.posthog.capture('section_toggle', { section: 'cost-stats', open: !!el.open }); } catch (er) {}
     if (el.open) loadCostStats();
   });
   if (el.open) loadCostStats();
@@ -10944,9 +10967,18 @@ document.querySelectorAll('.tab').forEach(tab => {
   }
 })();
 
-document.getElementById('log-job-filter').addEventListener('change', () => { loadLogFiles(); startLogAutoRefresh(); });
-document.getElementById('log-file-select').addEventListener('change', e => loadLogContent(e.target.value));
-document.getElementById('log-refresh-btn').addEventListener('click', loadLogFiles);
+document.getElementById('log-job-filter').addEventListener('change', (e) => {
+  try { window.posthog && window.posthog.capture('log_job_filter', { job: e.target.value }); } catch (er) {}
+  loadLogFiles(); startLogAutoRefresh();
+});
+document.getElementById('log-file-select').addEventListener('change', e => {
+  try { window.posthog && window.posthog.capture('log_file_open', { file: (e.target.value || '').split('/').pop() }); } catch (er) {}
+  loadLogContent(e.target.value);
+});
+document.getElementById('log-refresh-btn').addEventListener('click', () => {
+  try { window.posthog && window.posthog.capture('log_refresh'); } catch (er) {}
+  loadLogFiles();
+});
 document.getElementById('save-settings').addEventListener('click', saveSettings);
 
 // Init. In CLIENT_MODE the auth bootstrap below calls saStartApp() once
