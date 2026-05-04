@@ -8,6 +8,15 @@
 		<string>/Users/matthewdi</string>
 		<key>PATH</key>
 		<string>/Users/matthewdi/.nvm/versions/node/v20.19.4/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+		<!-- Canary: route reply state mutations through the public HTTPS lane
+		     (POST/PATCH /api/v1/replies/* on s4l.ai) instead of direct SQL.
+		     Stamps replies.install_id with this machine's id so we can audit
+		     the install attribution path with real traffic before flipping
+		     the other 3 platforms. Roll back: delete this key + reload. -->
+		<key>REPLY_DB_USE_HTTP</key>
+		<string>1</string>
+		<key>AUTOPOSTER_API_BASE</key>
+		<string>https://s4l.ai</string>
 	</dict>
 	<key>Label</key>
 	<string>com.m13v.social-github-engage</string>
