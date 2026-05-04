@@ -227,6 +227,22 @@ export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
 acquire_lock "reddit-browser" 3600
 ensure_browser_healthy "reddit"
 
+# Pre-flight: fail fast if reddit-agent Chrome didn't come up healthy.
+# ensure_browser_healthy triggers a cold-restart but always returns 0; without
+# this re-probe, an unhealthy Chrome leads to the orchestrator drafting for ~13
+# min ($4-5), failing to find mcp__reddit-agent__* tools, then falling back to
+# a banned Python Playwright path that CHECK-aborts a second Chrome on the
+# locked profile (incident 2026-05-04 08:27 r/Buddhism). Skip the run instead.
+sleep 2  # give a cold-started Chrome a beat to come up
+PROFILE_DIR="$HOME/.claude/browser-profiles/reddit"
+CDP_PORT=$(ps -A -o command= 2>/dev/null \
+  | awk -v p="user-data-dir=$PROFILE_DIR" \
+      'index($0,p)>0 { if (match($0,/remote-debugging-port=[0-9]+/)) { print substr($0,RSTART+22,RLENGTH-22); exit } }')
+if [ -z "$CDP_PORT" ] || ! curl -fsS --max-time 2 "http://localhost:${CDP_PORT}/json/version" >/dev/null 2>&1; then
+  echo "PREFLIGHT_FAILED: reddit-agent Chrome unhealthy after ensure_browser_healthy (port=${CDP_PORT:-none}). Skipping run to avoid burning a Claude orchestrator session on an undriveable browser." | tee -a "$LOG_FILE"
+  exit 0
+fi
+
 # Capture Claude output to a temp file so a non-zero exit doesn't swallow stderr
 # before we get a chance to log it. Without this, run_claude.sh failures look
 # like "SCRIPT DIED line=283 exit=1" with zero context.
@@ -289,6 +305,7 @@ Flair target (if known from prior attempt): ${PENDING_FLAIR}
 
 CRITICAL: NEVER use em dashes.
 CRITICAL: Use ONLY mcp__reddit-agent__* tools.
+CRITICAL: If mcp__reddit-agent__* tools are NOT available in this session (you cannot find them as deferred or callable), return JSON immediately with permalink=null and abort_reason='mcp_browser_unavailable'. DO NOT spawn Python, shell, headless or headed Playwright as a fallback. DO NOT use any other browser MCP. The pipeline depends on reddit-agent specifically; any other browser path violates project rules and CHECK-aborts a second Chrome on the locked profile (incident 2026-05-04 08:27).
 CRITICAL: Close browser tabs after each navigation (browser_tabs action 'close').
 CRITICAL: If a browser call times out, wait 30s and retry up to 3 times.
 CRITICAL: This is a RETRY of a $4-24 sunk-cost draft. Do NOT redraft, do NOT research." > "$CLAUDE_TMP" 2>&1
@@ -412,6 +429,7 @@ ${TOP_POSTS}
 
 CRITICAL: NEVER use em dashes.
 CRITICAL: Use ONLY mcp__reddit-agent__* tools.
+CRITICAL: If mcp__reddit-agent__* tools are NOT available in this session (you cannot find them as deferred or callable), return JSON immediately with permalink=null and abort_reason='mcp_browser_unavailable'. DO NOT spawn Python, shell, headless or headed Playwright as a fallback. DO NOT use any other browser MCP. The pipeline depends on reddit-agent specifically; any other browser path violates project rules and CHECK-aborts a second Chrome on the locked profile (incident 2026-05-04 08:27). The shell wrapper persists your draft to pending_threads on abort, so a clean ABORT-SAFE return preserves the work.
 CRITICAL: Close browser tabs after each navigation (browser_tabs action 'close').
 CRITICAL: If a browser call times out, wait 30s and retry up to 3 times." > "$CLAUDE_TMP" 2>&1
 CLAUDE_RC=$?
