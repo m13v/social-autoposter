@@ -4879,7 +4879,7 @@ const HTML = `<!DOCTYPE html>
   body.sa-authed-pending .header, body.sa-authed-pending .tabs, body.sa-authed-pending .content { visibility: hidden; }
 </style>
 <script>
-  window.SA_CONFIG = { clientMode: __SA_CLIENT_MODE_PLACEHOLDER__, firebase: __SA_FIREBASE_CONFIG_PLACEHOLDER__ };
+  window.SA_CONFIG = { clientMode: __SA_CLIENT_MODE_PLACEHOLDER__, firebase: __SA_FIREBASE_CONFIG_PLACEHOLDER__, posthog: __SA_POSTHOG_CONFIG_PLACEHOLDER__ };
   // Install fetch wrapper upfront so any /api/ call picks up the token
   // once auth resolves. Missing-token calls will 401 server-side in CLIENT_MODE.
   (function() {
@@ -4898,6 +4898,26 @@ const HTML = `<!DOCTYPE html>
 </script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script>
+  // PostHog product analytics. Loaded only when SA_CONFIG.posthog.key is set
+  // (CLIENT_MODE=1 hosted dashboard); a no-op in local operator mode.
+  // Identify + login capture happen below in the auth bootstrap, once we
+  // have the Firebase user and /api/me claims.
+  (function loadPosthog() {
+    var ph = window.SA_CONFIG && window.SA_CONFIG.posthog;
+    if (!ph || !ph.key) return;
+    !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSurveysLoaded onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug getPageViewId captureTraceFeedback captureTraceMetric".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+    posthog.init(ph.key, {
+      api_host: ph.host || 'https://us.i.posthog.com',
+      person_profiles: 'identified_only',
+      capture_pageview: true,
+      autocapture: true,
+      // Defer real persons until after login. Pre-auth pageviews land on an
+      // anonymous distinct_id and are aliased on identify().
+      loaded: function(p) { try { p.register({ app: 'sa-dashboard' }); } catch (e) {} }
+    });
+  })();
+</script>
 </head>
 <body class="sa-authed-pending">
 
@@ -10774,6 +10794,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (!activateTab(name)) return;
     // Persist last-active tab so a reload returns to the same view.
     saSave('sa.activeTab.v1', name);
+    try { window.posthog && window.posthog.capture('tab_view', { tab: name }); } catch (e) {}
   });
 });
 // On first paint, restore the persisted main tab. The HTML defaults to
@@ -10915,6 +10936,7 @@ function saStartApp() {
   document.body.classList.remove('sa-authed-pending');
   const isCloud = document.body.classList.contains('sa-cloud');
   const isAdmin = window.SA_IS_ADMIN !== false;
+  try { window.posthog && window.posthog.capture('dashboard_opened', { is_admin: isAdmin, is_cloud: isCloud }); } catch (e) {}
   // Status + pending are local-only (UI hidden by body.sa-cloud). Endpoints
   // are admin-only too, so skipping them on cloud also stops 403 spam for
   // scoped clients.
@@ -11006,6 +11028,7 @@ window.saStartApp = saStartApp;
     }
     fbAuth.signInWithEmailLink(savedEmail, window.location.href).then(function() {
       window.localStorage.removeItem('saEmailForSignIn');
+      try { window.posthog && window.posthog.capture('login_succeeded', { method: 'magic_link' }); } catch (e) {}
       if (window.history && window.history.replaceState) {
         window.history.replaceState({}, document.title, window.location.pathname);
       }
@@ -11025,6 +11048,7 @@ window.saStartApp = saStartApp;
     submitBtn.disabled = true;
     fbAuth.sendSignInLinkToEmail(email, actionCodeSettings).then(function() {
       window.localStorage.setItem('saEmailForSignIn', email);
+      try { window.posthog && window.posthog.capture('magic_link_sent', { email: email }); } catch (e) {}
       submitBtn.style.display = 'none';
       passwordRow.style.display = 'none';
       togglePasswordBtn.style.display = 'none';
@@ -11057,13 +11081,18 @@ window.saStartApp = saStartApp;
     if (!email) { errEl.textContent = 'Enter your email.'; return; }
     if (!password) { errEl.textContent = 'Enter a password.'; return; }
     passwordSubmitBtn.disabled = true;
-    fbAuth.signInWithEmailAndPassword(email, password).catch(function(err) {
+    fbAuth.signInWithEmailAndPassword(email, password).then(function() {
+      try { window.posthog && window.posthog.capture('login_succeeded', { method: 'password' }); } catch (e) {}
+    }).catch(function(err) {
       errEl.textContent = (err && err.message) || 'Sign-in failed';
+      try { window.posthog && window.posthog.capture('login_failed', { method: 'password', reason: (err && err.code) || 'unknown' }); } catch (e) {}
     }).finally(function() {
       passwordSubmitBtn.disabled = false;
     });
   });
   window.saSignOut = function() {
+    try { window.posthog && window.posthog.capture('logout'); } catch (e) {}
+    try { window.posthog && window.posthog.reset(); } catch (e) {}
     fbAuth.signOut().then(function() { location.reload(); });
   };
   fbAuth.onIdTokenChanged(function(user) {
@@ -11081,6 +11110,24 @@ window.saStartApp = saStartApp;
       if (!u) throw new Error('no user');
       window.SA_IS_ADMIN = !!u.admin;
       if (!u.admin) document.body.classList.add('sa-non-admin');
+      // Identify the user in PostHog. Use the Firebase uid as distinct_id so
+      // the same person stays unified across browsers/devices. Person props
+      // mirror the dashboard's auth claims (admin flag + project allowlist).
+      try {
+        if (window.posthog && u.uid) {
+          window.posthog.identify(u.uid, {
+            email: u.email || null,
+            is_admin: !!u.admin,
+            projects: Array.isArray(u.projects) ? u.projects : [],
+            project_count: Array.isArray(u.projects) ? u.projects.length : 0,
+          });
+          if (Array.isArray(u.projects)) {
+            u.projects.forEach(function(p) {
+              try { window.posthog.group('project', p); } catch (e) {}
+            });
+          }
+        }
+      } catch (e) {}
       var signoutBtn = document.getElementById('sa-signout-btn');
       if (signoutBtn) signoutBtn.style.display = '';
       var badge = document.getElementById('sa-user-badge');
@@ -11126,10 +11173,22 @@ function firebaseWebConfig() {
   };
 }
 
+// PostHog client-side config. The phc_* project key is intended to be public
+// (it can only ingest events, not read them); access control to the dashboard
+// itself is enforced by Firebase Security Rules + /api/me. Empty key disables
+// PostHog entirely (local operator mode, or hosted but not yet configured).
+function posthogWebConfig() {
+  return {
+    key: (process.env.POSTHOG_KEY || '').trim(),
+    host: (process.env.POSTHOG_HOST || 'https://us.i.posthog.com').trim(),
+  };
+}
+
 function renderHtml() {
   return HTML
     .replace('__SA_CLIENT_MODE_PLACEHOLDER__', JSON.stringify(auth.CLIENT_MODE))
-    .replace('__SA_FIREBASE_CONFIG_PLACEHOLDER__', JSON.stringify(firebaseWebConfig()));
+    .replace('__SA_FIREBASE_CONFIG_PLACEHOLDER__', JSON.stringify(firebaseWebConfig()))
+    .replace('__SA_POSTHOG_CONFIG_PLACEHOLDER__', JSON.stringify(posthogWebConfig()));
 }
 
 // --- Server ---
