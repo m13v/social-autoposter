@@ -120,15 +120,20 @@ def main():
             urn_for_url = activity_id or ugc_id
             kind = "activity" if activity_id else "ugcPost"
             our_url = f"https://www.linkedin.com/feed/update/urn:li:{kind}:{urn_for_url}/"
+            # thread_author: best signal we have is the notification author
+            # (the replier). It isn't the actual OP, but it's not us, so the
+            # dashboard "threads vs comments" filter (server.js /api/top)
+            # correctly classifies these as comments under someone else's post.
+            thread_author = author or "(unknown)"
             cur.execute(
                 """
-                INSERT INTO posts (platform, thread_url, our_url, our_content, our_account,
+                INSERT INTO posts (platform, thread_url, thread_author, our_url, our_content, our_account,
                                    project_name, engagement_style, status, posted_at)
-                VALUES ('linkedin', %s, %s, %s, 'Matthew Diakonov',
+                VALUES ('linkedin', %s, %s, %s, %s, 'Matthew Diakonov',
                         'general', 'discovered_via_notification', 'active', NOW())
                 RETURNING id
                 """,
-                (our_url, our_url, "[discovered via notification, no original content tracked]"),
+                (our_url, thread_author, our_url, "[discovered via notification, no original content tracked]"),
             )
             post_id = cur.fetchone()[0]
             conn.commit()
