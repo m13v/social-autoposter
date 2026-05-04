@@ -199,16 +199,48 @@ def _load_eligible_posts(conn, limit: int) -> list:
     ]
 
 
-def _scrape_one(page, post: dict, our_name: str, quiet: bool = False) -> dict:
+def _scrape_one(context, post: dict, our_name: str, quiet: bool = False) -> dict:
     """Navigate to one post, locate OUR comment, read reactions. Always
     returns a dict shaped for scrape_linkedin_stats.update_linkedin_stats
     consumption: {url, reactions, found, unavailable?, signal?}.
+
+    Opens its own page in the shared context and closes it before returning.
+    Page-per-URL (not reuse-one-page) so a peer in the same context — for
+    example a concurrent Phase A run sharing the linkedin-agent MCP — can't
+    close our tab out from under us mid-batch (observed live: a tab inside
+    the MCP's BrowserContext was closed by another tool call, raising
+    TargetClosedError on the next page.wait_for_timeout). Page creation
+    overhead is ~100ms per URL, well worth the isolation.
+
     Side-effect-free on errors: the caller decides whether to count as a
     DOM error vs. session_invalid (which aborts the whole run).
     """
     raw_url = post["our_url"]
     clean_url = _strip_comment_urn(raw_url)
 
+    try:
+        page = context.new_page()
+    except Exception as e:
+        return {
+            "url": raw_url,
+            "reactions": 0,
+            "found": False,
+            "_error": f"new_page_failed: {e}",
+        }
+
+    try:
+        return _scrape_one_on_page(page, raw_url, clean_url, post, our_name, quiet)
+    finally:
+        try:
+            page.close()
+        except Exception:
+            pass
+
+
+def _scrape_one_on_page(page, raw_url: str, clean_url: str, post: dict,
+                        our_name: str, quiet: bool = False) -> dict:
+    """Inner navigation + scrape on an already-created page. Caller owns the
+    page lifecycle and closes it after we return."""
     try:
         page.goto(clean_url, wait_until="domcontentloaded", timeout=30000)
     except Exception as e:
@@ -420,9 +452,7 @@ def run(limit: int = 30, summary_path: Optional[str] = None,
             }
         context = browser.contexts[0]
 
-        page = None
         try:
-            page = context.new_page()
             for i, post in enumerate(posts):
                 if not quiet:
                     print(
@@ -430,7 +460,7 @@ def run(limit: int = 30, summary_path: Optional[str] = None,
                         f"id={post['id']} {post['our_url'][:90]}",
                         flush=True,
                     )
-                r = _scrape_one(page, post, our_name, quiet=quiet)
+                r = _scrape_one(context, post, our_name, quiet=quiet)
 
                 if r.get("_session_invalid"):
                     session_invalid = True
@@ -455,11 +485,6 @@ def run(limit: int = 30, summary_path: Optional[str] = None,
                 if i + 1 < len(posts):
                     time.sleep(random.uniform(3.0, 5.0))
         finally:
-            try:
-                if page is not None:
-                    page.close()
-            except Exception:
-                pass
             try:
                 browser.disconnect()
             except Exception:
