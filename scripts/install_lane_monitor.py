@@ -29,7 +29,8 @@ FAIL = "\033[31m✗\033[0m"
 status = 0
 
 print("=" * 64)
-print("INSTALL LANE CANARY (github-engage HTTP / others SQL)")
+HTTP_LANE_PLATFORMS = {"github", "reddit"}
+print(f"INSTALL LANE CANARY (HTTP: {', '.join(sorted(HTTP_LANE_PLATFORMS))} / others SQL)")
 print("=" * 64)
 
 # 1. Heartbeat freshness
@@ -76,15 +77,15 @@ cur = db.execute("""
     ORDER BY total DESC
 """)
 rows = cur.fetchall()
-print("\n[2] LAST 24H REPLIES BY PLATFORM (canary = github)")
+print(f"\n[2] LAST 24H REPLIES BY PLATFORM (HTTP-lane: {', '.join(sorted(HTTP_LANE_PLATFORMS))})")
 print(f"     {'platform':<10} {'total':>5} {'attrib':>7} {'rep':>5} {'skp':>5} {'prc':>5} {'pnd':>5}  notes")
 for r in rows:
     plat, total, attrib, replied, skipped, proc, pend = r
     pct = (attrib / total * 100) if total else 0
     note = ""
-    if plat == "github":
+    if plat in HTTP_LANE_PLATFORMS:
         if total == 0:
-            note = "(no traffic yet — wait for next 2h cycle)"
+            note = "(no traffic yet)"
         elif pct < 80:
             note = f"  {WARN} only {pct:.0f}% attributed; expected ~100%"
             status = 1
