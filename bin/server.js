@@ -6410,6 +6410,7 @@ function wirePillRow(rowId, onSelect) {
     btn.classList.add('active');
     const v = btn.getAttribute('data-value');
     pillRow.setAttribute('data-selected', v);
+    try { window.posthog && window.posthog.capture('pill_select', { row: rowId, value: v }); } catch (er) {}
     onSelect(v);
   });
 }
@@ -6914,9 +6915,11 @@ function buildActivityFilters() {
     const el = ev.target.closest('[data-type]');
     if (!el || !tEl.contains(el)) return;
     const t = el.dataset.type;
-    if (_activityTypeFilter.has(t)) { _activityTypeFilter.delete(t); el.classList.remove('active'); }
-    else { _activityTypeFilter.add(t); el.classList.add('active'); }
+    var added;
+    if (_activityTypeFilter.has(t)) { _activityTypeFilter.delete(t); el.classList.remove('active'); added = false; }
+    else { _activityTypeFilter.add(t); el.classList.add('active'); added = true; }
     saSaveSet('sa.activity.typeFilter.v2', _activityTypeFilter);
+    try { window.posthog && window.posthog.capture('filter_toggle', { table: 'activity', dimension: 'type', value: t, action: added ? 'add' : 'remove' }); } catch (er) {}
     _activityPage = 0;
     renderActivity(_lastActivityEvents || []);
   });
@@ -6924,9 +6927,11 @@ function buildActivityFilters() {
     const el = ev.target.closest('[data-platform]');
     if (!el || !pEl.contains(el)) return;
     const p = el.dataset.platform;
-    if (_activityPlatformFilter.has(p)) { _activityPlatformFilter.delete(p); el.classList.remove('active'); }
-    else { _activityPlatformFilter.add(p); el.classList.add('active'); }
+    var added;
+    if (_activityPlatformFilter.has(p)) { _activityPlatformFilter.delete(p); el.classList.remove('active'); added = false; }
+    else { _activityPlatformFilter.add(p); el.classList.add('active'); added = true; }
     saSaveSet('sa.activity.platformFilter.v1', _activityPlatformFilter);
+    try { window.posthog && window.posthog.capture('filter_toggle', { table: 'activity', dimension: 'platform', value: p, action: added ? 'add' : 'remove' }); } catch (er) {}
     _activityPage = 0;
     renderActivity(_lastActivityEvents || []);
   });
@@ -6935,9 +6940,11 @@ function buildActivityFilters() {
       const el = ev.target.closest('[data-project]');
       if (!el || !projEl.contains(el)) return;
       const p = el.dataset.project;
-      if (_activityProjectFilter.has(p)) { _activityProjectFilter.delete(p); el.classList.remove('active'); }
-      else { _activityProjectFilter.add(p); el.classList.add('active'); }
+      var added;
+      if (_activityProjectFilter.has(p)) { _activityProjectFilter.delete(p); el.classList.remove('active'); added = false; }
+      else { _activityProjectFilter.add(p); el.classList.add('active'); added = true; }
       saSaveSet('sa.activity.projectFilter.v1', _activityProjectFilter);
+      try { window.posthog && window.posthog.capture('filter_toggle', { table: 'activity', dimension: 'project', value: p, action: added ? 'add' : 'remove' }); } catch (er) {}
       _activityPage = 0;
       renderActivity(_lastActivityEvents || []);
     });
@@ -6947,9 +6954,11 @@ function buildActivityFilters() {
       const el = ev.target.closest('[data-campaign]');
       if (!el || !campEl.contains(el)) return;
       const c = el.dataset.campaign;
-      if (_activityCampaignFilter.has(c)) { _activityCampaignFilter.delete(c); el.classList.remove('active'); }
-      else { _activityCampaignFilter.add(c); el.classList.add('active'); }
+      var added;
+      if (_activityCampaignFilter.has(c)) { _activityCampaignFilter.delete(c); el.classList.remove('active'); added = false; }
+      else { _activityCampaignFilter.add(c); el.classList.add('active'); added = true; }
       saSaveSet('sa.activity.campaignFilter.v1', _activityCampaignFilter);
+      try { window.posthog && window.posthog.capture('filter_toggle', { table: 'activity', dimension: 'campaign', value: c, action: added ? 'add' : 'remove' }); } catch (er) {}
       _activityPage = 0;
       renderActivity(_lastActivityEvents || []);
     });
@@ -6958,6 +6967,7 @@ function buildActivityFilters() {
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       const a = btn.dataset.filterAction;
+      try { window.posthog && window.posthog.capture('filter_bulk', { table: 'activity', action: a }); } catch (er) {}
       if (a === 'type-all') {
         _activityTypeFilter = new Set(EVENT_TYPES);
         tEl.querySelectorAll('[data-type]').forEach(c => c.classList.add('active'));
@@ -7002,11 +7012,18 @@ function buildActivityFilters() {
       // Hydrate the visible input with the persisted query so the user sees
       // the same filter state the table is already applying.
       if (_activitySearch && search.value !== _activitySearch) search.value = _activitySearch;
+      var _searchTrackTimer = null;
       search.addEventListener('input', () => {
         _activitySearch = search.value.trim().toLowerCase();
         saSave('sa.activity.search.v1', _activitySearch);
         _activityPage = 0;
         renderActivity(_lastActivityEvents || []);
+        // Debounce so PostHog only sees the final query (no per-keystroke spam).
+        // We log length only, not the value, to avoid leaking PII into events.
+        if (_searchTrackTimer) clearTimeout(_searchTrackTimer);
+        _searchTrackTimer = setTimeout(() => {
+          try { window.posthog && window.posthog.capture('search', { table: 'activity', length: _activitySearch.length, has_value: _activitySearch.length > 0 }); } catch (er) {}
+        }, 1500);
       });
     }
     document.querySelectorAll('.activity-sortable').forEach(el => {
@@ -7016,6 +7033,7 @@ function buildActivityFilters() {
         else { _activitySortField = field; _activitySortDir = field === 'occurred_at' ? 'desc' : 'asc'; }
         saSave('sa.activity.sortField.v1', _activitySortField);
         saSave('sa.activity.sortDir.v1', _activitySortDir);
+        try { window.posthog && window.posthog.capture('sort_change', { table: 'activity', field: _activitySortField, dir: _activitySortDir }); } catch (er) {}
         _activityPage = 0;
         renderActivity(_lastActivityEvents || []);
       });
@@ -8949,6 +8967,7 @@ function wireTopPillRow(rowId, onSelect) {
     const value = btn.getAttribute('data-value') || 'all';
     if ((row.dataset.selected || 'all') === value) return;
     setTopPillActive(row, value);
+    try { window.posthog && window.posthog.capture('pill_select', { row: rowId, value: value }); } catch (er) {}
     onSelect(value);
   });
   row._wired = true;
