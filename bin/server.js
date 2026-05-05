@@ -5067,6 +5067,7 @@ const HTML = `<!DOCTYPE html>
           <button type="button" class="style-stats-pill" data-value="seo_improve">SEO Improve</button>
           <button type="button" class="style-stats-pill" data-value="seo_top_pages">SEO Top Pages</button>
           <button type="button" class="style-stats-pill" data-value="seo_weekly_roundup">SEO Roundup</button>
+          <button type="button" class="style-stats-pill" data-value="seo_expire">SEO Expire</button>
           <button type="button" class="style-stats-pill" data-value="report">Report</button>
           <button type="button" class="style-stats-pill" data-value="other">Other</button>
         </div>
