@@ -259,7 +259,19 @@ LINKEDIN_POSTS=$(psql "$DATABASE_URL" -t -A -c "
 
 if [ "$LINKEDIN_POSTS" -gt 0 ]; then
     acquire_lock "linkedin-browser" 1800
-    ensure_browser_healthy "linkedin"
+    # Deliberately do NOT call ensure_browser_healthy here. That helper
+    # reads --remote-debugging-port from the Chrome cmdline, but the
+    # linkedin-agent MCP launches Chrome with `--remote-debugging-port=0`
+    # (let Chrome pick a random port; actual port written to
+    # DevToolsActivePort). Result: ensure_browser_healthy reads `0`, probes
+    # http://localhost:0, fails, then KILLS the perfectly healthy Chrome —
+    # which is the opposite of what we want. The bash lock's orphan-Chrome
+    # sweep (ppid==1 filter) already handles the truly-dead case, and our
+    # Python script CDP-attaches via DevToolsActivePort so it discovers the
+    # real port without needing the cmdline value. If MCP is genuinely cold,
+    # the script returns mcp_not_running and Step 4 logs as failed for that
+    # run — acceptable since the post pipeline (every 15min) primes Chrome
+    # in steady state.
 
     SOCIAL_AUTOPOSTER_LINKEDIN_STATS=1 gtimeout 1800 python3 \
         "$REPO_DIR/scripts/scrape_linkedin_stats_browser.py" \
