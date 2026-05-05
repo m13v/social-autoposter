@@ -8519,13 +8519,21 @@ function renderFunnelStats(payload) {
       // (clients with an amplitude block in config.json). Falls back to the
       // CTA click count for projects without that wiring. Tooltip + green
       // tint distinguishes the verified end-product signal from the click.
+      // When both are present, render "<amplitude> (<on-page click count>)"
+      // so the funnel from button-press to actual product signup is visible
+      // at a glance.
       { key: 'get_started_clicks', label: 'Get Started',   type: 'numeric', align: 'right',
         formatter: (v, r) => {
           if (r && r.amplitude_signups != null) {
             const n = Number(r.amplitude_signups) || 0;
+            const clicks = Number(r.get_started_clicks) || 0;
             const filt = r.amplitude_filter && Object.entries(r.amplitude_filter).map(([k,vv]) => k + '=' + (Array.isArray(vv) ? vv.join('|') : vv)).join(', ');
-            const tip = 'Amplitude-attributed end-product signups' + (filt ? ' (' + filt + ')' : '') + '. Falls back to CTA clicks when not configured.';
-            return '<span data-tooltip="' + escapeHtml(tip) + '" style="color:var(--success);font-weight:600;font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
+            const tip = 'Amplitude-attributed end-product signups' + (filt ? ' (' + filt + ')' : '') + '. Number in parens is on-page get_started_click count from PostHog (button-press intent, lossy due to client-side ad-blockers).';
+            const ampSpan = '<span data-tooltip="' + escapeHtml(tip) + '" style="color:var(--success);font-weight:600;font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
+            if (clicks > 0 && clicks !== n) {
+              return ampSpan + ' <span style="color:var(--text-muted);">(' + fmt(clicks) + ')</span>';
+            }
+            return ampSpan;
           }
           return makeFunnelFmt('domain_get_started_clicks')(v, r);
         } },
