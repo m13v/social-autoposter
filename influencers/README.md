@@ -63,6 +63,7 @@ Staggering posting times across accounts and rotating caption templates is requi
 
 - `README.md` (this file)
 - `upwork-job-post.md`, JD draft for the Upwork listing
+- `candidate-qualification.md`, triage checklist for incoming Upwork proposals
 - `contractor-onboarding.md`, what to send the contractor on day 1
 
 ## Cost estimate (rough)
