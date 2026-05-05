@@ -848,16 +848,18 @@ def main():
                                 )
                             except Exception as e:
                                 print(f"[engage_reddit] #{reply['id']} ensure-dm failed: {e}")
-                        # Update project if recommended
+                        # Update project if recommended. Routes through the
+                        # HTTPS PATCH lane in reply_db.py so the project name
+                        # travels as a JSON field (no shell interpolation, no
+                        # SQL injection vector) and benefits from the same
+                        # retry-on-transient policy as the rest of the
+                        # mutations.
                         if project:
-                            dbmod.load_env()
-                            db_url = os.environ.get("DATABASE_URL", "")
-                            if db_url:
-                                subprocess.run(
-                                    ["psql", db_url, "-c",
-                                     f"UPDATE replies SET project_name='{project}' WHERE id={reply['id']};"],
-                                    capture_output=True,
-                                )
+                            subprocess.run(
+                                ["python3", REPLY_DB, "set_project",
+                                 str(reply["id"]), project],
+                                capture_output=True,
+                            )
                         succeeded += 1
                         print(f"[engage_reddit] #{reply['id']} POSTED ({reply_elapsed:.0f}s) "
                               f"[${usage['cost_usd']:.4f}]")
