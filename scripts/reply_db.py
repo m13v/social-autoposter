@@ -29,36 +29,64 @@ def _http_patch(rid: int, body: dict) -> None:
     """PATCH /api/v1/replies/{rid} with body, attaching X-Installation header.
 
     Mirrors the SQL UPDATEs below: drops keys whose values are None so the
-    server's COALESCE-style endpoint preserves existing column values. Raises
-    on any non-2xx response so the calling shell sees a non-zero exit.
+    server''s COALESCE-style endpoint preserves existing column values.
+
+    Retries on transient failures (network errors, HTTP 5xx) up to 3 attempts
+    with exponential backoff (1s, 3s, 9s) so a brief s4l.ai blip does not
+    strand a row in ''processing''. 4xx responses are deterministic client
+    errors and fail fast without retry. Raises SystemExit on final failure
+    so the calling shell sees a non-zero exit.
     """
-    import urllib.request, urllib.error
+    import urllib.request, urllib.error, time
     from identity import get_identity_header  # local module
 
     payload = {k: v for k, v in body.items() if v is not None}
     data = json.dumps(payload).encode("utf8")
     url = f"{API_BASE}/api/v1/replies/{rid}"
-    req = urllib.request.Request(
-        url,
-        data=data,
-        method="PATCH",
-        headers={
-            "content-type": "application/json",
-            "x-installation": get_identity_header(),
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            resp.read()
-    except urllib.error.HTTPError as e:
-        body_txt = ""
+
+    attempts = 3
+    backoff_s = [1, 3, 9]
+    last_err = None
+    for i in range(attempts):
+        req = urllib.request.Request(
+            url,
+            data=data,
+            method="PATCH",
+            headers={
+                "content-type": "application/json",
+                "x-installation": get_identity_header(),
+            },
+        )
         try:
-            body_txt = e.read().decode("utf8", errors="ignore")
-        except Exception:
-            pass
-        raise SystemExit(f"http {e.code} from PATCH {url}: {body_txt}")
-    except urllib.error.URLError as e:
-        raise SystemExit(f"network error PATCH {url}: {e}")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()
+            return  # success
+        except urllib.error.HTTPError as e:
+            # 4xx is deterministic (bad payload, missing row, auth); never
+            # going to succeed on retry, so fail fast with the server body.
+            if 400 <= e.code < 500:
+                body_txt = ""
+                try:
+                    body_txt = e.read().decode("utf8", errors="ignore")
+                except Exception:
+                    pass
+                raise SystemExit(f"http {e.code} from PATCH {url}: {body_txt}")
+            # 5xx: transient (502/503/504 from upstream). Retry.
+            last_err = f"http {e.code}"
+        except urllib.error.URLError as e:
+            # Network-level failure: DNS resolution, connection refused,
+            # socket timeout. All worth retrying.
+            last_err = f"network error {e}"
+        if i < attempts - 1:
+            print(
+                f"[reply_db] PATCH {url} attempt {i+1}/{attempts} failed: "
+                f"{last_err}; retrying in {backoff_s[i]}s",
+                file=sys.stderr,
+            )
+            time.sleep(backoff_s[i])
+    raise SystemExit(
+        f"PATCH {url} failed after {attempts} attempts: {last_err}"
+    )
 
 
 # Lazy-init the SQL connection so HTTP-only callers don't need DATABASE_URL.
