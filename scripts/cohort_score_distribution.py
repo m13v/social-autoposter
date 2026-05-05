@@ -57,8 +57,8 @@ def query(conn, where_extra=""):
       AVG(COALESCE(views,0))::numeric(10,0)     AS avg_views,
       MAX(COALESCE(views,0))                    AS max_views
     FROM posts
-    WHERE created_at >= NOW() - INTERVAL '{DAYS} days'
-      AND status = 'live'
+    WHERE posted_at >= NOW() - INTERVAL '{DAYS} days'
+      AND status = 'active'
       AND upvotes IS NOT NULL
       {where_extra}
     GROUP BY 1
@@ -95,11 +95,10 @@ def main():
     print_table(f"ALL platforms — {total} posts", rows, total)
 
     # Per platform
-    cur = conn.cursor()
-    cur.execute(f"""
+    cur = conn.execute(f"""
         SELECT DISTINCT LOWER(platform)
         FROM posts
-        WHERE created_at >= NOW() - INTERVAL '{DAYS} days'
+        WHERE posted_at >= NOW() - INTERVAL '{DAYS} days'
           AND status='live' AND upvotes IS NOT NULL
         ORDER BY 1
     """)
