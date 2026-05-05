@@ -298,6 +298,7 @@ while read -r TARGET_PRODUCT; do
 
     python3 - "$BRIEF_FILE" "$TARGET_PRODUCT" > "$PROPOSAL_PROMPT" <<'PY'
 import json, sys
+from datetime import datetime
 brief = json.load(open(sys.argv[1]))
 target_product = sys.argv[2]
 target = next((t for t in brief.get("targets", []) if t["product"] == target_product), None)
@@ -307,10 +308,21 @@ if not target:
 proj = target["project_config"]
 winner = brief["winner"]
 
+# Date awareness for time-sensitive keywords. Without this, the model echoes
+# whatever month/year is in the global winner's slug (e.g. "april-2026") even
+# after the calendar rolled to the next month, producing dead-on-arrival pages.
+_now = datetime.now()
+CURRENT_MONTH = _now.strftime("%B")        # e.g. "May"
+CURRENT_MONTH_LOWER = _now.strftime("%B").lower()  # e.g. "may"
+CURRENT_YEAR = _now.strftime("%Y")          # e.g. "2026"
+CURRENT_DATE_HUMAN = _now.strftime("%B %Y") # e.g. "May 2026"
+
 prompt = f"""You are a senior SEO strategist. A global ranking across multiple
 sibling products identified ONE top-performing page in the last 24h, scored by
 a weighted composite of pageviews, email_signups, schedule_clicks,
 get_started_clicks, and bookings.
+
+TODAY IS {CURRENT_DATE_HUMAN}.
 
 GLOBAL WINNER (source of topical momentum):
   product: {winner['product']}
@@ -335,7 +347,7 @@ TOP 10 RANKING (for context across all projects):
 for r in brief.get("ranking", [])[:10]:
     prompt += f"  {r['score']:>6} {r['product']:20} {r['page_url']}\n"
 
-prompt += """
+prompt += f"""
 Rules:
 - keyword must be a 3-8 word search phrase a human would actually type
   for the TARGET project's audience.
@@ -343,8 +355,21 @@ Rules:
 - concept must be 1-2 sentences explaining the angle and how it adapts the
   global winner's topic to the target's audience without being a trivial
   rename.
-- Respond with a SINGLE JSON object on one line, nothing else:
-  {"keyword": "...", "slug": "...", "concept": "..."}
+
+DATE-SENSITIVE KEYWORD RULES (CRITICAL):
+- TODAY is {CURRENT_DATE_HUMAN}. If the global winner's slug or keyword
+  contains a stale month or year (any month != "{CURRENT_MONTH_LOWER}", or
+  year != "{CURRENT_YEAR}"), DO NOT echo that stale date into your proposal.
+- If your proposed keyword is inherently time-sensitive (release notes,
+  changelog roundup, news digest, "best X for <month>", "latest releases",
+  "what shipped"), use "{CURRENT_MONTH_LOWER} {CURRENT_YEAR}" or
+  "{CURRENT_YEAR}" only. Never propose a keyword for a past month.
+- If the global winner's topic is dated and there's no fresh angle for
+  {CURRENT_DATE_HUMAN}, prefer an evergreen or comparison-style keyword
+  (e.g. "vs", "alternative", "for <use case>") over another dated variant.
+
+Respond with a SINGLE JSON object on one line, nothing else:
+  {{"keyword": "...", "slug": "...", "concept": "..."}}
 """
 sys.stdout.write(prompt)
 PY
