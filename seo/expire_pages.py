@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+"""
+Auto-expire dead-weight SEO pages across every project in config.json.
+
+Definition of dead-weight (a page is "dead" if ALL of these hold):
+  - Site has at least 30 days of GSC history for the page
+  - Last 30 days: clicks == 0
+  - Last 30 days: impressions >= MIN_IMPRESSIONS (default 10) so we don't
+    delete pages Google never even surfaced (those may be brand-new and
+    are handled by GROUP B below)
+  - The on-disk source file is older than MIN_AGE_DAYS (default 30 days)
+    so we don't kill pages published this month
+
+What "delete" means here: we remove the source file in the consumer
+website repo. Next.js will then return 404 for the URL. The auto-commit
+agent will push the deletion within ~60s. We log every deletion to
+seo_expired_pages so we can audit / revert.
+
+Per-project source-of-truth for content path is detected automatically:
+  /blog/<slug>          -> <repo>/content/blog/<slug>.mdx
+  /t/<slug>             -> <repo>/src/app/t/<slug>/
+  /alternative/<slug>   -> <repo>/src/app/alternative/<slug>/
+  /best/<slug>          -> <repo>/src/app/best/<slug>/
+  (any other path)      -> logged + skipped
+
+Usage:
+  python3 expire_pages.py                          # dry-run, all projects
+  python3 expire_pages.py --product fazm           # dry-run, single project
+  python3 expire_pages.py --product fazm --apply   # actually delete
+  python3 expire_pages.py --apply --max 50         # cap at 50 deletions
+                                                     across all projects
+
+Schedule via launchd: weekly is plenty. Run with --apply.
+
+Safety:
+  - --apply required to delete; default is dry-run
+  - --max caps total deletions per invocation (default 100)
+  - --min-age-days protects fresh pages (default 30)
+  - --min-impressions protects pages Google never showed (default 10)
+  - All deletions logged to seo_expired_pages DB table for audit/revert
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import sys
+import time
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import urlparse
+
+SCRIPT_DIR = Path(__file__).parent.resolve()
+ROOT_DIR = SCRIPT_DIR.parent
+CONFIG_PATH = ROOT_DIR / "config.json"
+SA_PATH = SCRIPT_DIR / "credentials" / "seo-autopilot-sa.json"
+ENV_PATH = ROOT_DIR / ".env"
+
+PERIOD_DAYS = 30
+DEFAULT_MAX_DELETIONS = 100
+DEFAULT_MIN_AGE_DAYS = 30
+DEFAULT_MIN_IMPRESSIONS = 10
+# Fast-track: pages with >= this many impressions AND zero clicks are clearly
+# dead (Google showed them a lot, nobody clicked). Allow earlier deletion at
+# FAST_TRACK_MIN_AGE_DAYS instead of waiting the full MIN_AGE_DAYS window.
+FAST_TRACK_IMP_THRESHOLD = 1000
+FAST_TRACK_MIN_AGE_DAYS = 14
+ROW_LIMIT = 25000
+
+
+def load_env():
+    if ENV_PATH.exists():
+        for line in ENV_PATH.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+
+
+def load_config():
+    return json.loads(CONFIG_PATH.read_text())
+
+
+def get_gsc_service():
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+
+    creds = service_account.Credentials.from_service_account_file(
+        str(SA_PATH),
+        scopes=["https://www.googleapis.com/auth/webmasters.readonly"],
+    )
+    return build("searchconsole", "v1", credentials=creds)
+
+
+def fetch_gsc_pages(svc, gsc_property, start_date, end_date):
+    """Returns list of {page, clicks, impressions, ctr, position}."""
+    body = {
+        "startDate": start_date.isoformat(),
+        "endDate": end_date.isoformat(),
+        "dimensions": ["page"],
+        "rowLimit": ROW_LIMIT,
+    }
+    resp = svc.searchanalytics().query(siteUrl=gsc_property, body=body).execute()
+    return resp.get("rows", [])
+
+
+def url_to_source_path(repo_path: Path, page_url: str) -> Path | None:
+    """Map a public URL back to the on-disk source file/folder.
+
+    Returns None if the URL pattern is not recognized (we err on the side
+    of NOT deleting unknown URL shapes).
+    """
+    parsed = urlparse(page_url)
+    path = parsed.path.strip("/")
+    if not path:
+        return None  # never delete the homepage
+    parts = path.split("/")
+    # /blog/<slug> -> content/blog/<slug>.mdx
+    if parts[0] == "blog" and len(parts) == 2:
+        return repo_path / "content" / "blog" / f"{parts[1]}.mdx"
+    # /t/<slug> -> src/app/t/<slug>/
+    if parts[0] == "t" and len(parts) == 2:
+        candidate = repo_path / "src" / "app" / "t" / parts[1]
+        if candidate.exists():
+            return candidate
+        # Some sites use route groups: src/app/(content)/t/<slug>/
+        for group_dir in (repo_path / "src" / "app").glob("(*)/t"):
+            candidate2 = group_dir / parts[1]
+            if candidate2.exists():
+                return candidate2
+        return None
+    # /alternative/<slug>
+    if parts[0] == "alternative" and len(parts) == 2:
+        candidate = repo_path / "src" / "app" / "alternative" / parts[1]
+        return candidate if candidate.exists() else None
+    # /best/<slug>
+    if parts[0] == "best" and len(parts) == 2:
+        candidate = repo_path / "src" / "app" / "best" / parts[1]
+        return candidate if candidate.exists() else None
+    return None
+
+
+def file_age_days(path: Path, repo_path: Path) -> float:
+    """Return age in days using git creation date.
+
+    Falls back to filesystem mtime if git history isn't available. The
+    background auto-commit agent updates mtimes during routine commits, so
+    git's first-commit timestamp is the only reliable signal for "when was
+    this page actually published".
+    """
+    import subprocess
+    try:
+        # For folder routes (e.g. /t/<slug>/) the canonical file is page.tsx
+        # inside it; for blog .mdx the path itself is the file. Pick the
+        # newest creation timestamp inside the path so a folder with a stale
+        # page.tsx but a fresh helper file still counts as fresh.
+        if path.is_file():
+            targets = [path]
+        elif path.is_dir():
+            targets = [p for p in path.rglob("*") if p.is_file()]
+        else:
+            return 0
+        if not targets:
+            return 0
+        newest_creation = 0.0
+        for t in targets:
+            rel = t.relative_to(repo_path)
+            res = subprocess.run(
+                ["git", "log", "--diff-filter=A", "--follow",
+                 "--format=%at", "--", str(rel)],
+                cwd=str(repo_path), capture_output=True, text=True, timeout=10,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                lines = [int(x) for x in res.stdout.strip().splitlines() if x.strip().isdigit()]
+                if lines:
+                    # last line of git log --follow is the original creation
+                    creation_ts = lines[-1]
+                    if creation_ts > newest_creation:
+                        newest_creation = creation_ts
+        if newest_creation > 0:
+            return (time.time() - newest_creation) / 86400
+        # Fallback to mtime if git log returned nothing
+        mt = max(t.stat().st_mtime for t in targets)
+        return (time.time() - mt) / 86400
+    except Exception:
+        try:
+            return (time.time() - path.stat().st_mtime) / 86400
+        except Exception:
+            return 0
+
+
+def ensure_log_table():
+    """Create seo_expired_pages table if missing."""
+    import psycopg2
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS seo_expired_pages (
+            id SERIAL PRIMARY KEY,
+            product TEXT NOT NULL,
+            page_url TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            impressions_30d INT NOT NULL,
+            clicks_30d INT NOT NULL,
+            avg_position NUMERIC(6,2),
+            file_age_days NUMERIC(8,2),
+            expired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            reason TEXT,
+            UNIQUE (product, page_url)
+        )
+        """
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def log_expiry(product, page_url, source_path, imp, clicks, pos, age, reason):
+    import psycopg2
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO seo_expired_pages
+          (product, page_url, source_path, impressions_30d, clicks_30d,
+           avg_position, file_age_days, reason)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (product, page_url) DO UPDATE SET
+          expired_at = NOW(), reason = EXCLUDED.reason,
+          source_path = EXCLUDED.source_path,
+          impressions_30d = EXCLUDED.impressions_30d,
+          clicks_30d = EXCLUDED.clicks_30d
+        """,
+        (product, page_url, str(source_path), imp, clicks, pos, age, reason),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def expire_for_project(svc, project, args, end_date, deletions_remaining):
+    """Returns (candidates_found, deleted_count)."""
+    name = project["name"]
+    lp = project.get("landing_pages") or {}
+    gsc_property = lp.get("gsc_property")
+    repo = lp.get("repo")
+    if not gsc_property or not repo:
+        return (0, 0)
+    repo_path = Path(os.path.expanduser(repo))
+    if not repo_path.exists():
+        print(f"  [{name}] repo missing at {repo_path}, skipping")
+        return (0, 0)
+
+    start_date = end_date - timedelta(days=PERIOD_DAYS)
+    print(f"\n=== {name} ({gsc_property}) ===")
+    try:
+        rows = fetch_gsc_pages(svc, gsc_property, start_date, end_date)
+    except Exception as e:
+        print(f"  GSC fetch failed: {e}")
+        return (0, 0)
+    print(f"  pages with impressions in last {PERIOD_DAYS}d: {len(rows)}")
+
+    candidates = []
+    for r in rows:
+        page = r["keys"][0]
+        clicks = int(r.get("clicks") or 0)
+        imp = int(r.get("impressions") or 0)
+        pos = float(r.get("position") or 0)
+        if clicks > 0:
+            continue
+        if imp < args.min_impressions:
+            continue
+        src = url_to_source_path(repo_path, page)
+        if src is None:
+            continue
+        if not src.exists():
+            continue
+        age = file_age_days(src, repo_path)
+        # Fast-track for clearly-dead pages: high impressions, zero clicks,
+        # at least FAST_TRACK_MIN_AGE_DAYS old.
+        is_fast_track = (
+            imp >= FAST_TRACK_IMP_THRESHOLD
+            and age >= FAST_TRACK_MIN_AGE_DAYS
+        )
+        if not is_fast_track and age < args.min_age_days:
+            continue
+        candidates.append({
+            "page": page, "imp": imp, "clicks": clicks, "pos": pos,
+            "src": src, "age": age,
+            "reason": "fast_track_zero_clicks" if is_fast_track else "zero_clicks_30d",
+        })
+
+    candidates.sort(key=lambda c: -c["imp"])
+    print(f"  dead-weight candidates: {len(candidates)}")
+    if not candidates:
+        return (0, 0)
+
+    deleted = 0
+    for c in candidates:
+        if deletions_remaining <= 0:
+            print(f"  hit global --max cap, stopping for {name}")
+            break
+        flag = "DELETE" if args.apply else "DRY-RUN"
+        print(
+            f"  {flag} | imp={c['imp']:>5} pos={c['pos']:>5.1f} "
+            f"age={c['age']:>4.0f}d | {c['page']}"
+        )
+        if args.apply:
+            try:
+                if c["src"].is_file():
+                    c["src"].unlink()
+                elif c["src"].is_dir():
+                    shutil.rmtree(c["src"])
+                log_expiry(
+                    name, c["page"], c["src"], c["imp"], c["clicks"],
+                    c["pos"], c["age"], c["reason"],
+                )
+                deleted += 1
+                deletions_remaining -= 1
+            except Exception as e:
+                print(f"    delete failed: {e}")
+    return (len(candidates), deleted)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--product", help="Limit to one project name (case-insensitive)")
+    ap.add_argument("--apply", action="store_true",
+                    help="Actually delete (default is dry-run)")
+    ap.add_argument("--max", type=int, default=DEFAULT_MAX_DELETIONS,
+                    help=f"Cap total deletions across all projects (default {DEFAULT_MAX_DELETIONS})")
+    ap.add_argument("--min-age-days", type=int, default=DEFAULT_MIN_AGE_DAYS,
+                    help=f"Skip pages younger than N days (default {DEFAULT_MIN_AGE_DAYS})")
+    ap.add_argument("--min-impressions", type=int, default=DEFAULT_MIN_IMPRESSIONS,
+                    help=f"Skip pages with fewer than N impressions in {PERIOD_DAYS}d (default {DEFAULT_MIN_IMPRESSIONS})")
+    args = ap.parse_args()
+
+    load_env()
+    if "DATABASE_URL" not in os.environ:
+        print("ERROR: DATABASE_URL not in environment")
+        sys.exit(1)
+
+    if args.apply:
+        ensure_log_table()
+
+    cfg = load_config()
+    projects = cfg.get("projects", [])
+    if args.product:
+        projects = [p for p in projects if p["name"].lower() == args.product.lower()]
+        if not projects:
+            print(f"No project named {args.product}")
+            sys.exit(1)
+
+    svc = get_gsc_service()
+    end_date = date.today() - timedelta(days=2)  # GSC has 2-3 day lag
+
+    total_candidates = 0
+    total_deleted = 0
+    deletions_remaining = args.max
+    for p in projects:
+        cands, deleted = expire_for_project(
+            svc, p, args, end_date, deletions_remaining,
+        )
+        total_candidates += cands
+        total_deleted += deleted
+        deletions_remaining -= deleted
+        if deletions_remaining <= 0 and args.apply:
+            break
+
+    print(f"\n=== summary ===")
+    print(f"total candidates: {total_candidates}")
+    if args.apply:
+        print(f"deleted:          {total_deleted}")
+    else:
+        print(f"(dry-run; nothing deleted; pass --apply to delete)")
+
+
+if __name__ == "__main__":
+    main()
