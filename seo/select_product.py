@@ -37,7 +37,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(REPO_ROOT, "config.json")
 
 GSC_IMPRESSIONS_THRESHOLD = 5
-SERP_SCORE_THRESHOLD = 1.0
+SERP_SCORE_THRESHOLD = 1.5  # raised 2026-05-05 from 1.0 to cut dead-weight pages dragging domain quality
 
 
 def load_env():
