@@ -7367,6 +7367,7 @@ function currentStatsProject() {
 }
 function reloadStatsTabSections() {
   loadActivityStats();
+  loadCohortStats();
   loadStyleStats();
   // daily-metrics chart is intentionally NOT reloaded on window/platform/
   // project changes — it's fixed to a 30-day rolling window, independent
@@ -8248,6 +8249,124 @@ async function loadStyleStats() {
     ]);
     renderStyleStats(statsRes, meta);
   } catch {}
+}
+
+// Score-cohort distribution. Buckets posts in the trailing window into
+// 4 cohorts (dead/low/mid/high) by composite score (comments*3 + upvotes,
+// minus 1 on Reddit/Moltbook to strip the OP self-upvote). Mirrors top_performers.
+const COHORT_DEFS = [
+  { key: 'dead', label: 'Dead',  scoreLabel: '0',     blurb: 'No discussion, no upvotes beyond the OP self-upvote (Reddit/Moltbook). Skip imitating.' },
+  { key: 'low',  label: 'Low',   scoreLabel: '1\u20134',  blurb: 'A handful of upvotes OR a single comment. Faint signal, below the per-platform meaningful-engagement floor.' },
+  { key: 'mid',  label: 'Mid',   scoreLabel: '5\u201314', blurb: 'Real but modest reaction. Roughly 1\u20134 comments, or 5\u201314 upvotes, or a mix.' },
+  { key: 'high', label: 'High',  scoreLabel: '15+',   blurb: 'Posts that actually sparked discussion. Imitate these.' },
+];
+const COHORT_COLORS = { dead: '#9ca3af', low: '#60a5fa', mid: '#22c55e', high: '#a855f7' };
+
+function fmtIntCohort(v) {
+  if (v == null) return '\u2014';
+  return Number(v).toLocaleString();
+}
+function fmtFloatCohort(v) {
+  if (v == null) return '\u2014';
+  const n = Number(v);
+  return Number.isInteger(n) ? n.toLocaleString() : n.toFixed(1);
+}
+function fmtRangeCohort(min, max) {
+  if (min == null && max == null) return '\u2014';
+  if (min === max) return fmtIntCohort(min);
+  return fmtIntCohort(min) + '\u2013' + fmtIntCohort(max);
+}
+
+function renderCohortStats(payload) {
+  const body = document.getElementById('cohort-stats-body');
+  const totalEl = document.getElementById('cohort-stats-total');
+  if (!body) return;
+  if (payload && payload.error) {
+    if (totalEl) totalEl.textContent = 'error';
+    body.innerHTML = '<div class="style-stats-empty">' + escapeHtml(payload.error) + '</div>';
+    return;
+  }
+  const rows = (payload && payload.rows) || [];
+  const total = (payload && payload.totalPosts) || rows.reduce((a, r) => a + (Number(r.posts) || 0), 0);
+  if (totalEl) totalEl.textContent = total + ' post' + (total === 1 ? '' : 's');
+  if (!rows.length) {
+    body.innerHTML = '<div class="style-stats-empty">No posts with engagement metrics yet in this window.</div>';
+    return;
+  }
+  const byKey = {};
+  rows.forEach(r => { byKey[r.cohort] = r; });
+  const headers = [
+    { label: 'Cohort',   tip: 'Bucket name. Tooltip on each row explains what that range means.' },
+    { label: 'Posts',    tip: 'Number of posts in the bucket (and share of total in the current window/platform/project filter).' },
+    { label: 'Score',    tip: 'Composite score = comments \u00D7 3 + upvotes (Reddit/Moltbook subtract 1 to strip OP self-upvote). Range and average within this cohort.' },
+    { label: 'Upvotes',  tip: 'Upvote/like/reaction count range (min\u2013max) and average within this cohort. Raw, before the Reddit/Moltbook self-upvote discount.' },
+    { label: 'Comments', tip: 'Reply/comment count range (min\u2013max) and average within this cohort.' },
+    { label: 'Views',    tip: 'View count range (min\u2013max) and average within this cohort. Excludes Moltbook and GitHub since those platforms do not expose view counts.' },
+  ];
+  const headHtml = '<thead><tr>' +
+    headers.map(h =>
+      '<th data-tooltip="' + escapeHtml(h.tip) + '">' + escapeHtml(h.label) + '</th>'
+    ).join('') +
+    '</tr></thead>';
+  const bodyHtml = COHORT_DEFS.map(def => {
+    const r = byKey[def.key];
+    const posts = r ? Number(r.posts) || 0 : 0;
+    const pct = total ? (posts / total * 100) : 0;
+    const color = COHORT_COLORS[def.key] || 'var(--text-muted)';
+    const cohortCell = '<span style="display:inline-flex;align-items:center;gap:8px;">' +
+      '<span style="width:8px;height:8px;border-radius:50%;background:' + color + ';display:inline-block;flex:none;"></span>' +
+      '<span><span style="font-weight:600;color:var(--text);">' + escapeHtml(def.label) + '</span> ' +
+        '<span style="color:var(--text-muted);font-weight:400;font-size:11px;">score ' + escapeHtml(def.scoreLabel) + '</span></span>' +
+      '</span>';
+    const cohortTip = def.label + ' (score ' + def.scoreLabel + ') \u2014 ' + def.blurb;
+    const postsCell = r
+      ? fmtIntCohort(posts) + ' <span style="color:var(--text-muted);font-size:11px;">(' + pct.toFixed(1) + '%)</span>'
+      : '<span style="color:var(--text-very-faint);">0</span>';
+    const scoreCell = r
+      ? fmtRangeCohort(r.min_score, r.max_score) + ' <span style="color:var(--text-muted);font-size:11px;">avg ' + fmtFloatCohort(r.avg_score) + '</span>'
+      : '\u2014';
+    const upCell = r
+      ? fmtRangeCohort(r.min_up, r.max_up) + ' <span style="color:var(--text-muted);font-size:11px;">avg ' + fmtFloatCohort(r.avg_up) + '</span>'
+      : '\u2014';
+    const cmCell = r
+      ? fmtRangeCohort(r.min_cm, r.max_cm) + ' <span style="color:var(--text-muted);font-size:11px;">avg ' + fmtFloatCohort(r.avg_cm) + '</span>'
+      : '\u2014';
+    const vCell = r && (r.min_views != null || r.max_views != null)
+      ? fmtRangeCohort(r.min_views, r.max_views) + ' <span style="color:var(--text-muted);font-size:11px;">avg ' + fmtIntCohort(r.avg_views) + '</span>'
+      : '\u2014';
+    return '<tr data-tooltip="' + escapeHtml(cohortTip) + '">' +
+      '<td>' + cohortCell + '</td>' +
+      '<td>' + postsCell + '</td>' +
+      '<td>' + scoreCell + '</td>' +
+      '<td>' + upCell + '</td>' +
+      '<td>' + cmCell + '</td>' +
+      '<td>' + vCell + '</td>' +
+      '</tr>';
+  }).join('');
+  body.innerHTML =
+    '<div class="style-stats-table-wrapper"><table class="style-stats-table">' +
+      headHtml +
+      '<tbody>' + bodyHtml + '</tbody>' +
+    '</table></div>';
+}
+
+async function loadCohortStats() {
+  try {
+    const platformRow = document.getElementById('style-stats-platform-pills');
+    const projectRow  = document.getElementById('style-stats-project-pills');
+    const platform = (platformRow && platformRow.dataset.selected) || 'all';
+    const project  = (projectRow  && projectRow.dataset.selected)  || 'all';
+    const hours = currentStatsWindow().hours;
+    const params = ['hours=' + hours];
+    if (platform && platform !== 'all') params.push('platform=' + encodeURIComponent(platform));
+    if (project  && project  !== 'all') params.push('project='  + encodeURIComponent(project));
+    const res = await fetch('/api/cohort/stats?' + params.join('&'));
+    const data = await res.json();
+    renderCohortStats(data);
+  } catch (e) {
+    const body = document.getElementById('cohort-stats-body');
+    if (body) body.innerHTML = '<div class="style-stats-empty">Failed to load cohort stats.</div>';
+  }
 }
 
 let _funnelStatsTableState = { sortField: 'posts', sortDir: 'desc', filters: {} };
@@ -10650,6 +10769,7 @@ async function refreshAllData() {
   loadDeployHealth();
   loadStatus();
   loadActivityStats();
+  loadCohortStats();
   loadStyleStats();
   loadDmStats(true);
   loadAllPerDayCharts();
@@ -10904,7 +11024,7 @@ function activateTab(name) {
   } else {
     stopActivityAutoRefresh();
   }
-  if (name === 'stats') { loadActivityStats(); loadStyleStats(); loadDmStats(); loadAllPerDayCharts(); }
+  if (name === 'stats') { loadActivityStats(); loadCohortStats(); loadStyleStats(); loadDmStats(); loadAllPerDayCharts(); }
   if (name === 'top') {
     initTopFilters();
     if (_topSubtab === 'pages') {
@@ -10969,6 +11089,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     });
     syncStatsHeadings();
     loadActivityStats();
+    loadCohortStats();
     loadStyleStats();
     // daily-metrics is window-independent; don't refetch on pill change.
     const funnelEl = document.getElementById('funnel-stats');
@@ -11093,6 +11214,7 @@ function saStartApp() {
     setInterval(loadStatus, 5000);
   }
   loadActivityStats();
+  loadCohortStats();
   loadStyleStats();
   loadAllPerDayCharts();
   // Deploy Health is inside the Status tab, which is local-only. On the
@@ -11112,6 +11234,7 @@ function saStartApp() {
   const dmEl = document.getElementById('dm-stats');
   if (dmEl && dmEl.open) loadDmStats();
   setInterval(loadActivityStats, 300000);
+  setInterval(loadCohortStats, 300000);
   setInterval(loadStyleStats, 300000);
   setInterval(loadAllPerDayCharts, 300000);
   setTimeout(() => {
