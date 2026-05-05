@@ -1,55 +1,76 @@
 # Influencer Outreach Pipeline
 
-Subfolder for the freelancer / contractor posting pipeline. We provide the content, a contractor publishes to our IG / TikTok / etc.
+Subfolder for the freelancer / contractor posting pipeline. We hire a contractor, give them an email + phone we own, they create a fresh IG / TikTok account from their own device + IP, hand it over to our Meta Business portfolio, and then continue posting our content from it as a scoped Member.
 
-## Operating model: team-member invites (NOT password sharing)
+## Operating model: contractor creates the account on their device, we hold business-level ownership
 
-Password sharing violates Meta and TikTok ToS and gets accounts shadowbanned or nuked. We use the official platform-native team systems instead.
+Password sharing violates Meta and TikTok ToS and gets accounts shadowbanned or nuked. Single-device multi-account creation gets the whole farm linked and mass-banned the moment one trips. So:
 
-| Platform | Tool | Where contractor lives |
-|----------|------|------------------------|
-| Instagram + Facebook | Meta Business Suite, Settings, People, Invite people | They log in with their own personal IG / FB; we grant scoped asset access; we revoke instantly when work ends |
-| TikTok | TikTok Business Center, Members | Same shape. Add by email, role-scoped, no creds shared |
+- Each account is created and operated from the contractor's own device + IP. We never spin them up from our MacBook.
+- We provide a unique email and a unique phone number per account, and we forward SMS codes when IG / TikTok ask for them.
+- After signup, the contractor immediately converts the account to Business. Then we add it to our Meta Business portfolio.
+- We grant the contractor scoped Member access (Create content + Publish only). Day-to-day they never use the IG password again; they post via Business Suite signed in as themselves.
 
-**Important:** for the IG asset to be grantable in Meta Business Suite, it must be a Professional account (Business or Creator) and linked into the Business portfolio. Personal IG accounts show up disabled in the asset picker.
+If they go rogue or we end the contract, we click Remove in People and they instantly lose access. They never had the password, so they can't lock us out.
 
-## Active accounts
+## Per-account setup flow
 
-- **Instagram (target for posting):** `@matt_diak` (NOT yet linked to Business Manager — see Setup checklist)
-- **Instagram (already linked, low follower):** `@heartfulmatthew` (linked to FB Page `Matthewinstagramintegration`, currently shows as personal in BM asset picker)
-- **Business Manager (Meta):** Matthew Dy, business_id 331635906254099
-- **TikTok Business Center:** not yet set up
+1. **We provide:**
+   - Unique email (Google Workspace alias on a domain we own, or a fresh Gmail)
+   - Unique phone for SMS verification (real prepaid SIM is best; Google Voice is mid; Twilio / VoIP often gets blocked outright by IG)
+   - Handle + brand brief
 
-## Setup checklist (one-time)
+2. **Contractor creates the account on their own device + IP:**
+   - Fresh IG install (or clean profile)
+   - Sign up with the email we sent
+   - Verify the phone: we receive the SMS code, forward it to them within 60 seconds
+   - Set up profile per the brief
 
-### Meta side
-- [ ] Convert `@matt_diak` to Professional > Business in IG app, Settings, Account type
-- [ ] In Meta Business Suite, Settings, Instagram accounts, Add, sign in with `@matt_diak`
-- [ ] Verify it appears as selectable in Settings, People, Invite people, Assign business assets
-- [ ] (Optional) Create a fresh FB Page for the brand and link `@matt_diak` to it
+3. **Immediately convert to Business** (Settings, Account type and tools, Switch to professional account, Business)
 
-### TikTok side
-- [ ] Open business.tiktok.com, Business Center, sign in with i@m13v.com Google
-- [ ] Add the brand TikTok account to the Business Center
-- [ ] Confirm Members tab is available
+4. **We add the account to our Meta Business portfolio:**
+   - Business Suite, Settings, Instagram accounts, Add, sign in once with the IG creds we hold
+   - Account is now an asset we own at the business layer
 
-### Upwork side
-- [ ] Confirm Upwork client account exists for i@m13v.com (or create one)
-- [ ] Top up Connects (job posts cost ~6 Connects)
-- [ ] Use upwork-job-post.md as the JD
-- [ ] Set fixed-price or hourly trial of 1 to 2 weeks before committing
+5. **We invite the contractor as a Member:**
+   - Business Suite, Settings, People, Invite
+   - Their personal email (NOT the email we created for the IG account)
+   - Partial access: Create content + Publish content + Insights
+   - OFF: Manage settings, Manage permissions, Manage messages (unless we explicitly want them on DMs)
+
+6. **Contractor posts via Business Suite from their device, signed in as themselves.** The IG email + password becomes a root key kept in 1Password; we do not use it day-to-day.
+
+## The phone number bottleneck
+
+Each account needs a unique SMS-receivable number, and IG re-verifies on suspicious login / device change / password reset, so SMS forwarding is recurring, not one-time.
+
+| Option | Cost | Survival rate | Notes |
+|--------|------|---------------|-------|
+| Real prepaid SIM (Mint, US Mobile, eSIM) | $5 to $15/mo | High | Best survival; real cellular network |
+| Google Voice | Free | Medium | US only, 1 per Google account, sometimes flagged as VoIP |
+| Twilio | Cheap at scale | Low | IG often blocks VoIP signups outright |
+| SMS-Activate type services | Pennies | Very low | Burns hot, not recommended for production accounts |
+
+Default to real prepaid eSIMs for any account we expect to keep alive past 30 days.
+
+## Scaling
+
+Start with 3 to 5 accounts, run them clean for 30 days, then scale. Going 0 to 30 in a week is a mass-ban setup regardless of how clean each individual signup is, because Meta's behavioral linking catches content + timing patterns even when device + IP look unique.
+
+Staggering posting times across accounts and rotating caption templates is required, not optional.
 
 ## Files in this folder
 
 - `README.md` (this file)
-- `upwork-job-post.md` — JD draft for the Upwork listing
-- `contractor-onboarding.md` — what to send the contractor on day 1
-- `content-handoff-template.md` — template the contractor uses to confirm posts went out
+- `upwork-job-post.md`, JD draft for the Upwork listing
+- `contractor-onboarding.md`, what to send the contractor on day 1
 
 ## Cost estimate (rough)
 
 - Upwork client account: free
-- Connects to post one job: ~6 (about $0.90)
-- Contractor rate (per published post, US-based): $5 to $15
-- Contractor rate (offshore, Philippines / LatAm): $2 to $5
-- Estimated monthly burn at 4 platforms x daily posting x $5/post: ~$600
+- Connects to post one job: about 6 (~$0.90)
+- Phone numbers: $5 to $15/mo per account (real SIM lane)
+- Email: free (Google Workspace alias)
+- Contractor rate per published post, US-based: $5 to $15
+- Contractor rate offshore (Philippines / LatAm): $2 to $5
+- Estimated monthly burn at 5 accounts, daily posting, $5/post + $10/mo phone × 5: ~$800
