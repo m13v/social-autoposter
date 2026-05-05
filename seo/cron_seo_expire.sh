@@ -26,6 +26,13 @@ LOG_FILE="$LOG_DIR/${TS}.log"
 
 # Daily safety cap. Tune lower to be cautious during ramp-up.
 DAILY_MAX="${DAILY_MAX:-50}"
+# Fast-track lets us also delete pages 14-29 days old that have already
+# accumulated >=1000 impressions with zero clicks (the dated-aggregator
+# zombies). Set FAST_TRACK=0 to disable.
+FAST_TRACK="${FAST_TRACK:-1}"
+
+FAST_TRACK_FLAG=""
+[ "$FAST_TRACK" = "1" ] && FAST_TRACK_FLAG="--fast-track"
 
 mkdir -p "$LOG_DIR"
 
@@ -45,7 +52,7 @@ log "=== seo-expire $TS starting (DAILY_MAX=$DAILY_MAX) ==="
 
 # Run the actual deleter. --apply means real deletes; --max caps damage.
 # Cap each project independently in spirit by relying on the global cap.
-"$PYTHON" "$EXPIRE" --apply --max "$DAILY_MAX" >> "$LOG_FILE" 2>&1
+"$PYTHON" "$EXPIRE" --apply --max "$DAILY_MAX" $FAST_TRACK_FLAG >> "$LOG_FILE" 2>&1
 EXIT_CODE=$?
 
 ELAPSED=$(( $(date +%s) - START_TS ))
