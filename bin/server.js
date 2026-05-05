@@ -490,6 +490,7 @@ const STANDALONE_JOBS = {
   seo_improve: { job_type: 'seo', job_label: 'SEO Improve' },
   seo_top_pages: { job_type: 'seo', job_label: 'SEO Top Pages' },
   seo_weekly_roundup: { job_type: 'seo', job_label: 'SEO Weekly Roundup' },
+  seo_expire: { job_type: 'seo', job_label: 'SEO Expire (delete dead-weight pages)' },
   seo_daily_report: { job_type: 'report', job_label: 'SEO Daily Report' },
   daily_report: { job_type: 'report', job_label: 'Daily Report' },
   deploy_status: { job_type: 'report', job_label: 'Deploy Status' },
