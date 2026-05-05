@@ -66,3 +66,6 @@ scripts/context/
 
 # SQLite databases (broaden *.db to also cover *.sqlite)
 *.sqlite
+
+# Local video mixer assets (raw clips + audio library, not source-of-truth)
+mixer/
