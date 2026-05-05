@@ -210,7 +210,7 @@ try:
         result = outer
 
     score = result.get('score', 0)
-    status = 'pending' if score >= 1.0 else 'skip'
+    status = 'pending' if score >= 1.5 else 'skip'  # raised 2026-05-05 from 1.0 to cut dead-weight pages
 
     update_status(product, keyword, status,
         score=score,
