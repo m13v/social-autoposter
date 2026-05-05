@@ -1760,6 +1760,7 @@ let _pendingCache = { at: 0, value: null };
 let _statusCache = { at: 0, value: null };
 const activityStatsCache = new Map();
 const styleStatsCache = new Map();
+const cohortStatsCache = new Map();
 // Style metadata cache (description / note / status / invented_at / why_existing_didnt_fit
 // for the merged hardcoded + sidecar universe). Sourced via a one-shot Python call.
 // 1h TTL is fine: the universe only changes when the sidecar JSON is edited or the
@@ -2962,6 +2963,89 @@ async function handleApi(req, res) {
       styleStatsCache.set(cacheKey, { at: Date.now(), value, platforms, projects });
       return json(res, { windowHours, platform: platform || 'all', project: project || 'all',
         rows: value, platforms, projects });
+    })().catch(e => json(res, { error: e.message }, 500));
+  }
+
+  // GET /api/cohort/stats - posts bucketed into 4 score cohorts over a trailing window.
+  // Score formula matches top_performers.py SCORE_SQL:
+  //   score = comments_count*3 + upvotes (Reddit/Moltbook: -1 to strip OP self-upvote)
+  // Cohorts: dead=0, low=1-4, mid=5-14, high=15+.
+  // Honors the same window/platform/project filters as the rest of the Stats tab.
+  if (p === '/api/cohort/stats' && req.method === 'GET') {
+    const url = new URL(req.url, 'http://localhost');
+    const windowHours = Math.max(1, Math.min(720, parseInt(url.searchParams.get('hours') || '168', 10) || 168));
+    const rawPlatform = (url.searchParams.get('platform') || '').trim().toLowerCase();
+    const platform = (rawPlatform === '' || rawPlatform === 'all') ? '' :
+                     (rawPlatform === 'x' ? 'twitter' : rawPlatform);
+    const platformOk = platform === '' || /^[a-z0-9_]{1,32}$/.test(platform);
+    if (!platformOk) return json(res, { error: 'invalid platform' }, 400);
+    const rawProject = (url.searchParams.get('project') || '').trim();
+    const project = (rawProject === '' || rawProject.toLowerCase() === 'all') ? '' : rawProject;
+    const projectOk = project === '' || /^[A-Za-z0-9_\-]{1,64}$/.test(project);
+    if (!projectOk) return json(res, { error: 'invalid project' }, 400);
+    const cohortPc = auth.projectClause(req.user, 'project_name', project || null);
+    if (!cohortPc.ok) return json(res, { windowHours, platform: platform || 'all', project: project || 'all', rows: [], totalPosts: 0 });
+    const cacheKey = windowHours + '|' + platform + '|' + (cohortPc.clause || project || 'admin-all');
+    const cached = cohortStatsCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < 300000) {
+      return json(res, { windowHours, platform: platform || 'all', project: project || 'all',
+        rows: cached.value, totalPosts: cached.totalPosts, cachedAt: cached.at });
+    }
+    const platformFilter = platform
+      ? "AND LOWER(CASE WHEN LOWER(platform)='x' THEN 'twitter' ELSE platform END) = '" + platform + "' "
+      : '';
+    const projectFilter = cohortPc.clause ? cohortPc.clause + ' '
+      : (project ? "AND project_name = '" + project.replace(/'/g, "''") + "' " : '');
+    // Score expression (must stay aligned with scripts/top_performers.SCORE_SQL).
+    const scoreExpr =
+      "(COALESCE(comments_count,0) * 3 + " +
+        "CASE WHEN LOWER(platform) IN ('reddit', 'moltbook') " +
+          "THEN GREATEST(0, COALESCE(upvotes,0) - 1) " +
+          "ELSE COALESCE(upvotes,0) END)";
+    const cohortExpr =
+      "CASE " +
+        "WHEN " + scoreExpr + " = 0 THEN 'dead' " +
+        "WHEN " + scoreExpr + " BETWEEN 1 AND 4 THEN 'low' " +
+        "WHEN " + scoreExpr + " BETWEEN 5 AND 14 THEN 'mid' " +
+        "ELSE 'high' END";
+    // Views excluded from moltbook/github (no public view counter on those
+    // platforms); use FILTER so the views range only reflects platforms that
+    // actually report it.
+    const viewsFilter = "FILTER (WHERE LOWER(platform) NOT IN ('moltbook','github','github_issues'))";
+    const q = "SELECT json_agg(row_to_json(r)) FROM (" +
+      "SELECT cohort, " +
+        "COUNT(*)::int AS posts, " +
+        "MIN(score)::int AS min_score, " +
+        "MAX(score)::int AS max_score, " +
+        "AVG(score)::numeric(10,1) AS avg_score, " +
+        "MIN(COALESCE(upvotes,0))::int AS min_up, " +
+        "MAX(COALESCE(upvotes,0))::int AS max_up, " +
+        "AVG(COALESCE(upvotes,0))::numeric(10,1) AS avg_up, " +
+        "MIN(COALESCE(comments_count,0))::int AS min_cm, " +
+        "MAX(COALESCE(comments_count,0))::int AS max_cm, " +
+        "AVG(COALESCE(comments_count,0))::numeric(10,1) AS avg_cm, " +
+        "MIN(COALESCE(views,0)) " + viewsFilter + " AS min_views, " +
+        "MAX(COALESCE(views,0)) " + viewsFilter + " AS max_views, " +
+        "(AVG(COALESCE(views,0)) " + viewsFilter + ")::numeric(10,0) AS avg_views " +
+      "FROM (" +
+        "SELECT platform, upvotes, comments_count, views, " +
+          scoreExpr + " AS score, " +
+          cohortExpr + " AS cohort " +
+        "FROM posts " +
+        "WHERE posted_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
+          "AND upvotes IS NOT NULL " +
+          "AND our_content <> '(mention - no original post)' " +
+          platformFilter + projectFilter +
+      ") s GROUP BY cohort ORDER BY CASE cohort " +
+        "WHEN 'dead' THEN 1 WHEN 'low' THEN 2 WHEN 'mid' THEN 3 ELSE 4 END" +
+      ") r";
+    return (async () => {
+      const rows = await pq(q);
+      const value = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
+      const totalPosts = value.reduce((a, r) => a + (Number(r.posts) || 0), 0);
+      cohortStatsCache.set(cacheKey, { at: Date.now(), value, totalPosts });
+      return json(res, { windowHours, platform: platform || 'all', project: project || 'all',
+        rows: value, totalPosts });
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
