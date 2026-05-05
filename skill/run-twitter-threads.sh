@@ -195,6 +195,88 @@ RESULT_SCHEMA='{"type":"object","properties":{"research_files_read":{"type":"arr
 # Pre-generate session id so the prompt's inline INSERT can stamp it.
 export CLAUDE_SESSION_ID=$(uuidgen | tr 'A-Z' 'a-z')
 
+# --- Phase 0: link resolution (mirrors run-twitter-cycle.sh Phase 2b-gen) ---
+# Resolve LINK_URL + LINK_SOURCE BEFORE acquiring the browser lock, so the
+# 10-40 min generate_page.py mint (when A/B lands in the gen lane) does not
+# block other twitter pipelines on the browser. Reuses scripts/twitter_gen_links.py
+# unchanged; we feed it a single-candidate plan synthesised from the
+# (project, topic_angle) the picker already chose.
+THREADS_PLAN_FILE="/tmp/twitter_threads_link_$(date +%s)_$$.json"
+PROJECT_ENV="$PROJECT" TOPIC_ANGLE_ENV="$TOPIC_ANGLE" CONFIG_PATH="$CONFIG_FILE" \
+PLAN_FILE_ENV="$THREADS_PLAN_FILE" \
+/usr/bin/python3 <<'PYEOF' 2>&1 | tee -a "$LOG_FILE"
+import json, os, re
+
+CONFIG = os.environ['CONFIG_PATH']
+project = os.environ['PROJECT_ENV']
+topic_angle = os.environ['TOPIC_ANGLE_ENV']
+plan_file = os.environ['PLAN_FILE_ENV']
+
+c = json.load(open(CONFIG))
+proj = next((p for p in c['projects'] if p['name'] == project), None)
+lp = (proj or {}).get('landing_pages') or {}
+has_lp = bool(lp.get('repo') and lp.get('base_url'))
+
+def slugify(s):
+    s = re.sub(r'[^a-z0-9]+', '-', s.lower()).strip('-')
+    return s[:50].rstrip('-')
+
+slug = slugify(topic_angle)
+keyword = topic_angle.strip()
+
+plan = {"candidates": [{
+    "candidate_id": 0,
+    "matched_project": project,
+    "has_landing_pages": has_lp,
+    "link_keyword": keyword,
+    "link_slug": slug,
+}]}
+with open(plan_file, 'w') as f:
+    json.dump(plan, f)
+print(f"[link-prep] project={project!r} has_lp={has_lp} slug={slug!r}")
+PYEOF
+
+echo "[link-gen] running twitter_gen_links.py for ${PROJECT} (no browser lock held)..." | tee -a "$LOG_FILE"
+/usr/bin/python3 "$REPO_DIR/scripts/twitter_gen_links.py" --plan "$THREADS_PLAN_FILE" 2>&1 | tee -a "$LOG_FILE"
+GEN_EXIT=${PIPESTATUS[0]:-1}
+if [ "$GEN_EXIT" -ne 0 ]; then
+  echo "[link-gen] WARN: twitter_gen_links.py exited $GEN_EXIT, continuing with whatever link it set" | tee -a "$LOG_FILE"
+fi
+
+LINK_URL=$(/usr/bin/python3 -c "
+import json
+try:
+    p = json.load(open('$THREADS_PLAN_FILE'))
+    print((p.get('candidates') or [{}])[0].get('link_url') or '')
+except Exception:
+    print('')
+")
+LINK_SOURCE=$(/usr/bin/python3 -c "
+import json
+try:
+    p = json.load(open('$THREADS_PLAN_FILE'))
+    print((p.get('candidates') or [{}])[0].get('link_source') or '')
+except Exception:
+    print('')
+")
+rm -f "$THREADS_PLAN_FILE"
+export LINK_URL LINK_SOURCE
+echo "[link-gen] resolved LINK_URL='${LINK_URL}' LINK_SOURCE='${LINK_SOURCE}'" | tee -a "$LOG_FILE"
+
+# Build the prompt rule for tweet 1's link. Mandatory when we resolved a URL,
+# omitted otherwise (e.g. project has no website AND no landing_pages config).
+if [ -n "$LINK_URL" ]; then
+  LINK_LEN=${#LINK_URL}
+  TWEET1_BUDGET=$(( 280 - LINK_LEN - 1 ))
+  LINK_RULE="MANDATORY LINK: end your FIRST tweet with EXACTLY this URL preceded by a single space: ${LINK_URL}
+     - Reserve room: tweet 1 text BEFORE the URL must be <= ${TWEET1_BUDGET} chars (the URL itself is ${LINK_LEN} chars).
+     - Do NOT paraphrase, shorten, or wrap the URL. Do NOT include the link in tweets 2+ (X downranks link-heavy threads).
+     - The shell verifies post-flight that tweets[0] ends with this exact URL; if not, the post is logged with link_source='link_missing'."
+else
+  LINK_RULE="No link: this project has no website or landing_pages configured this cycle. Do NOT include any URL in any tweet."
+fi
+export LINK_RULE
+
 # Acquire browser lock right before MCP step.
 acquire_lock "twitter-browser" 3600
 ensure_browser_healthy "twitter"
@@ -308,7 +390,7 @@ ${CAMPAIGN_BLOCK}
    - At least one imperfection (sentence fragment, aside, run-on) somewhere in the thread.
    - Ground at least one claim in a specific detail from the source you read in step 1.
    - VARY YOUR CLOSER. Banned closers: 'curious if anyone', 'anyone else', 'thoughts?', 'has anyone'. Sometimes end with a statement, sometimes mid-thought, sometimes a specific question.
-   - First tweet may include the link from the project content_sources.link_base if relevant. Do NOT include the link in tweets 2+ (X downranks link-heavy threads).
+   - ${LINK_RULE}
 
 4. POST via mcp__twitter-agent__*:
    - Navigate to https://x.com/compose/post.
@@ -379,6 +461,8 @@ if [ "$PERMALINK" != "null" ] && [ "$PERMALINK" != "" ] && [ "$PERMALINK" != "PA
   REPO_DIR="$REPO_DIR" \
   CAMPAIGN_IDS="$CAMPAIGN_IDS" \
   CAMPAIGN_SUFFIX="$CAMPAIGN_SUFFIX" \
+  LINK_URL="$LINK_URL" \
+  LINK_SOURCE="$LINK_SOURCE" \
   /usr/bin/python3 <<'PYEOF' 2>&1 | tee -a "$LOG_FILE" || true
 import json, os, subprocess, sys
 sys.path.insert(0, os.path.join(os.environ["REPO_DIR"], "scripts"))
@@ -392,10 +476,25 @@ style     = parsed.get("engagement_style", "") or None
 session   = os.environ.get("CLAUDE_SESSION_ID") or None
 project   = os.environ.get("PROJECT_ENV", "")
 account   = os.environ.get("POST_ACCOUNT", "")
+link_url    = (os.environ.get("LINK_URL") or "").strip()
+link_source = (os.environ.get("LINK_SOURCE") or "").strip() or None
 
 if not permalink or not tweets:
-    print("[db-insert] SKIP — empty permalink or tweets in structured_output")
+    print("[db-insert] SKIP - empty permalink or tweets in structured_output")
     sys.exit(0)
+
+# Verify post-flight that tweet 1 ends with the resolved link. The cycle
+# pipeline gets this for free (twitter_browser.py concatenates the URL); for
+# threads the LLM does the appending, so we audit and downgrade link_source
+# when the model dropped the link.
+if link_url:
+    first_tweet = (tweets[0] or "").rstrip()
+    if first_tweet.endswith(link_url):
+        print(f"[link-verify] OK first tweet ends with {link_url!r}")
+    else:
+        print(f"[link-verify] MISS expected suffix {link_url!r} not at end of tweet1; "
+              f"tail={first_tweet[-80:]!r}")
+        link_source = "link_missing"
 
 # Stitch tweets into our_content with double-newline separators so downstream
 # stats/refresh queries treat the whole thread as one row.
@@ -419,18 +518,21 @@ row = conn.execute(
       (platform, thread_url, thread_author, thread_author_handle,
        thread_title, thread_content, our_url, our_content, our_account,
        source_summary, project_name, engagement_style,
-       feedback_report_used, status, posted_at, claude_session_id)
+       feedback_report_used, status, posted_at, claude_session_id,
+       link_source)
     VALUES
       ('twitter', %s, %s, %s,
        %s, %s, %s, %s, %s,
        %s, %s, %s,
-       TRUE, 'active', NOW(), %s::uuid)
+       TRUE, 'active', NOW(), %s::uuid,
+       %s)
     RETURNING id
     """,
     (permalink, account, account,
      title, body, permalink, body, account,
      summary, project, style,
-     session),
+     session,
+     link_source),
 ).fetchone()
 conn.commit()
 post_id = row[0]
