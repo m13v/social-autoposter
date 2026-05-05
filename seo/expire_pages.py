@@ -106,39 +106,91 @@ def fetch_gsc_pages(svc, gsc_property, start_date, end_date):
     return resp.get("rows", [])
 
 
+def _app_dirs(repo_path: Path) -> list[Path]:
+    """Return the candidate Next.js app dirs in a repo, in priority order.
+
+    Different sites use different conventions:
+      - src/app/  (most common)
+      - app/      (Mediar)
+    Both may be present or only one. Caller iterates and tries each.
+    """
+    out = []
+    for sub in ("src/app", "app"):
+        p = repo_path / sub
+        if p.exists():
+            out.append(p)
+    return out
+
+
+def _route_segment_candidates(repo_path: Path, segment: str, slug: str) -> list[Path]:
+    """Return on-disk candidates for /<segment>/<slug> across the app dir
+    and any route groups inside it (e.g. (main)/, (content)/).
+    Caller picks the first that exists.
+    """
+    cands: list[Path] = []
+    for app_dir in _app_dirs(repo_path):
+        cands.append(app_dir / segment / slug)
+        # route groups: app/(group)/<segment>/<slug>/
+        try:
+            for group in app_dir.glob("(*)"):
+                if group.is_dir():
+                    cands.append(group / segment / slug)
+        except OSError:
+            pass
+    return cands
+
+
+# URL path segments that we know host auto-generated SEO content. We only
+# expire pages under these prefixes; root-level slugs (e.g. /pricing,
+# /features, /contact, /demo) are intentionally left alone since they are
+# usually hand-built canonical pages.
+SEO_CONTENT_SEGMENTS = ("blog", "t", "alternative", "best", "guides", "compare", "for", "glossary")
+
+
 def url_to_source_path(repo_path: Path, page_url: str) -> Path | None:
     """Map a public URL back to the on-disk source file/folder.
 
     Returns None if the URL pattern is not recognized (we err on the side
-    of NOT deleting unknown URL shapes).
+    of NOT deleting unknown URL shapes — homepages, hand-built canonical
+    pages, root-level slugs, etc.).
     """
     parsed = urlparse(page_url)
+    # Skip subdomains other than www / apex (e.g. handbook.mediar.ai,
+    # 092025-cohere.mediar.ai, app.assrt.ai are NOT served by this repo).
+    host = (parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host.count(".") >= 2:
+        # Subdomain (e.g. handbook.mediar.ai). We can't safely delete content
+        # we don't host in this repo.
+        return None
+
     path = parsed.path.strip("/")
     if not path:
         return None  # never delete the homepage
     parts = path.split("/")
-    # /blog/<slug> -> content/blog/<slug>.mdx
-    if parts[0] == "blog" and len(parts) == 2:
-        return repo_path / "content" / "blog" / f"{parts[1]}.mdx"
-    # /t/<slug> -> src/app/t/<slug>/
-    if parts[0] == "t" and len(parts) == 2:
-        candidate = repo_path / "src" / "app" / "t" / parts[1]
-        if candidate.exists():
-            return candidate
-        # Some sites use route groups: src/app/(content)/t/<slug>/
-        for group_dir in (repo_path / "src" / "app").glob("(*)/t"):
-            candidate2 = group_dir / parts[1]
-            if candidate2.exists():
-                return candidate2
+    seg = parts[0]
+    if seg not in SEO_CONTENT_SEGMENTS:
         return None
-    # /alternative/<slug>
-    if parts[0] == "alternative" and len(parts) == 2:
-        candidate = repo_path / "src" / "app" / "alternative" / parts[1]
-        return candidate if candidate.exists() else None
-    # /best/<slug>
-    if parts[0] == "best" and len(parts) == 2:
-        candidate = repo_path / "src" / "app" / "best" / parts[1]
-        return candidate if candidate.exists() else None
+    if len(parts) != 2:
+        return None  # only handle /<segment>/<slug>; deeper paths are rare and risky
+    slug = parts[1]
+
+    # /blog/<slug>: try content/blog/<slug>.mdx first (MDX collection layout)
+    if seg == "blog":
+        mdx = repo_path / "content" / "blog" / f"{slug}.mdx"
+        if mdx.exists():
+            return mdx
+        # Fallback to App-Router folder (some sites use src/app/blog/<slug>/)
+        for cand in _route_segment_candidates(repo_path, "blog", slug):
+            if cand.exists():
+                return cand
+        return None
+
+    # All other segments: App-Router folder convention.
+    for cand in _route_segment_candidates(repo_path, seg, slug):
+        if cand.exists():
+            return cand
     return None
 
 
