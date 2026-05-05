@@ -64,6 +64,9 @@ from typing import Optional
 # with how the working SERP-scrape locates the MCP.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from linkedin_browser import (  # noqa: E402
+    PROFILE_DIR,
+    SYSTEM_CHROME,
+    VIEWPORT,
     _acquire_browser_lock,
     _is_login_or_checkpoint,
 )
@@ -405,20 +408,17 @@ def run(limit: int = 30, summary_path: Optional[str] = None,
     except Exception:
         our_name = "Matthew Diakonov"
 
-    # 3. Attach to MCP Chrome.
-    port = _read_devtools_port()
-    if port is None:
-        db.close()
-        return {
-            "ok": False,
-            "error": "mcp_not_running",
-            "detail": (
-                f"{DEVTOOLS_ACTIVE_PORT} is missing, empty, or pointing at a "
-                "dead port. The linkedin-agent MCP must be running and have "
-                "loaded Chrome at least once this session."
-            ),
-        }
-
+    # 3. Attach to MCP Chrome — or launch our own if no live MCP Chrome
+    # exists. The linkedin-agent MCP keeps Chrome alive only while a Claude
+    # session is connected to the wrapper; when the session exits Chrome
+    # closes within seconds. Stats fires from a bash launchd job (no Claude
+    # session), so in steady state Chrome will usually be DOWN when we
+    # run. Therefore CDP attach is the fast path and launch_persistent_context
+    # is the production-correct fallback. linkedin_browser.py has been using
+    # the launch_persistent_context pattern for unread-dms in production
+    # since 2026-04-29, so the fingerprint risk is well-understood: the
+    # cookie-clear regression that prompted CDP-attach for SERP discovery
+    # is specific to /search/ navigation, not /feed/update/ post pages.
     from playwright.sync_api import sync_playwright
 
     _acquire_browser_lock()
@@ -428,29 +428,91 @@ def run(limit: int = 30, summary_path: Optional[str] = None,
     session_invalid = False
     landed = None
 
-    with sync_playwright() as p:
-        try:
-            browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
-        except Exception as e:
-            db.close()
-            return {
-                "ok": False,
-                "error": "cdp_attach_failed",
-                "detail": f"connect_over_cdp(localhost:{port}) failed: {e}",
-            }
+    port = _read_devtools_port()
+    used_path = "cdp" if port is not None else "launch"
 
-        if not browser.contexts:
+    with sync_playwright() as p:
+        browser = None              # set when CDP attach succeeds
+        owned_context = None        # set when we launch our own context
+        context = None
+
+        if port is not None:
+            # Fast path: attach to MCP-managed Chrome.
             try:
-                browser.disconnect()
-            except Exception:
-                pass
-            db.close()
-            return {
-                "ok": False,
-                "error": "cdp_attach_failed",
-                "detail": "browser.contexts is empty; MCP has no open context",
-            }
-        context = browser.contexts[0]
+                browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
+            except Exception as e:
+                if not quiet:
+                    print(
+                        f"[browser] CDP attach failed ({e}); "
+                        "falling back to launch_persistent_context",
+                        flush=True,
+                    )
+                browser = None
+
+            if browser is not None:
+                if not browser.contexts:
+                    if not quiet:
+                        print(
+                            "[browser] CDP attach: empty contexts, "
+                            "falling back to launch_persistent_context",
+                            flush=True,
+                        )
+                    try:
+                        browser.disconnect()
+                    except Exception:
+                        pass
+                    browser = None
+                else:
+                    context = browser.contexts[0]
+                    used_path = "cdp"
+
+        if context is None:
+            # Launch our own. Mirrors linkedin_browser.unread_dms's pattern:
+            # headed Chrome on the linkedin-agent profile dir, system Chrome
+            # binary (Playwright's bundled "Chrome for Testing" is incompatible
+            # with this profile), AutomationControlled disabled, off-screen
+            # window position. Clear stale Singleton* in case a prior run
+            # exited uncleanly.
+            for fname in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                try:
+                    os.remove(os.path.join(PROFILE_DIR, fname))
+                except OSError:
+                    pass
+            try:
+                owned_context = p.chromium.launch_persistent_context(
+                    PROFILE_DIR,
+                    headless=False,
+                    executable_path=(
+                        SYSTEM_CHROME if os.path.exists(SYSTEM_CHROME) else None
+                    ),
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--window-position=3953,-1032",
+                        "--window-size=911,1016",
+                    ],
+                    viewport=VIEWPORT,
+                    user_agent=(
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/131.0.0.0 Safari/537.36"
+                    ),
+                )
+                context = owned_context
+                used_path = "launch"
+            except Exception as e:
+                db.close()
+                return {
+                    "ok": False,
+                    "error": "browser_launch_failed",
+                    "detail": (
+                        f"launch_persistent_context({PROFILE_DIR}) failed: {e}. "
+                        "MCP wrapper may have raced us for the profile, or the "
+                        "profile is locked by another peer."
+                    ),
+                }
+
+        if not quiet:
+            print(f"[browser] using path={used_path}", flush=True)
 
         try:
             for i, post in enumerate(posts):
@@ -485,10 +547,27 @@ def run(limit: int = 30, summary_path: Optional[str] = None,
                 if i + 1 < len(posts):
                     time.sleep(random.uniform(3.0, 5.0))
         finally:
-            try:
-                browser.disconnect()
-            except Exception:
-                pass
+            # CDP path: never close the context, just disconnect; the MCP
+            # owns the context lifetime. Launch path: close our own context
+            # so the profile is freed for the next caller.
+            if browser is not None:
+                try:
+                    browser.disconnect()
+                except Exception:
+                    pass
+            if owned_context is not None:
+                try:
+                    owned_context.close()
+                except Exception:
+                    pass
+                # Best-effort: clean up the SingletonLock so the next MCP
+                # launch finds a clean profile. Chrome usually removes these
+                # on graceful close, but a SIGKILL/OOM would leave them.
+                for fname in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                    try:
+                        os.remove(os.path.join(PROFILE_DIR, fname))
+                    except OSError:
+                        pass
 
     if session_invalid:
         db.close()
