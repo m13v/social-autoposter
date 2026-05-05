@@ -245,8 +245,9 @@ fi
 # dm-outreach-linkedin.sh / engage-dm-replies.sh (all of which acquire the
 # same lock for 3600s). The earlier Claude-driven Step 4 did NOT acquire
 # this lock, which let it race the post pipeline; the cutover closes that
-# gap. ensure_browser_healthy clears orphan Chromes / SingletonLock so the
-# script's CDP attach finds a clean profile.
+# gap. The lock's own ppid==1 orphan-Chrome sweep handles dead Chromes;
+# ensure_browser_healthy is intentionally NOT called here (see inline note
+# at the call site for the --remote-debugging-port=0 incompatibility).
 # ═══════════════════════════════════════════════════════
 if [ "$RUN_STEP4" -eq 1 ]; then
 log "Step 4: LinkedIn stats (Python CDP-attach to linkedin-agent)"
