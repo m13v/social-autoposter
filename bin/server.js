@@ -5199,6 +5199,15 @@ const HTML = `<!DOCTYPE html>
     </div>
     <div class="stats-grid" id="stats-grid"></div>
   </div>
+  <details class="style-stats-section" id="cohort-stats" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="cohort-stats-heading">Score Cohort Distribution (24h)</span><span class="stat-card-info" data-tooltip="Buckets posts by composite score (comments \u00D7 3 + upvotes; Reddit/Moltbook subtract 1 to strip OP self-upvote). Views are deliberately excluded from the score. Cohorts: Dead = 0, Low = 1-4, Mid = 5-14, High = 15+. Honors the Window / Platform / Project filters above.">i</span></span>
+      <span class="style-stats-total" id="cohort-stats-total"></span>
+    </summary>
+    <div id="cohort-stats-body">
+      <div class="style-stats-empty">Loading\u2026</div>
+    </div>
+  </details>
   <details class="style-stats-section" id="style-stats" open>
     <summary>
       <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="style-stats-heading">Posts by Engagement Style (24h)</span></span>
@@ -7375,6 +7384,8 @@ function syncStatsHeadings() {
   const titleCased = win.labelLong.charAt(0).toUpperCase() + win.labelLong.slice(1);
   const top = document.getElementById('stats-title');
   if (top) top.textContent = titleCased;
+  const cohort = document.getElementById('cohort-stats-heading');
+  if (cohort) cohort.textContent = 'Score Cohort Distribution (' + win.labelShort + ')';
   const style = document.getElementById('style-stats-heading');
   if (style) style.textContent = 'Posts by Engagement Style (' + win.labelShort + ')';
   const funnel = document.getElementById('funnel-stats-heading');
