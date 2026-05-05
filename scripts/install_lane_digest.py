@@ -170,9 +170,6 @@ if os.path.exists(plist):
         with open(plist) as fh:
             content = fh.read()
         config_lines.append(
-            f"REPLY_DB_USE_HTTP env present: {'yes' if 'REPLY_DB_USE_HTTP' in content else 'no'}"
-        )
-        config_lines.append(
             f"AUTOPOSTER_API_BASE env present: {'yes' if 'AUTOPOSTER_API_BASE' in content else 'no'}"
         )
     except Exception as e:
