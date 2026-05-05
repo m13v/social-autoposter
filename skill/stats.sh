@@ -225,10 +225,31 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════
-# STEP 4: LinkedIn stats (browser required)
+# STEP 4: LinkedIn stats (Python CDP-attach to linkedin-agent MCP)
+#
+# Cutover 2026-05-04: replaced the Claude-driven `run_claude.sh stats-step4`
+# heredoc-prompt path with a direct Python script that CDP-attaches to the
+# already-running linkedin-agent MCP, scrapes per-comment reactions, and
+# applies the same DB write-path (scrape_linkedin_stats.update_linkedin_stats).
+# Same data, $0 cost instead of $1-3 per run, 3-5 min instead of 5-10 min.
+# get_run_cost.py --scripts stats-step4 will return $0 going forward; that
+# is correct, not a missed run.
+#
+# Prereqs: linkedin-agent MCP must be alive (Chrome with --remote-debugging-port
+# already running). The post pipeline fires every 15min and primes the browser,
+# so in steady state DevToolsActivePort is always live. If MCP is cold the
+# script returns mcp_not_running / exit 1; stats.sh logs the leg as failed.
+#
+# Lock policy: acquire the bash linkedin-browser lock for 1800s so we
+# serialize against run-linkedin.sh / engage-linkedin.sh /
+# dm-outreach-linkedin.sh / engage-dm-replies.sh (all of which acquire the
+# same lock for 3600s). The earlier Claude-driven Step 4 did NOT acquire
+# this lock, which let it race the post pipeline; the cutover closes that
+# gap. ensure_browser_healthy clears orphan Chromes / SingletonLock so the
+# script's CDP attach finds a clean profile.
 # ═══════════════════════════════════════════════════════
 if [ "$RUN_STEP4" -eq 1 ]; then
-log "Step 4: LinkedIn stats (Claude + Playwright)"
+log "Step 4: LinkedIn stats (Python CDP-attach to linkedin-agent)"
 
 LINKEDIN_POSTS=$(psql "$DATABASE_URL" -t -A -c "
     SELECT COUNT(*) FROM posts
@@ -237,176 +258,16 @@ LINKEDIN_POSTS=$(psql "$DATABASE_URL" -t -A -c "
       AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days');" 2>/dev/null || echo "0")
 
 if [ "$LINKEDIN_POSTS" -gt 0 ]; then
-    STEP4_PROMPT=$(mktemp)
-    cat > "$STEP4_PROMPT" <<'STEP4_EOF'
-Scrape LinkedIn engagement stats for OUR COMMENTS (not the parent post). Do these steps in order, no deviations:
+    acquire_lock "linkedin-browser" 1800
+    ensure_browser_healthy "linkedin"
 
-CRITICAL: Use the linkedin-agent browser (mcp__linkedin-agent__* tools) for ALL steps below. NEVER use generic mcp__playwright-extension__*, mcp__isolated-browser__*, or mcp__macos-use__* tools.
-If a tool call is blocked or times out, wait 30 seconds and retry (up to 3 times). Do NOT fall back to any other browser tool.
-
-IMPORTANT CONTEXT: Our LinkedIn posts are COMMENTS on other people's posts, not original posts.
-The our_url field contains the parent post URL. We need to find OUR comment within that post
-and scrape the reactions on OUR comment specifically, not the parent post's reactions.
-Our LinkedIn account name is: LINKEDIN_NAME_PLACEHOLDER
-
-Step 1: Query the database to get LinkedIn posts needing stats updates:
-```bash
-source ~/social-autoposter/.env
-psql "$DATABASE_URL" -t -A -F '|' -c "
-    SELECT id, our_url, our_content as content_prefix FROM posts
-    WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
-      AND our_url LIKE '%linkedin.com/feed/update/%'
-      AND (engagement_updated_at IS NULL OR engagement_updated_at < NOW() - INTERVAL '7 days')
-    ORDER BY id
-    LIMIT 30;"
-```
-
-Step 2: For each post URL, STRIP the ?commentUrn=... query parameter before navigating (it breaks comment rendering).
-Navigate with mcp__linkedin-agent__browser_navigate to the clean URL, wait for page load.
-Then run mcp__linkedin-agent__browser_run_code with this JavaScript to find OUR comment and its reactions:
-
-SCRAPE_JS:
-async (page) => {
-  await page.waitForTimeout(4000);
-
-  // Early check: is the post itself unavailable?
-  const bodyText = (document.body && document.body.innerText) || '';
-  const unavailableSignals = [
-    "This post is unavailable",
-    "This post isn't available",
-    "This post is no longer available",
-    "This content isn't available",
-    "This content is no longer available",
-    "Page not found",
-    "We can't find the page",
-  ];
-  const matchedSignal = unavailableSignals.find(s => bodyText.includes(s));
-  if (matchedSignal) {
-    return JSON.stringify({ reactions: 0, found: false, unavailable: true, signal: matchedSignal });
-  }
-
-  // CRITICAL: Comments don't render until you interact with the page.
-  await page.evaluate(() => window.scrollBy(0, 600));
-  await page.waitForTimeout(2000);
-  const commentActionBtn = await page.$('button[aria-label="Comment"]');
-  if (commentActionBtn) {
-    try { await commentActionBtn.click(); await page.waitForTimeout(5000); } catch(e) {}
-  }
-
-  // Expand more comments
-  const expandBtns = await page.$$('button[aria-label*="Load more comments"], button[aria-label*="load more"], button[aria-label*="See previous replies"], button[aria-label*="Load previous replies"]');
-  for (const btn of expandBtns) {
-    try { await btn.click(); await page.waitForTimeout(2000); } catch(e) {}
-  }
-
-  const ourName = "LINKEDIN_NAME_JS_PLACEHOLDER";
-  const contentPrefix = "CONTENT_PREFIX_JS_PLACEHOLDER";
-
-  const result = await page.evaluate(({ourName, contentPrefix}) => {
-    const res = { reactions: 0, found: false, comment_text_preview: '' };
-
-    // Strategy 1: known CSS selectors (LinkedIn occasionally obfuscates these)
-    let commentContainers = Array.from(document.querySelectorAll(
-      'article.comments-comment-entity, ' +
-      'article.comments-comment-item, ' +
-      '[data-id*="comment"], ' +
-      '.comments-comment-list__comment'
-    ));
-
-    // Strategy 2: fallback - find elements by author name text, walk up to comment root
-    if (commentContainers.length === 0) {
-      const nameEls = Array.from(document.querySelectorAll('*')).filter(el =>
-        el.children.length === 0 && el.textContent.trim() === ourName
-      );
-      for (const el of nameEls) {
-        let node = el.parentElement;
-        for (let i = 0; i < 10; i++) {
-          if (!node) break;
-          const t = node.innerText || '';
-          if (t.match(/\d+\s+reaction/i) || node.tagName === 'ARTICLE' || node.getAttribute('data-id')) {
-            commentContainers.push(node);
-            break;
-          }
-          node = node.parentElement;
-        }
-      }
-    }
-
-    for (const container of commentContainers) {
-      const containerText = container.innerText || container.textContent || '';
-
-      // Match by author name in container text OR content prefix
-      const nameMatch = containerText.includes(ourName);
-      const prefixClean = contentPrefix.replace(/[^a-z0-9 ]/gi, '').substring(0, 60).toLowerCase();
-      const containerClean = containerText.replace(/[^a-z0-9 ]/gi, '').substring(0, 500).toLowerCase();
-      const contentMatch = prefixClean.length > 20 && containerClean.includes(prefixClean);
-
-      if (nameMatch || contentMatch) {
-        res.found = true;
-        res.comment_text_preview = containerText.substring(0, 80);
-
-        // Try aria-label button first
-        const reactionEl = container.querySelector(
-          'button[aria-label*="reaction"], button[aria-label*="Reaction"], ' +
-          'button[class*="reactions-count"], button[class*="social-bar"]'
-        );
-        if (reactionEl) {
-          const label = reactionEl.getAttribute('aria-label') || '';
-          const labelMatch = label.match(/([\d,]+)\s*[Rr]eaction/);
-          if (labelMatch) {
-            res.reactions = parseInt(labelMatch[1].replace(/,/g, ''), 10);
-          } else {
-            const num = parseInt(reactionEl.textContent.trim().replace(/,/g, ''), 10);
-            if (!isNaN(num)) res.reactions = num;
-          }
-        }
-
-        // Fallback: parse "N reactions" from container innerText
-        if (!res.reactions) {
-          const reactMatch = containerText.match(/(\d+)\s+reaction/i);
-          if (reactMatch) res.reactions = parseInt(reactMatch[1], 10);
-        }
-
-        break;
-      }
-    }
-
-    return res;
-  }, {ourName, contentPrefix});
-
-  return JSON.stringify(result);
-}
-
-IMPORTANT: For each post, replace CONTENT_PREFIX_JS_PLACEHOLDER in the JS with the first 80 chars of content_prefix from the DB query (escaped for JS string). This helps match our comment even if the author name format differs.
-
-Step 3: Collect all results into a JSON array and save to /tmp/linkedin_stats.json. Each entry should be:
-  {"url": "<the linkedin post url>", "reactions": N, "found": true/false, "unavailable": true/false (optional)}
-Include ALL entries (both found=true and found=false), so the Python-side can detect removals.
-When the SCRAPE_JS returned `unavailable: true`, propagate that flag into the JSON entry so Python can mark the post removed on first detection instead of waiting for the 2-strike confirmation.
-
-Process in batches of 10 with 5-second delays between page loads to avoid LinkedIn rate limiting.
-
-Step 4: Run: python3 REPO_DIR_PLACEHOLDER/scripts/scrape_linkedin_stats.py --from-json /tmp/linkedin_stats.json --summary LINKEDIN_SUMMARY_PLACEHOLDER
-
-The --summary flag is REQUIRED. It writes a small JSON ({refreshed, removed, unavailable, not_found}) that the calling shell reads back to populate the dashboard Jobs row pills. Skipping it makes the LinkedIn run show as zero work even when matches were found.
-
-Step 5: Close the browser tab (mcp__linkedin-agent__browser_tabs action 'close', NOT browser_close).
-
-Done. Report totals (found vs not-found). Do NOT read any other files. Do NOT deviate from these steps.
-STEP4_EOF
-    LINKEDIN_NAME=$(python3 -c "import json; print(json.load(open('$REPO_DIR/config.json'))['accounts']['linkedin']['name'])" 2>/dev/null || echo "Matthew Diakonov")
-    sed -i.bak "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$STEP4_PROMPT"
-    sed -i.bak "s|LINKEDIN_NAME_PLACEHOLDER|$LINKEDIN_NAME|g" "$STEP4_PROMPT"
-    sed -i.bak "s|LINKEDIN_NAME_JS_PLACEHOLDER|$LINKEDIN_NAME|g" "$STEP4_PROMPT"
-    sed -i.bak "s|LINKEDIN_SUMMARY_PLACEHOLDER|$LINKEDIN_SUMMARY_FILE|g" "$STEP4_PROMPT"
-    rm -f "${STEP4_PROMPT}.bak"
-
-    # Step 4 (LinkedIn) requires the linkedin-agent MCP for browser scraping.
-    # Regression fixed 2026-04-27: was pointing at no-agents-mcp.json which is
-    # an empty server set, so every run failed for ~8 days with "tools not available".
-    gtimeout 1800 "$REPO_DIR/scripts/run_claude.sh" "stats-step4" --strict-mcp-config --mcp-config "$HOME/.claude/browser-agent-configs/linkedin-agent-mcp.json" -p "$(cat "$STEP4_PROMPT")" >> "$LOGFILE" 2>&1
+    SOCIAL_AUTOPOSTER_LINKEDIN_STATS=1 gtimeout 1800 python3 \
+        "$REPO_DIR/scripts/scrape_linkedin_stats_browser.py" \
+        --limit 30 --summary "$LINKEDIN_SUMMARY_FILE" $QUIET \
+        >> "$LOGFILE" 2>&1
     STEP4_EXIT=$?
-    rm -f "$STEP4_PROMPT"
+    release_lock "linkedin-browser"
+
     if [ "$STEP4_EXIT" -eq 124 ]; then
         log "Step 4: TIMEOUT (30 min limit reached)"
     elif [ "$STEP4_EXIT" -ne 0 ]; then
