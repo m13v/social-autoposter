@@ -61,9 +61,10 @@ PERIOD_DAYS = 30
 DEFAULT_MAX_DELETIONS = 100
 DEFAULT_MIN_AGE_DAYS = 30
 DEFAULT_MIN_IMPRESSIONS = 10
-# Fast-track: pages with >= this many impressions AND zero clicks are clearly
-# dead (Google showed them a lot, nobody clicked). Allow earlier deletion at
-# FAST_TRACK_MIN_AGE_DAYS instead of waiting the full MIN_AGE_DAYS window.
+# Fast-track (opt-in via --fast-track): pages with >= this many impressions
+# AND zero clicks are clearly dead (Google showed them a lot, nobody clicked).
+# Allow earlier deletion at FAST_TRACK_MIN_AGE_DAYS instead of waiting the
+# full MIN_AGE_DAYS window. Off by default; user said 30/30 is the rule.
 FAST_TRACK_IMP_THRESHOLD = 1000
 FAST_TRACK_MIN_AGE_DAYS = 14
 ROW_LIMIT = 25000
@@ -141,20 +142,56 @@ def url_to_source_path(repo_path: Path, page_url: str) -> Path | None:
     return None
 
 
-def file_age_days(path: Path, repo_path: Path) -> float:
-    """Return age in days using git creation date.
+_GIT_CREATION_CACHE: dict[str, dict[str, int]] = {}
 
-    Falls back to filesystem mtime if git history isn't available. The
+
+def _build_git_creation_map(repo_path: Path) -> dict[str, int]:
+    """One-shot scan: build {repo-relative-path: first-commit-unix-ts} for every
+    file ever added to the repo. Single git log call instead of one per file.
+    """
+    import subprocess
+    key = str(repo_path)
+    if key in _GIT_CREATION_CACHE:
+        return _GIT_CREATION_CACHE[key]
+    out: dict[str, int] = {}
+    try:
+        # --reverse: oldest first, so each file's first occurrence is its add.
+        # --diff-filter=A: only the commits that ADDED a file.
+        # --name-only with format=%at puts a timestamp line, then file paths.
+        res = subprocess.run(
+            ["git", "log", "--reverse", "--diff-filter=A",
+             "--format=__TS__%at", "--name-only"],
+            cwd=str(repo_path), capture_output=True, text=True, timeout=120,
+        )
+        if res.returncode == 0:
+            current_ts = 0
+            for line in res.stdout.splitlines():
+                if line.startswith("__TS__"):
+                    try:
+                        current_ts = int(line[6:])
+                    except ValueError:
+                        current_ts = 0
+                elif line.strip() and current_ts:
+                    # Only record first-add (earliest), since --reverse means we
+                    # see each file's add commit before any later rename.
+                    if line not in out:
+                        out[line] = current_ts
+    except Exception:
+        pass
+    _GIT_CREATION_CACHE[key] = out
+    return out
+
+
+def file_age_days(path: Path, repo_path: Path) -> float:
+    """Return age in days using git creation date for the path (or the newest
+    creation timestamp inside it for folder routes).
+
+    Falls back to filesystem mtime if git history is unavailable. The
     background auto-commit agent updates mtimes during routine commits, so
     git's first-commit timestamp is the only reliable signal for "when was
     this page actually published".
     """
-    import subprocess
     try:
-        # For folder routes (e.g. /t/<slug>/) the canonical file is page.tsx
-        # inside it; for blog .mdx the path itself is the file. Pick the
-        # newest creation timestamp inside the path so a folder with a stale
-        # page.tsx but a fresh helper file still counts as fresh.
         if path.is_file():
             targets = [path]
         elif path.is_dir():
@@ -163,24 +200,16 @@ def file_age_days(path: Path, repo_path: Path) -> float:
             return 0
         if not targets:
             return 0
-        newest_creation = 0.0
+        creation_map = _build_git_creation_map(repo_path)
+        newest_creation = 0
         for t in targets:
-            rel = t.relative_to(repo_path)
-            res = subprocess.run(
-                ["git", "log", "--diff-filter=A", "--follow",
-                 "--format=%at", "--", str(rel)],
-                cwd=str(repo_path), capture_output=True, text=True, timeout=10,
-            )
-            if res.returncode == 0 and res.stdout.strip():
-                lines = [int(x) for x in res.stdout.strip().splitlines() if x.strip().isdigit()]
-                if lines:
-                    # last line of git log --follow is the original creation
-                    creation_ts = lines[-1]
-                    if creation_ts > newest_creation:
-                        newest_creation = creation_ts
+            rel = str(t.relative_to(repo_path))
+            ts = creation_map.get(rel, 0)
+            if ts > newest_creation:
+                newest_creation = ts
         if newest_creation > 0:
             return (time.time() - newest_creation) / 86400
-        # Fallback to mtime if git log returned nothing
+        # Fallback to mtime if git log had no record (untracked file, fresh repo)
         mt = max(t.stat().st_mtime for t in targets)
         return (time.time() - mt) / 86400
     except Exception:
@@ -278,10 +307,9 @@ def expire_for_project(svc, project, args, end_date, deletions_remaining):
         if not src.exists():
             continue
         age = file_age_days(src, repo_path)
-        # Fast-track for clearly-dead pages: high impressions, zero clicks,
-        # at least FAST_TRACK_MIN_AGE_DAYS old.
         is_fast_track = (
-            imp >= FAST_TRACK_IMP_THRESHOLD
+            args.fast_track
+            and imp >= FAST_TRACK_IMP_THRESHOLD
             and age >= FAST_TRACK_MIN_AGE_DAYS
         )
         if not is_fast_track and age < args.min_age_days:
@@ -335,6 +363,10 @@ def main():
                     help=f"Skip pages younger than N days (default {DEFAULT_MIN_AGE_DAYS})")
     ap.add_argument("--min-impressions", type=int, default=DEFAULT_MIN_IMPRESSIONS,
                     help=f"Skip pages with fewer than N impressions in {PERIOD_DAYS}d (default {DEFAULT_MIN_IMPRESSIONS})")
+    ap.add_argument("--fast-track", action="store_true",
+                    help=f"Also include pages older than {FAST_TRACK_MIN_AGE_DAYS}d "
+                         f"with >= {FAST_TRACK_IMP_THRESHOLD} impressions and zero clicks "
+                         "(clearly dead; off by default).")
     args = ap.parse_args()
 
     load_env()
