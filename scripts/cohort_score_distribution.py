@@ -90,7 +90,7 @@ def main():
     # All posts
     rows = query(conn)
     total = sum(r[1] for r in rows)
-    print(f"# Score-cohort distribution, last {DAYS} days (status=live)")
+    print(f"# Score-cohort distribution, last {DAYS} days (status=active)")
     print(f"# Score = comments*3 + upvotes (Reddit/Moltbook: -1 to strip OP self-upvote)")
     print_table(f"ALL platforms — {total} posts", rows, total)
 
@@ -99,7 +99,7 @@ def main():
         SELECT DISTINCT LOWER(platform)
         FROM posts
         WHERE posted_at >= NOW() - INTERVAL '{DAYS} days'
-          AND status='live' AND upvotes IS NOT NULL
+          AND status='active' AND upvotes IS NOT NULL
         ORDER BY 1
     """)
     platforms = [r[0] for r in cur.fetchall()]
