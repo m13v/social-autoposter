@@ -66,10 +66,10 @@ def pick_next_keyword(product):
     conn = get_conn()
     cur = conn.cursor()
 
-    # First: pending keywords ready to build (soft floor; ORDER BY score DESC prioritizes)
+    # First: pending keywords ready to build (floor raised 2026-05-05 from 1.0 to 1.5 after fazm.ai dead-weight audit)
     cur.execute("""
         SELECT keyword, slug, status, score FROM seo_keywords
-        WHERE product = %s AND status = 'pending' AND score >= 1.0
+        WHERE product = %s AND status = 'pending' AND score >= 1.5
         ORDER BY score DESC LIMIT 1
     """, (product,))
     row = cur.fetchone()
@@ -192,7 +192,7 @@ def has_work(product):
     cur.execute("""
         SELECT
             sum(case when status = 'unscored' then 1 else 0 end) as unscored,
-            sum(case when status = 'pending' and score >= 1.0 then 1 else 0 end) as pending
+            sum(case when status = 'pending' and score >= 1.5 then 1 else 0 end) as pending
         FROM seo_keywords WHERE product = %s
     """, (product,))
     row = cur.fetchone()
@@ -216,7 +216,7 @@ def report(product):
 
     cur.execute("""
         SELECT score, keyword FROM seo_keywords
-        WHERE product = %s AND status = 'pending' AND score >= 1.0
+        WHERE product = %s AND status = 'pending' AND score >= 1.5
         ORDER BY score DESC LIMIT 5
     """, (product,))
     pending = cur.fetchall()
