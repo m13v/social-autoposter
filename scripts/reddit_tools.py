@@ -252,12 +252,132 @@ def _parse_search_results(data, already_posted, blocked_subs):
     return threads, stats
 
 
+def _log_search_and_attach_deltas(query, subreddits_csv, project_name, batch_id, threads, stats):
+    """Dual-write feedback loop side effect of cmd_search.
+
+    1. Inserts ONE reddit_search_attempts row capturing (query, subreddits,
+       project, raw count, post-filter count, top metrics) so
+       top_dud_reddit_queries.py can later surface phrases that consistently
+       return zero candidates.
+    2. UPSERTs one reddit_thread_snapshots row per returned thread keyed by
+       thread_url. On second sight, computes delta_score / delta_comments /
+       delta_window_min from first_seen_* and mutates the threads list in
+       place, attaching those fields to each thread dict so the LLM sees:
+           "+15 upvotes / +4 comments since first seen 32min ago"
+       This is the entire delta-gating loop — no separate T1 fetch job.
+
+    Failures here MUST NOT break the search command. The whole point is to be
+    a passive side effect; dropping a snapshot row is preferable to failing the
+    whole call and starving the post pipeline.
+    """
+    try:
+        from datetime import datetime, timezone as _tz
+        dbmod.load_env()
+        conn = dbmod.get_conn()
+        try:
+            now = datetime.now(_tz.utc)
+
+            # 1) Per-thread upsert + delta attachment
+            for t in threads:
+                t_url = t.get("url")
+                if not t_url:
+                    continue
+                t_score = int(t.get("score") or 0)
+                t_comments = int(t.get("num_comments") or 0)
+                t_sub = (t.get("subreddit") or "").lstrip("r/")
+                t_title = (t.get("title") or "")[:500]
+
+                cur = conn.execute(
+                    """SELECT first_seen_at, first_seen_score, first_seen_comments,
+                              last_seen_score, last_seen_comments, sightings
+                       FROM reddit_thread_snapshots
+                       WHERE thread_url = %s""",
+                    [t_url],
+                )
+                existing = cur.fetchone()
+                if existing is not None:
+                    first_at, first_score, first_comments, prev_last_score, prev_last_comments, sightings = existing
+                    try:
+                        window_min = (now - first_at).total_seconds() / 60.0
+                    except Exception:
+                        window_min = 0.0
+                    t["delta_score"] = t_score - int(first_score or 0)
+                    t["delta_comments"] = t_comments - int(first_comments or 0)
+                    t["delta_window_min"] = round(window_min, 1)
+                    t["sightings"] = int(sightings or 1) + 1
+                    t["first_seen_at"] = first_at.isoformat() if first_at else None
+                    conn.execute(
+                        """UPDATE reddit_thread_snapshots
+                           SET last_seen_at = NOW(),
+                               last_seen_score = %s,
+                               last_seen_comments = %s,
+                               sightings = sightings + 1,
+                               subreddit = COALESCE(NULLIF(%s,''), subreddit),
+                               title = COALESCE(NULLIF(%s,''), title)
+                           WHERE thread_url = %s""",
+                        [t_score, t_comments, t_sub, t_title, t_url],
+                    )
+                else:
+                    # First sight: no delta yet, but still emit the keys at zero
+                    # so the JSON shape is consistent for the LLM.
+                    t["delta_score"] = 0
+                    t["delta_comments"] = 0
+                    t["delta_window_min"] = 0.0
+                    t["sightings"] = 1
+                    t["first_seen_at"] = now.isoformat()
+                    conn.execute(
+                        """INSERT INTO reddit_thread_snapshots
+                           (thread_url, subreddit, title,
+                            first_seen_at, first_seen_score, first_seen_comments,
+                            last_seen_at, last_seen_score, last_seen_comments,
+                            sightings)
+                           VALUES (%s, %s, %s, NOW(), %s, %s, NOW(), %s, %s, 1)
+                           ON CONFLICT (thread_url) DO NOTHING""",
+                        [t_url, t_sub, t_title, t_score, t_comments, t_score, t_comments],
+                    )
+
+            # 2) One row per query attempt
+            conn.execute(
+                """INSERT INTO reddit_search_attempts
+                   (query, subreddits, project_name,
+                    candidates_raw, candidates_post_filter,
+                    top_score, top_comments, batch_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                [
+                    query,
+                    subreddits_csv or None,
+                    project_name or None,
+                    int(stats.get("raw") or 0),
+                    int(stats.get("returned") or 0),
+                    int(stats.get("top_score") or 0),
+                    int(stats.get("top_comments") or 0),
+                    batch_id or None,
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        # Side-effect-only logging: never raise. Print once to stderr so
+        # the run log shows the failure without breaking the search.
+        print(f"[reddit_search] WARN: feedback log failed: {e}", file=sys.stderr, flush=True)
+
+
 def cmd_search(args):
     """Search Reddit and return threads as JSON.
 
     Uses sort=relevance by default for topically relevant results.
     Supports --subreddits to scope search to specific subs via restrict_sr.
     Supports --time to filter by recency (hour, day, week, month, year, all).
+
+    Side effects (introduced 2026-05-05):
+    - Logs one row to reddit_search_attempts per call (project + batch_id are
+      pulled from env so the LLM tool-call signature stays unchanged).
+    - Upserts one row to reddit_thread_snapshots per returned thread; attaches
+      delta_score / delta_comments / delta_window_min to each thread in the
+      stdout JSON when the same thread reappears across cycles. This feeds
+      Claude a "thread is gaining traction" gating signal without a Twitter-
+      style 2-phase staging refactor.
     """
     query = args.query
     time_filter = args.time
@@ -280,9 +400,21 @@ def cmd_search(args):
     data = _do_request(url)
     threads, stats = _parse_search_results(data, already_posted, blocked_subs)
 
+    # Feedback-loop side effect: log this query attempt + upsert per-thread
+    # snapshots, mutating `threads` in place to attach delta_* fields. project
+    # + batch_id come from env vars exported by post_reddit.py:run_claude
+    # before invoking the Claude session, so the tool-call signature the LLM
+    # uses stays unchanged.
+    project_env = os.environ.get("SAPS_REDDIT_PROJECT") or None
+    batch_env = os.environ.get("SAPS_REDDIT_BATCH_ID") or None
+    _log_search_and_attach_deltas(
+        query, args.subreddits, project_env, batch_env, threads, stats,
+    )
+
     # Emit a single-line marker on stderr so post_reddit.py can forward it into
     # run-reddit-search-*.log, where the dashboard's enrichPostCommentsRedditRuns
-    # parses it for the raw/passed pills. Stdout JSON contract unchanged.
+    # parses it for the raw/passed pills. Stdout JSON contract extended with
+    # delta_* keys per thread (additive, parsers ignore unknown keys).
     safe_q = query.replace('"', '\\"')[:120]
     print(
         f'[reddit_search] q="{safe_q}" raw={stats["raw"]} returned={stats["returned"]} '
