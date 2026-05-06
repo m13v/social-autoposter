@@ -90,12 +90,14 @@ def main():
 
     urls = []
     for d in decisions:
-        u = (d.get("target_thread_url") or "").strip()
+        # post_reddit.py writes the field as `thread_url` (not target_thread_url).
+        # Tolerate both for safety in case the schema ever changes.
+        u = (d.get("thread_url") or d.get("target_thread_url") or "").strip()
         if u:
             urls.append(u)
 
     if not urls:
-        print(f"[ripen] no target_thread_urls in {len(decisions)} decisions; passthrough",
+        print(f"[ripen] no thread_urls in {len(decisions)} decisions; passthrough",
               file=sys.stderr)
         with open(args.out, "w") as f:
             json.dump(plan, f)
@@ -127,7 +129,7 @@ def main():
     survivors = []
     drops = []
     for d in decisions:
-        url = (d.get("target_thread_url") or "").strip()
+        url = (d.get("thread_url") or d.get("target_thread_url") or "").strip()
         t0r = t0_ok.get(url)
         t1r = t1.get(url, {}) if t1 else {}
         if not t0r:
@@ -184,6 +186,31 @@ def main():
     with open(args.out, "w") as f:
         json.dump(plan, f)
 
+    # Compact, parseable summary marker for the dashboard's
+    # enrichPostCommentsRedditRuns() in bin/server.js. Field order matters; keep
+    # in sync with the regex on the JS side.
+    best_composite = None
+    best_d_up = None
+    best_d_co = None
+    for d in survivors:
+        rip = d.get("ripen") or {}
+        c = rip.get("composite")
+        if c is None:
+            continue
+        if best_composite is None or c > best_composite:
+            best_composite = c
+            best_d_up = rip.get("delta_up")
+            best_d_co = rip.get("delta_comments")
+    bc = "" if best_composite is None else f"{best_composite:.1f}"
+    bu = "" if best_d_up is None else str(best_d_up)
+    bk = "" if best_d_co is None else str(best_d_co)
+    print(
+        f"[ripen] summary input={len(decisions)} survivors={len(survivors)} "
+        f"drops={len(drops)} floor={args.floor} w_comments={args.w_comments} "
+        f"window_sec={args.sleep if not args.no_sleep else 0} "
+        f"best_composite={bc} best_d_up={bu} best_d_co={bk}",
+        file=sys.stderr,
+    )
     print(f"[ripen] done: {len(survivors)} survivors, {len(drops)} drops "
           f"(floor>{args.floor}, w_comments={args.w_comments})",
           file=sys.stderr)
