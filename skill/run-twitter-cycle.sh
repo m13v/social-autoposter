@@ -12,8 +12,8 @@
 # Phase 2 (t=5m):
 #   - re-fetch the same candidates via fxtwitter -> T1 snapshot + delta_score
 #   - SQL gate: only candidates with delta_score >= 1 (skip zero-momentum duds)
-#   - Claude reads top 10 by delta, drops unsuitable, posts top N where N is
-#     adaptive: 3 if ≥3 candidates cleared Δ≥10 (strong momentum), else 1
+#   - Claude reads top 15 by delta, drops unsuitable, posts top N where N is
+#     adaptive: 4 if ≥3 candidates cleared Δ≥10 (strong momentum), else 1
 #   - keep remaining pending rows: salvaged into the next cycle, hard-expired
 #     by Phase 0 once tweet age crosses FRESHNESS_HOURS
 #
@@ -320,7 +320,7 @@ async (page) => {
   await page.waitForTimeout(3000);
   const tweets = await page.evaluate(() => {
     const results = [];
-    for (const article of [...document.querySelectorAll('article[data-testid=\"tweet\"]')].slice(0, 5)) {
+    for (const article of [...document.querySelectorAll('article[data-testid=\"tweet\"]')].slice(0, 8)) {
       try {
         let handle = '';
         for (const link of article.querySelectorAll('a[role=\"link\"]')) {
@@ -529,7 +529,7 @@ sleep 300
 log "Phase 2a: re-polling fxtwitter for T1 engagement..."
 python3 "$REPO_DIR/scripts/fetch_twitter_t1.py" --batch-id "$BATCH_ID" 2>&1 | tee -a "$LOG_FILE"
 
-# --- Phase 2b: top 10 by delta (Δ≥1 floor), adaptive post cap 1 or 3 --------
+# --- Phase 2b: top 15 by delta (Δ≥1 floor), adaptive post cap 1 or 4 --------
 CANDIDATES=$(psql "$DATABASE_URL" -t -A -F '|' -c "
     SELECT id, tweet_url, author_handle,
            REPLACE(REPLACE(COALESCE(tweet_text, ''), E'\n', ' '), E'\r', ' '),
@@ -545,7 +545,7 @@ CANDIDATES=$(psql "$DATABASE_URL" -t -A -F '|' -c "
     FROM twitter_candidates
     WHERE batch_id='$BATCH_ID' AND status='pending' AND delta_score >= 1
     ORDER BY delta_score DESC
-    LIMIT 10;
+    LIMIT 15;
 " 2>/dev/null || echo "")
 
 if [ -z "$CANDIDATES" ]; then
@@ -567,11 +567,11 @@ fi
 CANDIDATE_COUNT=$(printf '%s\n' "$CANDIDATES" | grep -c '^[0-9]')
 log "Top $CANDIDATE_COUNT candidates by delta selected for post review."
 
-# Adaptive post cap: if ≥3 candidates cleared Δ≥10 (strong momentum), allow up to 3
+# Adaptive post cap: if ≥3 candidates cleared Δ≥10 (strong momentum), allow up to 4
 # posts; otherwise cap at 1 so we don't burn reply budget on marginal cycles.
 HIGH_DELTA_COUNT=$(printf '%s\n' "$CANDIDATES" | awk -F'|' '$1 ~ /^[0-9]+$/ && $6+0 >= 10 {n++} END {print n+0}')
 if [ "$HIGH_DELTA_COUNT" -ge 3 ]; then
-    POST_LIMIT=3
+    POST_LIMIT=4
 else
     POST_LIMIT=1
 fi
