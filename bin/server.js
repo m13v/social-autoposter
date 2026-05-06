@@ -5045,6 +5045,7 @@ const HTML = `<!DOCTYPE html>
 <div class="tabs">
   <div class="tab sa-local-only" data-tab="status">Status</div>
   <div class="tab active" data-tab="stats">Stats</div>
+  <div class="tab" data-tab="trends">Trends</div>
   <div class="tab" data-tab="activity">Activity</div>
   <div class="tab" data-tab="top">Top</div>
   <div class="tab sa-admin-only" data-tab="logs">Logs</div>
@@ -5166,18 +5167,6 @@ const HTML = `<!DOCTYPE html>
 </div>
 
 <div class="content" id="tab-stats">
-  <details class="style-stats-section" id="daily-metrics" open>
-    <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span>Daily Metrics (last 30 days)</span></span>
-      <span class="style-stats-total" id="daily-metrics-status"></span>
-    </summary>
-    <div id="daily-metrics-body">
-      <div id="daily-metrics-legend" class="daily-metrics-legend"></div>
-      <div id="daily-metrics-chart" class="daily-metrics-chart">
-        <div class="views-chart-empty">Loading…</div>
-      </div>
-    </div>
-  </details>
   <div class="stats-top-filters">
     <div class="style-stats-pill-row" id="stats-window-pills" data-selected="7d">
       <span class="label">Window</span>
@@ -5234,6 +5223,36 @@ const HTML = `<!DOCTYPE html>
     </summary>
     <div id="dm-stats-body">
       <div class="style-stats-empty">Loading\u2026</div>
+    </div>
+  </details>
+</div>
+
+<div class="content hidden" id="tab-trends">
+  <div class="stats-top-filters">
+    <div class="style-stats-pill-row" id="trends-platform-pills" data-selected="all">
+      <span class="label">Platform</span>
+      <button type="button" class="style-stats-pill active" data-value="all">All</button>
+    </div>
+    <div class="style-stats-pill-row" id="trends-project-pills" data-selected="all">
+      <span class="label">Project</span>
+      <button type="button" class="style-stats-pill active" data-value="all">All</button>
+    </div>
+    <div class="style-stats-pill-row" id="trends-granularity-pills" data-selected="daily">
+      <span class="label">Granularity</span>
+      <button type="button" class="style-stats-pill active" data-value="daily">Daily</button>
+      <button type="button" class="style-stats-pill" data-value="weekly">Weekly</button>
+    </div>
+  </div>
+  <details class="style-stats-section" id="daily-metrics" open>
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">▶</span><span id="daily-metrics-heading">Daily Metrics (last 30 days)</span></span>
+      <span class="style-stats-total" id="daily-metrics-status"></span>
+    </summary>
+    <div id="daily-metrics-body">
+      <div id="daily-metrics-legend" class="daily-metrics-legend"></div>
+      <div id="daily-metrics-chart" class="daily-metrics-chart">
+        <div class="views-chart-empty">Loading…</div>
+      </div>
     </div>
   </details>
 </div>
@@ -7463,28 +7482,37 @@ async function loadActivityStats() {
   } catch {}
 }
 
-// Combined daily-metrics line chart. Fetches 4 endpoints (2 post-series
-// endpoints, bookings, and a batched funnel PostHog endpoint covering 5
-// metrics) and renders one SVG with a toggleable colored line per metric.
-// The chart is fixed to a 30-day window and ignores the stats tab's
-// top window/platform/project filters by design.
+// Combined daily-metrics line chart (Trends tab). Fetches 4 endpoints (2
+// post-series endpoints, bookings, and a batched funnel PostHog endpoint
+// covering 5 metrics) and renders one SVG with a toggleable colored line
+// per metric.
+//
+// The Trends tab has its own platform / project / granularity (daily |
+// weekly) filter bar; loadDailyMetrics reads those pills and forwards
+// them to the API. Note: only the post-derived series (views, upvotes,
+// comments) actually honor the platform filter; bookings and the funnel
+// metrics are project-scoped only, so picking a platform leaves their
+// lines unchanged. Project filter applies to all metrics.
 //
 // Three post-derived metrics (views, upvotes, comments) exclude each
 // post's first-ever snapshot so day 1 never attributes lifetime counts
 // to a capture day; expect those lines to sit at 0 until at least two
 // consecutive days of snapshots have accumulated per post.
 const DAILY_METRICS = [
-  { id: 'views',           label: 'Views',             color: '#6366f1', endpoint: '/api/views/per-day',    valueKey: 'views_gained' },
-  { id: 'upvotes',         label: 'Upvotes',           color: '#f97316', endpoint: '/api/upvotes/per-day',  valueKey: 'upvotes_gained' },
-  { id: 'comments',        label: 'Comments',          color: '#14b8a6', endpoint: '/api/comments/per-day', valueKey: 'comments_gained' },
-  { id: 'bookings',        label: 'Bookings',          color: '#ef4444', endpoint: '/api/bookings/per-day', valueKey: 'bookings_gained' },
-  { id: 'pageviews',       label: 'Pageviews',         color: '#8b5cf6', funnel: true, valueKey: 'pageviews' },
-  { id: 'email_signups',   label: 'Email Signups',     color: '#10b981', funnel: true, valueKey: 'email_signups' },
-  { id: 'schedule_clicks', label: 'Schedule Clicks',   color: '#f59e0b', funnel: true, valueKey: 'schedule_clicks' },
-  { id: 'get_started',     label: 'Get Started',       color: '#06b6d4', funnel: true, valueKey: 'get_started_clicks' },
-  { id: 'cross_product',   label: 'Cross Product',     color: '#ec4899', funnel: true, valueKey: 'cross_product_clicks' },
+  { id: 'views',           label: 'Views',             color: '#6366f1', endpoint: '/api/views/per-day',    valueKey: 'views_gained',     platformAware: true },
+  { id: 'upvotes',         label: 'Upvotes',           color: '#f97316', endpoint: '/api/upvotes/per-day',  valueKey: 'upvotes_gained',   platformAware: true },
+  { id: 'comments',        label: 'Comments',          color: '#14b8a6', endpoint: '/api/comments/per-day', valueKey: 'comments_gained',  platformAware: true },
+  { id: 'bookings',        label: 'Bookings',          color: '#ef4444', endpoint: '/api/bookings/per-day', valueKey: 'bookings_gained',  platformAware: false },
+  { id: 'pageviews',       label: 'Pageviews',         color: '#8b5cf6', funnel: true, valueKey: 'pageviews',              platformAware: false },
+  { id: 'email_signups',   label: 'Email Signups',     color: '#10b981', funnel: true, valueKey: 'email_signups',          platformAware: false },
+  { id: 'schedule_clicks', label: 'Schedule Clicks',   color: '#f59e0b', funnel: true, valueKey: 'schedule_clicks',        platformAware: false },
+  { id: 'get_started',     label: 'Get Started',       color: '#06b6d4', funnel: true, valueKey: 'get_started_clicks',     platformAware: false },
+  { id: 'cross_product',   label: 'Cross Product',     color: '#ec4899', funnel: true, valueKey: 'cross_product_clicks',   platformAware: false },
 ];
-const DAILY_METRICS_DAYS = 30;
+// Daily granularity uses 30 days; weekly uses 91 days = 13 weeks so the
+// chart shows a meaningful weekly trend rather than 4-5 buckets.
+const DAILY_METRICS_DAYS_DAILY  = 30;
+const DAILY_METRICS_DAYS_WEEKLY = 91;
 
 // series: { [metricId]: { [dayISO]: number } }. Rebuilt by loadDailyMetrics,
 // read by renderDailyMetrics. Persisted selection lives in localStorage.
@@ -7708,18 +7736,65 @@ function renderDailyMetrics() {
   }
 }
 
+// Trends-tab filter state. Selection is read off the trends pill rows by
+// data-selected; granularity drives the day count and axis bucketing.
+function currentTrendsPlatform() {
+  const row = document.getElementById('trends-platform-pills');
+  return (row && row.dataset.selected) || 'all';
+}
+function currentTrendsProject() {
+  const row = document.getElementById('trends-project-pills');
+  return (row && row.dataset.selected) || 'all';
+}
+function currentTrendsGranularity() {
+  const row = document.getElementById('trends-granularity-pills');
+  const v = row && row.dataset.selected;
+  return v === 'weekly' ? 'weekly' : 'daily';
+}
+
+// Bucket a per-day series map into rolling 7-day weekly buckets ending on
+// the most recent day in `days`. Returns { weekKeys, weeklyMap } where
+// weekKeys is the new axis (ISO date of the first day of each bucket) and
+// weeklyMap is { [weekKey]: sum }.
+function _bucketWeekly(days, byDay) {
+  const weekKeys = [];
+  const weeklyMap = {};
+  for (let i = 0; i < days.length; i += 7) {
+    const slice = days.slice(i, i + 7);
+    if (!slice.length) break;
+    const key = slice[0];
+    let sum = 0;
+    slice.forEach(d => { sum += Number(byDay[d]) || 0; });
+    weekKeys.push(key);
+    weeklyMap[key] = sum;
+  }
+  return { weekKeys, weeklyMap };
+}
+
 async function loadDailyMetrics() {
   const chartEl = document.getElementById('daily-metrics-chart');
+  const headingEl = document.getElementById('daily-metrics-heading');
   const series = {};
-  // Prebuild the 30-day axis (end-exclusive so last entry is today UTC).
+  const granularity = currentTrendsGranularity();
+  const platform = currentTrendsPlatform();
+  const project = currentTrendsProject();
+  const fetchDays = granularity === 'weekly' ? DAILY_METRICS_DAYS_WEEKLY : DAILY_METRICS_DAYS_DAILY;
+
+  // Prebuild the daily axis (end-exclusive so last entry is today UTC).
   const today = new Date();
-  const axis = [];
-  for (let i = DAILY_METRICS_DAYS - 1; i >= 0; i--) {
+  const dailyAxis = [];
+  for (let i = fetchDays - 1; i >= 0; i--) {
     const d = new Date(today);
     d.setDate(today.getDate() - i);
-    axis.push(d.toISOString().slice(0, 10));
+    dailyAxis.push(d.toISOString().slice(0, 10));
   }
-  _dailyMetricsDays = axis;
+
+  // Update the section heading to reflect current granularity + window.
+  if (headingEl) {
+    headingEl.textContent = granularity === 'weekly'
+      ? 'Weekly Metrics (last ' + Math.round(fetchDays / 7) + ' weeks)'
+      : 'Daily Metrics (last ' + fetchDays + ' days)';
+  }
 
   // Each fetch is best-effort. Returning [] on failure means a single broken
   // endpoint (e.g. /api/funnel/per-day intentionally degraded in CLIENT_MODE,
@@ -7736,14 +7811,23 @@ async function loadDailyMetrics() {
       return { rows: [], failed: true, error: String(e && e.message || e) };
     }
   };
+  // Build per-endpoint querystrings: post-derived endpoints honor both
+  // platform + project; bookings + funnel honor project only.
+  const baseParams = ['days=' + fetchDays];
+  const platformAwareParams = baseParams.slice();
+  if (platform && platform !== 'all') platformAwareParams.push('platform=' + encodeURIComponent(platform));
+  if (project  && project  !== 'all') platformAwareParams.push('project='  + encodeURIComponent(project));
+  const projectOnlyParams = baseParams.slice();
+  if (project  && project  !== 'all') projectOnlyParams.push('project='  + encodeURIComponent(project));
+  const qsAware = platformAwareParams.join('&');
+  const qsProj  = projectOnlyParams.join('&');
   try {
-    const qs = 'days=' + DAILY_METRICS_DAYS;
     const [views, upvotes, comments, bookings, funnel] = await Promise.all([
-      fetchOne('/api/views/per-day?' + qs),
-      fetchOne('/api/upvotes/per-day?' + qs),
-      fetchOne('/api/comments/per-day?' + qs),
-      fetchOne('/api/bookings/per-day?' + qs),
-      fetchOne('/api/funnel/per-day?' + qs),
+      fetchOne('/api/views/per-day?'    + qsAware),
+      fetchOne('/api/upvotes/per-day?'  + qsAware),
+      fetchOne('/api/comments/per-day?' + qsAware),
+      fetchOne('/api/bookings/per-day?' + qsProj),
+      fetchOne('/api/funnel/per-day?'   + qsProj),
     ]);
     const allFailed = [views, upvotes, comments, bookings, funnel].every(r => r.failed);
     if (allFailed) {
@@ -7762,7 +7846,22 @@ async function loadDailyMetrics() {
     DAILY_METRICS.filter(m => m.funnel).forEach(m => {
       intoSeries(m.id, funnel.rows, m.valueKey);
     });
-    _dailyMetricsSeries = series;
+    // Weekly granularity: bucket all series into rolling 7-day windows and
+    // swap the axis to per-bucket keys before rendering.
+    if (granularity === 'weekly') {
+      const aggregated = {};
+      let weekKeys = null;
+      DAILY_METRICS.forEach(m => {
+        const bucketed = _bucketWeekly(dailyAxis, series[m.id] || {});
+        if (!weekKeys) weekKeys = bucketed.weekKeys;
+        aggregated[m.id] = bucketed.weeklyMap;
+      });
+      _dailyMetricsDays = weekKeys || [];
+      _dailyMetricsSeries = aggregated;
+    } else {
+      _dailyMetricsDays = dailyAxis;
+      _dailyMetricsSeries = series;
+    }
     renderDailyMetrics();
   } catch (e) {
     if (chartEl) chartEl.innerHTML = '<div class="views-chart-empty">Unable to load daily metrics (' + escapeHtml(String(e.message || e)) + ').</div>';
