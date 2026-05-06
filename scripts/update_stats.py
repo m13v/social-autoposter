@@ -1154,12 +1154,22 @@ def update_twitter(db, config=None, quiet=False, audit_mode=False):
         username = username.group(1) if username else 'i'
 
         url = f"https://api.fxtwitter.com/{username}/status/{tweet_id}"
-        data = fetch_json(url)
+        # fxtwitter returns HTTP 404 for malformed/non-existent handles
+        # (e.g. corrupted our_url rows). Catch HttpNotFoundError and route
+        # to the same in-body 404 handler below so a single bad row does
+        # not abort the whole pipeline.
+        try:
+            data = fetch_json(url)
+        except HttpNotFoundError:
+            data = {"code": 404, "tweet": None}
 
         if not data:
             # Retry once
             time.sleep(2)
-            data = fetch_json(url)
+            try:
+                data = fetch_json(url)
+            except HttpNotFoundError:
+                data = {"code": 404, "tweet": None}
             if not data:
                 errors += 1
                 continue
@@ -1352,10 +1362,18 @@ def update_twitter_replies(db, quiet=False):
         username = username_m.group(1) if username_m else 'i'
 
         api_url = f"https://api.fxtwitter.com/{username}/status/{tweet_id}"
-        data = fetch_json(api_url)
+        # See update_twitter() — same HttpNotFoundError guard for replies so
+        # a single corrupted reply URL doesn't crash the whole pipeline.
+        try:
+            data = fetch_json(api_url)
+        except HttpNotFoundError:
+            data = None
         if not data:
             time.sleep(2)
-            data = fetch_json(api_url)
+            try:
+                data = fetch_json(api_url)
+            except HttpNotFoundError:
+                data = None
             if not data:
                 errors += 1
                 continue
