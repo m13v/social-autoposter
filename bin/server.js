@@ -1218,6 +1218,14 @@ async function enrichPostCommentsRedditRuns(runs) {
   const planFailedRe = /Plan phase: Claude failed/;
   const planRateRe = /Plan phase: rate-limited/;
   const iterationRe = /^\[\d{2}:\d{2}:\d{2}\] --- Iteration \d+\//;
+  // Ripen phase summary marker (one per iteration that reaches ripen). Emitted
+  // by scripts/ripen_reddit_plan.py. Carries the per-iteration delta-gate
+  // stats so the dashboard can show ripen_input/survivors/drops + the best
+  // observed composite/Δup/Δcomments. Empty best_* fields mean nothing
+  // survived the floor (or numbers couldn't be measured).
+  const ripenSummaryRe = /\[ripen\] summary input=(\d+) survivors=(\d+) drops=(\d+) floor=([\d.]+) w_comments=([\d.]+) window_sec=(\d+) best_composite=([\d.\-]*) best_d_up=([\d\-]*) best_d_co=([\d\-]*)/;
+  const ripenSkipRe = /Ripen phase: 0 survivors; skipping post phase/;
+  const ripenPassthroughRe = /\[ripen\] (no thread_urls|empty plan|WARN: 0 of \d+ T0 fetches)/;
 
   for (const run of rdRuns) {
     const startMs = new Date(run.started_at).getTime();
@@ -1253,6 +1261,12 @@ async function enrichPostCommentsRedditRuns(runs) {
     try { body = fs.readFileSync(path.join(LOG_DIR, chosen), 'utf8'); } catch { body = ''; }
     let iterations = 0, searches = 0, fetched = 0, raw = 0, passed = 0, drafted = 0;
     let postedCount = 0, failedCount = 0, planFailed = 0;
+    // Ripen accumulators. Sum across iterations within a single run so the
+    // pill reflects the whole run, not just the last iteration.
+    let ripenInput = 0, ripenSurvivors = 0, ripenDrops = 0;
+    let ripenSkippedIters = 0, ripenPassthroughIters = 0, ripenIters = 0;
+    let bestComposite = null, bestDeltaUp = null, bestDeltaCo = null;
+    let ripenFloor = null, ripenWComments = null, ripenWindowSec = null;
     for (const ln of body.split('\n')) {
       if (iterationRe.test(ln)) iterations++;
       if (searchRe.test(ln) && ln.includes('tool: Bash')) searches++;
@@ -1265,6 +1279,26 @@ async function enrichPostCommentsRedditRuns(runs) {
       const pm = ln.match(phaseRollupRe);
       if (pm) failedCount += parseInt(pm[2], 10);
       if (planFailedRe.test(ln)) planFailed++;
+      const rs = ln.match(ripenSummaryRe);
+      if (rs) {
+        ripenIters++;
+        ripenInput += parseInt(rs[1], 10);
+        ripenSurvivors += parseInt(rs[2], 10);
+        ripenDrops += parseInt(rs[3], 10);
+        ripenFloor = parseFloat(rs[4]);
+        ripenWComments = parseFloat(rs[5]);
+        ripenWindowSec = parseInt(rs[6], 10);
+        if (rs[7] !== '') {
+          const c = parseFloat(rs[7]);
+          if (Number.isFinite(c) && (bestComposite === null || c > bestComposite)) {
+            bestComposite = c;
+            bestDeltaUp = rs[8] !== '' ? parseInt(rs[8], 10) : null;
+            bestDeltaCo = rs[9] !== '' ? parseInt(rs[9], 10) : null;
+          }
+        }
+      }
+      if (ripenSkipRe.test(ln)) ripenSkippedIters++;
+      if (ripenPassthroughRe.test(ln)) ripenPassthroughIters++;
     }
     const dropped = Math.max(0, raw - passed);
     const prior = run.result || {};
@@ -1287,6 +1321,24 @@ async function enrichPostCommentsRedditRuns(runs) {
       cost_usd: prior.cost_usd || 0,
       failure_reasons: Array.isArray(prior.failure_reasons) ? prior.failure_reasons : [],
       log_file: chosen,
+      // Ripen phase (5-min delta gate, scripts/ripen_reddit_plan.py). Reflects
+      // the per-run sum across all iterations that reached the ripen step.
+      // ripen_iters counts iterations where the [ripen] summary marker fired
+      // (i.e. plan succeeded). ripen_skipped_iters counts iterations where
+      // ripen returned 0 survivors and post-phase was skipped. best_* are
+      // the maximum delta observed across all surviving decisions in this run.
+      ripen_iters: ripenIters,
+      ripen_input: ripenInput,
+      ripen_survivors: ripenSurvivors,
+      ripen_drops: ripenDrops,
+      ripen_skipped_iters: ripenSkippedIters,
+      ripen_passthrough_iters: ripenPassthroughIters,
+      ripen_floor: ripenFloor,
+      ripen_w_comments: ripenWComments,
+      ripen_window_sec: ripenWindowSec,
+      ripen_best_composite: bestComposite,
+      ripen_best_delta_up: bestDeltaUp,
+      ripen_best_delta_co: bestDeltaCo,
     };
   }
 }
@@ -6325,6 +6377,20 @@ function renderResult(run) {
     const drafted = r.drafted || 0;
     const posted = r.posted || 0;
     const failed = r.failed || 0;
+    // Ripen phase (5-min delta gate). Per-run sums across iterations that
+    // reached ripen. survivors = decisions that passed composite > floor.
+    const ripenIters = r.ripen_iters || 0;
+    const ripenInput = r.ripen_input || 0;
+    const ripenSurvivors = r.ripen_survivors || 0;
+    const ripenDrops = r.ripen_drops || 0;
+    const ripenSkipped = r.ripen_skipped_iters || 0;
+    const ripenPassthrough = r.ripen_passthrough_iters || 0;
+    const ripenFloor = r.ripen_floor;
+    const ripenW = r.ripen_w_comments;
+    const ripenWindow = r.ripen_window_sec;
+    const bestComp = r.ripen_best_composite;
+    const bestDup = r.ripen_best_delta_up;
+    const bestDco = r.ripen_best_delta_co;
     const reasons = Array.isArray(r.failure_reasons) ? r.failure_reasons : [];
     const renderFailedPill = () => {
       if (!failed && !reasons.length) return '';
@@ -6340,6 +6406,32 @@ function renderResult(run) {
         'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
         label + (count ? ' <span style="color:var(--text);font-weight:600;">' + count + '</span>' : '') + '</span>';
     };
+    // Ripen pills. Only rendered when at least one iteration reached ripen,
+    // OR ripen explicitly skipped post-phase (so the operator sees why nothing
+    // posted). best_composite shown as `best:Δ12.0` style; Δup/Δco in tooltip.
+    const renderRipenPills = () => {
+      if (!ripenIters && !ripenSkipped && !ripenPassthrough) return '';
+      const ripenTip = 'ripen iters: ' + ripenIters +
+        ' / input decisions: ' + ripenInput +
+        ' / survivors (composite > ' + (ripenFloor != null ? ripenFloor : '?') + '): ' + ripenSurvivors +
+        ' / drops: ' + ripenDrops +
+        ' / iters skipped (0 survivors): ' + ripenSkipped +
+        ' / iters passthrough (no urls / rate limit): ' + ripenPassthrough +
+        (ripenWindow != null ? ' / window: ' + ripenWindow + 's' : '') +
+        (ripenW != null ? ' / formula: Δup + ' + ripenW + '*Δcomments' : '') +
+        (bestComp != null ? ' / best: composite=' + bestComp.toFixed(1) +
+          ' (Δup=' + (bestDup != null ? bestDup : '?') +
+          ', Δcomm=' + (bestDco != null ? bestDco : '?') + ')' : '');
+      const bestLabel = bestComp != null
+        ? ('best Δ' + bestComp.toFixed(1))
+        : (ripenSurvivors > 0 ? 'best Δ?' : 'no Δ');
+      const bestColor = bestComp != null && bestComp > 0 ? '#22c55e' : 'var(--muted)';
+      return '<span title="' + ripenTip.replace(/"/g, '&quot;') + '" style="display:inline-block;">' +
+        pill('ripened', ripenInput, ripenInput > 0 ? 'var(--text)' : 'var(--muted)') +
+        pill('survivors', ripenSurvivors, ripenSurvivors > 0 ? '#22c55e' : 'var(--muted)') +
+        pill(bestLabel, '', bestColor) +
+        '</span>';
+    };
     const tooltip = 'iterations: ' + iterations +
       ' / searches: ' + searches +
       ' / raw API results: ' + raw +
@@ -6347,6 +6439,8 @@ function renderResult(run) {
       ' / dropped (blocked sub / archived / locked / age>180d): ' + dropped +
       ' / fetched (model opened to read): ' + fetched +
       ' / drafted: ' + drafted +
+      (ripenIters ? ' / ripen survivors: ' + ripenSurvivors + '/' + ripenInput +
+        (bestComp != null ? ' (best composite ' + bestComp.toFixed(1) + ')' : '') : '') +
       ' / posted: ' + posted;
     return (
       '<span title="' + tooltip.replace(/"/g, '&quot;') + '" style="display:inline-block;">' +
@@ -6355,6 +6449,7 @@ function renderResult(run) {
         pill('raw', raw, raw > 0 ? 'var(--text)' : 'var(--muted)') +
         pill('passed', passed, passed > 0 ? '#22c55e' : 'var(--muted)') +
         pill('drafted', drafted, drafted > 0 ? 'var(--text)' : 'var(--muted)') +
+        renderRipenPills() +
         pill('posted', posted, posted > 0 ? '#22c55e' : 'var(--muted)') +
         renderFailedPill() +
       '</span>'
