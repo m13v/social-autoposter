@@ -1267,6 +1267,30 @@ async function enrichPostCommentsRedditRuns(runs) {
     let ripenSkippedIters = 0, ripenPassthroughIters = 0, ripenIters = 0;
     let bestComposite = null, bestDeltaUp = null, bestDeltaCo = null;
     let ripenFloor = null, ripenWComments = null, ripenWindowSec = null;
+    // Failure-reason breakdown. Two sources:
+    //   1) Plan-phase Claude failures: surfaced as "[post_reddit] Claude FAILED: <msg>"
+    //      followed by "Plan phase: Claude failed". The reason is on the FAILED line
+    //      (out-of-credits dominates), so we capture the most recent FAILED reason
+    //      and attribute it to the next "Plan phase" count line.
+    //   2) CDP-side reddit_browser failures: surfaced as "[post_reddit] CDP FAILED: <slug>".
+    //      One terminal line per failed reply; matches the per-iter rollup failed= count.
+    // Sum of bump() calls = planFailed + failedCount = failedFinal. Reasons rendered
+    // as "failed N (credits 3; reddit_locked 1)" in the post-comments-reddit pill.
+    const failureCounts = {};
+    const bumpFailure = (key) => { failureCounts[key] = (failureCounts[key] || 0) + 1; };
+    const claudeFailedRe = /\[post_reddit\] Claude FAILED: (.+)/;
+    const cdpFailedRe = /\[post_reddit\] CDP FAILED: (\w+)/;
+    const cdpReasonMap = {
+      thread_locked: 'reddit_locked',
+      subreddit_restricted: 'sub_restricted',
+      account_blocked_in_sub: 'account_blocked',
+      thread_not_found: 'reddit_deleted',
+      thread_archived: 'reddit_archived',
+      all_attempts_failed: 'cdp_no_response',
+      not_logged_in: 'reddit_logged_out',
+      already_replied: 'already_replied',
+    };
+    let lastPlanReason = null;
     for (const ln of body.split('\n')) {
       if (iterationRe.test(ln)) iterations++;
       if (searchRe.test(ln) && ln.includes('tool: Bash')) searches++;
@@ -1278,7 +1302,19 @@ async function enrichPostCommentsRedditRuns(runs) {
       if (postedRe.test(ln)) postedCount++;
       const pm = ln.match(phaseRollupRe);
       if (pm) failedCount += parseInt(pm[2], 10);
-      if (planFailedRe.test(ln)) planFailed++;
+      const cf = ln.match(claudeFailedRe);
+      if (cf) {
+        if (/out of extra usage/i.test(cf[1])) lastPlanReason = 'credits';
+        else if (/Not logged in/i.test(cf[1])) lastPlanReason = 'claude_logged_out';
+        else lastPlanReason = 'claude_other';
+      }
+      if (planFailedRe.test(ln)) {
+        planFailed++;
+        bumpFailure(lastPlanReason || 'claude_other');
+        lastPlanReason = null;
+      }
+      const cd = ln.match(cdpFailedRe);
+      if (cd) bumpFailure(cdpReasonMap[cd[1]] || ('cdp_' + cd[1]));
       const rs = ln.match(ripenSummaryRe);
       if (rs) {
         ripenIters++;
@@ -1307,6 +1343,15 @@ async function enrichPostCommentsRedditRuns(runs) {
     // grep when no rollup line was produced (e.g. all iterations failed plan).
     const postedFinal = postedCount > 0 ? postedCount : (prior.posted || 0);
     const failedFinal = failedCount + planFailed;
+    // Build breakdown array sorted by count desc. Falls back to whatever
+    // log_run.py persisted in prior.failure_reasons if our line scan found
+    // nothing (e.g. log truncated, parse miss). Renderer expects {reason, count}.
+    const parsedReasons = Object.entries(failureCounts)
+      .map(function (e) { return { reason: e[0], count: e[1] }; })
+      .sort(function (a, b) { return b.count - a.count; });
+    const failureReasonsFinal = parsedReasons.length
+      ? parsedReasons
+      : (Array.isArray(prior.failure_reasons) ? prior.failure_reasons : []);
     run.result = {
       type: 'post-comments-reddit',
       searches,
@@ -1319,7 +1364,7 @@ async function enrichPostCommentsRedditRuns(runs) {
       posted: postedFinal,
       failed: failedFinal || (prior.failed || 0),
       cost_usd: prior.cost_usd || 0,
-      failure_reasons: Array.isArray(prior.failure_reasons) ? prior.failure_reasons : [],
+      failure_reasons: failureReasonsFinal,
       log_file: chosen,
       // Ripen phase (5-min delta gate, scripts/ripen_reddit_plan.py). Reflects
       // the per-run sum across all iterations that reached the ripen step.
@@ -6392,19 +6437,23 @@ function renderResult(run) {
     const bestDup = r.ripen_best_delta_up;
     const bestDco = r.ripen_best_delta_co;
     const reasons = Array.isArray(r.failure_reasons) ? r.failure_reasons : [];
+    // Failed pill: "failed N (credits 3; reddit_locked 1)" so the operator sees
+    // why a run failed without expanding the row. Reasons come from
+    // enrichPostCommentsRedditRuns scanning the run log for "Claude FAILED:" /
+    // "CDP FAILED:" markers. Tooltip carries the same breakdown.
     const renderFailedPill = () => {
       if (!failed && !reasons.length) return '';
-      const top = reasons[0];
+      const count = failed || reasons.reduce(function (s, x) { return s + (x.count || 0); }, 0);
+      const breakdown = reasons.length
+        ? ' (' + reasons.map(function (x) { return x.reason + ' ' + x.count; }).join('; ') + ')'
+        : '';
       const tt = reasons.length
-        ? reasons.map(function (x) { return x.reason + ' x' + x.count; }).join(', ')
+        ? reasons.map(function (x) { return x.reason + ': ' + x.count; }).join(', ')
         : 'failed (no reason logged)';
-      const label = top
-        ? ('failed: ' + top.reason + (reasons.length > 1 ? ' +' + (reasons.length - 1) : ''))
-        : 'failed';
-      const count = failed || (reasons[0] ? reasons[0].count : 0);
       return '<span title="' + tt.replace(/"/g, '&quot;') + '" ' +
         'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
-        label + (count ? ' <span style="color:var(--text);font-weight:600;">' + count + '</span>' : '') + '</span>';
+        'failed' + (count ? ' <span style="color:var(--text);font-weight:600;">' + count + '</span>' : '') +
+        breakdown + '</span>';
     };
     // Ripen pills. Only rendered when at least one iteration reached ripen,
     // OR ripen explicitly skipped post-phase (so the operator sees why nothing
