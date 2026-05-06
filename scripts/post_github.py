@@ -555,7 +555,12 @@ def post_comment(owner, repo, number, body):
 def log_post(thread_url, our_url, text, project_name, thread_author, thread_title,
              github_username, engagement_style=None, search_topic=None, language=None,
              claude_session_id=None):
-    """Defers to github_tools.py log-post, which handles dedup + INSERT."""
+    """Defers to github_tools.py log-post, which handles dedup + INSERT.
+
+    Returns the new posts.id on success, or None on failure / dedup hit.
+    Callers who need attribution wiring (e.g. post_links backfill) check
+    the return for truthy before calling backfill_post_id.
+    """
     try:
         cmd = ["python3", GITHUB_TOOLS, "log-post",
                thread_url, our_url or "", text, project_name,
@@ -575,10 +580,16 @@ def log_post(thread_url, our_url, text, project_name, thread_author, thread_titl
                 parsed = json.loads(result.stdout.strip())
                 if parsed.get("error"):
                     log(f"log-post error: {parsed}")
+                    return None
+                # Success envelope from github_tools.py log-post should match
+                # log_post.py's shape: {"logged": true, "post_id": N, ...}.
+                pid = parsed.get("post_id")
+                return pid if isinstance(pid, int) else None
             except json.JSONDecodeError:
                 pass
     except Exception as e:
         log(f"WARNING: log-post failed: {e}")
+    return None
 
 
 # ---------- Main -------------------------------------------------------------
@@ -848,6 +859,27 @@ def main():
             failed += 1
             continue
 
+        # URL-wrap before sending to GitHub. project for wrapping is the
+        # decision-resolved match (e.g., the project whose repo the issue
+        # belongs to) or the orchestrator's own project_name. log_post
+        # uses the same fallback chain so attribution lines up.
+        wrap_project = (decision.get("matched_project") or project_name or "").strip()
+        minted_session = None
+        if wrap_project:
+            try:
+                from dm_short_links import wrap_text_for_post
+                wrap_res = wrap_text_for_post(text=text, platform="github_issues",
+                                                project_name=wrap_project)
+                if wrap_res.get("ok"):
+                    text = wrap_res["text"]
+                    minted_session = wrap_res.get("minted_session")
+                    if wrap_res.get("codes"):
+                        log(f"wrapped {len(wrap_res['codes'])} URL(s): {wrap_res['codes']}")
+                else:
+                    log(f"WARNING: URL wrap failed ({wrap_res.get('error')}); posting unwrapped")
+            except Exception as e:
+                log(f"WARNING: URL wrap raised ({e}); posting unwrapped")
+
         log(f"Posting {i + 1}/{len(posts)} -> {owner}/{repo}#{number}: {thread_title[:60]}")
         ok_post, url_or_err = post_comment(owner, repo, number, text)
         if not ok_post:
@@ -856,7 +888,7 @@ def main():
             time.sleep(3)
             continue
 
-        log_post(
+        new_post_id = log_post(
             thread_url, url_or_err, text,
             decision.get("matched_project") or project_name,
             thread_author, thread_title, github_username,
@@ -865,6 +897,15 @@ def main():
             language=language,
             claude_session_id=claude_session_id,
         )
+        # Stamp post_links.post_id for the URLs minted before posting.
+        # Idempotent; no-op when minted_session is None or the dedup path
+        # in github_tools.py log-post returned no post_id (e.g., dup thread).
+        if minted_session and new_post_id:
+            try:
+                from dm_short_links import backfill_post_id
+                backfill_post_id(minted_session=minted_session, post_id=new_post_id)
+            except Exception as e:
+                log(f"WARNING: backfill_post_id failed ({e})")
         posted += 1
         log(f"POSTED: {url_or_err or 'ok'}")
         time.sleep(3)
