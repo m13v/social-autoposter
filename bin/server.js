@@ -6179,6 +6179,41 @@ function renderResult(run) {
       (failed ? pill('failed', failed, '#ef4444') : '')
     );
   }
+  // seo_expire (delete dead-weight pages): repurposes posted/skipped from the
+  // generic log line, but the meanings are different: posted=files deleted,
+  // skipped=candidates kept (didn't meet the delete criteria, or DAILY_MAX cap
+  // was hit). Render with task-appropriate labels so operators don't read
+  // "posted 100 / skipped 607" and think the pipeline posted 100 pages.
+  if (run.script === 'seo_expire') {
+    const deleted = r.posted || 0;
+    const kept = r.skipped || 0;
+    const failed = r.failed || 0;
+    const reasons = Array.isArray(r.failure_reasons) ? r.failure_reasons : [];
+    const renderFailedPill = () => {
+      if (!failed && !reasons.length) return '';
+      const top = reasons[0];
+      const tt = reasons.length
+        ? reasons.map(function (x) { return x.reason + ' x' + x.count; }).join(', ')
+        : 'failed (no reason logged)';
+      const label = top
+        ? ('failed: ' + top.reason + (reasons.length > 1 ? ' +' + (reasons.length - 1) : ''))
+        : 'failed';
+      const count = failed || (reasons[0] ? reasons[0].count : 0);
+      return '<span title="' + tt.replace(/"/g, '&quot;') + '" ' +
+        'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
+        label + (count ? ' <span style="color:var(--text);font-weight:600;">' + count + '</span>' : '') + '</span>';
+    };
+    const tooltip = 'deleted: ' + deleted +
+      ' / kept (no-click candidates left in place, or daily cap hit): ' + kept +
+      ' / failed: ' + failed;
+    return (
+      '<span title="' + tooltip.replace(/"/g, '&quot;') + '" style="display:inline-block;">' +
+        pill('deleted', deleted, deleted > 0 ? '#22c55e' : 'var(--muted)') +
+        pill('kept', kept, kept > 0 ? 'var(--muted)' : 'var(--muted)') +
+        renderFailedPill() +
+      '</span>'
+    );
+  }
   // Generic fallback: posted/skipped/failed/replies_refreshed from run_monitor.log.
   // Also surfaces salvaged (Twitter cycle Phase 0) and failure_reasons so a
   // run that posted=0 due to auth/rate/usage limit doesn't render as "—".
@@ -7390,8 +7425,8 @@ function reloadStatsTabSections() {
   loadActivityStats();
   loadCohortStats();
   loadStyleStats();
-  // daily-metrics chart is intentionally NOT reloaded on window/platform/
-  // project changes — it's fixed to a 30-day rolling window, independent
+  // daily-metrics chart now lives on its own Trends tab with its own filter
+  // bar; intentionally NOT reloaded on stats-tab window/platform/project
   // of the filter bar.
   const funnelEl = document.getElementById('funnel-stats');
   if (funnelEl && funnelEl.open) {
@@ -7753,9 +7788,9 @@ function currentTrendsGranularity() {
 }
 
 // Bucket a per-day series map into rolling 7-day weekly buckets ending on
-// the most recent day in `days`. Returns { weekKeys, weeklyMap } where
-// weekKeys is the new axis (ISO date of the first day of each bucket) and
-// weeklyMap is { [weekKey]: sum }.
+// the most recent day in the input axis. Returns { weekKeys, weeklyMap }
+// where weekKeys is the new axis (ISO date of the first day of each
+// bucket) and weeklyMap maps each weekKey to its summed value.
 function _bucketWeekly(days, byDay) {
   const weekKeys = [];
   const weeklyMap = {};
@@ -8167,7 +8202,7 @@ const STYLE_STATS_HELP = {
   views:    'Sum of impressions on OUR comment/post. Per-post average in parentheses. Moltbook and GitHub are excluded from both the total and the per-post denominator since neither platform exposes a views metric.',
   recommendations: 'Number of posts in this tone that ALSO carried a project recommendation (is_recommendation = true). Independent dimension from style: tells you how often this tone was used to deliver a product mention.',
 };
-function renderStyleStatsPills(containerId, values, selected, labelAll) {
+function renderStyleStatsPills(containerId, values, selected, labelAll, onChange) {
   const row = document.getElementById(containerId);
   if (!row) return;
   row.dataset.selected = selected || 'all';
@@ -8182,6 +8217,7 @@ function renderStyleStatsPills(containerId, values, selected, labelAll) {
     escapeHtml(v === 'all' ? labelAll : v) + '</button>'
   )).join('');
   row.innerHTML = labelHtml + pillsHtml;
+  const handler = (typeof onChange === 'function') ? onChange : reloadStatsTabSections;
   row.querySelectorAll('.style-stats-pill').forEach(btn => {
     btn.addEventListener('click', () => {
       row.dataset.selected = btn.getAttribute('data-value') || 'all';
@@ -8190,7 +8226,7 @@ function renderStyleStatsPills(containerId, values, selected, labelAll) {
       row.querySelectorAll('.style-stats-pill').forEach(b => {
         b.classList.toggle('active', b === btn);
       });
-      reloadStatsTabSections();
+      handler();
     });
   });
 }
@@ -8230,6 +8266,15 @@ function renderStyleStats(payload, meta) {
   const selectedProject  = (payload && payload.project)  || 'all';
   renderStyleStatsPills('style-stats-platform-pills', (payload && payload.platforms) || [], selectedPlatform, 'All');
   renderStyleStatsPills('style-stats-project-pills',  (payload && payload.projects)  || [], selectedProject,  'All');
+  // Reuse the same platform/project lists for the Trends tab so it doesn't
+  // need its own backend fetch; selection state is independent (read off
+  // each row's data-selected). Click handler reloads the trends chart only.
+  const trendsPlatRow = document.getElementById('trends-platform-pills');
+  const trendsProjRow = document.getElementById('trends-project-pills');
+  const trendsPlat = (trendsPlatRow && trendsPlatRow.dataset.selected) || 'all';
+  const trendsProj = (trendsProjRow && trendsProjRow.dataset.selected) || 'all';
+  renderStyleStatsPills('trends-platform-pills', (payload && payload.platforms) || [], trendsPlat, 'All', loadDailyMetrics);
+  renderStyleStatsPills('trends-project-pills',  (payload && payload.projects)  || [], trendsProj, 'All', loadDailyMetrics);
   const rows = (payload && payload.rows) || [];
   if (!rows.length) {
     if (totalEl) totalEl.textContent = '0 posts';
@@ -11133,7 +11178,8 @@ function activateTab(name) {
   } else {
     stopActivityAutoRefresh();
   }
-  if (name === 'stats') { loadActivityStats(); loadCohortStats(); loadStyleStats(); loadDmStats(); loadAllPerDayCharts(); }
+  if (name === 'stats') { loadActivityStats(); loadCohortStats(); loadStyleStats(); loadDmStats(); }
+  if (name === 'trends') { loadDailyMetrics(); }
   if (name === 'top') {
     initTopFilters();
     if (_topSubtab === 'pages') {
@@ -11167,7 +11213,7 @@ document.querySelectorAll('.tab').forEach(tab => {
 // visible to the user (some tabs are admin-only).
 (function restoreActiveTab() {
   const saved = saLoad('sa.activeTab.v1', null);
-  const valid = ['status', 'stats', 'activity', 'top', 'logs', 'settings'];
+  const valid = ['status', 'stats', 'trends', 'activity', 'top', 'logs', 'settings'];
   if (!saved || !valid.includes(saved) || saved === 'stats') return;
   // Defer a tick so admin-only visibility (driven by auth init) settles
   // before we try to switch.
@@ -11244,6 +11290,26 @@ document.querySelectorAll('.tab').forEach(tab => {
 // renderStyleStatsPills (pills are rebuilt from the /api/style/stats payload),
 // which invokes reloadStatsTabSections() to re-fetch every stats-tab section
 // so platform+project scope flows through the whole page.
+
+// Trends-tab daily/weekly granularity pill. Static pills (no rebuild from
+// API), so we wire the click handler directly. Platform + project pills
+// are rebuilt by renderStyleStats() with loadDailyMetrics as the change
+// handler, so changes there refetch the chart. This handler does the same.
+(function wireTrendsGranularityPills() {
+  const row = document.getElementById('trends-granularity-pills');
+  if (!row) return;
+  row.addEventListener('click', ev => {
+    const btn = ev.target.closest('.style-stats-pill');
+    if (!btn) return;
+    const v = btn.getAttribute('data-value') || 'daily';
+    if (v === row.dataset.selected) return;
+    row.dataset.selected = v;
+    row.querySelectorAll('.style-stats-pill').forEach(b => {
+      b.classList.toggle('active', b === btn);
+    });
+    loadDailyMetrics();
+  });
+})();
 
 // Lazy-load funnel stats the first time the user opens the section. The fetch
 // shells out to PostHog and two Postgres DBs, so we don't want to run it on
