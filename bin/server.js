@@ -7666,6 +7666,10 @@ const DAILY_METRICS_DAYS_WEEKLY = 91;
 let _dailyMetricsSeries = null;
 let _dailyMetricsDays = [];
 let _dailyMetricsActive = null;
+// Endpoints that returned failed:true on the most recent fetch (e.g. funnel
+// when PostHog is slow). renderDailyMetrics appends a "(N timed out)" note
+// to the status pill so the user understands why some series are flat.
+let _dailyMetricsFailed = [];
 
 // First-time defaults. Single-series (views) so a new dashboard user lands
 // on a clean column chart with one labeled bar per day rather than 9 series
@@ -7840,7 +7844,18 @@ function renderDailyMetrics() {
     '</svg>' +
     '<div class="daily-metrics-tooltip" id="daily-metrics-tooltip"></div>';
   chartEl.innerHTML = svg;
-  if (statusEl) statusEl.textContent = visibleMetrics.length + ' of ' + DAILY_METRICS.length + ' series';
+  if (statusEl) {
+    let txt = visibleMetrics.length + ' of ' + DAILY_METRICS.length + ' series';
+    if (_dailyMetricsFailed && _dailyMetricsFailed.length) {
+      const timedOut = _dailyMetricsFailed.filter(f => f.timedOut).map(f => f.key);
+      const errored  = _dailyMetricsFailed.filter(f => !f.timedOut).map(f => f.key);
+      const parts = [];
+      if (timedOut.length) parts.push(timedOut.join(', ') + ' timed out');
+      if (errored.length)  parts.push(errored.join(', ') + ' failed');
+      if (parts.length) txt += ' · ' + parts.join('; ');
+    }
+    statusEl.textContent = txt;
+  }
 
   // Hover interactions — snap to nearest day index, move dashed line,
   // populate tooltip. Positioned relative to the chart container so the
@@ -7995,14 +8010,27 @@ async function loadDailyMetrics() {
   // or any transient 5xx) renders the affected series as flat zeros instead
   // of killing the whole chart. The "Unable to load daily metrics" fallback
   // below now only triggers when literally every fetch failed.
+  // Per-endpoint timeout. /api/funnel/per-day shells out to PostHog +
+  // Postgres and at days=91 (weekly window) it can hang well past 15s,
+  // which previously froze the entire chart because Promise.all waited on
+  // the slowest of 5. Cap each fetch at ~9s so a slow endpoint degrades
+  // gracefully (renders as flat zeros with the "rendered N of 5" note in
+  // the status pill) instead of leaving a permanent "Loading…" placeholder.
+  const FETCH_TIMEOUT_MS = 9000;
   const fetchOne = async (url) => {
+    const ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => { try { ctl.abort(); } catch {} }, FETCH_TIMEOUT_MS) : null;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, ctl ? { signal: ctl.signal } : undefined);
       if (!res.ok) return { rows: [], failed: true, status: res.status };
       const data = await res.json();
       return { rows: data.rows || [], failed: false, error: data.error || null };
     } catch (e) {
-      return { rows: [], failed: true, error: String(e && e.message || e) };
+      const msg = String(e && e.message || e);
+      const timedOut = msg.includes('aborted') || msg.includes('Timeout') || msg.includes('timed out');
+      return { rows: [], failed: true, error: timedOut ? 'timeout' : msg, timedOut };
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   };
   // Build per-endpoint querystrings: post-derived endpoints honor both
@@ -8056,6 +8084,13 @@ async function loadDailyMetrics() {
       _dailyMetricsDays = dailyAxis;
       _dailyMetricsSeries = series;
     }
+    // Stash a list of failed endpoints so renderDailyMetrics can surface a
+    // small "(N timed out)" hint in the status pill rather than silently
+    // showing flat zeros for those series.
+    const fetchResults = { views, upvotes, comments, bookings, funnel };
+    _dailyMetricsFailed = Object.keys(fetchResults)
+      .filter(k => fetchResults[k].failed)
+      .map(k => ({ key: k, timedOut: !!fetchResults[k].timedOut }));
     renderDailyMetrics();
   } catch (e) {
     if (chartEl) chartEl.innerHTML = '<div class="views-chart-empty">Unable to load daily metrics (' + escapeHtml(String(e.message || e)) + ').</div>';
