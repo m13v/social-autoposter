@@ -44,6 +44,7 @@ import os
 import re
 import secrets
 import sys
+import uuid
 from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -164,6 +165,36 @@ def _build_target_url(target_url: str, kind: str, *, dm_id: int, project: str | 
         'utm_medium': 'dm',
         'utm_campaign': (project or 'unknown').lower(),
         'utm_content': f'dm_{dm_id}',
+    }
+    for k, v in utm.items():
+        existing.setdefault(k, v)
+        if kind == 'booking':
+            existing[f'metadata[{k}]'] = v
+
+    new_query = urlencode(existing, doseq=True)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
+
+
+def _build_target_url_for_post(target_url: str, kind: str, *, minted_session: str,
+                                project: str | None, platform: str) -> str:
+    """UTM stamping for PUBLIC post wrappers (utm_medium='post').
+
+    Same kinds as the DM path (booking + website get stamped, github + other
+    pass through). utm_content uses the minted_session UUID at mint time;
+    after log_post returns post_id we have it stored alongside in
+    post_links, so analytics can join post_links → posts on session.
+    """
+    if kind not in ('booking', 'website'):
+        return target_url
+
+    parts = urlsplit(target_url)
+    existing = dict(parse_qsl(parts.query, keep_blank_values=True))
+
+    utm = {
+        'utm_source': platform,           # reddit | twitter | linkedin | github_issues
+        'utm_medium': 'post',
+        'utm_campaign': (project or 'unknown').lower(),
+        'utm_content': f'post_{minted_session}',
     }
     for k, v in utm.items():
         existing.setdefault(k, v)
