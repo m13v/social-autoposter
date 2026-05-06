@@ -2110,11 +2110,12 @@ async function handleApi(req, res) {
     const pool = getPool();
     if (!pool) return json(res, { error: 'no_db' }, 500);
     try {
-      // Resolver reads from the dm_links child table (multi-link, multi-turn).
-      // The dms join hands back platform + target_project for the response
-      // envelope (kept identical to the legacy shape so /r/[code] frontends
-      // don't need to change).
-      const r = await pool.query(
+      // Resolver tries dm_links first (DM rail), falls through to post_links
+      // (public-post rail) on miss. Codes are minted from the same alphabet
+      // and namespace; cross-rail collisions are statistically negligible at
+      // 8 chars × 32 alphabet, but the PK collision retry in mint() guards
+      // against it inside each table independently.
+      const dmRes = await pool.query(
         `UPDATE dm_links l SET
             clicks = l.clicks + 1,
             first_click_at = COALESCE(l.first_click_at, NOW()),
@@ -2125,38 +2126,67 @@ async function handleApi(req, res) {
                     d.platform, d.target_project, d.project_name`,
         [code]
       );
-      if (!r.rows.length) {
+
+      if (dmRes.rows.length) {
+        const row = dmRes.rows[0];
+        if (!row.target_url) {
+          return json(res, { error: 'no_target_url', dm_id: row.dm_id }, 404);
+        }
+        // Click is treated as a first-class trigger to the engage-dm-replies
+        // pipeline. Insert a synthetic 'inbound' row in dm_messages so the
+        // existing PENDING_CONVOS query (last_in > last_out) surfaces this
+        // thread on the next polling tick. Failures MUST NOT break the
+        // redirect — log + continue.
+        try {
+          await pool.query(
+            `INSERT INTO dm_messages (dm_id, direction, author, content, message_at, logged_at)
+             VALUES ($1, 'inbound', '__click_signal__', '[CLICK_SIGNAL] short link clicked', NOW(), NOW())`,
+            [row.dm_id]
+          );
+        } catch (e) {
+          console.error('[short-links] click_signal insert failed (non-fatal):', e.message);
+        }
+        let platform = (row.platform || 'reddit').toLowerCase();
+        if (platform === 'x') platform = 'twitter';
+        return json(res, {
+          dm_id: row.dm_id,
+          platform,
+          project: row.target_project || row.project_name || null,
+          kind: row.kind || null,
+          target_url: row.target_url,
+        });
+      }
+
+      // Fallback: post_links rail (public posts/comments). No click_signal
+      // insert here — there is no engage pipeline waiting on these, the
+      // attribution lives entirely in the post_links.clicks counter +
+      // first_click_at / last_click_at timestamps.
+      const postRes = await pool.query(
+        `UPDATE post_links SET
+            clicks = clicks + 1,
+            first_click_at = COALESCE(first_click_at, NOW()),
+            last_click_at = NOW()
+          WHERE code = $1
+          RETURNING post_id, reply_id, platform, project_name,
+                    target_url, kind`,
+        [code]
+      );
+      if (!postRes.rows.length) {
         return json(res, { error: 'not_found', code }, 404);
       }
-      const row = r.rows[0];
-      if (!row.target_url) {
-        return json(res, { error: 'no_target_url', dm_id: row.dm_id }, 404);
+      const prow = postRes.rows[0];
+      if (!prow.target_url) {
+        return json(res, { error: 'no_target_url', post_id: prow.post_id, reply_id: prow.reply_id }, 404);
       }
-      // Click is treated as a first-class trigger to the engage-dm-replies
-      // pipeline. Insert a synthetic 'inbound' row in dm_messages so the
-      // existing PENDING_CONVOS query (last_in > last_out) surfaces this
-      // thread on the next polling tick. Idempotent in spirit: if multiple
-      // clicks land before we follow up, the LATEST synthetic row wins via
-      // ORDER BY message_at DESC LIMIT 1; we don't bother dedup'ing inserts
-      // because the engage pipeline only nudges once per cycle anyway.
-      // Failures here MUST NOT break the redirect — log + continue.
-      try {
-        await pool.query(
-          `INSERT INTO dm_messages (dm_id, direction, author, content, message_at, logged_at)
-           VALUES ($1, 'inbound', '__click_signal__', '[CLICK_SIGNAL] short link clicked', NOW(), NOW())`,
-          [row.dm_id]
-        );
-      } catch (e) {
-        console.error('[short-links] click_signal insert failed (non-fatal):', e.message);
-      }
-      let platform = (row.platform || 'reddit').toLowerCase();
-      if (platform === 'x') platform = 'twitter';
+      let pPlatform = (prow.platform || 'reddit').toLowerCase();
+      if (pPlatform === 'x') pPlatform = 'twitter';
       return json(res, {
-        dm_id: row.dm_id,
-        platform,
-        project: row.target_project || row.project_name || null,
-        kind: row.kind || null,
-        target_url: row.target_url,
+        post_id: prow.post_id,
+        reply_id: prow.reply_id,
+        platform: pPlatform,
+        project: prow.project_name || null,
+        kind: prow.kind || null,
+        target_url: prow.target_url,
       });
     } catch (e) {
       console.error('[short-links] resolver db error:', e.message);
