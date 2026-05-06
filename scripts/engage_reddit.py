@@ -754,6 +754,37 @@ def main():
                             print(f"[engage_reddit] #{reply['id']} applied campaigns "
                                   f"{applied_campaign_ids} (suffix appended)")
 
+                    # URL-wrap the final reply_text (suffix included) so every
+                    # outbound URL routes through /r/<code> for click attribution.
+                    # project_name comes from the LLM decision (Tier 2/3) or
+                    # falls back to the reply row's project_name; either is
+                    # populated for any reply that includes a URL we care about.
+                    # We backfill post_links.reply_id after the platform call
+                    # succeeds (using reply["id"]).
+                    minted_session = None
+                    wrap_project = (project or reply.get("project_name") or "").strip()
+                    wrap_platform = "reddit" if reply["platform"] == "reddit" else reply["platform"]
+                    if wrap_project:
+                        try:
+                            from dm_short_links import wrap_text_for_post
+                            wrap_res = wrap_text_for_post(
+                                text=reply_text,
+                                platform=wrap_platform,
+                                project_name=wrap_project,
+                            )
+                            if wrap_res.get("ok"):
+                                reply_text = wrap_res["text"]
+                                minted_session = wrap_res.get("minted_session")
+                                if wrap_res.get("codes"):
+                                    print(f"[engage_reddit] #{reply['id']} wrapped "
+                                          f"{len(wrap_res['codes'])} URL(s)")
+                            else:
+                                print(f"[engage_reddit] #{reply['id']} WARNING: URL wrap "
+                                      f"failed ({wrap_res.get('error')}); posting unwrapped")
+                        except Exception as e:
+                            print(f"[engage_reddit] #{reply['id']} WARNING: URL wrap "
+                                  f"raised ({e}); posting unwrapped")
+
                     # Post via CDP (reddit) or Moltbook API (moltbook)
                     post_result = None
                     if reply["platform"] == "moltbook":
@@ -829,6 +860,17 @@ def main():
                         subprocess.run(cmd_args)
                         # Attribute reply to any campaigns that applied a suffix
                         bump_campaigns("replies", reply["id"], applied_campaign_ids)
+                        # Stamp post_links.reply_id for the URLs minted before
+                        # the platform call (idempotent; no-op when reply had
+                        # no URLs to wrap).
+                        if minted_session:
+                            try:
+                                from dm_short_links import backfill_reply_id
+                                backfill_reply_id(minted_session=minted_session,
+                                                  reply_id=reply["id"])
+                            except Exception as e:
+                                print(f"[engage_reddit] #{reply['id']} WARNING: "
+                                      f"backfill_reply_id failed ({e})")
                         # Cross-pipeline linkage: ensure a dms row exists for
                         # this person on this thread so engage-dm-replies'
                         # next cycle picks up any inbound on this chain
