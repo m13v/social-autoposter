@@ -5419,7 +5419,7 @@ const HTML = `<!DOCTYPE html>
       <div class="style-stats-empty">Loading\u2026</div>
     </div>
   </details>
-  <details class="style-stats-section" id="search-queries-stats">
+  <details class="style-stats-section" id="search-queries-stats" open>
     <summary>
       <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="search-queries-stats-heading">Search Queries (last 24 hours)</span><span class="stat-card-info" data-tooltip="Per-query stats from twitter_search_attempts + linkedin_search_attempts. Reddit and GitHub don't log discovery queries today, so they're not represented. attempts = times the query was drafted and run. candidates_found = sum of tweets/posts the search returned. dud_rate = % of attempts that returned 0. posts_made = candidates from this query that we actually posted to. avg_engagement = comments\u00D73 + upvotes on those resulting posts (same formula as top_performers.py). Honors Window/Platform/Project filters above.">i</span></span>
       <span class="style-stats-total" id="search-queries-stats-total"></span>
@@ -9226,21 +9226,20 @@ function renderSearchQueriesStats(payload) {
     storageKey: 'sa.searchQueriesStatsTable.v1',
     showTotals: false,
     columns: [
-      { key: 'query',       label: 'Query',     type: 'text',    align: 'left',
+      { key: 'query',       label: 'Query',     type: 'text',    align: 'left', widthPct: 60,
         formatter: v => {
           const s = String(v || '');
-          // Long Twitter boolean queries go up to ~200 chars; clamp the
-          // visible cell to keep the row height sane and surface the full
-          // string via the global tooltip handler.
-          const display = s.length > 90 ? s.slice(0, 87) + '\u2026' : s;
-          return '<span data-tooltip="' + escapeHtml(s) + '" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;">' + escapeHtml(display) + '</span>';
+          // Long Twitter boolean queries go up to ~200 chars. The 60% column
+          // width + CSS truncation handles the visual clamp; we just hand the
+          // full string to the global tooltip and let CSS ellipsize.
+          return '<span data-tooltip="' + escapeHtml(s) + '" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;">' + escapeHtml(s) + '</span>';
         } },
-      { key: 'platform',    label: 'Platform',  type: 'text',    align: 'left',
-        formatter: v => platformIconHtml(v) + ' <span style="text-transform:capitalize;color:var(--text-secondary);">' + escapeHtml(v) + '</span>' },
-      { key: 'project_name', label: 'Project',  type: 'text',    align: 'left',
+      { key: 'platform',    label: 'Platform',  type: 'text',    align: 'center', widthPct: 5,
+        formatter: v => '<span data-tooltip="' + escapeHtml(String(v || '')) + '" style="text-transform:capitalize;">' + platformIconHtml(v) + '</span>' },
+      { key: 'project_name', label: 'Project',  type: 'text',    align: 'left', widthPct: 8,
         formatter: v => escapeHtml((typeof PROJECT_LABELS !== 'undefined' && PROJECT_LABELS[v]) || v) },
-      { key: 'attempts',    label: 'Attempts',  type: 'numeric', align: 'right', formatter: fmt },
-      { key: 'candidates_found', label: 'Found', type: 'numeric', align: 'right',
+      { key: 'attempts',    label: 'Attempts',  type: 'numeric', align: 'right', widthPct: 5, formatter: fmt },
+      { key: 'candidates_found', label: 'Found', type: 'numeric', align: 'right', widthPct: 5,
         formatter: (v, row) => {
           const n = Number(v) || 0;
           if (row.serp_quality_avg != null) {
@@ -9249,26 +9248,26 @@ function renderSearchQueriesStats(payload) {
           }
           return fmt(n);
         } },
-      { key: 'dud_rate',    label: 'Dud %',     type: 'numeric', align: 'right',
+      { key: 'dud_rate',    label: 'Dud %',     type: 'numeric', align: 'right', widthPct: 5,
         formatter: (v, row) => {
           const n = Number(v) || 0;
           const tip = (row.dud_attempts || 0) + ' of ' + (row.attempts || 0) + ' attempts returned 0';
           const color = n >= 0.5 ? 'var(--danger,#dc2626)' : (n >= 0.25 ? 'var(--warn,#d97706)' : 'var(--text-secondary)');
           return '<span data-tooltip="' + escapeHtml(tip) + '" style="color:' + color + ';font-variant-numeric:tabular-nums;">' + pct(n) + '</span>';
         } },
-      { key: 'posts_made',  label: 'Posts',     type: 'numeric', align: 'right',
+      { key: 'posts_made',  label: 'Posts',     type: 'numeric', align: 'right', widthPct: 4,
         formatter: v => {
           const n = Number(v) || 0;
           if (!n) return '<span style="color:var(--text-faint);">\u2014</span>';
           return '<span style="color:var(--success);font-weight:600;font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
         } },
-      { key: 'avg_engagement', label: 'Avg Eng', type: 'numeric', align: 'right',
+      { key: 'avg_engagement', label: 'Avg Eng', type: 'numeric', align: 'right', widthPct: 4,
         formatter: v => {
           if (v == null) return '<span style="color:var(--text-faint);">\u2014</span>';
           const tip = 'comments\u00D73 + upvotes (same formula as top_performers.py)';
           return '<span data-tooltip="' + escapeHtml(tip) + '" style="font-variant-numeric:tabular-nums;">' + fmt1(v) + '</span>';
         } },
-      { key: 'last_run',    label: 'Last Run',  type: 'numeric', align: 'right',
+      { key: 'last_run',    label: 'Last Run',  type: 'numeric', align: 'right', widthPct: 4,
         formatter: v => {
           if (!v) return '<span style="color:var(--text-faint);">\u2014</span>';
           const abs = new Date(v).toLocaleString();
@@ -11369,6 +11368,7 @@ async function refreshAllData() {
   loadCohortStats();
   loadStyleStats();
   loadDmStats(true);
+  loadSearchQueriesStats(true);
   loadAllPerDayCharts();
   loadFunnelStats(true);
   loadCostStats(true);
@@ -11907,6 +11907,8 @@ function saStartApp() {
   if (funnelEl && funnelEl.open) loadFunnelStats();
   const dmEl = document.getElementById('dm-stats');
   if (dmEl && dmEl.open) loadDmStats();
+  const sqEl = document.getElementById('search-queries-stats');
+  if (sqEl && sqEl.open) loadSearchQueriesStats();
   setInterval(loadActivityStats, 300000);
   setInterval(loadCohortStats, 300000);
   setInterval(loadStyleStats, 300000);
