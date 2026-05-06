@@ -4166,7 +4166,7 @@ async function handleApi(req, res) {
       // Reddit/GitHub/etc have no search_attempts tables — return empty rather than error.
       return json(res, { days, rows: [], platform_supported: false });
     }
-    const limit = Math.max(1, Math.min(2000, parseInt(url.searchParams.get('limit') || '1000', 10) || 1000));
+    const limit = Math.max(1, Math.min(5000, parseInt(url.searchParams.get('limit') || '5000', 10) || 5000));
     const dudsOnly = url.searchParams.get('duds_only') === '1';
     // Project clause is applied to COALESCE(a.project_name, '(none)') so it
     // matches the way we display the row. Same auth model as /api/dm/stats:
@@ -5429,7 +5429,7 @@ const HTML = `<!DOCTYPE html>
         <input type="checkbox" id="search-queries-stats-duds-only" style="cursor:pointer;">
         Show duds only (0 candidates)
       </label>
-      <span style="font-size:12px;color:var(--text-faint);">Up to 1000 rows, sorted by posts_made then attempts</span>
+      <span style="font-size:12px;color:var(--text-faint);">Up to 5000 rows, sorted by posts_made then attempts</span>
     </div>
     <div id="search-queries-stats-body">
       <div class="style-stats-empty">Loading\u2026</div>
@@ -11483,7 +11483,7 @@ async function loadSearchQueriesStats(force) {
     if (plat && plat !== 'all') params.push('platform=' + encodeURIComponent(plat));
     if (proj && proj !== 'all') params.push('project='  + encodeURIComponent(proj));
     if (dudsOnly) params.push('duds_only=1');
-    params.push('limit=1000');
+    params.push('limit=5000');
     const res = await fetch('/api/search-queries/stats?' + params.join('&'));
     const data = await res.json();
     renderSearchQueriesStats(data);
