@@ -257,6 +257,30 @@ def get_top_search_topics(project_name, platform="reddit", limit=8, window_days=
     return ""
 
 
+def get_dud_reddit_queries(project_name, limit=15, window_hours=168):
+    """Return a JSON list (as a string) of recent dud Reddit queries for this
+    project so build_prompt can paste an anti-list into the LLM scanner.
+
+    Source: reddit_search_attempts (one row per cmd_search call), surfaced via
+    scripts/top_dud_reddit_queries.py. Window mirrors the LinkedIn-style 7d
+    default — Reddit cycles fire every 30min, so 7d gives a wide enough sample
+    to flag truly dead phrasings without overweighting same-day noise.
+    """
+    try:
+        result = subprocess.run(
+            ["python3", os.path.join(REPO_DIR, "scripts", "top_dud_reddit_queries.py"),
+             "--project", project_name,
+             "--window-hours", str(window_hours),
+             "--limit", str(limit)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
 def get_recent_comments(limit=5):
     dbmod.load_env()
     conn = dbmod.get_conn()
@@ -341,8 +365,15 @@ def build_content_angle(project, config):
     return config.get("content_angle", "")
 
 
-def build_prompt(project, config, limit, top_report, recent_comments, top_topics_report=""):
-    """Build prompt for Claude to search, evaluate, and draft replies (no posting)."""
+def build_prompt(project, config, limit, top_report, recent_comments,
+                 top_topics_report="", dud_queries_report=""):
+    """Build prompt for Claude to search, evaluate, and draft replies (no posting).
+
+    `dud_queries_report` is a JSON list of recent zero-result queries for this
+    project (see get_dud_reddit_queries). When non-empty, an anti-list block is
+    inserted alongside the positive top_topics_report so the LLM is steered
+    away from phrasings that have already proven flat in the last 7 days.
+    """
     content_angle = build_content_angle(project, config)
 
     # Unified search_topics (post 2026-04-30 legacy field cleanup).
@@ -381,6 +412,24 @@ seeds match this run's angle, pick any seed from the project's search_topics
 list. New seeds with 0 posts are fine — we need to explore.
 """
 
+    # NEGATIVE-signal feedback: queries that have produced zero post-filter
+    # candidates in the last 7 days. Mirrors twitter_search_attempts /
+    # top_dud_twitter_queries.py but speaks in terms of (query, subreddits)
+    # since Reddit search is sub-scoped. Keep this list short — Reddit is
+    # more keyword-rigid than Twitter, so even "the same phrase but in a
+    # different sub" can still produce results.
+    dud_queries_ctx = ""
+    if dud_queries_report and dud_queries_report.strip() not in ("[]", ""):
+        dud_queries_ctx = f"""
+## Dead queries (DO NOT redraft these — flat for the last 7 days):
+{dud_queries_report}
+
+Each entry is a (query, subreddits) phrasing that has returned ZERO usable
+threads on every recent attempt. Pick fresh wording, a different angle, or a
+different subreddit slate. Reusing an exact dead phrasing wastes a search
+slot and burns rate-limit budget for no upside.
+"""
+
     return f"""Find {limit} Reddit threads where you can add genuine value as someone with expertise in {project.get('name', 'general')}.
 
 Topic area: {project_json}
@@ -398,7 +447,7 @@ CRITICAL: every comment picks ONE of two lanes (see the GROUNDING RULE below).
   voice / messaging in config.json. Otherwise drop the specific or pattern-frame ("the part that
   breaks down is...", "the typical failure mode is...").
 Never present an invented specific as a personal first-hand claim without a Lane 1 opener.
-{recent_ctx}{top_ctx}{top_topics_ctx}
+{recent_ctx}{top_ctx}{top_topics_ctx}{dud_queries_ctx}
 {get_styles_prompt("reddit", context="posting")}
 
 ## Tools (via Bash) - ALWAYS foreground, NEVER run_in_background
@@ -409,6 +458,20 @@ Never present an invented specific as a personal first-hand claim without a Lane
 - Check dedup: python3 {REDDIT_TOOLS} already-posted "THREAD_URL"
 
 Search defaults to sort=relevance and time=week. Use --time month for broader results. Use --subreddits for targeted sub searches.
+
+## Delta gating (new 2026-05-05)
+Each thread in the search JSON now carries delta fields populated from a
+persistent reddit_thread_snapshots table:
+  - sightings: how many search cycles have surfaced this exact thread
+  - delta_score: upvote change since first_seen_at
+  - delta_comments: comment change since first_seen_at
+  - delta_window_min: minutes between first_seen_at and now
+  - first_seen_at: when we first saw this thread
+
+Use these to PREFER threads that are still picking up momentum since we last
+saw them (positive delta_score with recent activity) over stale threads that
+peaked hours ago. A thread with sightings>=2 and delta_score<=0 over 60+ min
+is going cold; skip it for a fresher candidate.
 
 ## CRITICAL Bash rules
 - NEVER use run_in_background=true. All bash commands must run foreground and return quickly (under 20s each).
@@ -696,8 +759,10 @@ def _plan_iteration(args, config, reddit_username, already_picked):
     top_report = get_top_performers(project_name)
     recent_comments = get_recent_comments()
     top_topics_report = get_top_search_topics(project_name, platform="reddit")
+    dud_queries_report = get_dud_reddit_queries(project_name)
     prompt = build_prompt(project, config, args.limit, top_report, recent_comments,
-                          top_topics_report=top_topics_report)
+                          top_topics_report=top_topics_report,
+                          dud_queries_report=dud_queries_report)
 
     if args.dry_run:
         print(f"=== DRY RUN (project={project_name}) ===")
@@ -705,6 +770,13 @@ def _plan_iteration(args, config, reddit_username, already_picked):
         print(prompt)
         print("=== END DRY RUN ===")
         return {"project_name": project_name, "decisions": [], "cost": 0.0, "dry_run": True}
+
+    # Export per-cycle context so reddit_tools.py:cmd_search can attribute
+    # rows to the right project and group all queries from this plan-phase
+    # into one batch_id without changing the LLM's tool-call signature.
+    plan_batch_id = f"reddit-plan-{project_name}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    os.environ["SAPS_REDDIT_PROJECT"] = project_name
+    os.environ["SAPS_REDDIT_BATCH_ID"] = plan_batch_id
 
     print(f"[post_reddit] Starting Claude session (limit={args.limit}, timeout={args.timeout}s)")
     start = time.time()
