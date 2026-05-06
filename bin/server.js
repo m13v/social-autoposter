@@ -1033,9 +1033,17 @@ async function enrichPostCommentsTwitterRuns(runs) {
     "WHERE ran_at >= $1::timestamp",
     [since]
   ) || [];
+  // Pull t1_checked_at too so we can compute per-run queue drain.
+  // Exit timestamps by status:
+  //   posted   -> posted_at        (Phase 2b post commits the row)
+  //   expired  -> t1_checked_at    (T1 re-poll decides delta<1)
+  //   skipped  -> t1_checked_at    (T1 re-poll decides skip)
+  // Also include status='pending' so we never miss long-lived pending rows
+  // (discovered before our `since` cutoff but still in queue), which would
+  // otherwise undercount the per-run queue snapshot at older runs.
   const candidateRows = await pq(
-    "SELECT discovered_at, posted_at, status, batch_id FROM twitter_candidates " +
-    "WHERE discovered_at >= $1::timestamp OR posted_at >= $1::timestamp",
+    "SELECT discovered_at, posted_at, t1_checked_at, status, batch_id FROM twitter_candidates " +
+    "WHERE discovered_at >= $1::timestamp OR posted_at >= $1::timestamp OR t1_checked_at >= $1::timestamp OR status='pending'",
     [since]
   ) || [];
   const pendingRow = await pq(
@@ -1053,12 +1061,24 @@ async function enrichPostCommentsTwitterRuns(runs) {
     found: r.tweets_found || 0,
     batch_id: r.batch_id || '',
   }));
-  const candNorm = candidateRows.map(r => ({
-    discoveredMs: toMs(r.discovered_at),
-    postedMs: toMs(r.posted_at),
-    status: r.status,
-    batch_id: r.batch_id || '',
-  }));
+  // exitMs = the moment the row left 'pending'. Null for rows still pending.
+  // posted -> posted_at (always set when status='posted'),
+  // expired/skipped -> t1_checked_at.
+  const candNorm = candidateRows.map(r => {
+    const postedMs = toMs(r.posted_at);
+    const t1Ms = toMs(r.t1_checked_at);
+    let exitMs = null;
+    if (r.status === 'posted') exitMs = postedMs;
+    else if (r.status === 'expired' || r.status === 'skipped') exitMs = t1Ms;
+    return {
+      discoveredMs: toMs(r.discovered_at),
+      postedMs,
+      t1CheckedMs: t1Ms,
+      exitMs,
+      status: r.status,
+      batch_id: r.batch_id || '',
+    };
+  });
 
   for (const run of txRuns) {
     const startMs = new Date(run.started_at).getTime();
@@ -1079,6 +1099,50 @@ async function enrichPostCommentsTwitterRuns(runs) {
       else if (c.status === 'expired') expired++;
     }
     const candidatesDropped = Math.max(0, candidatesRaw - candidatesPassed);
+    // Per-run queue delta. ADD = candidates whose discovered_at fell in this
+    // run's window (Phase 1 SERP discovery wrote them into twitter_candidates
+    // as 'pending'). DRAIN = candidates that left 'pending' inside the same
+    // window: status='posted' with posted_at in window (Phase 2b), or
+    // status='expired'/'skipped' with t1_checked_at in window (T1 re-poll
+    // decision). Counted across ALL batches, not just this run's, because
+    // Phase 2b drains rows queued by earlier cycles too.
+    let queueAdded = 0, queueDrainedPosted = 0, queueDrainedExpired = 0, queueDrainedSkipped = 0;
+    for (const c of candNorm) {
+      if (c.discoveredMs != null && c.discoveredMs >= startMs && c.discoveredMs <= endMs) {
+        queueAdded++;
+      }
+      if (c.status === 'posted' && c.postedMs != null && c.postedMs >= startMs && c.postedMs <= endMs) {
+        queueDrainedPosted++;
+      }
+      if (c.status === 'expired' && c.t1CheckedMs != null && c.t1CheckedMs >= startMs && c.t1CheckedMs <= endMs) {
+        queueDrainedExpired++;
+      }
+      if (c.status === 'skipped' && c.t1CheckedMs != null && c.t1CheckedMs >= startMs && c.t1CheckedMs <= endMs) {
+        queueDrainedSkipped++;
+      }
+    }
+    const queueDrained = queueDrainedPosted + queueDrainedExpired + queueDrainedSkipped;
+    // Queue size at end of THIS run. A row is in the queue at time T if it
+    // was discovered by T and either still pending or its exit timestamp
+    // is strictly after T. queueStart is shown in the tooltip so the
+    // operator can see (queueEnd - queueStart) == (added - drained), which
+    // makes the per-run delta verifiable at a glance.
+    let queueEnd = 0, queueStart = 0;
+    for (const c of candNorm) {
+      if (c.discoveredMs == null) continue;
+      // queueStart: was this row in the queue at run.started_at?
+      if (c.discoveredMs <= startMs) {
+        if (c.status === 'pending' || (c.exitMs != null && c.exitMs > startMs)) {
+          queueStart++;
+        }
+      }
+      // queueEnd: was this row in the queue at run.finished_at?
+      if (c.discoveredMs <= endMs) {
+        if (c.status === 'pending' || (c.exitMs != null && c.exitMs > endMs)) {
+          queueEnd++;
+        }
+      }
+    }
     const prior = run.result || {};
     const priorDiscover = (prior.discover && typeof prior.discover === 'object') ? prior.discover : {};
     run.result = {
@@ -1090,7 +1154,14 @@ async function enrichPostCommentsTwitterRuns(runs) {
       candidates_expired: expired,
       above_floor: priorDiscover.above_floor || 0,
       posted,
-      pending_queue: pendingNow,
+      pending_queue: pendingNow,    // live snapshot, kept for backward compat
+      queue_end: queueEnd,           // primary number shown in the pill
+      queue_start: queueStart,       // shown in tooltip
+      queue_added: queueAdded,
+      queue_drained: queueDrained,
+      queue_drained_posted: queueDrainedPosted,
+      queue_drained_expired: queueDrainedExpired,
+      queue_drained_skipped: queueDrainedSkipped,
       cost_usd: prior.cost_usd || 0,
       failed: prior.failed || 0,
       failure_reasons: Array.isArray(prior.failure_reasons) ? prior.failure_reasons : [],
@@ -4904,6 +4975,9 @@ const HTML = `<!DOCTYPE html>
   .daily-metrics-chart .gridline { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 3; }
   .daily-metrics-chart .axis-text { fill: var(--text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; }
   .daily-metrics-chart .series-line { fill: none; stroke-width: 1.75; stroke-linejoin: round; stroke-linecap: round; }
+  .daily-metrics-chart .series-bar { transition: opacity 0.1s; }
+  .daily-metrics-chart .series-bar:hover { opacity: 0.85; }
+  .daily-metrics-chart .series-value { fill: var(--text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; pointer-events: none; }
   .daily-metrics-chart .hover-line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0; pointer-events: none; }
   .daily-metrics-tooltip { position: absolute; pointer-events: none; background: var(--bg-panel, #fff); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); min-width: 180px; max-width: 260px; opacity: 0; transition: opacity 0.08s; z-index: 5; left: 0; top: 0; }
   .daily-metrics-tooltip .tt-day { font-weight: 600; margin-bottom: 4px; color: var(--text); }
@@ -6021,7 +6095,20 @@ function renderResult(run) {
     const expired = r.candidates_expired || 0;
     const aboveFloor = r.above_floor || 0;
     const posted = r.posted || 0;
-    const queue = r.pending_queue || 0;
+    // queue = end-of-run snapshot (per-row, derived from candidate timestamps)
+    // when present; falls back to the live pending count for old (pre-patch)
+    // rows so they don't render as 0.
+    const queue = (r.queue_end != null) ? r.queue_end : (r.pending_queue || 0);
+    const queueStart = r.queue_start || 0;
+    const pendingLive = r.pending_queue || 0;
+    // Per-run queue delta (computed in enrichPostCommentsTwitterRuns).
+    // Shown as queue-N-(+A/-D) so the operator can see how THIS run moved
+    // the queue, not just the live count that's stamped on every row.
+    const qAdded = r.queue_added || 0;
+    const qDrained = r.queue_drained || 0;
+    const qDrainedPosted = r.queue_drained_posted || 0;
+    const qDrainedExpired = r.queue_drained_expired || 0;
+    const qDrainedSkipped = r.queue_drained_skipped || 0;
     const failed = r.failed || 0;
     const reasons = Array.isArray(r.failure_reasons) ? r.failure_reasons : [];
     const renderFailedPill = () => {
@@ -6038,6 +6125,25 @@ function renderResult(run) {
         'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
         label + (count ? ' <span style="color:var(--text);font-weight:600;">' + count + '</span>' : '') + '</span>';
     };
+    // Queue pill with per-run delta. Format: queue N (+A/-D)
+    // N = live pending count (snapshot at render time).
+    // +A = candidates added to queue during this run's window.
+    // -D = candidates that left pending during this run's window
+    //      (D = posted + expired; tooltip breaks it down).
+    // Delta omitted when both sides are zero so old (pre-patch) rows stay
+    // clean instead of showing noisy (+0/-0).
+    const queueDeltaSuffix = (qAdded || qDrained)
+      ? ' <span style="color:var(--muted);font-weight:400;">(' +
+          (qAdded ? '+' + qAdded : '+0') +
+          '/' +
+          (qDrained ? '-' + qDrained : '-0') +
+          ')</span>'
+      : '';
+    const queuePill =
+      '<span style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
+      'queue <span style="color:var(--text);font-weight:600;">' + queue + '</span>' +
+      queueDeltaSuffix +
+      '</span>';
     const tooltip = 'searches: ' + searches +
       ' / raw tweets: ' + raw +
       ' / passed score-time cuts: ' + passed +
@@ -6045,7 +6151,10 @@ function renderResult(run) {
       ' / expired (delta<1 floor): ' + expired +
       ' / above review cap (delta>=10, gates POST_LIMIT=3): ' + aboveFloor +
       ' / posted: ' + posted +
-      ' / pending queue: ' + queue;
+      ' / queue end-of-run: ' + queue +
+      ' (start: ' + queueStart + ', +' + qAdded + ' added, -' + qDrained + ' drained = ' +
+        qDrainedPosted + ' posted + ' + qDrainedExpired + ' expired + ' + qDrainedSkipped + ' skipped)' +
+      ' / queue right now (live): ' + pendingLive;
     return (
       '<span title="' + tooltip.replace(/"/g, '&quot;') + '" style="display:inline-block;">' +
         pill('searches', searches, searches > 0 ? 'var(--text)' : 'var(--muted)') +
@@ -6054,7 +6163,7 @@ function renderResult(run) {
         pill('expired', expired, expired > 0 ? 'var(--text)' : 'var(--muted)') +
         pill('Δ≥10', aboveFloor, aboveFloor > 0 ? '#a78bfa' : 'var(--muted)') +
         pill('posted', posted, posted > 0 ? '#22c55e' : 'var(--muted)') +
-        pill('queue', queue, queue > 0 ? 'var(--text)' : 'var(--muted)') +
+        queuePill +
         renderFailedPill() +
       '</span>'
     );
@@ -6186,7 +6295,8 @@ function renderResult(run) {
   // "posted 100 / skipped 607" and think the pipeline posted 100 pages.
   if (run.script === 'seo_expire') {
     const deleted = r.posted || 0;
-    const kept = r.skipped || 0;
+    const queue = r.skipped || 0;
+    const total = deleted + queue;
     const failed = r.failed || 0;
     const reasons = Array.isArray(r.failure_reasons) ? r.failure_reasons : [];
     const renderFailedPill = () => {
@@ -6203,13 +6313,15 @@ function renderResult(run) {
         'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
         label + (count ? ' <span style="color:var(--text);font-weight:600;">' + count + '</span>' : '') + '</span>';
     };
-    const tooltip = 'deleted: ' + deleted +
-      ' / kept (no-click candidates left in place, or daily cap hit): ' + kept +
+    const tooltip = 'total pages in scope (zero-click 30+ days, all projects): ' + total +
+      ' / deleted this run: ' + deleted +
+      ' / queue (waiting for next run, capped by DAILY_MAX): ' + queue +
       ' / failed: ' + failed;
     return (
       '<span title="' + tooltip.replace(/"/g, '&quot;') + '" style="display:inline-block;">' +
+        pill('total pages', total, total > 0 ? 'var(--text)' : 'var(--muted)') +
         pill('deleted', deleted, deleted > 0 ? '#22c55e' : 'var(--muted)') +
-        pill('kept', kept, kept > 0 ? 'var(--muted)' : 'var(--muted)') +
+        pill('queue', queue, queue > 0 ? 'var(--text)' : 'var(--muted)') +
         renderFailedPill() +
       '</span>'
     );
@@ -7555,21 +7667,25 @@ let _dailyMetricsSeries = null;
 let _dailyMetricsDays = [];
 let _dailyMetricsActive = null;
 
-// First-time defaults. Show the three metrics that matter most at a glance
-// (views = reach, upvotes = endorsement, comments = engagement) so a new
-// dashboard user sees a readable chart instead of all 9 lines on top of
-// each other. Returning users keep whatever they've toggled.
-const DAILY_METRICS_DEFAULTS = ['views', 'upvotes', 'comments'];
+// First-time defaults. Single-series (views) so a new dashboard user lands
+// on a clean column chart with one labeled bar per day rather than 9 series
+// fighting for the same shared scale. Returning users keep whatever they've
+// toggled.
+const DAILY_METRICS_DEFAULTS = ['views'];
+// .v2 key: line→column chart switch in 2026-05 narrowed the default from
+// 3 metrics to 1; bump so the old saved selection doesn't leak into the
+// new column layout (where 3 stacked series compete for one shared scale).
+const DAILY_METRICS_STORAGE_KEY = 'dailyMetricsActive.v2';
 function _loadDailyMetricsActive() {
   if (_dailyMetricsActive) return _dailyMetricsActive;
   let saved = null;
-  try { saved = JSON.parse(localStorage.getItem('dailyMetricsActive') || 'null'); } catch {}
+  try { saved = JSON.parse(localStorage.getItem(DAILY_METRICS_STORAGE_KEY) || 'null'); } catch {}
   const set = new Set(Array.isArray(saved) ? saved : DAILY_METRICS_DEFAULTS);
   _dailyMetricsActive = set;
   return set;
 }
 function _saveDailyMetricsActive() {
-  try { localStorage.setItem('dailyMetricsActive', JSON.stringify(Array.from(_dailyMetricsActive))); } catch {}
+  try { localStorage.setItem(DAILY_METRICS_STORAGE_KEY, JSON.stringify(Array.from(_dailyMetricsActive))); } catch {}
 }
 
 function _fmtShort(n) {
@@ -7633,59 +7749,76 @@ function renderDailyMetrics() {
     });
   });
 
-  // Chart. Each metric gets its own independent Y-axis — every line is
-  // normalized to its own 30-day peak so all nine shapes are comparable
-  // regardless of raw magnitude (pageviews at 2K vs bookings at 5 both
-  // use the full canvas height). No numeric Y-axis is rendered; peak
-  // values live in the legend + tooltip instead.
+  // Chart. Column chart with shared Y-axis. Each day is a "group" containing
+  // one bar per visible metric, side-by-side. Y-axis ticks are labeled with
+  // _fmtShort(value); when only ONE metric is visible (the default), we also
+  // render a value label on top of each bar. With multiple metrics active,
+  // bars get narrow and per-bar value labels would overlap, so we skip them
+  // and rely on the hover tooltip.
   const visibleMetrics = DAILY_METRICS.filter(m => active.has(m.id));
   if (!visibleMetrics.length) {
     chartEl.innerHTML = '<div class="views-chart-empty">Select at least one metric above to render the chart.</div>';
     if (statusEl) statusEl.textContent = '0 of ' + DAILY_METRICS.length + ' series';
     return;
   }
-  // Per-series peak over the 30-day window; used for independent scaling.
-  const seriesPeak = {};
-  DAILY_METRICS.forEach(m => {
+  // Shared Y-axis max across all visible metrics, rounded up to a "nice"
+  // number so axis ticks land on round values. Mixing very different scales
+  // (e.g. views in 10Ks alongside bookings in single digits) will visually
+  // crush the smaller series; that's intentional, the user opted in.
+  let yMax = 0;
+  visibleMetrics.forEach(m => {
     const byDay = _dailyMetricsSeries[m.id] || {};
-    let p = 0;
-    days.forEach(d => { p = Math.max(p, Number(byDay[d]) || 0); });
-    seriesPeak[m.id] = p;
+    days.forEach(d => { yMax = Math.max(yMax, Number(byDay[d]) || 0); });
   });
+  yMax = _niceMax(yMax);
   const width = 960;
   const height = 260;
-  const padL = 12, padR = 12, padT = 12, padB = 24;
+  const padL = 44, padR = 12, padT = 16, padB = 24;
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
-  const xStep = days.length > 1 ? plotW / (days.length - 1) : 0;
-  const xOf = i => padL + xStep * i;
-  // A baseline at the bottom + three subtle unlabeled gridlines for visual
-  // grounding. No numeric labels because the scale differs per line.
+  const groupWidth = days.length > 0 ? plotW / days.length : 0;
+  const groupGap = Math.max(1, groupWidth * 0.18);
+  const barCount = visibleMetrics.length;
+  const barSpacing = barCount > 1 ? 1 : 0;
+  const innerWidth = Math.max(1, groupWidth - groupGap);
+  const barWidth = Math.max(1, (innerWidth - barSpacing * (barCount - 1)) / barCount);
+  const yOf = v => padT + plotH - (yMax > 0 ? (v / yMax) * plotH : 0);
+  const xCenter = i => padL + groupWidth * i + groupWidth / 2;
+  // Y-axis ticks: 5 lines with numeric labels left of the plot.
   const yGrid = [0, 0.25, 0.5, 0.75, 1].map(t => {
     const y = padT + plotH - t * plotH;
-    return '<line class="gridline" x1="' + padL + '" x2="' + (width - padR) + '" y1="' + y + '" y2="' + y + '"/>';
+    const v = yMax * t;
+    return '<line class="gridline" x1="' + padL + '" x2="' + (width - padR) + '" y1="' + y + '" y2="' + y + '"/>' +
+           '<text class="axis-text" x="' + (padL - 6) + '" y="' + (y + 3) + '" text-anchor="end">' + escapeHtml(_fmtShort(v)) + '</text>';
   }).join('');
   // X-axis day labels: first, ~25%, mid, ~75%, last.
   const xLabelIdxs = days.length <= 1
     ? [0]
     : [0, Math.floor(days.length * 0.25), Math.floor(days.length / 2), Math.floor(days.length * 0.75), days.length - 1];
   const xLabels = Array.from(new Set(xLabelIdxs)).map(i => {
-    const x = xOf(i);
-    return '<text class="axis-text" x="' + x + '" y="' + (height - 6) + '" text-anchor="middle">' + escapeHtml(_fmtDay(days[i])) + '</text>';
+    return '<text class="axis-text" x="' + xCenter(i) + '" y="' + (height - 6) + '" text-anchor="middle">' + escapeHtml(_fmtDay(days[i])) + '</text>';
   }).join('');
-  // One polyline per visible metric, each normalized to its own peak so
-  // every series fills the canvas vertically.
-  const lines = visibleMetrics.map(m => {
-    const byDay = _dailyMetricsSeries[m.id] || {};
-    const peak = seriesPeak[m.id] || 0;
-    const yOf = v => padT + plotH - (peak > 0 ? (v / peak) * plotH : 0);
-    const pts = days.map((d, i) => xOf(i) + ',' + yOf(Number(byDay[d]) || 0)).join(' ');
-    return '<polyline class="series-line" data-metric="' + escapeHtml(m.id) + '" stroke="' + m.color + '" points="' + pts + '"/>';
+  // Bars: grouped per day. Value labels only when a single metric is visible,
+  // otherwise bars get too narrow for legible labels.
+  const showValueLabels = visibleMetrics.length === 1;
+  const bars = days.map((d, i) => {
+    const groupX = padL + groupWidth * i + groupGap / 2;
+    return visibleMetrics.map((m, mi) => {
+      const v = Number((_dailyMetricsSeries[m.id] || {})[d]) || 0;
+      const x = groupX + (barWidth + barSpacing) * mi;
+      const y = yOf(v);
+      const h = Math.max(0, padT + plotH - y);
+      const barRect = '<rect class="series-bar" data-day="' + escapeHtml(d) + '" data-metric="' + escapeHtml(m.id) + '" x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + barWidth.toFixed(2) + '" height="' + h.toFixed(2) + '" fill="' + m.color + '"/>';
+      const valueLabel = (showValueLabels && v > 0)
+        ? '<text class="series-value" x="' + (x + barWidth / 2).toFixed(2) + '" y="' + (y - 3).toFixed(2) + '" text-anchor="middle">' + escapeHtml(_fmtShort(v)) + '</text>'
+        : '';
+      return barRect + valueLabel;
+    }).join('');
   }).join('');
   // Transparent rect captures pointer events for the tooltip.
   const svg =
-    '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" role="img" aria-label="Daily metrics line chart">' +
-      yGrid + xLabels + lines +
+    '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" role="img" aria-label="Daily metrics column chart">' +
+      yGrid + xLabels + bars +
       '<line class="hover-line" id="daily-metrics-hover-line" x1="0" y1="' + padT + '" x2="0" y2="' + (padT + plotH) + '"/>' +
       '<rect id="daily-metrics-hover-rect" x="' + padL + '" y="' + padT + '" width="' + plotW + '" height="' + plotH + '" fill="transparent"/>' +
     '</svg>' +
@@ -7706,9 +7839,9 @@ function renderDailyMetrics() {
       const relX = e.clientX - box.left;
       const scale = width / box.width;
       const svgX = relX * scale;
-      const idxRaw = (svgX - padL) / (xStep || 1);
-      const idx = Math.max(0, Math.min(days.length - 1, Math.round(idxRaw)));
-      const snapX = xOf(idx);
+      const idxRaw = (svgX - padL) / (groupWidth || 1);
+      const idx = Math.max(0, Math.min(days.length - 1, Math.floor(idxRaw)));
+      const snapX = xCenter(idx);
       hoverLine.setAttribute('x1', snapX);
       hoverLine.setAttribute('x2', snapX);
       hoverLine.style.opacity = '1';
