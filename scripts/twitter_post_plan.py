@@ -215,6 +215,30 @@ def post_one(c: dict) -> tuple[str, str]:
 
     full_text = f"{reply_text} {link_url}".strip() if link_url else reply_text
 
+    # URL-wrap the text BEFORE handing it to twitter_browser. The browser
+    # script appends the campaign suffix internally; suffixes are plain
+    # text in practice, so URLs in the suffix won't be wrapped (documented
+    # caveat). All URLs in reply_text + link_url get minted into post_links
+    # with NULL post_id; we backfill with post_id below after log_post.py
+    # returns.
+    minted_session = None
+    try:
+        from dm_short_links import wrap_text_for_post
+        wrap_res = wrap_text_for_post(text=full_text, platform="twitter",
+                                        project_name=project)
+        if wrap_res.get("ok"):
+            full_text = wrap_res["text"]
+            minted_session = wrap_res.get("minted_session")
+            if wrap_res.get("codes"):
+                print(f"[post] candidate {cid} wrapped {len(wrap_res['codes'])} URL(s): "
+                      f"{wrap_res['codes']}", flush=True)
+        else:
+            print(f"[post] candidate {cid} WARNING: URL wrap failed "
+                  f"({wrap_res.get('error')}); posting unwrapped", flush=True)
+    except Exception as e:
+        print(f"[post] candidate {cid} WARNING: URL wrap raised ({e}); "
+              f"posting unwrapped", flush=True)
+
     print(f"[post] candidate {cid} -> posting (link={link_url!r})", flush=True)
     rc, out, err = run_subprocess(
         ["python3", TWITTER_BROWSER, "reply", candidate_url, full_text],
@@ -291,6 +315,16 @@ def post_one(c: dict) -> tuple[str, str]:
         # next cycle. 'failed' would re-rank it for retry which is worse.
         update_candidate(cid, "skipped")
         return ("skipped", "log_post_no_id")
+
+    # Stamp post_links.post_id for the URLs minted at wrap time. Idempotent;
+    # no-op when minted_session is None (no URLs in the original text).
+    if minted_session:
+        try:
+            from dm_short_links import backfill_post_id
+            backfill_post_id(minted_session=minted_session, post_id=post_id)
+        except Exception as e:
+            print(f"[post] candidate {cid} WARNING: backfill_post_id failed ({e})",
+                  flush=True)
 
     # Campaign attribution.
     for ccid in applied_campaigns:
