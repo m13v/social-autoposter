@@ -1230,16 +1230,21 @@ async function enrichPostCommentsRedditRuns(runs) {
   for (const run of rdRuns) {
     const startMs = new Date(run.started_at).getTime();
     const endMs = new Date(run.finished_at).getTime() + 60 * 1000;
-    // Pick the log file whose start timestamp is closest to (and <=) the run's
-    // started_at. Tolerate up to 90s slack to absorb log_run.py wallclock skew.
+    // Pick the log file whose start timestamp is closest to (and bounded by)
+    // the run's started_at. Tolerate up to 90s slack to absorb log_run.py
+    // wallclock skew. Anchor on START not END: launchd parallel-fires
+    // run-reddit-search every 15min, so a long-running 22-min job overlaps a
+    // newer file. Anchoring on end picks the parallel run's log and shows
+    // empty breakdowns for the original run.
     let chosen = null;
-    let chosenTs = -Infinity;
+    let chosenDelta = Infinity;
     for (const f of logFiles) {
       const ts = fileTs(f);
       if (!Number.isFinite(ts)) continue;
-      if (ts > endMs) continue;
-      if (ts < startMs - 90 * 1000) continue;
-      if (ts > chosenTs) { chosenTs = ts; chosen = f; }
+      if (ts > startMs + 90 * 1000) continue;       // file started >90s after run → another job
+      if (ts < startMs - 90 * 1000) continue;       // file too old to belong to this run
+      const delta = Math.abs(ts - startMs);
+      if (delta < chosenDelta) { chosenDelta = delta; chosen = f; }
     }
     if (!chosen) {
       // No matching log file (rotated/cleaned). Surface what we can from the
