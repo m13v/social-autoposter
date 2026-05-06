@@ -89,6 +89,34 @@ for i in $(seq 1 "$ITERATIONS"); do
     PICKED=$(python3 -c "import json,sys;print(json.load(open('$PLAN_FILE')).get('project_name',''))" 2>/dev/null || echo "")
     [ -n "$PICKED" ] && EXCLUDE="${EXCLUDE:+$EXCLUDE,}$PICKED"
 
+    # Ripen phase: 5-min delta gate (Reddit equivalent of Twitter Phase 2a).
+    # Captures T0 score/comments for each target thread, sleeps 300s, re-polls
+    # for T1, computes composite = Δup + 4*Δcomments, drops decisions where
+    # composite <= 5. Runs WITHOUT the browser lock so peers stay unblocked
+    # during the wait. If ripen filters everything out, post phase is skipped.
+    RIPEN_FILE=$(mktemp -t post_reddit_plan_ripened.XXXXXX.json)
+    log "Ripening plan (5-min delta gate, floor>5, w_comments=4)..."
+    set +e
+    python3 "$REPO_DIR/scripts/ripen_reddit_plan.py" \
+        --in "$PLAN_FILE" \
+        --out "$RIPEN_FILE" 2>&1 | tee -a "$LOG_FILE"
+    RIPEN_RC=${PIPESTATUS[0]}
+    set -e
+
+    if [ "$RIPEN_RC" != "0" ]; then
+        log "Ripen phase: exit code $RIPEN_RC; falling back to unfiltered plan."
+        cp "$PLAN_FILE" "$RIPEN_FILE"
+    fi
+
+    SURVIVORS=$(python3 -c "import json;print(len(json.load(open('$RIPEN_FILE')).get('decisions',[])))" 2>/dev/null || echo 0)
+    if [ "$SURVIVORS" = "0" ]; then
+        log "Ripen phase: 0 survivors; skipping post phase for this iteration."
+        TOTAL_SKIPPED=$((TOTAL_SKIPPED + 1))
+        rm -f "$PLAN_FILE" "$RIPEN_FILE"
+        continue
+    fi
+    log "Ripen phase: $SURVIVORS decision(s) passed delta gate."
+
     # Post phase: needs browser. Acquire (blocks if a peer is mid-run), do the
     # post, release immediately so the next iteration's plan runs unlocked.
     log "Acquiring reddit-browser lock for post phase..."
@@ -96,7 +124,7 @@ for i in $(seq 1 "$ITERATIONS"); do
     ensure_browser_healthy "reddit"
 
     set +e
-    POST_OUT=$(python3 "$REPO_DIR/scripts/post_reddit.py" --phase post --in "$PLAN_FILE" 2>&1 | tee -a "$LOG_FILE")
+    POST_OUT=$(python3 "$REPO_DIR/scripts/post_reddit.py" --phase post --in "$RIPEN_FILE" 2>&1 | tee -a "$LOG_FILE")
     POST_RC=${PIPESTATUS[0]}
     set -e
 
@@ -112,7 +140,7 @@ for i in $(seq 1 "$ITERATIONS"); do
         TOTAL_FAILED=$((TOTAL_FAILED + 1))
     fi
 
-    rm -f "$PLAN_FILE"
+    rm -f "$PLAN_FILE" "$RIPEN_FILE"
 done
 
 ELAPSED=$(( $(date +%s) - RUN_START ))
