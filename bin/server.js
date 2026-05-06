@@ -5329,6 +5329,22 @@ const HTML = `<!DOCTYPE html>
       <div class="style-stats-empty">Loading\u2026</div>
     </div>
   </details>
+  <details class="style-stats-section" id="search-queries-stats">
+    <summary>
+      <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="search-queries-stats-heading">Search Queries (last 24 hours)</span><span class="stat-card-info" data-tooltip="Per-query stats from twitter_search_attempts + linkedin_search_attempts. Reddit and GitHub don't log discovery queries today, so they're not represented. attempts = times the query was drafted and run. candidates_found = sum of tweets/posts the search returned. dud_rate = % of attempts that returned 0. posts_made = candidates from this query that we actually posted to. avg_engagement = comments\u00D73 + upvotes on those resulting posts (same formula as top_performers.py). Honors Window/Platform/Project filters above.">i</span></span>
+      <span class="style-stats-total" id="search-queries-stats-total"></span>
+    </summary>
+    <div id="search-queries-stats-controls" style="padding:8px 16px 0;display:flex;gap:8px;align-items:center;">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;">
+        <input type="checkbox" id="search-queries-stats-duds-only" style="cursor:pointer;">
+        Show duds only (0 candidates)
+      </label>
+      <span style="font-size:12px;color:var(--text-faint);">Top 50 by posts_made, then attempts</span>
+    </div>
+    <div id="search-queries-stats-body">
+      <div class="style-stats-empty">Loading\u2026</div>
+    </div>
+  </details>
 </div>
 
 <div class="content hidden" id="tab-trends">
@@ -7577,6 +7593,8 @@ function reloadStatsTabSections() {
   }
   const dmEl = document.getElementById('dm-stats');
   if (dmEl && dmEl.open) loadDmStats(true);
+  const sqEl = document.getElementById('search-queries-stats');
+  if (sqEl && sqEl.open) loadSearchQueriesStats(true);
 }
 function syncStatsHeadings() {
   const win = currentStatsWindow();
@@ -7591,6 +7609,8 @@ function syncStatsHeadings() {
   if (funnel) funnel.textContent = 'Project Funnel Stats (' + win.labelLong + ')';
   const dm = document.getElementById('dm-stats-heading');
   if (dm) dm.textContent = 'DM Funnel Stats (' + win.labelLong + ')';
+  const sq = document.getElementById('search-queries-stats-heading');
+  if (sq) sq.textContent = 'Search Queries (' + win.labelLong + ')';
 }
 function syncStatusHeadings() {
   const win = currentStatusWindow();
