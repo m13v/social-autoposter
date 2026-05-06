@@ -6408,7 +6408,11 @@ function renderResult(run) {
     };
     // Ripen pills. Only rendered when at least one iteration reached ripen,
     // OR ripen explicitly skipped post-phase (so the operator sees why nothing
-    // posted). best_composite shown as `best:Δ12.0` style; Δup/Δco in tooltip.
+    // posted). best_composite shown as best-Δ12.0 style; Δup/Δco in tooltip.
+    // (Avoid backticks in this block. This whole renderResult function lives
+    // inside the outer HTML backtick template; backticks in any string/comment
+    // here will close that template prematurely. Same gotcha as
+    // feedback_server_js_template_regex memory.)
     const renderRipenPills = () => {
       if (!ripenIters && !ripenSkipped && !ripenPassthrough) return '';
       const ripenTip = 'ripen iters: ' + ripenIters +
