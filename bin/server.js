@@ -7749,31 +7749,37 @@ function renderDailyMetrics() {
     });
   });
 
-  // Chart. Column chart with shared Y-axis. Each day is a "group" containing
-  // one bar per visible metric, side-by-side. Y-axis ticks are labeled with
-  // _fmtShort(value); when only ONE metric is visible (the default), we also
-  // render a value label on top of each bar. With multiple metrics active,
-  // bars get narrow and per-bar value labels would overlap, so we skip them
-  // and rely on the hover tooltip.
+  // Chart. Column chart with grouped bars per day. Single-series mode
+  // (default) renders a labeled Y-axis with shared scale. Multi-series mode
+  // gives every metric its OWN scale (each bar normalized to its own series
+  // peak) so a tiny-magnitude series (bookings = single digits) stays
+  // visually comparable next to a huge one (views = 10Ks). Y-axis tick
+  // labels are dropped in multi-series mode because no single number would
+  // be true for every bar in that bucket. Value labels above each bar stay
+  // on in both modes since the user wants to read magnitudes directly.
   const visibleMetrics = DAILY_METRICS.filter(m => active.has(m.id));
   if (!visibleMetrics.length) {
     chartEl.innerHTML = '<div class="views-chart-empty">Select at least one metric above to render the chart.</div>';
     if (statusEl) statusEl.textContent = '0 of ' + DAILY_METRICS.length + ' series';
     return;
   }
-  // Shared Y-axis max across all visible metrics, rounded up to a "nice"
-  // number so axis ticks land on round values. Mixing very different scales
-  // (e.g. views in 10Ks alongside bookings in single digits) will visually
-  // crush the smaller series; that's intentional, the user opted in.
-  let yMax = 0;
+  const isSingle = visibleMetrics.length === 1;
+  // Per-metric peaks (used for scaling in BOTH modes; in single mode the
+  // map has one entry and we expose it as the axis max too).
+  const seriesPeak = {};
   visibleMetrics.forEach(m => {
     const byDay = _dailyMetricsSeries[m.id] || {};
-    days.forEach(d => { yMax = Math.max(yMax, Number(byDay[d]) || 0); });
+    let p = 0;
+    days.forEach(d => { p = Math.max(p, Number(byDay[d]) || 0); });
+    seriesPeak[m.id] = p;
   });
-  yMax = _niceMax(yMax);
+  // Single-series axis max rounded up to a "nice" tick value.
+  const yMax = isSingle ? _niceMax(seriesPeak[visibleMetrics[0].id] || 0) : 0;
   const width = 960;
   const height = 260;
-  const padL = 44, padR = 12, padT = 16, padB = 24;
+  // Drop the left padding when there are no Y-axis labels to align against.
+  const padL = isSingle ? 44 : 12;
+  const padR = 12, padT = 16, padB = 24;
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
   const groupWidth = days.length > 0 ? plotW / days.length : 0;
@@ -7782,14 +7788,23 @@ function renderDailyMetrics() {
   const barSpacing = barCount > 1 ? 1 : 0;
   const innerWidth = Math.max(1, groupWidth - groupGap);
   const barWidth = Math.max(1, (innerWidth - barSpacing * (barCount - 1)) / barCount);
-  const yOf = v => padT + plotH - (yMax > 0 ? (v / yMax) * plotH : 0);
+  // Per-metric yOf: in multi mode each metric uses its own peak so bars are
+  // independent vertically; in single mode they all share yMax.
+  const yOfFor = (m) => {
+    const peak = isSingle ? yMax : (seriesPeak[m.id] || 0);
+    return v => padT + plotH - (peak > 0 ? (v / peak) * plotH : 0);
+  };
   const xCenter = i => padL + groupWidth * i + groupWidth / 2;
-  // Y-axis ticks: 5 lines with numeric labels left of the plot.
+  // Y-axis: gridlines always, but tick labels only when we have a single
+  // shared scale to label.
   const yGrid = [0, 0.25, 0.5, 0.75, 1].map(t => {
     const y = padT + plotH - t * plotH;
-    const v = yMax * t;
-    return '<line class="gridline" x1="' + padL + '" x2="' + (width - padR) + '" y1="' + y + '" y2="' + y + '"/>' +
-           '<text class="axis-text" x="' + (padL - 6) + '" y="' + (y + 3) + '" text-anchor="end">' + escapeHtml(_fmtShort(v)) + '</text>';
+    let label = '';
+    if (isSingle) {
+      const v = yMax * t;
+      label = '<text class="axis-text" x="' + (padL - 6) + '" y="' + (y + 3) + '" text-anchor="end">' + escapeHtml(_fmtShort(v)) + '</text>';
+    }
+    return '<line class="gridline" x1="' + padL + '" x2="' + (width - padR) + '" y1="' + y + '" y2="' + y + '"/>' + label;
   }).join('');
   // X-axis day labels: first, ~25%, mid, ~75%, last.
   const xLabelIdxs = days.length <= 1
@@ -7798,19 +7813,20 @@ function renderDailyMetrics() {
   const xLabels = Array.from(new Set(xLabelIdxs)).map(i => {
     return '<text class="axis-text" x="' + xCenter(i) + '" y="' + (height - 6) + '" text-anchor="middle">' + escapeHtml(_fmtDay(days[i])) + '</text>';
   }).join('');
-  // Bars: grouped per day. Value labels only when a single metric is visible,
-  // otherwise bars get too narrow for legible labels.
-  const showValueLabels = visibleMetrics.length === 1;
+  // Bars: grouped per day. Value labels rendered above every non-zero bar
+  // in both single and multi modes (multi can crowd, but the user
+  // explicitly wants the numbers visible).
   const bars = days.map((d, i) => {
     const groupX = padL + groupWidth * i + groupGap / 2;
     return visibleMetrics.map((m, mi) => {
       const v = Number((_dailyMetricsSeries[m.id] || {})[d]) || 0;
       const x = groupX + (barWidth + barSpacing) * mi;
+      const yOf = yOfFor(m);
       const y = yOf(v);
       const h = Math.max(0, padT + plotH - y);
       const barRect = '<rect class="series-bar" data-day="' + escapeHtml(d) + '" data-metric="' + escapeHtml(m.id) + '" x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + barWidth.toFixed(2) + '" height="' + h.toFixed(2) + '" fill="' + m.color + '"/>';
-      const valueLabel = (showValueLabels && v > 0)
-        ? '<text class="series-value" x="' + (x + barWidth / 2).toFixed(2) + '" y="' + (y - 3).toFixed(2) + '" text-anchor="middle">' + escapeHtml(_fmtShort(v)) + '</text>'
+      const valueLabel = (v > 0)
+        ? '<text class="series-value" x="' + (x + barWidth / 2).toFixed(2) + '" y="' + (y - 3).toFixed(2) + '" text-anchor="middle" fill="' + m.color + '">' + escapeHtml(_fmtShort(v)) + '</text>'
         : '';
       return barRect + valueLabel;
     }).join('');
@@ -7942,11 +7958,21 @@ function _bucketWeekly(days, byDay) {
 async function loadDailyMetrics() {
   const chartEl = document.getElementById('daily-metrics-chart');
   const headingEl = document.getElementById('daily-metrics-heading');
+  const statusEl = document.getElementById('daily-metrics-status');
   const series = {};
   const granularity = currentTrendsGranularity();
   const platform = currentTrendsPlatform();
   const project = currentTrendsProject();
   const fetchDays = granularity === 'weekly' ? DAILY_METRICS_DAYS_WEEKLY : DAILY_METRICS_DAYS_DAILY;
+
+  // Show a loading state immediately on every (re)fetch, so toggling
+  // granularity / platform / project gives instant visual feedback even
+  // before the API responses come back. Without this, the previously
+  // rendered chart sits frozen until all 5 endpoints settle, which on a
+  // weekly switch can be a few hundred ms with zero indication anything
+  // is happening.
+  if (chartEl) chartEl.innerHTML = '<div class="views-chart-empty">Loading…</div>';
+  if (statusEl) statusEl.textContent = 'Loading…';
 
   // Prebuild the daily axis (end-exclusive so last entry is today UTC).
   const today = new Date();
@@ -11312,7 +11338,14 @@ function activateTab(name) {
     stopActivityAutoRefresh();
   }
   if (name === 'stats') { loadActivityStats(); loadCohortStats(); loadStyleStats(); loadDmStats(); }
-  if (name === 'trends') { loadDailyMetrics(); }
+  if (name === 'trends') {
+    // loadStyleStats() also rebuilds the trends platform/project pill rows
+    // off /api/style/stats. Without this call, landing on Trends first (e.g.
+    // via persisted active tab) leaves those rows showing only the static
+    // "All" button because the Stats tab never ran the fetch.
+    loadStyleStats();
+    loadDailyMetrics();
+  }
   if (name === 'top') {
     initTopFilters();
     if (_topSubtab === 'pages') {
