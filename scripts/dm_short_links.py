@@ -452,6 +452,196 @@ def wrap_text(*, dm_id: int, text: str) -> dict:
         conn.close()
 
 
+# ---- Post-link library (parallel rail to DM, table=post_links) ----------
+
+def _mint_one_post(conn, *, target_url: str, projects: list, platform: str,
+                    project_name: str, minted_session: str) -> dict:
+    """Core mint logic for public posts. Mirrors _mint_one but writes to
+    post_links instead of dm_links, with post_id and reply_id BOTH NULL at
+    mint time (the caller backfills exactly one of them after log_post or
+    reply_db returns the row id).
+
+    Returns:
+      {ok: True, code, short_url, target_url, kind}
+      {ok: False, error: 'no_primary_website' | 'empty_url' | 'code_collision_after_8_tries'}
+    """
+    target_url = _ensure_scheme((target_url or '').strip())
+    if not target_url or target_url == 'https://':
+        return {'ok': False, 'error': 'empty_url'}
+
+    kind, matched_project = _classify_url(target_url, projects)
+
+    # Wrapper hostname comes from the project we're posting AS, not from any
+    # URL classification. Posts always know which project they are for.
+    website = _project_website(projects, project_name)
+    if not website:
+        return {
+            'ok': False,
+            'error': 'no_primary_website',
+            'project': project_name,
+            'detail': f"no website for project={project_name!r} in config.json",
+        }
+
+    final_target = _build_target_url_for_post(
+        target_url,
+        kind,
+        minted_session=minted_session,
+        project=matched_project or project_name,
+        platform=platform,
+    )
+
+    # Posts mint fresh codes every call — no idempotency on (post_id, target_url)
+    # because post_id is NULL at mint time. The minted_session UUID groups the
+    # codes so the caller can backfill them all in one UPDATE after log_post
+    # returns. If a wrap is retried (rare), we get duplicate codes pointing at
+    # the same target_url; orphans of failed posts are bounded and harmless.
+    for _ in range(8):
+        code = _gen_code()
+        try:
+            conn.execute(
+                "INSERT INTO post_links (code, platform, project_name, "
+                "       target_url, kind, project_at_mint, minted_session) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (code, platform, project_name, final_target, kind,
+                 matched_project, minted_session),
+            )
+            conn.commit()
+            return {
+                'ok': True,
+                'code': code,
+                'short_url': f"{website}/r/{code}",
+                'target_url': final_target,
+                'kind': kind,
+            }
+        except Exception as e:
+            if 'duplicate key' in str(e).lower() and 'post_links_pkey' in str(e).lower():
+                conn.execute("ROLLBACK")
+                continue
+            raise
+    return {'ok': False, 'error': 'code_collision_after_8_tries'}
+
+
+def wrap_text_for_post(*, text: str, platform: str, project_name: str) -> dict:
+    """Find every URL in `text`, mint into post_links, substring-replace.
+
+    Returns:
+      {ok: True, text: <wrapped>, minted_session, codes: [...], skipped: [...]}
+      {ok: False, error: ..., url: ...}
+
+    minted_session is a UUID the caller MUST pass to backfill_post_id /
+    backfill_reply_id once the platform call returns the row id from
+    log_post.py or reply_db.py. If the platform call fails, the codes are
+    orphaned (post_id and reply_id stay NULL); they still resolve correctly
+    via target_url frozen at mint time, just without attribution.
+
+    Normalize platform: 'x' is collapsed to 'twitter' so analytics joins
+    against posts.platform line up.
+    """
+    if not text:
+        return {'ok': True, 'text': text, 'minted_session': None,
+                'codes': [], 'skipped': []}
+
+    platform = (platform or '').lower()
+    if platform == 'x':
+        platform = 'twitter'
+
+    minted_session = str(uuid.uuid4())
+    projects = _load_projects()
+    conn = dbmod.get_conn()
+    try:
+        seen = {}
+        codes = []
+        skipped = []
+
+        for m in list(_URL_RE.finditer(text)):
+            raw = m.group(0)
+            stripped = raw.rstrip(_TRAILING_PUNCT)
+            if stripped in seen:
+                continue
+
+            # Already-wrapped /r/<code> on one of our domains: leave alone.
+            if re.search(r'/r/[a-z0-9]{4,32}(?:[/?#]|$)', stripped, re.IGNORECASE):
+                seen[stripped] = stripped
+                skipped.append({'url': stripped, 'reason': 'already_wrapped'})
+                continue
+
+            res = _mint_one_post(
+                conn,
+                target_url=stripped,
+                projects=projects,
+                platform=platform,
+                project_name=project_name,
+                minted_session=minted_session,
+            )
+            if not res.get('ok'):
+                return {**res, 'ok': False}
+            seen[stripped] = res['short_url']
+            codes.append(res['code'])
+
+        if not seen:
+            return {'ok': True, 'text': text, 'minted_session': None,
+                    'codes': [], 'skipped': skipped}
+
+        def _sub(m):
+            raw = m.group(0)
+            stripped = raw.rstrip(_TRAILING_PUNCT)
+            trailing = raw[len(stripped):]
+            wrapped = seen.get(stripped, stripped)
+            return wrapped + trailing
+
+        new_text = _URL_RE.sub(_sub, text)
+        return {
+            'ok': True,
+            'text': new_text,
+            'minted_session': minted_session,
+            'codes': codes,
+            'skipped': skipped,
+        }
+    finally:
+        conn.close()
+
+
+def backfill_post_id(*, minted_session: str, post_id: int) -> int:
+    """Stamp post_links.post_id for every code minted under minted_session.
+
+    Returns the rowcount affected. Safe to call multiple times (idempotent).
+    Caller should NOT raise on rowcount==0 because some posts have no URLs
+    and minted_session was None — the caller should skip the backfill in
+    that case.
+    """
+    if not minted_session or post_id is None:
+        return 0
+    conn = dbmod.get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE post_links SET post_id = %s "
+            "WHERE minted_session = %s AND post_id IS NULL",
+            (post_id, minted_session),
+        )
+        conn.commit()
+        return cur.rowcount or 0
+    finally:
+        conn.close()
+
+
+def backfill_reply_id(*, minted_session: str, reply_id: int) -> int:
+    """Same as backfill_post_id but stamps post_links.reply_id (engage_reddit
+    writes to the `replies` table, not `posts`)."""
+    if not minted_session or reply_id is None:
+        return 0
+    conn = dbmod.get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE post_links SET reply_id = %s "
+            "WHERE minted_session = %s AND reply_id IS NULL",
+            (reply_id, minted_session),
+        )
+        conn.commit()
+        return cur.rowcount or 0
+    finally:
+        conn.close()
+
+
 # ---- CLI subcommands ----
 
 def cmd_mint(args):
@@ -547,6 +737,30 @@ def cmd_wrap_text(args):
         sys.stdout.write(res['text'])
 
 
+def cmd_wrap_post_text(args):
+    res = wrap_text_for_post(text=args.text, platform=args.platform,
+                              project_name=args.project)
+    if not res.get('ok'):
+        sys.stderr.write(json.dumps(res) + '\n')
+        sys.exit(2)
+    # JSON envelope is the default for the post path because callers always
+    # need minted_session for the backfill UPDATE. The shell scripts that
+    # consume this WILL parse JSON.
+    print(json.dumps(res))
+
+
+def cmd_backfill_post(args):
+    n = backfill_post_id(minted_session=args.minted_session, post_id=args.post_id)
+    print(json.dumps({'backfilled': n, 'post_id': args.post_id,
+                      'minted_session': args.minted_session}))
+
+
+def cmd_backfill_reply(args):
+    n = backfill_reply_id(minted_session=args.minted_session, reply_id=args.reply_id)
+    print(json.dumps({'backfilled': n, 'reply_id': args.reply_id,
+                      'minted_session': args.minted_session}))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -565,6 +779,28 @@ def main():
     p_wrap.add_argument('--text', required=True)
     p_wrap.add_argument('--json', action='store_true', help='Print full JSON envelope to stdout')
 
+    p_wrap_post = sub.add_parser('wrap-post-text',
+                                  help='Wrap URLs in a public post/comment text. '
+                                       'Mints into post_links with NULL post_id; '
+                                       'backfill via backfill-post or backfill-reply.')
+    p_wrap_post.add_argument('--text', required=True)
+    p_wrap_post.add_argument('--platform', required=True,
+                             choices=['reddit', 'twitter', 'x', 'linkedin', 'github_issues'])
+    p_wrap_post.add_argument('--project', required=True,
+                             help='project_name from config.json (drives wrapper hostname)')
+
+    p_bp = sub.add_parser('backfill-post',
+                           help='Stamp post_links.post_id for every code minted '
+                                'under --minted-session. Idempotent.')
+    p_bp.add_argument('--minted-session', required=True)
+    p_bp.add_argument('--post-id', type=int, required=True)
+
+    p_br = sub.add_parser('backfill-reply',
+                           help='Stamp post_links.reply_id for every code minted '
+                                'under --minted-session. Idempotent.')
+    p_br.add_argument('--minted-session', required=True)
+    p_br.add_argument('--reply-id', type=int, required=True)
+
     args = ap.parse_args()
     if args.cmd == 'mint':
         cmd_mint(args)
@@ -572,6 +808,12 @@ def main():
         cmd_resolve(args)
     elif args.cmd == 'wrap-text':
         cmd_wrap_text(args)
+    elif args.cmd == 'wrap-post-text':
+        cmd_wrap_post_text(args)
+    elif args.cmd == 'backfill-post':
+        cmd_backfill_post(args)
+    elif args.cmd == 'backfill-reply':
+        cmd_backfill_reply(args)
 
 
 if __name__ == '__main__':
