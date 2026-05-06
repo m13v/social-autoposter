@@ -9169,6 +9169,115 @@ function renderDmStats(payload) {
   });
 }
 
+// Search Queries Stats: per-query intelligence across Twitter + LinkedIn (the
+// two platforms whose pickers log discovery queries to *_search_attempts).
+// One row per (platform, query, project). attempts/candidates/duds come from
+// the search_attempts tables; posts_made and avg_engagement are joined back
+// through *_candidates -> posts. Reddit + GitHub aren't represented because
+// those pickers don't track discovery queries today.
+let _searchQueriesStatsTableState = { sortField: 'posts_made', sortDir: 'desc', filters: {} };
+function renderSearchQueriesStats(payload) {
+  const body = document.getElementById('search-queries-stats-body');
+  const totalEl = document.getElementById('search-queries-stats-total');
+  if (!body) return;
+  if (payload && payload.error) {
+    if (totalEl) totalEl.textContent = 'error';
+    body.innerHTML = '<div class="style-stats-empty">' + escapeHtml(payload.error) + '</div>';
+    return;
+  }
+  // Reddit/GitHub were selected as the platform filter; we just render an
+  // empty-state explaining why instead of pretending we have data.
+  if (payload && payload.platform_supported === false) {
+    if (totalEl) totalEl.textContent = 'n/a';
+    body.innerHTML = '<div class="style-stats-empty">This platform doesn\u2019t log discovery queries (only Twitter and LinkedIn do).</div>';
+    return;
+  }
+  const rows = (payload && payload.rows) || [];
+  if (!rows.length) {
+    if (totalEl) totalEl.textContent = '0 queries';
+    body.innerHTML = '<div class="style-stats-empty">No search queries in this window.</div>';
+    return;
+  }
+  if (totalEl) totalEl.textContent = rows.length + ' quer' + (rows.length === 1 ? 'y' : 'ies');
+  const fmt = n => (Number(n) || 0).toLocaleString();
+  const fmt1 = n => (Number(n) || 0).toFixed(1);
+  const pct = v => (Number(v) * 100).toFixed(0) + '%';
+  const normalized = rows.map(r => {
+    const attempts = Number(r.attempts) || 0;
+    const duds = Number(r.dud_attempts) || 0;
+    return {
+      platform:           String(r.platform || '').toLowerCase(),
+      query:              String(r.query || ''),
+      project_name:       r.project_name || '(none)',
+      attempts:           attempts,
+      candidates_found:   Number(r.candidates_found) || 0,
+      dud_rate:           attempts > 0 ? duds / attempts : 0,
+      dud_attempts:       duds,
+      serp_quality_avg:   r.serp_quality_avg == null ? null : Number(r.serp_quality_avg),
+      posts_made:         Number(r.posts_made) || 0,
+      avg_engagement:     r.avg_engagement == null ? null : Number(r.avg_engagement),
+      last_run:           r.last_run || null,
+    };
+  });
+  mountSortableTable({
+    containerId: 'search-queries-stats-body',
+    rows: normalized,
+    state: _searchQueriesStatsTableState,
+    storageKey: 'sa.searchQueriesStatsTable.v1',
+    showTotals: false,
+    columns: [
+      { key: 'query',       label: 'Query',     type: 'text',    align: 'left',
+        formatter: v => {
+          const s = String(v || '');
+          // Long Twitter boolean queries go up to ~200 chars; clamp the
+          // visible cell to keep the row height sane and surface the full
+          // string via the global tooltip handler.
+          const display = s.length > 90 ? s.slice(0, 87) + '\u2026' : s;
+          return '<span data-tooltip="' + escapeHtml(s) + '" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;">' + escapeHtml(display) + '</span>';
+        } },
+      { key: 'platform',    label: 'Platform',  type: 'text',    align: 'left',
+        formatter: v => platformIconHtml(v) + ' <span style="text-transform:capitalize;color:var(--text-secondary);">' + escapeHtml(v) + '</span>' },
+      { key: 'project_name', label: 'Project',  type: 'text',    align: 'left',
+        formatter: v => escapeHtml((typeof PROJECT_LABELS !== 'undefined' && PROJECT_LABELS[v]) || v) },
+      { key: 'attempts',    label: 'Attempts',  type: 'numeric', align: 'right', formatter: fmt },
+      { key: 'candidates_found', label: 'Found', type: 'numeric', align: 'right',
+        formatter: (v, row) => {
+          const n = Number(v) || 0;
+          if (row.serp_quality_avg != null) {
+            const tip = 'avg SERP quality (LinkedIn only): ' + row.serp_quality_avg.toFixed(1) + '/10';
+            return '<span data-tooltip="' + escapeHtml(tip) + '">' + fmt(n) + '</span>';
+          }
+          return fmt(n);
+        } },
+      { key: 'dud_rate',    label: 'Dud %',     type: 'numeric', align: 'right',
+        formatter: (v, row) => {
+          const n = Number(v) || 0;
+          const tip = (row.dud_attempts || 0) + ' of ' + (row.attempts || 0) + ' attempts returned 0';
+          const color = n >= 0.5 ? 'var(--danger,#dc2626)' : (n >= 0.25 ? 'var(--warn,#d97706)' : 'var(--text-secondary)');
+          return '<span data-tooltip="' + escapeHtml(tip) + '" style="color:' + color + ';font-variant-numeric:tabular-nums;">' + pct(n) + '</span>';
+        } },
+      { key: 'posts_made',  label: 'Posts',     type: 'numeric', align: 'right',
+        formatter: v => {
+          const n = Number(v) || 0;
+          if (!n) return '<span style="color:var(--text-faint);">\u2014</span>';
+          return '<span style="color:var(--success);font-weight:600;font-variant-numeric:tabular-nums;">' + fmt(n) + '</span>';
+        } },
+      { key: 'avg_engagement', label: 'Avg Eng', type: 'numeric', align: 'right',
+        formatter: v => {
+          if (v == null) return '<span style="color:var(--text-faint);">\u2014</span>';
+          const tip = 'comments\u00D73 + upvotes (same formula as top_performers.py)';
+          return '<span data-tooltip="' + escapeHtml(tip) + '" style="font-variant-numeric:tabular-nums;">' + fmt1(v) + '</span>';
+        } },
+      { key: 'last_run',    label: 'Last Run',  type: 'numeric', align: 'right',
+        formatter: v => {
+          if (!v) return '<span style="color:var(--text-faint);">\u2014</span>';
+          const abs = new Date(v).toLocaleString();
+          return '<span data-tooltip="' + escapeHtml(abs) + '" style="color:var(--text-secondary);">' + escapeHtml(relTime(v)) + '</span>';
+        } },
+    ],
+  });
+}
+
 // Cost Stats: per-activity-type count + total cost + cost-per-activity, driven
 // by /api/cost/stats. Types are the four the user cares about: thread (posts),
 // comment (replies), page (SEO pages), dm_thread (DMs). Section is closed by
@@ -11352,6 +11461,39 @@ async function loadDmStats(force) {
   }
 }
 
+let _searchQueriesStatsLoadedFor = null;
+let _searchQueriesStatsLoading = false;
+async function loadSearchQueriesStats(force) {
+  if (_searchQueriesStatsLoading) return;
+  if (saAuthNotReady()) return;
+  const days = currentStatsWindow().days;
+  const plat = currentStatsPlatform();
+  const proj = currentStatsProject();
+  const dudsOnlyEl = document.getElementById('search-queries-stats-duds-only');
+  const dudsOnly = !!(dudsOnlyEl && dudsOnlyEl.checked);
+  const key  = days + '|' + plat + '|' + proj + '|' + (dudsOnly ? '1' : '0');
+  if (_searchQueriesStatsLoadedFor === key && !force) return;
+  _searchQueriesStatsLoading = true;
+  const totalEl = document.getElementById('search-queries-stats-total');
+  const body = document.getElementById('search-queries-stats-body');
+  if (totalEl) totalEl.textContent = 'loading\u2026';
+  if (body) body.innerHTML = '<div class="style-stats-empty">Loading\u2026</div>';
+  try {
+    const params = ['days=' + days];
+    if (plat && plat !== 'all') params.push('platform=' + encodeURIComponent(plat));
+    if (proj && proj !== 'all') params.push('project='  + encodeURIComponent(proj));
+    if (dudsOnly) params.push('duds_only=1');
+    const res = await fetch('/api/search-queries/stats?' + params.join('&'));
+    const data = await res.json();
+    renderSearchQueriesStats(data);
+    _searchQueriesStatsLoadedFor = key;
+  } catch (e) {
+    if (body) body.innerHTML = '<div class="style-stats-empty">Failed to load.</div>';
+  } finally {
+    _searchQueriesStatsLoading = false;
+  }
+}
+
 let _lastActivityEvents = [];
 function renderActivity(events) {
   _lastActivityEvents = events;
@@ -11675,6 +11817,22 @@ document.querySelectorAll('.tab').forEach(tab => {
     try { window.posthog && window.posthog.capture('section_toggle', { section: 'dm-stats', open: !!el.open }); } catch (er) {}
     if (el.open) loadDmStats();
   });
+})();
+
+(function wireSearchQueriesStats() {
+  const el = document.getElementById('search-queries-stats');
+  if (!el) return;
+  el.addEventListener('toggle', () => {
+    try { window.posthog && window.posthog.capture('section_toggle', { section: 'search-queries-stats', open: !!el.open }); } catch (er) {}
+    if (el.open) loadSearchQueriesStats();
+  });
+  const duds = document.getElementById('search-queries-stats-duds-only');
+  if (duds) {
+    duds.addEventListener('change', () => {
+      try { window.posthog && window.posthog.capture('search_queries_duds_toggle', { on: !!duds.checked }); } catch (er) {}
+      if (el.open) loadSearchQueriesStats(true);
+    });
+  }
 })();
 
 (function wireCostStats() {
