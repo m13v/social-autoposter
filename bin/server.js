@@ -4208,7 +4208,12 @@ async function handleApi(req, res) {
         "SELECT cand.platform, cand.query, cand.project_name, " +
                "COUNT(*) FILTER (WHERE cand.post_id IS NOT NULL)::int AS posts_made, " +
                "AVG(COALESCE(p.upvotes, 0) + COALESCE(p.comments_count, 0) * 3) " +
-                 "FILTER (WHERE cand.post_id IS NOT NULL) AS avg_engagement " +
+                 "FILTER (WHERE cand.post_id IS NOT NULL) AS avg_engagement, " +
+               // Twitter-only: LinkedIn doesn't expose comment views, so AVG()
+               // comes back null on linkedin rows. Frontend renders null as a
+               // dash so it's clear the metric is N/A on that platform.
+               "AVG(NULLIF(p.views, 0)) " +
+                 "FILTER (WHERE cand.post_id IS NOT NULL AND cand.platform = 'twitter') AS avg_views " +
         "FROM cand " +
         "LEFT JOIN posts p ON p.id = cand.post_id " +
         candPlatformFilter +
@@ -4222,7 +4227,8 @@ async function handleApi(req, res) {
              "AVG(a.serp_quality_score)::float8 AS serp_quality_avg, " +
              "MAX(a.ran_at) AS last_run, " +
              "COALESCE(MAX(ppq.posts_made), 0)::int AS posts_made, " +
-             "MAX(ppq.avg_engagement)::float8 AS avg_engagement " +
+             "MAX(ppq.avg_engagement)::float8 AS avg_engagement, " +
+             "MAX(ppq.avg_views)::float8 AS avg_views " +
       "FROM attempts a " +
       "LEFT JOIN posts_per_query ppq " +
         "ON ppq.platform = a.platform " +
@@ -9216,6 +9222,7 @@ function renderSearchQueriesStats(payload) {
       serp_quality_avg:   r.serp_quality_avg == null ? null : Number(r.serp_quality_avg),
       posts_made:         Number(r.posts_made) || 0,
       avg_engagement:     r.avg_engagement == null ? null : Number(r.avg_engagement),
+      avg_views:          r.avg_views == null ? null : Number(r.avg_views),
       last_run:           r.last_run || null,
     };
   });
@@ -9264,8 +9271,14 @@ function renderSearchQueriesStats(payload) {
       { key: 'avg_engagement', label: 'Avg Eng', type: 'numeric', align: 'right', widthPct: 4,
         formatter: v => {
           if (v == null) return '<span style="color:var(--text-faint);">\u2014</span>';
-          const tip = 'comments\u00D73 + upvotes (same formula as top_performers.py)';
+          const tip = 'comments\u00D73 + upvotes on our reply (same formula as top_performers.py)';
           return '<span data-tooltip="' + escapeHtml(tip) + '" style="font-variant-numeric:tabular-nums;">' + fmt1(v) + '</span>';
+        } },
+      { key: 'avg_views',   label: 'Avg Views', type: 'numeric', align: 'right', widthPct: 4,
+        formatter: v => {
+          if (v == null) return '<span data-tooltip="LinkedIn does not expose comment views" style="color:var(--text-faint);">\u2014</span>';
+          const tip = 'avg view count on our Twitter reply (raw, not weighted into Avg Eng)';
+          return '<span data-tooltip="' + escapeHtml(tip) + '" style="font-variant-numeric:tabular-nums;">' + fmt(Math.round(v)) + '</span>';
         } },
       { key: 'last_run',    label: 'Last Run',  type: 'numeric', align: 'right', widthPct: 4,
         formatter: v => {
