@@ -1,16 +1,16 @@
-# Upwork Job Post: Social Media Account Operator
+# Upwork Job Post: Social Media Posting Assistant
 
 ## Job title
-Social Media Account Operator (Instagram + TikTok), $500/month per account, North America or Europe only
+Social Media Posting Assistant (Instagram + TikTok), $500/month per account, North America or Europe
 
 ## Category
 Sales & Marketing > Social Media Marketing
 
 ## Skills (tags)
-Social Media Posting, Instagram, TikTok, Meta Business Suite, TikTok Business Center
+Social Media Posting, Instagram, TikTok, Content Scheduling
 
 ## Project type
-Ongoing project (start with a 1 to 2 week trial)
+Ongoing project (start with a short paid trial)
 
 ## Hours
 Less than 30 hrs/week, very part time, ~5 to 7 hrs/week per account
@@ -19,85 +19,70 @@ Less than 30 hrs/week, very part time, ~5 to 7 hrs/week per account
 Entry to intermediate
 
 ## Budget
-$500/month per account (fixed monthly retainer). Plus a one-time $30 onboarding fee per account for the initial Business Suite Member setup, paid in 2 milestones.
+$500/month per account (fixed monthly retainer).
 
 ## Talent location
-North America or Europe only. Applications from outside this region will be auto-declined.
+North America or Europe.
 
 ---
 
 ## Job description
 
-We are a US tech startup. Our in-house content team produces short videos and image posts for Instagram and TikTok. We need a reliable contractor to **operate our existing brand accounts**: take the finished media and captions we hand you, and publish them on schedule.
+We are a small US tech startup. Our team produces short videos and image posts for Instagram and TikTok. We are looking for a friendly, reliable assistant to help us publish that content on a steady schedule.
 
-**The setup, in plain English:**
-- We already own and operate the brand Instagram and TikTok accounts. They live in our Meta Business portfolio and our TikTok Business Center.
-- We invite you as a Member of those properties using your personal email.
-- You accept the invite signed in with your own personal Facebook / TikTok identity.
-- From then on, you post our content via Meta Business Suite and TikTok Business Center, signed in as yourself. You never log in directly with the brand account password.
+**What the role looks like, in plain English:**
 
-You don't make the content. You don't write captions. You don't shoot video. We hand you finished assets and post times; you make sure each post goes out on schedule.
+We send you the finished video or image, plus the caption text. You publish it to one of our brand accounts at the time we set. That's it. You don't need to create anything, write captions, edit video, or come up with strategy. We hand you a ready-to-post bundle, you put it up.
 
-**Compensation, in plain English**
+**Compensation**
 
-This is a monthly salary role, not pay-per-post. The expectation:
+This is a monthly retainer, not pay-per-post.
 
-- **Salary: $500/month per account** (paid via Upwork bonuses every 4 weeks)
-- **Quantity expectation: 5 posts/day, 6 days/week**, total ~130 posts/month per account. You pick which day is your rest day; we just need consistency.
-- **Onboarding fee: one-time $30 per account**, paid in 2 milestones (see below). This is separate from the monthly salary.
+- **$500/month per account** (paid through Upwork every 4 weeks)
+- Typical posting volume: roughly 5 posts per day, 6 days per week, so ~130 posts/month per account. You pick which day of the week is your day off.
+- If things go well, we may give you 2 or 3 accounts to handle. Most assistants comfortably run 1 to 3.
 
-If we hand you 3 accounts to operate, that's $1,500/month + $90 in one-time setup. If we hand you 5 accounts, $2,500/month + $150 in setup. Most contractors run 1 to 3 accounts comfortably; 5 is the realistic upper limit.
+**What we are looking for**
 
-**Per-account onboarding milestones ($30, paid once per account)**
-1. **Member invite accepted via Business Suite + TikTok Business Center** (60%): You accept our Meta Business Suite Member invite using your personal Facebook, and our TikTok Business Center Member invite using your personal TikTok. You confirm in our shared channel that both accounts now appear in your Business Suite / Business Center dashboards.
-2. **First test post published via Business Suite** (40%): One test post published to each platform from Business Suite / Business Center using your Member access, link confirmed in our shared channel.
+- Located in North America or Europe
+- Comfortable with Instagram and TikTok as a regular user
+- Dependable: posts go up close to the time we set
+- Friendly to communicate with on Slack, WhatsApp, or Telegram
+- English good enough to copy-paste captions accurately
 
-**What you will do (per account, monthly)**
-- Accept Member invites in Meta Business Suite and TikTok Business Center
-- Publish 5 posts per day, 6 days per week (~130 posts/month) at the schedule we set, using the media and captions we provide
-- Confirm in our shared Slack / WhatsApp / Telegram that each post went out, with a link
+**What you don't need**
 
-**Hard NO list (auto-reject if violated)**
-- Do NOT request, store, or share the brand-account passwords. You operate everything via your Member access in Business Suite / Business Center, signed in as yourself.
-- Do NOT use your own ID, SSN, or banking information for any verification step. If a platform asks, stop and tell us; we handle it.
-- Do NOT respond to DMs, comments, or @-mentions on brand accounts unless explicitly assigned in writing
-- Do NOT purchase paid plans, ads, boosts, or promoted posts on any platform without explicit written approval
-- Do NOT write captions, design content, or shoot video; we hand you finished assets
-
-**Hard requirements**
-- Located in North America (US, Canada) or Europe (any country)
-- Has used Meta Business Suite before as a team Member (mention which brand in your application)
-- Has used TikTok Business Center before as a team Member (mention which brand in your application)
-- Reliable. Posts must go out within 30 minutes of the scheduled time. Two missed windows in the 14 day trial = contract ends.
-- Available daily during US Pacific business + evening hours (most of our scheduled posts run 9am to 9pm Pacific, which is 12pm to 12am Eastern, 5pm to 5am UK / Western Europe, 6pm to 6am Central Europe, 7pm to 7am Eastern Europe). Europe-based applicants: confirm you're OK with evening posting hours your local time.
-- English good enough to read and copy-paste captions correctly
+- You don't need to be a content creator. We make all the content.
+- You don't need to write copy. We write the captions.
+- You don't need video editing skills.
+- You don't need a large following of your own.
 
 **Trial**
-- First 14 days is a paid trial at the rates above (prorated against the $500/month per account)
-- If we keep you, ongoing role at the same rates, with optional bumps for extra responsibilities (DM triage, reply ladders, scheduling tools)
 
-**To apply**, answer in your cover letter:
+The first couple of weeks is a short paid trial at the rate above. If we both like working together, we continue on the same terms.
 
-1. Your country and city of residence, and your time zone.
-2. Have you posted to a brand IG via Meta Business Suite as a team Member before? (yes / no, brief detail, which brand)
-3. Same question for TikTok Business Center.
-4. What posting cadence have you handled? (e.g., 3 brands x 2 posts/day for 6 months)
-5. Are the proposed terms ($500/month per account, 5 posts x 6 days = ~130 posts/month) fair for your situation? Yes/no, and if no, your counter.
-6. **Sample task (must answer in your own words, not pasted from a guide):** Walk me through the exact step-by-step sequence you would take to (a) accept a Meta Business Suite Member invite using your personal Facebook, (b) confirm the brand IG now shows up in your Business Suite dashboard, and (c) publish a scheduled post to that brand IG via Business Suite without ever signing into the brand account directly. I'm looking for the actual menus and toggles you'd tap, not a generic summary.
+---
 
-Generic AI-written cover letters will be ignored. The sample task in question 6 is the real filter; vague or paraphrased answers tell us you have not done this before.
+**To apply**, just answer in your cover letter:
+
+1. Your country and city, and your time zone.
+2. Have you helped post content to someone else's brand Instagram or TikTok before? (Quick yes/no with a sentence of context. First-time is okay too.)
+3. Roughly how many posts per week have you handled in the past, if any?
+4. Are the proposed terms ($500/month per account, ~5 posts/day, 6 days/week) workable for you?
+5. Anything we should know about your availability over the next 1 to 2 months?
+
+We read every application. Short and specific is better than long and polished. Looking forward to hearing from you.
 
 ---
 
 ## Screening questions (Upwork built-in)
 1. What country and city do you live in?
-2. Have you used Meta Business Suite as a team Member (NOT logged in as the brand owner)?
-3. Have you used TikTok Business Center as a team Member?
-4. What is the largest brand IG you have posted on (follower count)?
+2. Have you helped post content to a brand's Instagram or TikTok before? (Yes / No, brief context)
+3. Roughly how many posts per week could you comfortably handle for us?
 
 ## Hire decision criteria (internal, do NOT include in JD)
-- Stated country is in NA or Europe; sample task answer references real menus / toggles
-- Has prior team-Member experience (NOT just "I have my own IG")
-- Asking for credentials beyond Member-level access = auto reject
-- Asking to do strategy / captions / content = wrong role, pass
-- Counter-offer in Q5 above $700/month per account = pass; below $400/month = caution (likely PH/LATAM lying about location)
+- Stated country is in NA or Europe and Upwork-displayed location matches
+- Cover letter is human-written and reads natural (not a generic templated AI letter)
+- Comfortable with the cadence in Q3
+- Counter-offer above $700/month per account = pass; below $350/month = caution (likely misrepresented location)
+- For shortlisted candidates, the Member invite + Business Suite walkthrough happens privately during onboarding, not in the public JD
