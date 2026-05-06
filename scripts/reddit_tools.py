@@ -525,6 +525,52 @@ def cmd_fetch(args):
     print(json.dumps({"thread": thread, "comments": comments}, indent=2))
 
 
+def cmd_repoll(args):
+    """Re-fetch current score/comments for a list of thread URLs.
+
+    Used by ripen_reddit_plan.py to compute T1 - T0 deltas after a 5-min
+    sleep, then gate posts by composite delta score.
+
+    Reads JSON on stdin: {"urls": ["https://old.reddit.com/r/.../comments/.../...", ...]}
+    Writes JSON to stdout: {"results": {"<url>": {"ok": true, "score": N, "comments": M} | {"ok": false, "error": "..."}}}
+
+    Failures (network, rate limit, deleted thread) are returned per-url with
+    ok=false so the caller can fail-closed and drop those candidates.
+    """
+    import re as _re
+    raw = sys.stdin.read().strip()
+    if not raw:
+        print(json.dumps({"results": {}}))
+        return
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(json.dumps({"error": f"bad_json: {e}"}))
+        sys.exit(1)
+    urls = payload.get("urls") or []
+    results = {}
+    for url in urls:
+        try:
+            base = url.rstrip("/")
+            if not base.endswith(".json"):
+                base = base + ".json"
+            data = _do_request(base + "?limit=1&sort=top")
+            if not isinstance(data, list) or len(data) < 1:
+                results[url] = {"ok": False, "error": "unexpected_response"}
+                continue
+            td = data[0]["data"]["children"][0]["data"]
+            results[url] = {
+                "ok": True,
+                "score": int(td.get("score") or 0),
+                "comments": int(td.get("num_comments") or 0),
+            }
+        except RateLimitedError as e:
+            results[url] = {"ok": False, "error": f"rate_limited:{int(e.reset_seconds)}"}
+        except Exception as e:
+            results[url] = {"ok": False, "error": f"{type(e).__name__}:{str(e)[:80]}"}
+    print(json.dumps({"results": results}))
+
+
 def cmd_already_posted(args):
     """Check if we already posted in a thread."""
     dbmod.load_env()
@@ -591,6 +637,9 @@ def main():
     p_fetch = sub.add_parser("fetch", help="Fetch thread + comments")
     p_fetch.add_argument("url", help="Thread URL")
 
+    # repoll (T1 fetch for ripen)
+    sub.add_parser("repoll", help="Re-fetch score/comments for a list of thread URLs (JSON on stdin)")
+
     # already-posted
     p_ap = sub.add_parser("already-posted", help="Check if already posted in thread")
     p_ap.add_argument("url", help="Thread URL")
@@ -614,6 +663,8 @@ def main():
             cmd_search(args)
         elif args.command == "fetch":
             cmd_fetch(args)
+        elif args.command == "repoll":
+            cmd_repoll(args)
         elif args.command == "already-posted":
             cmd_already_posted(args)
         elif args.command == "log-post":
