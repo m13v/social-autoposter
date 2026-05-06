@@ -21,6 +21,12 @@ from db import load_env, get_conn
 load_env()
 db = get_conn()
 
+# Platforms that use HTTP-lane (install_id) attribution. Must mirror
+# install_lane_monitor.py::HTTP_LANE_PLATFORMS. Adding a platform here
+# silences the "unexpected install_id rows on SQL-lane platform" WARN
+# and instead enforces an attribution-coverage check.
+HTTP_LANE_PLATFORMS = {"github", "reddit"}
+
 severity = "OK"
 
 
@@ -90,7 +96,7 @@ platforms_html += (
 for r in platform_rows:
     plat, total, attrib, replied, skipped, proc, pend = r
     note = ""
-    if plat == "github":
+    if plat in HTTP_LANE_PLATFORMS:
         if total == 0:
             note = "no traffic in last 24h"
         else:
