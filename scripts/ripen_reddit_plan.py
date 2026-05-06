@@ -68,8 +68,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--in", dest="in_path", required=True, help="Input plan JSON path")
     p.add_argument("--out", required=True, help="Output filtered plan JSON path")
-    p.add_argument("--floor", type=float, default=5.0,
-                   help="Composite delta must be STRICTLY greater than this (default: 5.0)")
+    p.add_argument("--floor", type=float, default=1.0,
+                   help="Composite delta must be STRICTLY greater than this (default: 1.0)")
     p.add_argument("--w-comments", type=float, default=4.0,
                    help="Comment weight in composite formula (default: 4.0)")
     p.add_argument("--sleep", type=int, default=300,
