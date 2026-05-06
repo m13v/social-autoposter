@@ -252,7 +252,19 @@ fi
 if [ "$RUN_STEP4" -eq 1 ]; then
 log "Step 4: LinkedIn stats (Python CDP-attach to linkedin-agent)"
 
-LINKEDIN_POSTS=$(psql "$DATABASE_URL" -t -A -c "
+# PATH hardening: launchd / nohup / cron environments don't inherit the
+# interactive shell PATH, so `psql`, `gtimeout`, and `python3` may not
+# resolve. Pin to absolute Homebrew + system paths. /usr/bin/python3 is
+# the only python on this Mac with playwright installed in user-site
+# (see CLAUDE.md "Programmatic Gmail Access" + engage-dm-replies.sh:1314
+# for the same convention). 2026-05-05 cutover bug: bare `python3` in
+# nohup shells resolved to /opt/homebrew/bin/python3 which has psycopg2
+# but NOT playwright, causing ModuleNotFoundError on every Step 4 fire.
+PSQL_BIN="/opt/homebrew/bin/psql"
+GTIMEOUT_BIN="/opt/homebrew/bin/gtimeout"
+PY_BIN="/usr/bin/python3"
+
+LINKEDIN_POSTS=$("$PSQL_BIN" "$DATABASE_URL" -t -A -c "
     SELECT COUNT(*) FROM posts
     WHERE platform='linkedin' AND status='active' AND our_url IS NOT NULL
       AND our_url LIKE '%linkedin.com/feed/update/%'
@@ -270,11 +282,12 @@ if [ "$LINKEDIN_POSTS" -gt 0 ]; then
     # sweep (ppid==1 filter) already handles the truly-dead case, and our
     # Python script CDP-attaches via DevToolsActivePort so it discovers the
     # real port without needing the cmdline value. If MCP is genuinely cold,
-    # the script returns mcp_not_running and Step 4 logs as failed for that
-    # run — acceptable since the post pipeline (every 15min) primes Chrome
-    # in steady state.
+    # the script falls back to launch_persistent_context on the SAME
+    # ~/.claude/browser-profiles/linkedin profile the MCP uses (verified
+    # against linkedin_browser.PROFILE_DIR), so cookies + fingerprint match
+    # the post pipeline regardless of which lifecycle mode is active.
 
-    SOCIAL_AUTOPOSTER_LINKEDIN_STATS=1 gtimeout 1800 python3 \
+    SOCIAL_AUTOPOSTER_LINKEDIN_STATS=1 "$GTIMEOUT_BIN" 1800 "$PY_BIN" \
         "$REPO_DIR/scripts/scrape_linkedin_stats_browser.py" \
         --limit 30 --summary "$LINKEDIN_SUMMARY_FILE" $QUIET \
         >> "$LOGFILE" 2>&1
