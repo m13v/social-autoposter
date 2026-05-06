@@ -853,6 +853,27 @@ def _post_iteration(plan, reddit_username):
         if applied_campaign_ids:
             print(f"[post_reddit] applied campaigns {applied_campaign_ids} (suffix appended)")
 
+        # URL-wrap the final text (URLs in suffix included). Mints into
+        # post_links with NULL post_id; we backfill after log_post returns
+        # below. On wrap failure, post unwrapped — losing attribution is
+        # better than failing a post that already passed planning.
+        minted_session = None
+        try:
+            from dm_short_links import wrap_text_for_post
+            wrap_res = wrap_text_for_post(text=text, platform="reddit",
+                                            project_name=project_name)
+            if wrap_res.get("ok"):
+                text = wrap_res["text"]
+                minted_session = wrap_res.get("minted_session")
+                if wrap_res.get("codes"):
+                    print(f"[post_reddit] wrapped {len(wrap_res['codes'])} URL(s): "
+                          f"{wrap_res['codes']}")
+            else:
+                print(f"[post_reddit] WARNING: URL wrap failed "
+                      f"({wrap_res.get('error')}); posting unwrapped")
+        except Exception as e:
+            print(f"[post_reddit] WARNING: URL wrap raised ({e}); posting unwrapped")
+
         print(f"[post_reddit] Posting {i + 1}/{len(decisions)}: {thread_title[:50]}...")
         result = post_via_cdp(thread_url, reply_to_url, text)
 
@@ -870,6 +891,17 @@ def _post_iteration(plan, reddit_username):
                      engagement_style=engagement_style,
                      search_topic=search_topic)
             bump_campaigns("posts", new_post_id, applied_campaign_ids)
+            # Backfill post_links.post_id for the codes minted at wrap time
+            # so /api/short-links/<code> resolver knows which post each
+            # click attributes to. Idempotent; no-op when minted_session is
+            # None (post had no URLs).
+            if minted_session and new_post_id:
+                try:
+                    from dm_short_links import backfill_post_id
+                    backfill_post_id(minted_session=minted_session,
+                                     post_id=new_post_id)
+                except Exception as e:
+                    print(f"[post_reddit] WARNING: backfill_post_id failed ({e})")
             posted += 1
             print(f"[post_reddit] POSTED: {permalink}")
         else:
