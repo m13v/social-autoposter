@@ -42,7 +42,7 @@ EDITABLE=$(psql "$DATABASE_URL" -t -A -c "
           AND posted_at < NOW() - INTERVAL '6 hours'
           AND link_edited_at IS NULL
           AND our_url IS NOT NULL
-          AND upvotes > 2
+          AND upvotes > 1
         ORDER BY upvotes DESC NULLS LAST
     ) q;" 2>/dev/null || echo "")
 
