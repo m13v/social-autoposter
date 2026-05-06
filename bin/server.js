@@ -4149,6 +4149,96 @@ async function handleApi(req, res) {
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
+  // GET /api/search-queries/stats - per-query intelligence across Twitter +
+  // LinkedIn (the two platforms that log discovery queries to *_search_attempts).
+  // Joins each query back to its candidates table to count posts that came from
+  // it and average our resulting engagement (comments*3 + upvotes, same as
+  // top_performers.py). Reddit and GitHub aren't represented because their
+  // pickers don't track discovery queries today.
+  if (p === '/api/search-queries/stats' && req.method === 'GET') {
+    const url = new URL(req.url, 'http://localhost');
+    const days = Math.max(1, Math.min(90, parseInt(url.searchParams.get('days') || '7', 10) || 7));
+    const windowHours = days * 24;
+    const rawPlatform = (url.searchParams.get('platform') || '').trim().toLowerCase();
+    const platform = (rawPlatform === '' || rawPlatform === 'all') ? '' :
+                     (rawPlatform === 'x' ? 'twitter' : rawPlatform);
+    if (platform && platform !== 'twitter' && platform !== 'linkedin') {
+      // Reddit/GitHub/etc have no search_attempts tables — return empty rather than error.
+      return json(res, { days, rows: [], platform_supported: false });
+    }
+    const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get('limit') || '50', 10) || 50));
+    const dudsOnly = url.searchParams.get('duds_only') === '1';
+    // Project clause is applied to COALESCE(a.project_name, '(none)') so it
+    // matches the way we display the row. Same auth model as /api/dm/stats:
+    // projectClause returns ok:false when the user has no allowed projects.
+    const sqPc = auth.projectClause(req.user, "COALESCE(a.project_name, '(none)')", url.searchParams.get('project'));
+    if (!sqPc.ok) return json(res, { days, rows: [], platform_supported: true });
+    const whereParts = [];
+    if (platform) whereParts.push("a.platform = '" + platform + "'");
+    if (sqPc.clause) whereParts.push(sqPc.clause.replace(/^\s*AND\s+/, ''));
+    const whereSql = whereParts.length ? ('WHERE ' + whereParts.join(' AND ') + ' ') : '';
+    const havingSql = dudsOnly ? "HAVING COALESCE(SUM(a.candidates_found), 0) = 0 " : '';
+    const candPlatformFilter = platform ? ("WHERE cand.platform = '" + platform + "' ") : '';
+    const q =
+      "WITH attempts AS ( " +
+        "SELECT 'twitter'  AS platform, query, project_name, " +
+               "tweets_found AS candidates_found, NULL::float8 AS serp_quality_score, ran_at " +
+        "FROM twitter_search_attempts " +
+        "WHERE ran_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
+          "AND query IS NOT NULL AND length(trim(query)) > 0 " +
+        "UNION ALL " +
+        "SELECT 'linkedin', query, project_name, candidates_found, serp_quality_score, ran_at " +
+        "FROM linkedin_search_attempts " +
+        "WHERE ran_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
+          "AND query IS NOT NULL AND length(trim(query)) > 0 " +
+      "), " +
+      "cand AS ( " +
+        "SELECT 'twitter'  AS platform, c.search_topic AS query, " +
+               "COALESCE(c.matched_project, '(none)') AS project_name, c.post_id " +
+        "FROM twitter_candidates c " +
+        "WHERE c.discovered_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
+          "AND c.search_topic IS NOT NULL " +
+        "UNION ALL " +
+        "SELECT 'linkedin', c.search_query, COALESCE(c.matched_project, '(none)'), c.post_id " +
+        "FROM linkedin_candidates c " +
+        "WHERE c.discovered_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
+          "AND c.search_query IS NOT NULL " +
+      "), " +
+      "posts_per_query AS ( " +
+        "SELECT cand.platform, cand.query, cand.project_name, " +
+               "COUNT(*) FILTER (WHERE cand.post_id IS NOT NULL)::int AS posts_made, " +
+               "AVG(COALESCE(p.upvotes, 0) + COALESCE(p.comments_count, 0) * 3) " +
+                 "FILTER (WHERE cand.post_id IS NOT NULL) AS avg_engagement " +
+        "FROM cand " +
+        "LEFT JOIN posts p ON p.id = cand.post_id " +
+        candPlatformFilter +
+        "GROUP BY cand.platform, cand.query, cand.project_name " +
+      ") " +
+      "SELECT a.platform, a.query, " +
+             "COALESCE(a.project_name, '(none)') AS project_name, " +
+             "COUNT(*)::int AS attempts, " +
+             "COALESCE(SUM(a.candidates_found), 0)::int AS candidates_found, " +
+             "COUNT(*) FILTER (WHERE COALESCE(a.candidates_found, 0) = 0)::int AS dud_attempts, " +
+             "AVG(a.serp_quality_score)::float8 AS serp_quality_avg, " +
+             "MAX(a.ran_at) AS last_run, " +
+             "COALESCE(MAX(ppq.posts_made), 0)::int AS posts_made, " +
+             "MAX(ppq.avg_engagement)::float8 AS avg_engagement " +
+      "FROM attempts a " +
+      "LEFT JOIN posts_per_query ppq " +
+        "ON ppq.platform = a.platform " +
+       "AND ppq.query    = a.query " +
+       "AND ppq.project_name = COALESCE(a.project_name, '(none)') " +
+      whereSql +
+      "GROUP BY a.platform, a.query, a.project_name " +
+      havingSql +
+      "ORDER BY posts_made DESC, attempts DESC " +
+      "LIMIT " + limit;
+    return (async () => {
+      const rows = await pq(q);
+      return json(res, { days, rows: rows || [], platform_supported: true });
+    })().catch(e => json(res, { error: e.message }, 500));
+  }
+
   // GET /api/project/status - per-project weight + target share + posts-by-platform
   // in the last N hours, with actual share and deficit (matches pick_project.py logic).
   // Cheap Postgres-only query so it's safe to expose without caching.
