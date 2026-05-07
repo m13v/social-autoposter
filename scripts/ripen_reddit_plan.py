@@ -197,6 +197,12 @@ def main():
                    help="Composite delta must be GREATER THAN OR EQUAL to this "
                         "(default: 1.0). composite = Δup + 4*Δcomments; +1 upvote in 5min "
                         "is enough signal that the thread is still alive.")
+    p.add_argument("--top-k", type=int, default=0,
+                   help="After applying the floor, sort survivors by composite "
+                        "DESC and keep only the top K. 0 = unlimited (default). "
+                        "Mirrors twitter_post_plan.py's `LIMIT 15` SQL cap so a "
+                        "wide discover doesn't flood the draft phase. Typical: "
+                        "1 for per-iteration cycles, 5+ for a single-batch cycle.")
     p.add_argument("--w-comments", type=float, default=4.0,
                    help="Comment weight in composite formula (default: 4.0)")
     p.add_argument("--sleep", type=int, default=300,
@@ -231,33 +237,30 @@ def main():
         return 0
 
     # ---- T0 capture ---------------------------------------------------------
-    # Salvaged plans (replayed from reddit_candidates by Phase 0) prefer the
-    # PERSISTED T0 captured at first sighting over a fresh live fetch. This
-    # makes salvage delta CUMULATIVE since discovery, mirroring twitter:
-    # Phase 0 there leaves likes_t0 untouched and Phase 2a re-uses it. A
-    # thread that gained +1 upvote per hour over 2 hours then computes
-    # composite=2 against the original T0 — passes — even though every
-    # 5-min snapshot would read flat.
-    #
-    # Live fetch still fires for any salvaged URL whose T0 is missing
-    # (discover→crash before ripen, or stale row from before the queue
-    # migration), and remains the only path for newly-discovered plans.
+    # Always prefer PERSISTED T0 from reddit_candidates (captured at discover
+    # time from the search response, no extra HTTP), falling back to a fresh
+    # live fetch for URLs that don't have one yet. This unifies the salvage
+    # and fresh-discover paths and mirrors twitter's behavior:
+    #   - Fresh discoveries: T0 was just captured seconds ago at INSERT time,
+    #     so cumulative delta over the upcoming 5-min sleep ≈ a fresh window.
+    #   - Salvaged rows:    T0 is the FIRST-SIGHTING value (could be hours
+    #     old), so delta is cumulative since discovery — catches slow-trickle
+    #     threads a fresh 5-min window would miss.
+    # Live fetch fallback only fires for URLs the orchestrator never INSERTed
+    # (e.g. legacy tmpfiles from before the candidates migration). Pure
+    # safety net.
     is_salvaged = bool(plan.get("salvaged"))
-    if is_salvaged:
-        persisted = _db_load_persisted_t0(urls)
-        missing = [u for u in urls if u not in persisted]
-        print(f"[ripen] salvage T0: {len(persisted)} persisted from prior "
-              f"ripen, {len(missing)} need live fetch", file=sys.stderr)
-        if missing:
-            live = repoll(missing)
-            for u, r in live.items():
-                if r.get("ok"):
-                    persisted[u] = r
-        t0_ok = persisted
-    else:
-        print(f"[ripen] T0: fetching {len(urls)} thread(s)...", file=sys.stderr)
-        t0 = repoll(urls)
-        t0_ok = {u: r for u, r in t0.items() if r.get("ok")}
+    persisted = _db_load_persisted_t0(urls)
+    missing = [u for u in urls if u not in persisted]
+    print(f"[ripen] T0: {len(persisted)} from reddit_candidates, "
+          f"{len(missing)} need live fetch (salvaged={'yes' if is_salvaged else 'no'})",
+          file=sys.stderr)
+    if missing:
+        live = repoll(missing)
+        for u, r in live.items():
+            if r.get("ok"):
+                persisted[u] = r
+    t0_ok = persisted
     if not t0_ok:
         print(f"[ripen] WARN: 0 of {len(urls)} T0 fetches succeeded; "
               "passthrough (likely rate limit)", file=sys.stderr)
@@ -334,6 +337,30 @@ def main():
                                      composite, bump_attempt=True)
             print(f"[ripen] DROP composite={composite:.1f} (Δup={d_up}, Δcomm={d_co}) "
                   f"{url}", file=sys.stderr)
+
+    # ---- Top-K cap: rank survivors by composite delta and keep the best ----
+    # Wide-discover cycles (post 2026-05-06 refactor) can produce dozens of
+    # survivors. Sort DESC by composite and trim to args.top_k so the draft
+    # phase doesn't pay LLM cost for the long tail. 0 = unlimited (legacy
+    # behavior preserved). Mirrors twitter_post_plan.py's `LIMIT 15` SQL cap.
+    if survivors and args.top_k > 0 and len(survivors) > args.top_k:
+        survivors.sort(
+            key=lambda d: (d.get("ripen") or {}).get("composite", 0.0),
+            reverse=True,
+        )
+        excess = survivors[args.top_k:]
+        survivors = survivors[:args.top_k]
+        for ex in excess:
+            rip = ex.get("ripen") or {}
+            drops.append({
+                "url": ex.get("thread_url") or ex.get("target_thread_url"),
+                "reason": f"top_k_cap: composite={rip.get('composite', 0):.1f} "
+                          f"below cutoff (kept top {args.top_k})",
+                "delta_up": rip.get("delta_up"),
+                "delta_comments": rip.get("delta_comments"),
+            })
+        print(f"[ripen] top-K cap: kept {len(survivors)}/{len(survivors) + len(excess)} "
+              f"by composite DESC", file=sys.stderr)
 
     # ---- HTML lock pre-flight for delta-gate survivors ----------------------
     # cmd_repoll checks the JSON locked flag, but Reddit's AutoMod sometimes
