@@ -57,8 +57,9 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import db as dbmod
+import http_api
 import linkedin_url as li_url
+from db import load_env
 
 URN_ID_RE = re.compile(r"\b(\d{16,19})\b")
 
@@ -103,20 +104,11 @@ def mark_self_reply(args):
         }))
         sys.exit(1)
 
-    dbmod.load_env()
-    conn = dbmod.get_conn()
-    cur = conn.execute(
-        "UPDATE posts SET link_edited_at=NOW(), link_edit_content=%s "
-        "WHERE id=%s RETURNING id",
-        [f"{args.self_reply_content} {args.self_reply_url}".strip(), args.post_id],
-    )
-    row = cur.fetchone()
-    if not row:
-        conn.close()
-        print(json.dumps({"error": "POST_NOT_FOUND", "post_id": args.post_id}))
-        sys.exit(1)
-    conn.commit()
-    conn.close()
+    load_env()
+    http_api.api_patch(f"/api/v1/posts/{args.post_id}", {
+        "self_reply_url": args.self_reply_url,
+        "self_reply_content": args.self_reply_content,
+    })
     print(json.dumps({"marked": True, "post_id": args.post_id}))
 
 
@@ -145,60 +137,42 @@ def log_rejected(args):
         summary_parts.append(f"NETWORK: {args.network_response}")
     summary = "\n".join(summary_parts) if summary_parts else "rejected_by_platform"
 
-    dbmod.load_env()
-    conn = dbmod.get_conn()
-
-    cur = conn.execute(
-        "SELECT id, status FROM posts "
-        "WHERE platform = %s AND thread_url = %s LIMIT 1",
-        [args.platform, args.thread_url],
-    )
-    existing = cur.fetchone()
-    if existing:
-        conn.close()
-        print(json.dumps({
-            "error": "DUPLICATE_THREAD",
-            "message": "Already have a row for this thread",
-            "existing_post_id": existing[0],
-            "existing_status": existing[1],
-        }))
-        return
-
+    load_env()
     claude_session_id = os.environ.get("CLAUDE_SESSION_ID") or None
 
-    # Same URN harvesting for rejected attempts so a soft-blocked thread
-    # is locked out of future runs even if the activity URN was never
-    # exposed (the rejection response sometimes carries it in the body).
     urn_ids = []
     if args.platform == "linkedin":
         urn_ids = parse_urn_ids(args.urns, args.thread_url, args.network_response)
 
-    cur = conn.execute(
-        """INSERT INTO posts (
-            platform, thread_url, thread_author, thread_author_handle,
-            thread_title, thread_content, our_url, our_content, our_account,
-            source_summary, project_name, status, posted_at,
-            feedback_report_used, engagement_style, is_recommendation,
-            language, claude_session_id, urns
-        ) VALUES (
-            %s, %s, %s, %s,
-            %s, '', '', %s, %s,
-            %s, %s, 'rejected_by_platform', NOW(),
-            FALSE, %s, FALSE,
-            %s, %s, %s
-        ) RETURNING id""",
-        [
-            args.platform, args.thread_url, args.thread_author, args.thread_author,
-            args.thread_title, args.our_content, account,
-            summary, args.project, args.engagement_style,
-            args.language, claude_session_id,
-            urn_ids if urn_ids else None,
-        ],
-    )
-    row = cur.fetchone()
-    post_id = row[0] if row else None
-    conn.commit()
-    conn.close()
+    body = {
+        "platform": args.platform,
+        "thread_url": args.thread_url,
+        "our_content": args.our_content,
+        "project": args.project,
+        "status": "rejected_by_platform",
+        "thread_author": args.thread_author or "",
+        "thread_title": args.thread_title or "",
+        "our_account": account,
+        "source_summary": summary,
+    }
+    if args.engagement_style:
+        body["engagement_style"] = args.engagement_style
+    if args.language:
+        body["language"] = args.language
+    if claude_session_id:
+        body["claude_session_id"] = claude_session_id
+    if urn_ids:
+        body["urns"] = urn_ids
+
+    resp = http_api.api_post("/api/v1/posts", body, ok_on_conflict=True)
+    if resp and resp.get("error") in ("duplicate_thread", "conflict"):
+        print(json.dumps({
+            "error": "DUPLICATE_THREAD",
+            "message": "Already have a row for this thread",
+            "existing_post_id": resp.get("existing_post_id"),
+        }))
+        return
+    post_id = (resp or {}).get("post", {}).get("id")
     print(json.dumps({"rejected": True, "post_id": post_id, "urns": urn_ids}))
 
 
@@ -302,55 +276,41 @@ def main():
         # collision check missed and we double-posted.
         urn_ids = parse_urn_ids(args.urns, args.thread_url, args.our_url)
 
-    dbmod.load_env()
-    conn = dbmod.get_conn()
+    load_env()
+    claude_session_id = os.environ.get("CLAUDE_SESSION_ID") or None
 
-    # Dedup: refuse if we already posted in this thread on this platform
-    cur = conn.execute(
-        "SELECT id, our_content FROM posts "
-        "WHERE platform = %s AND thread_url = %s LIMIT 1",
-        [args.platform, args.thread_url],
-    )
-    existing = cur.fetchone()
-    if existing:
-        conn.close()
+    body = {
+        "platform": args.platform,
+        "thread_url": args.thread_url,
+        "our_url": args.our_url,
+        "our_content": args.our_content,
+        "project": args.project,
+        "thread_author": args.thread_author or "",
+        "thread_title": args.thread_title or "",
+        "our_account": account,
+        "is_recommendation": bool(args.is_recommendation),
+    }
+    if args.engagement_style:
+        body["engagement_style"] = args.engagement_style
+    if args.language:
+        body["language"] = args.language
+    if claude_session_id:
+        body["claude_session_id"] = claude_session_id
+    if urn_ids:
+        body["urns"] = urn_ids
+    if args.link_source:
+        body["link_source"] = args.link_source
+
+    resp = http_api.api_post("/api/v1/posts", body, ok_on_conflict=True)
+    if resp and resp.get("error") in ("duplicate_thread", "conflict"):
         print(json.dumps({
             "error": "DUPLICATE_THREAD",
             "message": "Already posted in this thread",
-            "existing_post_id": existing[0],
-            "content_preview": existing[1],
+            "existing_post_id": resp.get("existing_post_id"),
+            "content_preview": resp.get("content_preview"),
         }))
         return
-
-    claude_session_id = os.environ.get("CLAUDE_SESSION_ID") or None
-
-    cur = conn.execute(
-        """INSERT INTO posts (
-            platform, thread_url, thread_author, thread_author_handle,
-            thread_title, thread_content, our_url, our_content, our_account,
-            source_summary, project_name, status, posted_at,
-            feedback_report_used, engagement_style, is_recommendation,
-            language, claude_session_id, urns, link_source
-        ) VALUES (
-            %s, %s, %s, %s,
-            %s, '', %s, %s, %s,
-            '', %s, 'active', NOW(),
-            TRUE, %s, %s,
-            %s, %s, %s, %s
-        ) RETURNING id""",
-        [
-            args.platform, args.thread_url, args.thread_author, args.thread_author,
-            args.thread_title, args.our_url, args.our_content, account,
-            args.project, args.engagement_style, bool(args.is_recommendation),
-            args.language, claude_session_id,
-            urn_ids if urn_ids else None,
-            args.link_source,
-        ],
-    )
-    row = cur.fetchone()
-    post_id = row[0] if row else None
-    conn.commit()
-    conn.close()
+    post_id = (resp or {}).get("post", {}).get("id")
     print(json.dumps({"logged": True, "post_id": post_id, "urns": urn_ids}))
 
 
