@@ -475,9 +475,9 @@ def main():
         if not ok:
             failed += 1
             consecutive_failures += 1
-            # Mark as error so the loop advances to the next pending reply
-            conn.execute("UPDATE replies SET status='error' WHERE id=%s", [reply["id"]])
-            conn.commit()
+            # Mark as skipped so the loop advances to the next pending reply
+            subprocess.run(["python3", REPLY_DB, "skipped", str(reply["id"]), "claude_error"],
+                           capture_output=True)
             print(f"[engage_github] #{reply['id']} CLAUDE FAILED ({reply_elapsed:.0f}s): {output[:200]}")
         else:
             consecutive_failures = 0
@@ -512,16 +512,10 @@ def main():
                             cmd_args.append(style)
                         subprocess.run(cmd_args)
                         if project:
-                            db_url = os.environ.get("DATABASE_URL", "")
-                            if db_url:
-                                subprocess.run(
-                                    ["psql", db_url, "-c",
-                                     "UPDATE replies SET project_name=%s WHERE id=%s" % (
-                                         "'" + str(project).replace("'", "''") + "'",
-                                         int(reply["id"]),
-                                     )],
-                                    capture_output=True,
-                                )
+                            subprocess.run(
+                                ["python3", REPLY_DB, "set_project", str(reply["id"]), project],
+                                capture_output=True,
+                            )
                         succeeded += 1
                         print(f"[engage_github] #{reply['id']} POSTED ({reply_elapsed:.0f}s) "
                               f"[${usage['cost_usd']:.4f}] -> {url_or_err or '(no url)'}")
