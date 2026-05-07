@@ -17,7 +17,7 @@ import os
 import subprocess
 import sys
 
-import psycopg2
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def load_env():
@@ -74,28 +74,11 @@ def main():
         sys.exit(3)
 
     load_env()
-    db = os.environ.get("DATABASE_URL")
-    if not db:
-        print("ERROR: DATABASE_URL not set", file=sys.stderr)
-        sys.exit(4)
-
-    session_id = args.session_id
-
-    conn = psycopg2.connect(db)
-    with conn, conn.cursor() as cur:
-        if session_id:
-            cur.execute(
-                "UPDATE dms SET status='sent', our_dm_content=%s, sent_at=NOW(), "
-                "claude_session_id=%s::uuid WHERE id=%s",
-                (args.message, session_id, args.dm_id),
-            )
-        else:
-            cur.execute(
-                "UPDATE dms SET status='sent', our_dm_content=%s, sent_at=NOW() "
-                "WHERE id=%s",
-                (args.message, args.dm_id),
-            )
-    conn.close()
+    import http_api
+    patch_body: dict = {"status": "sent", "our_dm_content": args.message}
+    if args.session_id:
+        patch_body["claude_session_id"] = args.session_id
+    http_api.api_patch(f"/api/v1/dms/{args.dm_id}", patch_body)
 
     subprocess.run(
         [
