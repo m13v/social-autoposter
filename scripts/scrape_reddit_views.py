@@ -30,6 +30,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db as dbmod
+import http_api
 
 
 def extract_ids(url):
@@ -136,27 +137,18 @@ def update_views(db, scraped_data, quiet=False):
             score_val = score_by_post.get(post_id)
             cc_val = cc_by_post.get(post_id)
 
-        sets = []
-        params = []
-        if views is not None:
-            sets.append("views=%s")
-            params.append(views)
-        if score_val is not None:
-            sets.append("upvotes=%s")
-            params.append(score_val)
-        if cc_val is not None:
-            sets.append("comments_count=%s")
-            params.append(cc_val)
-
-        if sets:
-            sets.append("engagement_updated_at=NOW()")
-            params.append(db_id)
-            db.execute(
-                f"UPDATE posts SET {', '.join(sets)} WHERE id=%s",
-                params,
-            )
+        has_update = views is not None or score_val is not None or cc_val is not None
+        if has_update:
+            patch_body = {"stamp_engagement_now": True}
             if views is not None:
-                dbmod.snapshot_post_views(db, db_id, views)
+                patch_body["views"] = views
+            if score_val is not None:
+                patch_body["upvotes"] = score_val
+            if cc_val is not None:
+                patch_body["comments_count"] = cc_val
+            http_api.api_patch(f"/api/v1/posts/{db_id}", patch_body)
+            if views is not None:
+                http_api.api_post(f"/api/v1/posts/{db_id}/views", {"views": views})
             matched += 1
             if comment_id and score_val is not None:
                 matched_comment_score += 1
@@ -164,8 +156,6 @@ def update_views(db, scraped_data, quiet=False):
                 matched_thread_stats += 1
         else:
             unmatched += 1
-
-    db.commit()
     return {
         "matched": matched,
         "matched_comment_score": matched_comment_score,
