@@ -10093,12 +10093,14 @@ function initTopFilters() {
     saveDashboardWindow(_topWindow);
     if (_topSubtab === 'pages') loadTopPages(true);
     else if (_topSubtab === 'dms') { _topDmOffset = 0; loadTopDms(true); }
+    else if (_topSubtab === 'links') loadTopLinks(true);
     else loadTopPosts(true);
   });
   wireTopPillRow('top-platform-pills', (v) => {
     _topPlatform = v || 'all';
     saSave('sa.top.platform.v1', _topPlatform);
     if (_topSubtab === 'dms') { _topDmOffset = 0; loadTopDms(true); }
+    else if (_topSubtab === 'links') loadTopLinks(true);
     else loadTopPosts(true);
   });
   wireTopPillRow('top-project-pills', (v) => {
@@ -10106,6 +10108,7 @@ function initTopFilters() {
     saSave('sa.top.project.v1', _topProject);
     if (_topSubtab === 'pages') renderTopPagesFromCache();
     else if (_topSubtab === 'dms') { if (_topDmsPayload) renderTopDms(_topDmsPayload); }
+    else if (_topSubtab === 'links') loadTopLinks(true);
     else loadTopPosts(true); // refetch so the SQL LIMIT applies AFTER project filter
   });
   wireTopPillRow('top-campaign-pills', (v) => {
