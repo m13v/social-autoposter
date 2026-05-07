@@ -264,9 +264,18 @@ for i in $(seq 1 "$ITERATIONS"); do
 done
 
 ELAPSED=$(( $(date +%s) - RUN_START ))
-log "=== Run summary: posted=$TOTAL_POSTED failed=$TOTAL_FAILED skipped=$TOTAL_SKIPPED projects=[$EXCLUDE] elapsed=${ELAPSED}s ==="
+log "=== Run summary: posted=$TOTAL_POSTED failed=$TOTAL_FAILED skipped=$TOTAL_SKIPPED salvaged=$TOTAL_SALVAGED candidates=$TOTAL_CANDIDATES projects=[$EXCLUDE] elapsed=${ELAPSED}s ==="
 
 LOG_ARGS=(--script "post_reddit" --posted "$TOTAL_POSTED" --skipped "$TOTAL_SKIPPED" --failed "$TOTAL_FAILED" --cost 0 --elapsed "$ELAPSED")
+# Queue counters surface in the dashboard Result column:
+#   --salvaged   how many iterations replayed a row from a prior cycle
+#                (parsed by RUN_LINE_RE and rendered as a "salvaged: N" pill,
+#                same key as Twitter's run-twitter-cycle.sh)
+#   --candidates total reddit_candidates rows the cycle TOUCHED across discover
+#                + salvage iterations. Lets an operator see "discover hit 4
+#                candidates, queue replayed 2" at a glance.
+[ "${TOTAL_SALVAGED:-0}" -gt 0 ] && LOG_ARGS+=(--salvaged "$TOTAL_SALVAGED")
+[ "${TOTAL_CANDIDATES:-0}" -gt 0 ] && LOG_ARGS+=(--candidates "$TOTAL_CANDIDATES")
 [ -n "$FAILURE_REASONS" ] && LOG_ARGS+=(--failure-reasons "$FAILURE_REASONS")
 python3 "$REPO_DIR/scripts/log_run.py" "${LOG_ARGS[@]}" || true
 
