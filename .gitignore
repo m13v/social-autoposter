@@ -86,3 +86,6 @@ scripts/config.json.before-*.json
 # Lock files and stray scratch markdown
 scripts/*.lock
 scripts/instagram_creators.md
+
+# Archived root cleanup (2026-05-06): quarantined media/snapshots/scratch
+/_archive_*/
