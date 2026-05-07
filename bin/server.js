@@ -1218,6 +1218,11 @@ async function enrichPostCommentsRedditRuns(runs) {
   const planFailedRe = /Plan phase: Claude failed/;
   const planRateRe = /Plan phase: rate-limited/;
   const iterationRe = /^\[\d{2}:\d{2}:\d{2}\] --- Iteration \d+\//;
+  // New 4-phase pipeline markers (discover/ripen/draft/post split).
+  const discoverFoundRe = /\[post_reddit\] Discover found (\d+) candidate/;
+  const discoverFailedRe = /Discover phase: Claude failed/;
+  const draftStartRe = /Drafting comments for (\d+) survivor/;
+  const draftFailedRe = /Draft phase: Claude failed/;
   // Ripen phase summary marker (one per iteration that reaches ripen). Emitted
   // by scripts/ripen_reddit_plan.py. Carries the per-iteration delta-gate
   // stats so the dashboard can show ripen_input/survivors/drops + the best
@@ -1266,6 +1271,7 @@ async function enrichPostCommentsRedditRuns(runs) {
     try { body = fs.readFileSync(path.join(LOG_DIR, chosen), 'utf8'); } catch { body = ''; }
     let iterations = 0, searches = 0, fetched = 0, raw = 0, passed = 0, drafted = 0;
     let postedCount = 0, failedCount = 0, planFailed = 0;
+    let discoverFound = 0, discoverFailed = 0, draftFailed = 0;
     // Ripen accumulators. Sum across iterations within a single run so the
     // pill reflects the whole run, not just the last iteration.
     let ripenInput = 0, ripenSurvivors = 0, ripenDrops = 0;
@@ -1313,11 +1319,14 @@ async function enrichPostCommentsRedditRuns(runs) {
         else if (/Not logged in/i.test(cf[1])) lastPlanReason = 'claude_logged_out';
         else lastPlanReason = 'claude_other';
       }
-      if (planFailedRe.test(ln)) {
+      if (planFailedRe.test(ln) || discoverFailedRe.test(ln)) {
         planFailed++;
         bumpFailure(lastPlanReason || 'claude_other');
         lastPlanReason = null;
       }
+      const df = ln.match(discoverFoundRe);
+      if (df) discoverFound += parseInt(df[1], 10);
+      if (draftFailedRe.test(ln)) draftFailed++;
       const cd = ln.match(cdpFailedRe);
       if (cd) bumpFailure(cdpReasonMap[cd[1]] || ('cdp_' + cd[1]));
       const rs = ln.match(ripenSummaryRe);
