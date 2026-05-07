@@ -34,6 +34,88 @@ import time
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS_DIR = os.path.join(REPO_DIR, "scripts")
 
+sys.path.insert(0, SCRIPTS_DIR)
+
+
+def _db_update_ripen_metrics(thread_url, t0_score, t0_comments,
+                             t1_score, t1_comments, composite, bump_attempt):
+    """Persist T0/T1/delta to reddit_candidates and (optionally) bump attempt_count.
+
+    Called for every decision after T1 measurement. `bump_attempt` is True
+    when the candidate failed the floor or was HTML-locked, so the row counts
+    against the MAX_ATTEMPTS budget; it's False for survivors so a successful
+    later post phase doesn't need to dispute the count.
+
+    Locked-thread survivors (HTML lock check returned 'locked' / 'archived')
+    pass `bump_attempt=True` AND have status flipped to 'failed' so Phase 0
+    salvage skips them — see _db_mark_html_locked below.
+
+    Best-effort. If reddit_candidates doesn't have a row for this URL (e.g.
+    a stale tmpfile from before the migration), the UPDATE is a no-op.
+    """
+    if not thread_url:
+        return
+    try:
+        import db as dbmod
+        dbmod.load_env()
+        conn = dbmod.get_conn()
+        if bump_attempt:
+            conn.execute(
+                "UPDATE reddit_candidates SET "
+                "  score_t0 = %s, comments_t0 = %s, "
+                "  score_t1 = %s, comments_t1 = %s, "
+                "  delta_score = %s, t1_checked_at = NOW(), "
+                "  attempt_count = attempt_count + 1, "
+                "  last_attempt_at = NOW(), "
+                "  last_failure_reason = 'ripen_floor_miss', "
+                "  status = CASE WHEN attempt_count + 1 >= 3 THEN 'failed' ELSE status END "
+                "WHERE thread_url = %s",
+                [t0_score, t0_comments, t1_score, t1_comments, composite, thread_url],
+            )
+        else:
+            conn.execute(
+                "UPDATE reddit_candidates SET "
+                "  score_t0 = %s, comments_t0 = %s, "
+                "  score_t1 = %s, comments_t1 = %s, "
+                "  delta_score = %s, t1_checked_at = NOW() "
+                "WHERE thread_url = %s",
+                [t0_score, t0_comments, t1_score, t1_comments, composite, thread_url],
+            )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[ripen] WARN: db update failed for {thread_url}: {e}",
+              file=sys.stderr)
+
+
+def _db_mark_html_locked(thread_url, state):
+    """Mark a candidate as permanently failed because the HTML lock check
+    detected a state ('locked' or 'archived') the JSON API hadn't reported.
+
+    Permanent failure: Phase 0 salvage filters by status='pending', so
+    'failed' rows never come back. last_failure_reason captures the state
+    so the dashboard can render reddit_locked / reddit_archived breakdowns.
+    """
+    if not thread_url:
+        return
+    try:
+        import db as dbmod
+        dbmod.load_env()
+        conn = dbmod.get_conn()
+        conn.execute(
+            "UPDATE reddit_candidates SET "
+            "  status = 'failed', "
+            "  last_failure_reason = %s, "
+            "  last_attempt_at = NOW() "
+            "WHERE thread_url = %s",
+            [f"html_{state}", thread_url],
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[ripen] WARN: html_locked db update failed for {thread_url}: {e}",
+              file=sys.stderr)
+
 
 def repoll(urls, timeout=120):
     """Call reddit_tools.py repoll with the given URLs. Returns the parsed
@@ -160,6 +242,11 @@ def main():
         }
         if composite > args.floor:
             survivors.append(d)
+            # Persist T0/T1/delta for the survivor; do NOT bump attempt_count
+            # — passing the floor isn't an "attempt" against the post budget.
+            _db_update_ripen_metrics(url, t0r["score"], t0r["comments"],
+                                     t1r["score"], t1r["comments"],
+                                     composite, bump_attempt=False)
             print(f"[ripen] PASS composite={composite:.1f} (Δup={d_up}, Δcomm={d_co}) "
                   f"{url}", file=sys.stderr)
         else:
@@ -169,6 +256,12 @@ def main():
                 "delta_up": d_up,
                 "delta_comments": d_co,
             })
+            # Floor miss counts against the candidate's attempt budget so a
+            # chronically-flat thread eventually drops out of the salvage
+            # rotation. Phase 0's MAX_ATTEMPTS=3 ceiling auto-promotes it.
+            _db_update_ripen_metrics(url, t0r["score"], t0r["comments"],
+                                     t1r["score"], t1r["comments"],
+                                     composite, bump_attempt=True)
             print(f"[ripen] DROP composite={composite:.1f} (Δup={d_up}, Δcomm={d_co}) "
                   f"{url}", file=sys.stderr)
 
@@ -196,6 +289,10 @@ def main():
                     print(f"[ripen] HTML-{state}: dropping survivor {url}",
                           file=sys.stderr)
                     drops.append({"url": url, "reason": f"html_{state}"})
+                    # Permanent failure in the queue: Phase 0 salvage skips
+                    # status='failed', and the dashboard renders the reason
+                    # via last_failure_reason. No retry on locked threads.
+                    _db_mark_html_locked(url, state)
                     continue
             except Exception as e:
                 print(f"[ripen] WARN: check-locked failed for {url}: {e}; keeping survivor",
