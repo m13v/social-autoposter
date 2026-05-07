@@ -1,15 +1,17 @@
 #!/bin/bash
 # Social Autoposter - Reddit comment posting via search API + CDP browser
 #
-# Mirrors run-twitter-cycle.sh's release_lock pattern: each of N iterations
-# splits into a "plan" phase (project pick + Claude session that uses
-# reddit_tools.py HTTP search/fetch — no browser) and a "post" phase (CDP
-# posting via reddit_browser.py). The reddit-browser lock is held only around
-# the post phase, freeing it during plan so peers (dm-outreach-reddit,
-# link-edit-reddit, engage-dm-replies-reddit, audit-reddit*) can run their
-# browser steps in those windows instead of waiting on us.
+# 4-phase pipeline per iteration (mirrors Twitter's discover/T1/post split):
+#   1. Discover  - Claude searches and selects threads only (no drafting, no browser)
+#   2. Ripen     - T0 snapshot, 5-min sleep, T1 re-poll, composite delta gate
+#   3. Draft     - Claude writes comments ONLY for ripen-survivors (no browser)
+#   4. Post      - CDP browser posts survivors with drafted text
 #
-# Called by launchd every 30 minutes.
+# Browser lock is held ONLY around post phase. All other phases run unlocked
+# so peers (dm-outreach, link-edit, engage-dm-replies, audit) can use the
+# browser during our HTTP/Claude work.
+#
+# Called by launchd every 15 minutes via run-reddit-search-launchd.sh.
 
 set -euo pipefail
 
@@ -34,97 +36,126 @@ TOTAL_FAILED=0
 TOTAL_SKIPPED=0
 RUN_START=$(date +%s)
 
-# Lock is acquired only around the post phase of each iteration. Plan runs
-# unlocked so peers can use the browser during our HTTP/Claude work.
 for i in $(seq 1 "$ITERATIONS"); do
     log "--- Iteration $i/$ITERATIONS ---"
-    PLAN_FILE=$(mktemp -t post_reddit_plan.XXXXXX.json)
+    DISCOVER_FILE=$(mktemp -t post_reddit_discover.XXXXXX.json)
 
-    # Plan phase: no browser, no lock.
+    # Phase 1: Discover — search and select threads. No browser, no drafting.
     set +e
     python3 "$REPO_DIR/scripts/post_reddit.py" \
-        --phase plan \
-        --out "$PLAN_FILE" \
+        --phase discover \
+        --out "$DISCOVER_FILE" \
         --exclude "$EXCLUDE" \
         --limit "$LIMIT" 2>&1 | tee -a "$LOG_FILE"
-    PLAN_RC=${PIPESTATUS[0]}
+    DISCOVER_RC=${PIPESTATUS[0]}
     set -e
 
-    case "$PLAN_RC" in
+    case "$DISCOVER_RC" in
         0)
-            : # plan succeeded with decisions
+            : # discover succeeded with candidates
             ;;
         3)
-            log "Plan phase: rate-limited; ending run."
-            rm -f "$PLAN_FILE"
+            log "Discover phase: rate-limited; ending run."
+            rm -f "$DISCOVER_FILE"
             break
             ;;
         4)
-            log "Plan phase: no eligible project left; ending run."
-            rm -f "$PLAN_FILE"
+            log "Discover phase: no eligible project left; ending run."
+            rm -f "$DISCOVER_FILE"
             break
             ;;
         5)
-            log "Plan phase: Claude failed; counting as failed and continuing."
+            log "Discover phase: Claude failed; counting as failed and continuing."
             TOTAL_FAILED=$((TOTAL_FAILED + 1))
-            rm -f "$PLAN_FILE"
+            rm -f "$DISCOVER_FILE"
             continue
             ;;
         6)
-            log "Plan phase: no decisions drafted; counting as skipped and continuing."
+            log "Discover phase: no candidates found; counting as skipped and continuing."
             TOTAL_SKIPPED=$((TOTAL_SKIPPED + 1))
-            PICKED=$(python3 -c "import json,sys;print(json.load(open('$PLAN_FILE')).get('project_name',''))" 2>/dev/null || echo "")
+            PICKED=$(python3 -c "import json,sys;print(json.load(open('$DISCOVER_FILE')).get('project_name',''))" 2>/dev/null || echo "")
             [ -n "$PICKED" ] && EXCLUDE="${EXCLUDE:+$EXCLUDE,}$PICKED"
-            rm -f "$PLAN_FILE"
+            rm -f "$DISCOVER_FILE"
             continue
             ;;
         *)
-            log "Plan phase: unexpected exit code $PLAN_RC; aborting iteration."
+            log "Discover phase: unexpected exit code $DISCOVER_RC; counting as failed."
             TOTAL_FAILED=$((TOTAL_FAILED + 1))
-            rm -f "$PLAN_FILE"
+            rm -f "$DISCOVER_FILE"
             continue
             ;;
     esac
 
-    PICKED=$(python3 -c "import json,sys;print(json.load(open('$PLAN_FILE')).get('project_name',''))" 2>/dev/null || echo "")
+    PICKED=$(python3 -c "import json,sys;print(json.load(open('$DISCOVER_FILE')).get('project_name',''))" 2>/dev/null || echo "")
     [ -n "$PICKED" ] && EXCLUDE="${EXCLUDE:+$EXCLUDE,}$PICKED"
 
-    # Ripen phase: 5-min delta gate (Reddit equivalent of Twitter Phase 2a).
-    # Captures T0 score/comments for each target thread, sleeps 300s, re-polls
-    # for T1, computes composite = Δup + 4*Δcomments, drops decisions where
-    # composite <= 5. Runs WITHOUT the browser lock so peers stay unblocked
-    # during the wait. If ripen filters everything out, post phase is skipped.
-    RIPEN_FILE=$(mktemp -t post_reddit_plan_ripened.XXXXXX.json)
-    log "Ripening plan (5-min delta gate, floor>5, w_comments=4)..."
+    # Phase 2: Ripen — T0 snapshot, 5-min sleep, T1 re-poll, composite delta gate.
+    # composite = Δup + 4*Δcomments, floor > 1. Runs without browser lock.
+    RIPEN_FILE=$(mktemp -t post_reddit_ripened.XXXXXX.json)
+    log "Ripening candidates (5-min delta gate, floor>1, w_comments=4)..."
     set +e
     python3 "$REPO_DIR/scripts/ripen_reddit_plan.py" \
-        --in "$PLAN_FILE" \
+        --in "$DISCOVER_FILE" \
         --out "$RIPEN_FILE" 2>&1 | tee -a "$LOG_FILE"
     RIPEN_RC=${PIPESTATUS[0]}
     set -e
 
     if [ "$RIPEN_RC" != "0" ]; then
-        log "Ripen phase: exit code $RIPEN_RC; falling back to unfiltered plan."
-        cp "$PLAN_FILE" "$RIPEN_FILE"
+        log "Ripen phase: exit code $RIPEN_RC; falling back to unfiltered discover output."
+        cp "$DISCOVER_FILE" "$RIPEN_FILE"
     fi
 
     SURVIVORS=$(python3 -c "import json;print(len(json.load(open('$RIPEN_FILE')).get('decisions',[])))" 2>/dev/null || echo 0)
     if [ "$SURVIVORS" = "0" ]; then
-        log "Ripen phase: 0 survivors; skipping post phase for this iteration."
+        log "Ripen phase: 0 survivors; skipping draft and post for this iteration."
         TOTAL_SKIPPED=$((TOTAL_SKIPPED + 1))
-        rm -f "$PLAN_FILE" "$RIPEN_FILE"
+        rm -f "$DISCOVER_FILE" "$RIPEN_FILE"
         continue
     fi
-    log "Ripen phase: $SURVIVORS decision(s) passed delta gate."
+    log "Ripen phase: $SURVIVORS candidate(s) passed delta gate."
 
-    # Post phase: needs browser. Acquire (blocks if a peer is mid-run), do the
-    # post, release immediately so the next iteration's plan runs unlocked.
+    # Phase 3: Draft — Claude writes comments for survivors only. No browser.
+    DRAFT_FILE=$(mktemp -t post_reddit_draft.XXXXXX.json)
+    log "Drafting comments for $SURVIVORS survivor(s)..."
+    set +e
+    python3 "$REPO_DIR/scripts/post_reddit.py" \
+        --phase draft \
+        --in "$RIPEN_FILE" \
+        --out "$DRAFT_FILE" 2>&1 | tee -a "$LOG_FILE"
+    DRAFT_RC=${PIPESTATUS[0]}
+    set -e
+
+    case "$DRAFT_RC" in
+        0)
+            : # draft succeeded
+            ;;
+        5)
+            log "Draft phase: Claude failed; counting as failed and continuing."
+            TOTAL_FAILED=$((TOTAL_FAILED + 1))
+            rm -f "$DISCOVER_FILE" "$RIPEN_FILE" "$DRAFT_FILE"
+            continue
+            ;;
+        6)
+            log "Draft phase: no drafted decisions; counting as skipped."
+            TOTAL_SKIPPED=$((TOTAL_SKIPPED + 1))
+            rm -f "$DISCOVER_FILE" "$RIPEN_FILE" "$DRAFT_FILE"
+            continue
+            ;;
+        *)
+            log "Draft phase: unexpected exit code $DRAFT_RC; counting as failed."
+            TOTAL_FAILED=$((TOTAL_FAILED + 1))
+            rm -f "$DISCOVER_FILE" "$RIPEN_FILE" "$DRAFT_FILE"
+            continue
+            ;;
+    esac
+
+    # Phase 4: Post — needs browser. Acquire lock, post, release immediately.
     log "Acquiring reddit-browser lock for post phase..."
     acquire_lock "reddit-browser" 3600
     ensure_browser_healthy "reddit"
 
     set +e
-    POST_OUT=$(python3 "$REPO_DIR/scripts/post_reddit.py" --phase post --in "$RIPEN_FILE" 2>&1 | tee -a "$LOG_FILE")
+    POST_OUT=$(python3 "$REPO_DIR/scripts/post_reddit.py" --phase post --in "$DRAFT_FILE" 2>&1 | tee -a "$LOG_FILE")
     POST_RC=${PIPESTATUS[0]}
     set -e
 
@@ -140,7 +171,7 @@ for i in $(seq 1 "$ITERATIONS"); do
         TOTAL_FAILED=$((TOTAL_FAILED + 1))
     fi
 
-    rm -f "$PLAN_FILE" "$RIPEN_FILE"
+    rm -f "$DISCOVER_FILE" "$RIPEN_FILE" "$DRAFT_FILE"
 done
 
 ELAPSED=$(( $(date +%s) - RUN_START ))
