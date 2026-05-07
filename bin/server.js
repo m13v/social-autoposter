@@ -4144,6 +4144,53 @@ async function handleApi(req, res) {
     })().catch(e => json(res, { error: e.message }, 500));
   }
 
+  // GET /api/top/links - post short links ranked by click count.
+  // Queries post_links joined with posts so the content snippet is available.
+  // Returns links with >= 1 click, ordered by clicks desc. Used by the "Links"
+  // subtab in the Top tab to surface attribution from social posts.
+  if (p === '/api/top/links' && req.method === 'GET') {
+    const url = new URL(req.url, 'http://localhost');
+    const WINDOW_HOURS = { '24h': 24, '7d': 24*7, '14d': 24*14, '30d': 24*30, '90d': 24*90, 'all': null };
+    const rawWindow = String(url.searchParams.get('window') || '7d').toLowerCase();
+    const windowKey = Object.prototype.hasOwnProperty.call(WINDOW_HOURS, rawWindow) ? rawWindow : '7d';
+    const windowHours = WINDOW_HOURS[windowKey];
+    const rawPlatform = String(url.searchParams.get('platform') || '').toLowerCase().trim();
+    const ALLOWED_PLATFORMS = new Set(['reddit', 'twitter', 'x', 'linkedin', 'moltbook', 'github']);
+    const platformFilter = ALLOWED_PLATFORMS.has(rawPlatform) ? rawPlatform : '';
+    const pc = auth.projectClause(req.user, 'pl.project_name', url.searchParams.get('project'));
+    if (!pc.ok) return json(res, { links: [], window: windowKey, platform: 'all' });
+    const limit = Math.max(100, Math.min(2000, parseInt(url.searchParams.get('limit') || '500', 10) || 500));
+    const whereParts = [];
+    if (windowHours != null) {
+      whereParts.push("pl.minted_at >= NOW() - INTERVAL '" + windowHours + " hours'");
+    }
+    if (platformFilter) {
+      whereParts.push("LOWER(pl.platform) = '" + platformFilter + "'");
+    }
+    if (pc.clause) whereParts.push(pc.clause.replace(/^\s*AND\s+/, ''));
+    const whereSql = whereParts.length ? ('WHERE ' + whereParts.join(' AND ')) : '';
+    const q = "SELECT json_agg(row_to_json(r)) FROM (" +
+      "SELECT pl.code, pl.platform, pl.project_name, pl.target_url, " +
+        "pl.clicks, pl.first_click_at, pl.last_click_at, pl.minted_at, " +
+        "pl.post_id, pl.reply_id, pl.kind, " +
+        "CASE WHEN pl.reply_id IS NOT NULL THEN 'comment' ELSE 'thread' END AS link_kind, " +
+        "LEFT(COALESCE(p.our_content, ''), 200) AS our_content, " +
+        "p.our_url, p.thread_url, p.thread_title, p.posted_at, " +
+        "COALESCE(p.upvotes, 0)::int AS upvotes, " +
+        "COALESCE(p.comments_count, 0)::int AS comments_count " +
+      "FROM post_links pl " +
+      "LEFT JOIN posts p ON p.id = pl.post_id " +
+      whereSql + " " +
+      "ORDER BY pl.clicks DESC NULLS LAST, pl.first_click_at DESC NULLS LAST " +
+      "LIMIT " + limit +
+      ") r";
+    return (async () => {
+      const rows = await pq(q);
+      const links = (rows && rows.length && rows[0].json_agg) ? rows[0].json_agg : [];
+      return json(res, { links, window: windowKey, platform: platformFilter || 'all' });
+    })().catch(e => json(res, { error: e.message }, 500));
+  }
+
   // GET /api/funnel/stats - per-project funnel (posts -> pageviews -> CTAs -> bookings)
   // Shells out to scripts/project_stats_json.py. PostHog API calls make this
   // slow (~15-30s), so we cache for 10 min and dedupe concurrent callers.
@@ -5012,6 +5059,11 @@ const HTML = `<!DOCTYPE html>
   #top-dms-container .style-stats-table td[data-col-key="last_ts"] { white-space: normal; overflow: visible; text-overflow: clip; vertical-align: top; }
   #top-dms-container .style-stats-table td[data-col-key="message_count"] { white-space: normal; overflow: visible; text-overflow: clip; vertical-align: top; }
   #top-dms-container .style-stats-table td[data-col-key="link_sent"] { vertical-align: top; }
+  #top-links-container .style-stats-table { table-layout: fixed; }
+  #top-links-container .style-stats-table th,
+  #top-links-container .style-stats-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 10px 10px; }
+  #top-links-container .style-stats-table td[data-col-key="our_content"] { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; color: var(--text-secondary); font-size: 12px; }
+  #top-links-container .style-stats-table td[data-col-key="target_url"] { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-all; }
   .dm-stat-stack { display: flex; flex-direction: column; gap: 2px; line-height: 1.3; }
   .dm-stat-line { font-size: 12px; white-space: nowrap; }
   .dm-stat-line-muted { color: var(--text-faint); }
@@ -5691,6 +5743,11 @@ const HTML = `<!DOCTYPE html>
         <span class="top-subtab-label">DMs</span>
         <span class="top-subtab-sub">prospect chats</span>
       </span>
+      <span class="top-subtab" data-subtab="links" role="tab" aria-selected="false" title="Short links in your posts ranked by click count \u2014 see which posts drive real traffic">
+        <span class="top-subtab-icon" aria-hidden="true">\ud83d\udd17</span>
+        <span class="top-subtab-label">Links</span>
+        <span class="top-subtab-sub">post clicks</span>
+      </span>
     </div>
     <div class="top-controls">
       <input id="top-search" class="top-search" type="search" placeholder="Search posts\u2026" />
@@ -5789,6 +5846,8 @@ const HTML = `<!DOCTYPE html>
     <div class="style-stats-empty">Loading\u2026 (first call can take 15\u201330s)</div>
   </div>
   <div id="top-pages-unknown-container" class="hidden"></div>
+  <div id="top-links-container" class="hidden">
+  </div>
   <div id="top-dms-container" class="hidden">
     <div class="style-stats-empty">Loading\u2026</div>
   </div>
@@ -9981,6 +10040,7 @@ const TOP_SUBTAB_HELP = {
   comments: 'Top comments your accounts have left under other people’s threads, ranked by reach and reactions.',
   pages: 'Top landing/SEO pages on your sites this period, ranked by pageviews.',
   dms: 'Direct message conversations with prospects, ranked by recent activity.',
+  links: 'Short links embedded in your posts, ranked by clicks. Once traffic flows, PostHog stitches each click to downstream conversions (get started, book a call, sign up).',
 };
 function syncTopSubtabHelp() {
   const el = document.getElementById('top-subtab-help');
@@ -10147,10 +10207,11 @@ function applyTopSubtabState(sub, loadData) {
     s.setAttribute('aria-selected', isActive ? 'true' : 'false');
   });
   syncTopSubtabHelp();
-  const postsC = document.getElementById('top-table-container');
-  const pagesC = document.getElementById('top-pages-container');
+  const postsC  = document.getElementById('top-table-container');
+  const pagesC  = document.getElementById('top-pages-container');
   const pagesUnknownC = document.getElementById('top-pages-unknown-container');
-  const dmsC   = document.getElementById('top-dms-container');
+  const dmsC    = document.getElementById('top-dms-container');
+  const linksC  = document.getElementById('top-links-container');
   const platRowEl = document.getElementById('top-platform-pills');
   const projRowEl = document.getElementById('top-project-pills');
   const campRowEl = document.getElementById('top-campaign-pills');
@@ -10191,10 +10252,28 @@ function applyTopSubtabState(sub, loadData) {
       searchElDm.value = _topDmSearch || '';
     }
     if (loadData) loadTopDms(true);
+  } else if (sub === 'links') {
+    if (postsC) postsC.classList.add('hidden');
+    if (pagesC) pagesC.classList.add('hidden');
+    if (pagesUnknownC) pagesUnknownC.classList.add('hidden');
+    if (dmsC) dmsC.classList.add('hidden');
+    if (linksC) linksC.classList.remove('hidden');
+    if (platRowEl) platRowEl.classList.remove('hidden');
+    if (srcRowEl) srcRowEl.classList.add('hidden');
+    if (campRowEl) campRowEl.classList.add('hidden');
+    setDmRowsHidden(true);
+    if (totalEl) totalEl.textContent = '';
+    const searchElLinks = document.getElementById('top-search');
+    if (searchElLinks) {
+      searchElLinks.placeholder = 'Search links\u2026';
+      searchElLinks.value = '';
+    }
+    if (loadData) loadTopLinks(true);
   } else {
     if (pagesC) pagesC.classList.add('hidden');
     if (pagesUnknownC) pagesUnknownC.classList.add('hidden');
     if (dmsC) dmsC.classList.add('hidden');
+    if (linksC) linksC.classList.add('hidden');
     if (postsC) postsC.classList.remove('hidden');
     if (platRowEl) platRowEl.classList.remove('hidden');
     if (srcRowEl) srcRowEl.classList.add('hidden');
@@ -10349,6 +10428,77 @@ function renderTopPages(payload) {
         columns,
       });
     }
+  }
+}
+
+let _topLinksPayload = null;
+let _topLinksLoading = false;
+let _topLinksLoaded = false;
+let _topLinksTableHandle = null;
+
+function renderTopLinks(payload) {
+  const container = document.getElementById('top-links-container');
+  const totalEl = document.getElementById('top-total');
+  if (!container) return;
+  const links = (payload && payload.links) ? payload.links : [];
+  if (!links.length) {
+    container.innerHTML = '<div class="style-stats-empty">No clicks tracked yet. Short links will appear here once posts with embedded links receive clicks. UTM attribution starts flowing immediately after this deployment.</div>';
+    if (totalEl) totalEl.textContent = '';
+    return;
+  }
+  const fmtDate = (ts) => ts ? new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+  const fmtDt  = (ts) => ts ? new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  const platformFilter = _topPlatform || 'all';
+  const projectFilter  = _topProject  || 'all';
+  let rows = links;
+  if (platformFilter !== 'all') rows = rows.filter(r => (r.platform || '').toLowerCase() === platformFilter || (platformFilter === 'twitter' && (r.platform || '').toLowerCase() === 'x'));
+  if (projectFilter !== 'all')  rows = rows.filter(r => (r.project_name || '') === projectFilter);
+  if (totalEl) totalEl.textContent = rows.length + ' link' + (rows.length === 1 ? '' : 's');
+  const PLAT_ICON = { reddit: '\ud83e\udd16', twitter: '\ud835\udd4f', linkedin: '\ud83d\udcbc', moltbook: '\ud83d\udcda', github: '\ud83d\udc31', x: '\ud835\udd4f' };
+  const columns = [
+    { key: 'first_click_at', label: 'First Click', width: '90px', formatter: (v) => fmtDate(v) || '\u2014' },
+    { key: 'platform', label: 'Platform', width: '80px', formatter: (v) => (PLAT_ICON[v] || '') + ' ' + (v || '') },
+    { key: 'project_name', label: 'Project', width: '100px' },
+    { key: 'link_kind', label: 'Type', width: '70px' },
+    { key: 'clicks', label: 'Clicks', width: '60px', formatter: (v) => (v || 0).toString() },
+    { key: 'our_content', label: 'Post content', formatter: (v, row) => {
+      const snippet = (v || '').slice(0, 120) || (row.thread_title || '').slice(0, 120) || '';
+      const url = row.our_url || row.thread_url || '';
+      if (!url) return snippet;
+      return '<a href="' + encodeURI(url) + '" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">' + escapeHtml(snippet) + '</a>';
+    }, isHtml: true },
+    { key: 'target_url', label: 'Target URL', width: '180px', formatter: (v) => v ? '<a href="' + encodeURI(v) + '" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline;word-break:break-all;">' + escapeHtml(v.replace(/^https?:\/\//, '')) + '</a>' : '\u2014', isHtml: true },
+    { key: 'last_click_at', label: 'Last Click', width: '110px', formatter: (v) => fmtDt(v) || '\u2014' },
+  ];
+  _topLinksTableHandle = mountSortableTable({
+    containerId: 'top-links-container',
+    rows,
+    state: { sortField: 'clicks', sortDir: 'desc', filters: {} },
+    storageKey: 'sa.topLinksTable.v1',
+    columns,
+  });
+}
+
+async function loadTopLinks(force) {
+  if (_topLinksLoading) return;
+  if (_topLinksLoaded && !force) return;
+  _topLinksLoading = true;
+  try {
+    const params = new URLSearchParams({ window: _topWindow, limit: '500' });
+    if (_topPlatform && _topPlatform !== 'all') params.set('platform', _topPlatform);
+    if (_topProject && _topProject !== 'all') params.set('project', _topProject);
+    const container = document.getElementById('top-links-container');
+    if (container && force) container.innerHTML = '<div class="style-stats-empty">Loading\u2026</div>';
+    const res = await fetch('/api/top/links?' + params.toString());
+    const data = await res.json();
+    _topLinksPayload = data;
+    renderTopLinks(data);
+    _topLinksLoaded = true;
+  } catch (e) {
+    const container = document.getElementById('top-links-container');
+    if (container) container.innerHTML = '<div class="style-stats-empty">Failed to load.</div>';
+  } finally {
+    _topLinksLoading = false;
   }
 }
 
