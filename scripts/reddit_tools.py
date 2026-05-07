@@ -559,6 +559,16 @@ def cmd_repoll(args):
                 results[url] = {"ok": False, "error": "unexpected_response"}
                 continue
             td = data[0]["data"]["children"][0]["data"]
+            # Catch JSON-level locks/archives before reporting ok=True.
+            # Note: Reddit's JSON locked flag sometimes misreports for HTML-only
+            # AutoMod locks (see _html_postable_check). Those are caught later
+            # in ripen via the check-locked subcommand for T1 survivors.
+            if td.get("locked"):
+                results[url] = {"ok": False, "error": "thread_locked"}
+                continue
+            if td.get("archived"):
+                results[url] = {"ok": False, "error": "thread_archived"}
+                continue
             results[url] = {
                 "ok": True,
                 "score": int(td.get("score") or 0),
@@ -569,6 +579,19 @@ def cmd_repoll(args):
         except Exception as e:
             results[url] = {"ok": False, "error": f"{type(e).__name__}:{str(e)[:80]}"}
     print(json.dumps({"results": results}))
+
+
+def cmd_check_locked(args):
+    """Lightweight HTML-only lock check for a single thread URL.
+
+    Used by ripen_reddit_plan.py after the delta gate to catch AutoMod
+    HTML-only locks that the JSON API misreports as locked=false (known
+    issue on r/Entrepreneur and others). One unauthenticated GET, ~1s.
+
+    Returns {"url": "...", "state": "ok"|"locked"|"archived"|"error"}
+    """
+    state = _html_postable_check(args.url)
+    print(json.dumps({"url": args.url, "state": state or "error"}))
 
 
 def cmd_already_posted(args):
