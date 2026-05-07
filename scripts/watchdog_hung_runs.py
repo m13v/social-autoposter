@@ -109,7 +109,7 @@ SCRIPT_LABELS = {
     "octolens-linkedin.sh": "octolens-linkedin",
     "octolens-reddit.sh": "octolens-reddit",
     "stats-twitter.sh": "stats_twitter",
-    "stats-linkedin.sh": "stats_linkedin",
+    "stats-linkedin-comments.sh": "stats_linkedin_comments",
     "stats-moltbook.sh": "stats_moltbook",
     "stats-reddit.sh": "stats_reddit",
 }
