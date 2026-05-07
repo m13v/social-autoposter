@@ -1398,6 +1398,9 @@ async function enrichPostCommentsRedditRuns(runs) {
       ripen_best_composite: bestComposite,
       ripen_best_delta_up: bestDeltaUp,
       ripen_best_delta_co: bestDeltaCo,
+      // 4-phase pipeline counters (discover/ripen/draft/post split)
+      discover_found: discoverFound,
+      draft_failed: draftFailed,
     };
   }
 }
@@ -6434,6 +6437,11 @@ function renderResult(run) {
     const passed = r.candidates_passed || 0;
     const dropped = r.candidates_dropped || 0;
     const drafted = r.drafted || 0;
+    const discoverFound = r.discover_found || 0;
+    const draftFailed = r.draft_failed || 0;
+    // In the new 4-phase pipeline, discover_found replaces drafted as the pre-ripen count.
+    const preRipenCount = discoverFound > 0 ? discoverFound : drafted;
+    const preRipenLabel = discoverFound > 0 ? 'discovered' : 'drafted';
     const posted = r.posted || 0;
     const failed = r.failed || 0;
     // Ripen phase (5-min delta gate). Per-run sums across iterations that
@@ -6515,7 +6523,7 @@ function renderResult(run) {
         pill('searches', searches, searches > 0 ? 'var(--text)' : 'var(--muted)') +
         pill('raw', raw, raw > 0 ? 'var(--text)' : 'var(--muted)') +
         pill('passed', passed, passed > 0 ? '#22c55e' : 'var(--muted)') +
-        pill('drafted', drafted, drafted > 0 ? 'var(--text)' : 'var(--muted)') +
+        pill(preRipenLabel, preRipenCount, preRipenCount > 0 ? 'var(--text)' : 'var(--muted)') +
         renderRipenPills() +
         pill('posted', posted, posted > 0 ? '#22c55e' : 'var(--muted)') +
         renderFailedPill() +
