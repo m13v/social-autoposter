@@ -365,6 +365,166 @@ def build_content_angle(project, config):
     return config.get("content_angle", "")
 
 
+def build_discover_prompt(project, config, limit, top_report, recent_comments,
+                          top_topics_report="", dud_queries_report=""):
+    """DISCOVER phase: search and select threads only. No drafting.
+
+    Claude outputs action=candidate JSON objects (thread_url, title, author,
+    search_topic, engagement_style — no text). Drafting is deferred until after
+    ripen filters the list so LLM spend only hits threads that passed the delta gate.
+    """
+    content_angle = build_content_angle(project, config)
+    topics_list = project.get("search_topics") or []
+    project_json = json.dumps({
+        "name": project.get("name"),
+        "description": project.get("description"),
+        "search_topics": topics_list,
+    }, indent=2)
+
+    recent_ctx = ""
+    if recent_comments:
+        snippets = "\n".join(f"  - {c}" for c in recent_comments)
+        recent_ctx = f"\nYour last {len(recent_comments)} comments (don't repeat these threads):\n{snippets}\n"
+
+    top_ctx = ""
+    if top_report:
+        lines = top_report.split("\n")[:20]
+        top_ctx = f"\n## Past performance feedback:\n{chr(10).join(lines)}\n"
+
+    top_topics_ctx = ""
+    if top_topics_report:
+        top_topics_ctx = f"\n## Search-topic feedback (seeds with best engagement):\n{top_topics_report}\n"
+
+    dud_queries_ctx = ""
+    if dud_queries_report and dud_queries_report.strip() not in ("[]", ""):
+        dud_queries_ctx = f"\n## Dead queries (skip these exact phrasings):\n{dud_queries_report}\n"
+
+    return f"""Find {limit} Reddit thread(s) where someone with expertise in {project.get('name', 'general')} could add genuine value. DO NOT write any comment text yet — just identify the best candidate threads.
+
+Topic area: {project_json}
+Content angle: {content_angle}
+{recent_ctx}{top_ctx}{top_topics_ctx}{dud_queries_ctx}
+## Tools (via Bash)
+- Search: python3 {REDDIT_TOOLS} search "QUERY" --limit 15
+- Search by sub: python3 {REDDIT_TOOLS} search "QUERY" --subreddits AI_Agents,SaaS --time month
+- Check dedup: python3 {REDDIT_TOOLS} already-posted "THREAD_URL"
+
+## CRITICAL Bash rules
+- NEVER use run_in_background=true. All commands must run foreground.
+- Run ONE search at a time. Stop after 5 total searches.
+- If rate-limited, use whatever results you already have.
+
+## Thread selection criteria
+Each search result carries delta fields from a persistent snapshot table:
+  - sightings: how many cycles have surfaced this thread
+  - delta_score: upvote change since first_seen_at
+  - delta_comments: comment change since first_seen_at
+  - delta_window_min: minutes since first seen
+Prefer threads with positive and RECENT delta (still moving in the last 30-60 min).
+Skip threads with sightings>=2 and delta_score<=0 over 60+ min (going cold).
+Skip already_posted=true threads.
+
+## Steps
+1. Pick 2 concepts from search_topics: {json.dumps(topics_list)}.
+   Rephrase into natural Reddit search terms (vernacular, pain points).
+2. Pick {limit} best candidate thread(s). Prefer high recent delta. Skip blocked subs.
+3. Output each as a JSON candidate object, then DONE.
+
+## OUTPUT FORMAT (no text field — just thread selection)
+One JSON per line:
+{{"action": "candidate", "thread_url": "https://old.reddit.com/r/sub/comments/abc/title/", "thread_title": "the thread title", "thread_author": "username", "search_topic": "the seed concept you used", "engagement_style": "critic"}}
+
+Output DONE on its own line after all candidates. Do NOT describe what you are doing. Do NOT draft any comment text.
+"""
+
+
+def build_draft_prompt(project, config, candidates, top_report, recent_comments):
+    """DRAFT phase: write comments only for ripen-survivors.
+
+    `candidates` is the list of decisions that passed the delta gate, each
+    annotated with ripen data (delta_up, delta_comments, composite). Claude
+    fetches each thread, reads context, then writes the best comment.
+    """
+    content_angle = build_content_angle(project, config)
+
+    recent_ctx = ""
+    if recent_comments:
+        snippets = "\n".join(f"  - {c}" for c in recent_comments)
+        recent_ctx = f"\nYour last {len(recent_comments)} comments (don't repeat talking points):\n{snippets}\n"
+
+    top_ctx = ""
+    if top_report:
+        lines = top_report.split("\n")[:20]
+        top_ctx = f"\n## Past performance feedback:\n{chr(10).join(lines)}\n"
+
+    candidate_lines = []
+    for c in candidates:
+        rip = c.get("ripen") or {}
+        delta_info = ""
+        if rip.get("composite") is not None:
+            delta_info = (f" [active: Δup={rip.get('delta_up', 0)},"
+                          f" Δcomm={rip.get('delta_comments', 0)},"
+                          f" composite={rip.get('composite', 0):.1f} over"
+                          f" {rip.get('window_sec', 300)}s]")
+        candidate_lines.append(
+            f"  - {c['thread_url']}{delta_info}\n"
+            f"    title: {c.get('thread_title', '')}\n"
+            f"    suggested style: {c.get('engagement_style', '')}"
+        )
+    candidates_block = "\n".join(candidate_lines)
+
+    return f"""Write a comment for each of the {len(candidates)} pre-selected Reddit thread(s) below. These threads were chosen because they showed active engagement in the last few minutes — they're worth posting on now.
+
+Content angle: {content_angle}
+{recent_ctx}{top_ctx}
+## Threads to draft for:
+{candidates_block}
+
+## Tools (via Bash)
+- Fetch thread: python3 {REDDIT_TOOLS} fetch "THREAD_URL"
+- Do NOT run any searches. The threads are already chosen.
+
+## CRITICAL Bash rules
+- NEVER use run_in_background=true. All commands foreground.
+- Fetch each thread once to read OP and top comments for context.
+
+## CRITICAL CONTENT RULES
+- Go BIMODAL on length: 1 punchy sentence (<100 chars) OR 4-5 sentences of real substance. Avoid 2-3 sentence middle-ground.
+- GROUNDING RULE — pick ONE lane per comment:
+  LANE 1 - DISCLOSED STORY: open with a hedge ("hypothetically", "imagine someone running this", "scenario:") then you may invent specifics freely.
+  LANE 2 - NO FABRICATION: first-person only if every specific (numbers, durations, places, tools) appears verbatim in the content_angle above. Otherwise drop the specific and pattern-frame ("the part that breaks down is...", "the typical failure mode is...").
+- NEVER mention product names (fazm, assrt, pieline, cyrano, terminator, mk0r, s4l).
+- NEVER include URLs or links in your comment text.
+- Prefer replying to OP (top-level reply). ONE comment per thread.
+- Statements beat questions. Be authoritative, not inquisitive.
+
+## Content rules
+{get_content_rules("reddit")}
+
+## OUTPUT FORMAT
+After fetching and reading each thread, output one JSON object per line:
+{{"action": "post", "thread_url": "SAME_URL_AS_GIVEN", "reply_to_url": null, "text": "your comment here", "thread_author": "username", "thread_title": "thread title", "engagement_style": "style_name", "search_topic": "the seed concept", "new_style": null}}
+
+Output DONE after all JSONs. Do NOT narrate. Fetch, draft, output JSON, DONE.
+"""
+
+
+def parse_candidates(output):
+    """Extract action=candidate JSON objects from Claude's discover output."""
+    candidates = []
+    seen_urls = set()
+    for match in re.finditer(r'\{[^{}]*?"action"\s*:\s*"candidate"[^{}]*?\}', output):
+        try:
+            c = json.loads(match.group())
+            url = c.get("thread_url", "")
+            if url and url not in seen_urls:
+                candidates.append(c)
+                seen_urls.add(url)
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return candidates
+
+
 def build_prompt(project, config, limit, top_report, recent_comments,
                  top_topics_report="", dud_queries_report=""):
     """Build prompt for Claude to search, evaluate, and draft replies (no posting).
@@ -799,6 +959,141 @@ def _plan_iteration(args, config, reddit_username, already_picked):
             "cost": usage["cost_usd"], "session_id": usage.get("session_id")}
 
 
+def _discover_iteration(args, config, reddit_username, already_picked):
+    """DISCOVER phase: search and select threads. No drafting.
+
+    Returns {project_name, decisions: [candidates], cost, session_id} where
+    each candidate has thread_url, title, author, search_topic, engagement_style
+    but NO text field. Uses `decisions` key so ripen_reddit_plan.py needs no
+    changes (it reads decisions[].thread_url regardless of text presence).
+    """
+    if args.project:
+        project = None
+        for p in config.get("projects", []):
+            if p["name"].lower() == args.project.lower():
+                project = p
+                break
+        if not project:
+            print(f"[post_reddit] ERROR: project '{args.project}' not found")
+            return None
+    else:
+        project = pick_project("reddit", exclude=already_picked)
+        if not project:
+            print(f"[post_reddit] No eligible project left (already picked: {already_picked})")
+            return None
+
+    project_name = project.get("name", "general")
+    print(f"[post_reddit] Project: {project_name}")
+
+    top_report = get_top_performers(project_name)
+    recent_comments = get_recent_comments()
+    top_topics_report = get_top_search_topics(project_name, platform="reddit")
+    dud_queries_report = get_dud_reddit_queries(project_name)
+    prompt = build_discover_prompt(project, config, args.limit, top_report, recent_comments,
+                                   top_topics_report=top_topics_report,
+                                   dud_queries_report=dud_queries_report)
+
+    if args.dry_run:
+        print(f"=== DRY RUN discover (project={project_name}) ===")
+        print(prompt)
+        print("=== END DRY RUN ===")
+        return {"project_name": project_name, "decisions": [], "cost": 0.0, "dry_run": True}
+
+    plan_batch_id = f"reddit-discover-{project_name}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    os.environ["SAPS_REDDIT_PROJECT"] = project_name
+    os.environ["SAPS_REDDIT_BATCH_ID"] = plan_batch_id
+
+    print(f"[post_reddit] Starting discover session (limit={args.limit}, timeout={args.timeout}s)")
+    start = time.time()
+    ok, output, usage = run_claude(prompt, timeout=args.timeout)
+    elapsed = time.time() - start
+    print(f"[post_reddit] Discover finished in {elapsed:.0f}s (${usage['cost_usd']:.4f})")
+
+    if not ok:
+        print(f"[post_reddit] Discover FAILED: {output[:300]}")
+        return {"project_name": project_name, "decisions": [], "cost": usage["cost_usd"],
+                "error": "claude_failed"}
+
+    candidates = parse_candidates(output)
+    print(f"[post_reddit] Discover found {len(candidates)} candidate(s)")
+    if not candidates:
+        print(f"[post_reddit] No candidates in output (last 10 lines):")
+        for line in output.strip().split("\n")[-10:]:
+            print(f"  {line}")
+
+    return {"project_name": project_name, "decisions": candidates,
+            "cost": usage["cost_usd"], "session_id": usage.get("session_id"),
+            "phase": "discover"}
+
+
+def _draft_iteration(plan, config, reddit_username):
+    """DRAFT phase: write comments for ripen-survivors only.
+
+    `plan` is the ripen-filtered discover output. Each decision has thread_url
+    + ripen annotations. Claude fetches each thread and writes the comment.
+    Returns the plan with `text` added to each decision (i.e. ready for _post_iteration).
+    """
+    project_name = plan.get("project_name", "general")
+    candidates = [d for d in (plan.get("decisions") or []) if d.get("thread_url")]
+    if not candidates:
+        return plan
+
+    project = None
+    config_projects = config.get("projects", [])
+    for p in config_projects:
+        if p["name"].lower() == project_name.lower():
+            project = p
+            break
+    if not project:
+        print(f"[post_reddit] WARNING: project '{project_name}' not found in config, drafting with generic context")
+        project = {"name": project_name}
+
+    top_report = get_top_performers(project_name)
+    recent_comments = get_recent_comments()
+    prompt = build_draft_prompt(project, config, candidates, top_report, recent_comments)
+
+    print(f"[post_reddit] Starting draft session for {len(candidates)} thread(s)...")
+    start = time.time()
+    ok, output, usage = run_claude(prompt, timeout=600)
+    elapsed = time.time() - start
+    print(f"[post_reddit] Draft finished in {elapsed:.0f}s (${usage['cost_usd']:.4f})")
+
+    if not ok:
+        print(f"[post_reddit] Draft FAILED: {output[:300]}")
+        plan["draft_error"] = "claude_failed"
+        plan["draft_cost"] = usage["cost_usd"]
+        return plan
+
+    drafted = parse_post_decisions(output)
+    print(f"[post_reddit] Draft produced {len(drafted)} post(s)")
+
+    # Merge text back into the original candidates by thread_url so we
+    # preserve ripen annotations, search_topic, etc. from discover phase.
+    by_url = {d["thread_url"]: d for d in drafted}
+    merged = []
+    for c in candidates:
+        url = c.get("thread_url", "")
+        drafted_d = by_url.get(url)
+        if drafted_d and drafted_d.get("text"):
+            merged_d = dict(c)
+            merged_d["text"] = drafted_d["text"]
+            merged_d["reply_to_url"] = drafted_d.get("reply_to_url")
+            merged_d["thread_author"] = drafted_d.get("thread_author") or c.get("thread_author")
+            merged_d["thread_title"] = drafted_d.get("thread_title") or c.get("thread_title")
+            merged_d["engagement_style"] = drafted_d.get("engagement_style") or c.get("engagement_style")
+            merged_d["action"] = "post"
+            merged.append(merged_d)
+        else:
+            print(f"[post_reddit] WARNING: no draft for {url}, skipping")
+
+    plan = dict(plan)
+    plan["decisions"] = merged
+    plan["draft_cost"] = usage["cost_usd"]
+    plan["draft_session_id"] = usage.get("session_id")
+    plan["phase"] = "draft"
+    return plan
+
+
 def _post_iteration(plan, reddit_username):
     """Execute browser CDP posts for the decisions in plan. Returns (posted, failed)."""
     project_name = plan["project_name"]
@@ -946,8 +1241,10 @@ def main():
                              "Each iteration picks a different project.")
     parser.add_argument("--timeout", type=int, default=3600, help="Timeout for Claude session")
     parser.add_argument("--project", default=None, help="Override project selection (forces iterations=1)")
-    parser.add_argument("--phase", choices=["plan", "post", "all"], default="all",
-                        help="plan: pick project + Claude (no browser), writes JSON to --out. "
+    parser.add_argument("--phase", choices=["discover", "draft", "plan", "post", "all"], default="all",
+                        help="discover: search+select threads only (no drafting), writes JSON to --out. "
+                             "draft: write comments for ripen-survivors from --in, writes JSON to --out. "
+                             "plan: legacy search+draft in one session, writes JSON to --out. "
                              "post: read JSON from --in and post via CDP. all: legacy single-call.")
     parser.add_argument("--out", default=None, help="Plan output JSON path (--phase plan)")
     parser.add_argument("--in", dest="in_path", default=None, help="Plan input JSON path (--phase post)")
@@ -960,6 +1257,49 @@ def main():
 
     config = load_config()
     reddit_username = config.get("accounts", {}).get("reddit", {}).get("username", "Deep_Ad1959")
+
+    if args.phase == "discover":
+        if not args.out:
+            print("[post_reddit] ERROR: --phase discover requires --out PATH", file=sys.stderr)
+            sys.exit(2)
+        if not preflight_rate_limit():
+            print("[post_reddit] rate-limited, discover skipped")
+            sys.exit(3)
+        excluded = [x.strip() for x in args.exclude.split(",") if x.strip()]
+        plan = _discover_iteration(args, config, reddit_username, excluded)
+        if plan is None:
+            sys.exit(4)
+        with open(args.out, "w") as f:
+            json.dump(plan, f)
+        if plan.get("dry_run"):
+            sys.exit(0)
+        if plan.get("error"):
+            sys.exit(5)
+        if not plan.get("decisions"):
+            sys.exit(6)
+        return
+
+    if args.phase == "draft":
+        if not args.in_path or not os.path.exists(args.in_path):
+            print(f"[post_reddit] ERROR: --phase draft requires --in PATH (got {args.in_path!r})",
+                  file=sys.stderr)
+            sys.exit(2)
+        if not args.out:
+            print("[post_reddit] ERROR: --phase draft requires --out PATH", file=sys.stderr)
+            sys.exit(2)
+        with open(args.in_path) as f:
+            plan = json.load(f)
+        if not plan.get("decisions"):
+            print("[post_reddit] draft: no survivors in plan, nothing to draft")
+            sys.exit(6)
+        plan = _draft_iteration(plan, config, reddit_username)
+        with open(args.out, "w") as f:
+            json.dump(plan, f)
+        if plan.get("draft_error"):
+            sys.exit(5)
+        if not plan.get("decisions"):
+            sys.exit(6)
+        return
 
     if args.phase == "plan":
         if not args.out:
