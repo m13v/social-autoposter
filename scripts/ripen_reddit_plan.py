@@ -89,6 +89,48 @@ def _db_update_ripen_metrics(thread_url, t0_score, t0_comments,
               file=sys.stderr)
 
 
+def _db_load_persisted_t0(urls):
+    """Load score_t0 / comments_t0 from reddit_candidates for a list of URLs.
+
+    Used by salvage iterations to pull the FIRST-SIGHTING T0 captured by an
+    earlier cycle's ripen, so the delta computed below is cumulative since
+    discovery (mirrors twitter_candidates' behavior, where Phase 0 salvage
+    leaves likes_t0 untouched and Phase 2a's fetch_twitter_t1.py compares
+    fresh T1 against the original T0). Catches slow-trickle threads that a
+    fresh 5-min window would never see grow.
+
+    Returns dict {url: {"score": s, "comments": c, "ok": True}} for every row
+    where BOTH score_t0 and comments_t0 are non-null. URLs without persisted
+    T0 are absent from the returned dict so the caller falls back to a live
+    fetch (preserves the cumulative semantics for rows that DID ripen before
+    while still working for discover→ripen-crashed→re-discover edge cases).
+    """
+    if not urls:
+        return {}
+    try:
+        import db as dbmod
+        dbmod.load_env()
+        conn = dbmod.get_conn()
+        cur = conn.execute(
+            "SELECT thread_url, score_t0, comments_t0 "
+            "FROM reddit_candidates "
+            "WHERE thread_url = ANY(%s) "
+            "  AND score_t0 IS NOT NULL "
+            "  AND comments_t0 IS NOT NULL",
+            [list(urls)],
+        )
+        rows = cur.fetchall()
+        conn.close()
+        return {
+            r[0]: {"score": int(r[1]), "comments": int(r[2]), "ok": True}
+            for r in rows
+        }
+    except Exception as e:
+        print(f"[ripen] WARN: load_persisted_t0 failed: {e}",
+              file=sys.stderr)
+        return {}
+
+
 def _db_mark_html_locked(thread_url, state):
     """Mark a candidate as permanently failed because the HTML lock check
     detected a state ('locked' or 'archived') the JSON API hadn't reported.
@@ -189,16 +231,41 @@ def main():
         return 0
 
     # ---- T0 capture ---------------------------------------------------------
-    print(f"[ripen] T0: fetching {len(urls)} thread(s)...", file=sys.stderr)
-    t0 = repoll(urls)
-    t0_ok = {u: r for u, r in t0.items() if r.get("ok")}
+    # Salvaged plans (replayed from reddit_candidates by Phase 0) prefer the
+    # PERSISTED T0 captured at first sighting over a fresh live fetch. This
+    # makes salvage delta CUMULATIVE since discovery, mirroring twitter:
+    # Phase 0 there leaves likes_t0 untouched and Phase 2a re-uses it. A
+    # thread that gained +1 upvote per hour over 2 hours then computes
+    # composite=2 against the original T0 — passes — even though every
+    # 5-min snapshot would read flat.
+    #
+    # Live fetch still fires for any salvaged URL whose T0 is missing
+    # (discover→crash before ripen, or stale row from before the queue
+    # migration), and remains the only path for newly-discovered plans.
+    is_salvaged = bool(plan.get("salvaged"))
+    if is_salvaged:
+        persisted = _db_load_persisted_t0(urls)
+        missing = [u for u in urls if u not in persisted]
+        print(f"[ripen] salvage T0: {len(persisted)} persisted from prior "
+              f"ripen, {len(missing)} need live fetch", file=sys.stderr)
+        if missing:
+            live = repoll(missing)
+            for u, r in live.items():
+                if r.get("ok"):
+                    persisted[u] = r
+        t0_ok = persisted
+    else:
+        print(f"[ripen] T0: fetching {len(urls)} thread(s)...", file=sys.stderr)
+        t0 = repoll(urls)
+        t0_ok = {u: r for u, r in t0.items() if r.get("ok")}
     if not t0_ok:
         print(f"[ripen] WARN: 0 of {len(urls)} T0 fetches succeeded; "
               "passthrough (likely rate limit)", file=sys.stderr)
         with open(args.out, "w") as f:
             json.dump(plan, f)
         return 0
-    print(f"[ripen] T0: {len(t0_ok)}/{len(urls)} succeeded", file=sys.stderr)
+    print(f"[ripen] T0: {len(t0_ok)}/{len(urls)} succeeded "
+          f"(salvaged={'yes' if is_salvaged else 'no'})", file=sys.stderr)
 
     # ---- Sleep --------------------------------------------------------------
     if not args.no_sleep:
