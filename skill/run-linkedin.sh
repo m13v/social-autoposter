@@ -693,7 +693,15 @@ $STYLES_BLOCK
    if present). Reply in $PA_LANG.
    NEVER use em dashes.
 
-4. Post the comment via mcp__linkedin-agent (find textbox, click, type, submit).
+3b. Wrap any URLs in your draft before typing. Run:
+     WRAP_RESULT=\$(python3 $REPO_DIR/scripts/dm_short_links.py wrap-post-text \\
+       --text "YOUR_COMMENT_TEXT" --platform linkedin --project '$PA_PROJECT')
+   If wrap_result.ok is true: use wrap_result.text as the final comment text
+   and save wrap_result.minted_session as MINTED_SESSION. Otherwise use the
+   original draft and set MINTED_SESSION to empty.
+
+4. Post the comment via mcp__linkedin-agent (find textbox, click, type, submit)
+   using the (possibly wrapped) text from step 3b.
 
 5. POST-SUBMIT VERIFICATION (mandatory).
    5a. mcp__linkedin-agent__browser_network_requests with:
@@ -728,7 +736,7 @@ $STYLES_BLOCK
    Then STOP with '## Comment soft-blocked, ledgered'.
 
 7. If SUCCESS, log the post and mark candidate posted:
-     python3 $REPO_DIR/scripts/log_post.py \\
+     LOG_RESULT=\$(python3 $REPO_DIR/scripts/log_post.py \\
        --platform linkedin \\
        --thread-url '$PA_URL' \\
        --our-url '$PA_URL' \\
@@ -738,8 +746,13 @@ $STYLES_BLOCK
        --thread-title '$PA_TITLE_HINT' \\
        --engagement-style STYLE_YOU_CHOSE \\
        --language '$PA_LANG' \\
-       --urns 'ALL_POST_URNS'
+       --urns 'ALL_POST_URNS')
+     echo "\$LOG_RESULT"
      python3 -c "import sys; sys.path.insert(0,'$REPO_DIR/scripts'); import db; c=db.get_conn(); c.execute(\"UPDATE linkedin_candidates SET status='posted', posted_at=NOW() WHERE activity_id=%s\", ['$PA_ACTIVITY_ID']); c.commit(); c.close()"
+     If MINTED_SESSION is non-empty: extract post_id from LOG_RESULT and backfill:
+       LOG_POST_ID=\$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('post_id',''))" "\$LOG_RESULT" 2>/dev/null || echo "")
+       [ -n "\$LOG_POST_ID" ] && python3 $REPO_DIR/scripts/dm_short_links.py backfill-post \\
+         --minted-session "\$MINTED_SESSION" --post-id "\$LOG_POST_ID"
 
 CRITICAL: ONE post only. If anything fails, STOP — do NOT pick another candidate.
 CRITICAL: Use ONLY mcp__linkedin-agent__* tools.
