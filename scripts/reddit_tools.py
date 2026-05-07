@@ -663,6 +663,10 @@ def main():
     # repoll (T1 fetch for ripen)
     sub.add_parser("repoll", help="Re-fetch score/comments for a list of thread URLs (JSON on stdin)")
 
+    # check-locked (HTML-based lock check, used by ripen for T1 survivors)
+    p_cl = sub.add_parser("check-locked", help="Check if a thread is locked via old.reddit.com HTML")
+    p_cl.add_argument("url", help="Thread URL")
+
     # already-posted
     p_ap = sub.add_parser("already-posted", help="Check if already posted in thread")
     p_ap.add_argument("url", help="Thread URL")
@@ -688,6 +692,8 @@ def main():
             cmd_fetch(args)
         elif args.command == "repoll":
             cmd_repoll(args)
+        elif args.command == "check-locked":
+            cmd_check_locked(args)
         elif args.command == "already-posted":
             cmd_already_posted(args)
         elif args.command == "log-post":
