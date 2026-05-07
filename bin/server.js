@@ -4131,8 +4131,12 @@ async function handleApi(req, res) {
         "posted_at, engagement_updated_at, our_content, our_url, thread_url, thread_title, " +
         "LEFT(COALESCE(thread_content, ''), 400) AS thread_content, " +
         "our_account, project_name, engagement_style, is_recommendation, " +
-        "c.name AS campaign_name " +
+        "c.name AS campaign_name, " +
+        "COALESCE(pl.total_clicks, 0)::int AS link_clicks, " +
+        "COALESCE(pl.link_count, 0)::int AS link_count, " +
+        "pl.first_code AS link_code " +
       "FROM posts LEFT JOIN campaigns c ON c.id = posts.campaign_id " +
+      "LEFT JOIN (SELECT post_id, SUM(clicks)::int AS total_clicks, COUNT(*)::int AS link_count, MIN(code) AS first_code FROM post_links GROUP BY post_id) pl ON pl.post_id = posts.id " +
       "WHERE " + whereParts.join(' AND ') + " " +
       "ORDER BY upvotes DESC NULLS LAST, comments_count DESC NULLS LAST, views DESC NULLS LAST " +
       "LIMIT " + limit +
@@ -5059,11 +5063,6 @@ const HTML = `<!DOCTYPE html>
   #top-dms-container .style-stats-table td[data-col-key="last_ts"] { white-space: normal; overflow: visible; text-overflow: clip; vertical-align: top; }
   #top-dms-container .style-stats-table td[data-col-key="message_count"] { white-space: normal; overflow: visible; text-overflow: clip; vertical-align: top; }
   #top-dms-container .style-stats-table td[data-col-key="link_sent"] { vertical-align: top; }
-  #top-links-container .style-stats-table { table-layout: fixed; }
-  #top-links-container .style-stats-table th,
-  #top-links-container .style-stats-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 10px 10px; }
-  #top-links-container .style-stats-table td[data-col-key="our_content"] { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; color: var(--text-secondary); font-size: 12px; }
-  #top-links-container .style-stats-table td[data-col-key="target_url"] { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-all; }
   .dm-stat-stack { display: flex; flex-direction: column; gap: 2px; line-height: 1.3; }
   .dm-stat-line { font-size: 12px; white-space: nowrap; }
   .dm-stat-line-muted { color: var(--text-faint); }
@@ -5743,11 +5742,6 @@ const HTML = `<!DOCTYPE html>
         <span class="top-subtab-label">DMs</span>
         <span class="top-subtab-sub">prospect chats</span>
       </span>
-      <span class="top-subtab" data-subtab="links" role="tab" aria-selected="false" title="Short links in your posts ranked by click count \u2014 see which posts drive real traffic">
-        <span class="top-subtab-icon" aria-hidden="true">\ud83d\udd17</span>
-        <span class="top-subtab-label">Links</span>
-        <span class="top-subtab-sub">post clicks</span>
-      </span>
     </div>
     <div class="top-controls">
       <input id="top-search" class="top-search" type="search" placeholder="Search posts\u2026" />
@@ -5846,8 +5840,6 @@ const HTML = `<!DOCTYPE html>
     <div class="style-stats-empty">Loading\u2026 (first call can take 15\u201330s)</div>
   </div>
   <div id="top-pages-unknown-container" class="hidden"></div>
-  <div id="top-links-container" class="hidden">
-  </div>
   <div id="top-dms-container" class="hidden">
     <div class="style-stats-empty">Loading\u2026</div>
   </div>
@@ -9928,6 +9920,9 @@ function renderTopPosts(payload) {
     our_account:   p.our_account || '',
     project_name:  p.project_name || '',
     is_recommendation: !!p.is_recommendation,
+    link_clicks:   Number(p.link_clicks) || 0,
+    link_count:    Number(p.link_count)  || 0,
+    link_code:     p.link_code || '',
   }));
   _topTableHandle = mountSortableTable({
     containerId: 'top-table-container',
@@ -9982,6 +9977,23 @@ function renderTopPosts(payload) {
         filterMode: 'dropdown',
         filterOptions: numericThresholdOptions(normalized, 'score'),
         filterPredicate: filterPredicateGte },
+      { key: 'link_clicks',    label: 'Links',    type: 'numeric', align: 'left',  widthPct: 10,
+        formatter: (_v, r) => {
+          const hasLink = r.link_count > 0;
+          const clicks  = r.link_clicks;
+          const linkLine  = '<span class="top-stats-bit"><span class="top-stats-k">link</span>'
+            + (hasLink ? '\u2714' : '\u2014') + '</span>';
+          const clickLine = hasLink
+            ? '<span class="top-stats-bit"><span class="top-stats-k">clicks</span>' + (clicks || 0) + '</span>'
+            : '';
+          const ctaLine = hasLink
+            ? '<span class="top-stats-bit" title="CTA conversion data flows once UTM-tagged visits land in PostHog"><span class="top-stats-k">CTA</span>\u2014</span>'
+            : '';
+          return '<div class="top-stats-cell">' + linkLine + clickLine + ctaLine + '</div>';
+        },
+        filterMode: 'dropdown',
+        filterOptions: [{ label: 'Any', value: '' }, { label: 'Has link', value: '>=1' }],
+        filterPredicate: filterPredicateGte },
       { key: 'posted_ts',      label: 'Posted',   type: 'numeric', align: 'right', widthPct: 6,
         formatter: (_v, r) => {
           const abs = r.posted_at ? new Date(r.posted_at).toLocaleString() : '';
@@ -9990,7 +10002,7 @@ function renderTopPosts(payload) {
         filterMode: 'dropdown',
         filterOptions: ageThresholdOptions(),
         filterPredicate: filterPredicateAge },
-      { key: 'our_content',    label: 'Content',  type: 'text',    align: 'left',  widthPct: 58,
+      { key: 'our_content',    label: 'Content',  type: 'text',    align: 'left',  widthPct: 48,
         formatter: renderTopContentCell,
         filterMode: 'none' },
     ],
@@ -10040,7 +10052,6 @@ const TOP_SUBTAB_HELP = {
   comments: 'Top comments your accounts have left under other people’s threads, ranked by reach and reactions.',
   pages: 'Top landing/SEO pages on your sites this period, ranked by pageviews.',
   dms: 'Direct message conversations with prospects, ranked by recent activity.',
-  links: 'Short links embedded in your posts, ranked by clicks. Once traffic flows, PostHog stitches each click to downstream conversions (get started, book a call, sign up).',
 };
 function syncTopSubtabHelp() {
   const el = document.getElementById('top-subtab-help');
@@ -10093,14 +10104,12 @@ function initTopFilters() {
     saveDashboardWindow(_topWindow);
     if (_topSubtab === 'pages') loadTopPages(true);
     else if (_topSubtab === 'dms') { _topDmOffset = 0; loadTopDms(true); }
-    else if (_topSubtab === 'links') loadTopLinks(true);
     else loadTopPosts(true);
   });
   wireTopPillRow('top-platform-pills', (v) => {
     _topPlatform = v || 'all';
     saSave('sa.top.platform.v1', _topPlatform);
     if (_topSubtab === 'dms') { _topDmOffset = 0; loadTopDms(true); }
-    else if (_topSubtab === 'links') loadTopLinks(true);
     else loadTopPosts(true);
   });
   wireTopPillRow('top-project-pills', (v) => {
@@ -10108,7 +10117,6 @@ function initTopFilters() {
     saSave('sa.top.project.v1', _topProject);
     if (_topSubtab === 'pages') renderTopPagesFromCache();
     else if (_topSubtab === 'dms') { if (_topDmsPayload) renderTopDms(_topDmsPayload); }
-    else if (_topSubtab === 'links') loadTopLinks(true);
     else loadTopPosts(true); // refetch so the SQL LIMIT applies AFTER project filter
   });
   wireTopPillRow('top-campaign-pills', (v) => {
@@ -10210,11 +10218,10 @@ function applyTopSubtabState(sub, loadData) {
     s.setAttribute('aria-selected', isActive ? 'true' : 'false');
   });
   syncTopSubtabHelp();
-  const postsC  = document.getElementById('top-table-container');
-  const pagesC  = document.getElementById('top-pages-container');
+  const postsC = document.getElementById('top-table-container');
+  const pagesC = document.getElementById('top-pages-container');
   const pagesUnknownC = document.getElementById('top-pages-unknown-container');
-  const dmsC    = document.getElementById('top-dms-container');
-  const linksC  = document.getElementById('top-links-container');
+  const dmsC   = document.getElementById('top-dms-container');
   const platRowEl = document.getElementById('top-platform-pills');
   const projRowEl = document.getElementById('top-project-pills');
   const campRowEl = document.getElementById('top-campaign-pills');
@@ -10255,28 +10262,10 @@ function applyTopSubtabState(sub, loadData) {
       searchElDm.value = _topDmSearch || '';
     }
     if (loadData) loadTopDms(true);
-  } else if (sub === 'links') {
-    if (postsC) postsC.classList.add('hidden');
-    if (pagesC) pagesC.classList.add('hidden');
-    if (pagesUnknownC) pagesUnknownC.classList.add('hidden');
-    if (dmsC) dmsC.classList.add('hidden');
-    if (linksC) linksC.classList.remove('hidden');
-    if (platRowEl) platRowEl.classList.remove('hidden');
-    if (srcRowEl) srcRowEl.classList.add('hidden');
-    if (campRowEl) campRowEl.classList.add('hidden');
-    setDmRowsHidden(true);
-    if (totalEl) totalEl.textContent = '';
-    const searchElLinks = document.getElementById('top-search');
-    if (searchElLinks) {
-      searchElLinks.placeholder = 'Search links\u2026';
-      searchElLinks.value = '';
-    }
-    if (loadData) loadTopLinks(true);
   } else {
     if (pagesC) pagesC.classList.add('hidden');
     if (pagesUnknownC) pagesUnknownC.classList.add('hidden');
     if (dmsC) dmsC.classList.add('hidden');
-    if (linksC) linksC.classList.add('hidden');
     if (postsC) postsC.classList.remove('hidden');
     if (platRowEl) platRowEl.classList.remove('hidden');
     if (srcRowEl) srcRowEl.classList.add('hidden');
@@ -10431,77 +10420,6 @@ function renderTopPages(payload) {
         columns,
       });
     }
-  }
-}
-
-let _topLinksPayload = null;
-let _topLinksLoading = false;
-let _topLinksLoaded = false;
-let _topLinksTableHandle = null;
-
-function renderTopLinks(payload) {
-  const container = document.getElementById('top-links-container');
-  const totalEl = document.getElementById('top-total');
-  if (!container) return;
-  const links = (payload && payload.links) ? payload.links : [];
-  if (!links.length) {
-    container.innerHTML = '<div class="style-stats-empty">No clicks tracked yet. Short links will appear here once posts with embedded links receive clicks. UTM attribution starts flowing immediately after this deployment.</div>';
-    if (totalEl) totalEl.textContent = '';
-    return;
-  }
-  const fmtDate = (ts) => ts ? new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
-  const fmtDt  = (ts) => ts ? new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-  const platformFilter = _topPlatform || 'all';
-  const projectFilter  = _topProject  || 'all';
-  let rows = links;
-  if (platformFilter !== 'all') rows = rows.filter(r => (r.platform || '').toLowerCase() === platformFilter || (platformFilter === 'twitter' && (r.platform || '').toLowerCase() === 'x'));
-  if (projectFilter !== 'all')  rows = rows.filter(r => (r.project_name || '') === projectFilter);
-  if (totalEl) totalEl.textContent = rows.length + ' link' + (rows.length === 1 ? '' : 's');
-  const PLAT_ICON = { reddit: '\ud83e\udd16', twitter: '\ud835\udd4f', linkedin: '\ud83d\udcbc', moltbook: '\ud83d\udcda', github: '\ud83d\udc31', x: '\ud835\udd4f' };
-  const columns = [
-    { key: 'first_click_at', label: 'First Click', width: '90px', formatter: (v) => fmtDate(v) || '\u2014' },
-    { key: 'platform', label: 'Platform', width: '80px', formatter: (v) => (PLAT_ICON[v] || '') + ' ' + (v || '') },
-    { key: 'project_name', label: 'Project', width: '100px' },
-    { key: 'link_kind', label: 'Type', width: '70px' },
-    { key: 'clicks', label: 'Clicks', width: '60px', formatter: (v) => (v || 0).toString() },
-    { key: 'our_content', label: 'Post content', formatter: (v, row) => {
-      const snippet = (v || '').slice(0, 120) || (row.thread_title || '').slice(0, 120) || '';
-      const url = row.our_url || row.thread_url || '';
-      if (!url) return snippet;
-      return '<a href="' + encodeURI(url) + '" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">' + escapeHtml(snippet) + '</a>';
-    }, isHtml: true },
-    { key: 'target_url', label: 'Target URL', width: '180px', formatter: (v) => v ? '<a href="' + encodeURI(v) + '" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline;word-break:break-all;">' + escapeHtml(v.replace(/^https?:\/\//, '')) + '</a>' : '\u2014', isHtml: true },
-    { key: 'last_click_at', label: 'Last Click', width: '110px', formatter: (v) => fmtDt(v) || '\u2014' },
-  ];
-  _topLinksTableHandle = mountSortableTable({
-    containerId: 'top-links-container',
-    rows,
-    state: { sortField: 'clicks', sortDir: 'desc', filters: {} },
-    storageKey: 'sa.topLinksTable.v1',
-    columns,
-  });
-}
-
-async function loadTopLinks(force) {
-  if (_topLinksLoading) return;
-  if (_topLinksLoaded && !force) return;
-  _topLinksLoading = true;
-  try {
-    const params = new URLSearchParams({ window: _topWindow, limit: '500' });
-    if (_topPlatform && _topPlatform !== 'all') params.set('platform', _topPlatform);
-    if (_topProject && _topProject !== 'all') params.set('project', _topProject);
-    const container = document.getElementById('top-links-container');
-    if (container && force) container.innerHTML = '<div class="style-stats-empty">Loading\u2026</div>';
-    const res = await fetch('/api/top/links?' + params.toString());
-    const data = await res.json();
-    _topLinksPayload = data;
-    renderTopLinks(data);
-    _topLinksLoaded = true;
-  } catch (e) {
-    const container = document.getElementById('top-links-container');
-    if (container) container.innerHTML = '<div class="style-stats-empty">Failed to load.</div>';
-  } finally {
-    _topLinksLoading = false;
   }
 }
 
