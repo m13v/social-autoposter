@@ -82,7 +82,7 @@ const JOBS = [
   // Stats row
   { label: 'com.m13v.social-stats-reddit', name: 'Stats Reddit', type: 'Stats', platform: 'Reddit', script: 'stats-reddit.sh', logPrefix: 'stats-reddit-', plist: 'com.m13v.social-stats-reddit.plist' },
   { label: 'com.m13v.social-stats-twitter', name: 'Stats Twitter', type: 'Stats', platform: 'Twitter', script: 'stats-twitter.sh', logPrefix: 'stats-twitter-', plist: 'com.m13v.social-stats-twitter.plist' },
-  { label: 'com.m13v.social-stats-linkedin', name: 'Stats LinkedIn', type: 'Stats', platform: 'LinkedIn', script: 'stats-linkedin.sh', logPrefix: 'stats-linkedin-', plist: 'com.m13v.social-stats-linkedin.plist' },
+  { label: 'com.m13v.social-linkedin-stats-comments', name: 'Stats LinkedIn', type: 'Stats', platform: 'LinkedIn', script: 'stats-linkedin-comments.sh', logPrefix: 'stats-linkedin-comments-', plist: 'com.m13v.social-linkedin-stats-comments.plist' },
   { label: 'com.m13v.social-stats-moltbook', name: 'Stats MoltBook', type: 'Stats', platform: 'MoltBook', script: 'stats-moltbook.sh', logPrefix: 'stats-moltbook-', plist: 'com.m13v.social-stats-moltbook.plist' },
   // Post Audit row (verify posts still exist / API health)
   { label: 'com.m13v.social-audit-reddit', name: 'Post Audit Reddit', type: 'Post Audit', platform: 'Reddit', script: 'audit-reddit.sh', logPrefix: 'audit-reddit-', plist: 'com.m13v.social-audit-reddit.plist' },
