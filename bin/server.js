@@ -1203,6 +1203,67 @@ async function enrichPostCommentsRedditRuns(runs) {
   try {
     logFiles = fs.readdirSync(LOG_DIR).filter(f => f.startsWith('run-reddit-search-') && f.endsWith('.log'));
   } catch { return; }
+
+  // ---- reddit_candidates queue snapshot (added 2026-05-06) ------------------
+  // Mirror enrichPostCommentsTwitterRuns: pull every reddit_candidates row that
+  // touched the runs' time windows, then compute per-run queueStart / queueEnd
+  // / queueAdded / queueDrained fields. The render layer reads these to show
+  // the same "queue: 3 (start 5, end 3, drained 2)" pill Twitter has.
+  //
+  // pendingNow is a global live snapshot of status='pending' rows across all
+  // batches, surfaced as `pending_queue` for the simple legacy display path.
+  let oldestMs = Infinity;
+  for (const r of rdRuns) {
+    const ms = new Date(r.started_at).getTime();
+    if (ms < oldestMs) oldestMs = ms;
+  }
+  const since = new Date(oldestMs - 2 * 60 * 1000).toISOString();
+  const candidateRows = await pq(
+    "SELECT discovered_at, posted_at, last_attempt_at, t1_checked_at, status, batch_id " +
+    "FROM reddit_candidates " +
+    "WHERE discovered_at >= $1::timestamp " +
+    "   OR posted_at >= $1::timestamp " +
+    "   OR last_attempt_at >= $1::timestamp " +
+    "   OR status='pending'",
+    [since]
+  ) || [];
+  const pendingRow = await pq(
+    "SELECT COUNT(*)::int AS n FROM reddit_candidates WHERE status='pending'"
+  );
+  const pendingNow = (pendingRow && pendingRow[0]) ? pendingRow[0].n : 0;
+
+  const toMs = (d) => {
+    if (!d) return null;
+    const dt = d instanceof Date ? d : new Date(d);
+    return dt.getTime();
+  };
+  // exitMs = the moment the row left 'pending'. Null for rows still pending.
+  // posted  -> posted_at
+  // failed  -> last_attempt_at  (set by _db_mark_candidate_attempt + html_locked)
+  // expired -> last_attempt_at  (Phase 0 hard-expire doesn't stamp last_attempt_at,
+  //                              but those rows have last_attempt_at from the prior
+  //                              ripen miss in nearly every case; older rows fall
+  //                              back to discovered_at as a last resort)
+  // skipped -> last_attempt_at  (same)
+  const candNorm = candidateRows.map(r => {
+    const postedMs = toMs(r.posted_at);
+    const lastAttemptMs = toMs(r.last_attempt_at);
+    const t1Ms = toMs(r.t1_checked_at);
+    const discoveredMs = toMs(r.discovered_at);
+    let exitMs = null;
+    if (r.status === 'posted') exitMs = postedMs;
+    else if (r.status === 'failed' || r.status === 'expired' || r.status === 'skipped') {
+      exitMs = lastAttemptMs || t1Ms || discoveredMs;
+    }
+    return {
+      discoveredMs,
+      postedMs,
+      lastAttemptMs,
+      exitMs,
+      status: r.status,
+      batch_id: r.batch_id || '',
+    };
+  });
   // Filename carries the run start: run-reddit-search-YYYY-MM-DD_HHMMSS.log
   const fileTs = (name) => {
     const m = name.match(/run-reddit-search-(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})(\d{2})\.log$/);
@@ -1264,6 +1325,15 @@ async function enrichPostCommentsRedditRuns(runs) {
         failed: prior.failed || 0,
         cost_usd: prior.cost_usd || 0,
         failure_reasons: Array.isArray(prior.failure_reasons) ? prior.failure_reasons : [],
+        // Queue snapshot still useful even when the per-run log is missing:
+        // the operator can see how big the pending backlog is right now.
+        // Per-run delta fields are zero by definition (we have nothing to
+        // attribute to this run without the log).
+        pending_queue: pendingNow,
+        queue_end: pendingNow,
+        queue_start: pendingNow,
+        queue_added: 0,
+        queue_drained: 0,
         log_missing: true,
       };
       continue;
@@ -1351,6 +1421,48 @@ async function enrichPostCommentsRedditRuns(runs) {
       if (ripenSkipRe.test(ln)) ripenSkippedIters++;
       if (ripenPassthroughRe.test(ln)) ripenPassthroughIters++;
     }
+    // ---- per-run queue delta (mirrors twitter enricher above) -------------
+    // queueAdded   = candidates whose discovered_at fell in this run window
+    //                (a fresh discover INSERTed them as 'pending')
+    // queueDrained = candidates that left 'pending' inside the same window
+    //                (posted_at or last_attempt_at landed in this window)
+    // queueStart / queueEnd = queue depth at run start / run end. Computed
+    //                across ALL rows, not just this batch, because Phase 0
+    //                salvage can drain rows queued by earlier cycles.
+    let queueAdded = 0;
+    let queueDrainedPosted = 0, queueDrainedFailed = 0;
+    let queueDrainedExpired = 0, queueDrainedSkipped = 0;
+    let queueStart = 0, queueEnd = 0;
+    for (const c of candNorm) {
+      if (c.discoveredMs != null && c.discoveredMs >= startMs && c.discoveredMs <= endMs) {
+        queueAdded++;
+      }
+      if (c.status === 'posted' && c.postedMs != null
+          && c.postedMs >= startMs && c.postedMs <= endMs) {
+        queueDrainedPosted++;
+      }
+      if (c.status === 'failed' && c.lastAttemptMs != null
+          && c.lastAttemptMs >= startMs && c.lastAttemptMs <= endMs) {
+        queueDrainedFailed++;
+      }
+      if (c.status === 'expired' && c.lastAttemptMs != null
+          && c.lastAttemptMs >= startMs && c.lastAttemptMs <= endMs) {
+        queueDrainedExpired++;
+      }
+      if (c.status === 'skipped' && c.lastAttemptMs != null
+          && c.lastAttemptMs >= startMs && c.lastAttemptMs <= endMs) {
+        queueDrainedSkipped++;
+      }
+      if (c.discoveredMs != null && c.discoveredMs <= startMs) {
+        if (c.status === 'pending' || (c.exitMs != null && c.exitMs > startMs)) queueStart++;
+      }
+      if (c.discoveredMs != null && c.discoveredMs <= endMs) {
+        if (c.status === 'pending' || (c.exitMs != null && c.exitMs > endMs)) queueEnd++;
+      }
+    }
+    const queueDrained = queueDrainedPosted + queueDrainedFailed
+                       + queueDrainedExpired + queueDrainedSkipped;
+
     const dropped = Math.max(0, raw - passed);
     const prior = run.result || {};
     // Trust the per-iter rollup `phase=post posted=N` over the bare POSTED:
@@ -1402,6 +1514,23 @@ async function enrichPostCommentsRedditRuns(runs) {
       // 4-phase pipeline counters (discover/ripen/draft/post split)
       discover_found: discoverFound,
       draft_failed: draftFailed,
+      // ---- reddit_candidates queue metrics (added 2026-05-06) -------------
+      // pending_queue: live global count of status='pending' rows across all
+      //                batches at render time. Kept for backward compat.
+      // queue_end / queue_start: depth at run end / start. Primary number
+      //                shown in the dashboard pill.
+      // queue_added / queue_drained: per-run delta. queueEnd - queueStart
+      //                should equal added - drained, modulo Phase 0
+      //                hard-expires that don't stamp last_attempt_at.
+      pending_queue: pendingNow,
+      queue_end: queueEnd,
+      queue_start: queueStart,
+      queue_added: queueAdded,
+      queue_drained: queueDrained,
+      queue_drained_posted: queueDrainedPosted,
+      queue_drained_failed: queueDrainedFailed,
+      queue_drained_expired: queueDrainedExpired,
+      queue_drained_skipped: queueDrainedSkipped,
     };
   }
 }
@@ -6576,6 +6705,40 @@ function renderResult(run) {
         pill(bestLabel, '', bestColor) +
         '</span>';
     };
+    // ---- queue pill (added 2026-05-06) -----------------------------------
+    // Mirrors Twitter's queue rendering: shows end-of-run depth with a
+    // (+added/-drained) suffix so the operator sees how this cycle moved
+    // the queue. Falls back to the live pending count when queue_end isn't
+    // populated (pre-migration runs). Pill is omitted entirely when nothing
+    // is in the queue and nothing moved this run, so older "no queue"
+    // Reddit rows stay visually clean.
+    const queue = (r.queue_end != null) ? r.queue_end : (r.pending_queue || 0);
+    const queueStartV = r.queue_start || 0;
+    const pendingLive = r.pending_queue || 0;
+    const qAdded = r.queue_added || 0;
+    const qDrained = r.queue_drained || 0;
+    const qDrainedPosted = r.queue_drained_posted || 0;
+    const qDrainedFailed = r.queue_drained_failed || 0;
+    const qDrainedExpired = r.queue_drained_expired || 0;
+    const qDrainedSkipped = r.queue_drained_skipped || 0;
+    const renderQueuePill = () => {
+      if (!queue && !qAdded && !qDrained && !pendingLive) return '';
+      const queueDeltaSuffix = (qAdded || qDrained)
+        ? ' <span style="color:var(--muted);font-weight:400;">(' +
+            '+' + qAdded + '/-' + qDrained +
+            ')</span>'
+        : '';
+      const qTip = 'queue end-of-run: ' + queue +
+        ' (start: ' + queueStartV + ', +' + qAdded + ' added, -' + qDrained +
+        ' drained = ' + qDrainedPosted + ' posted + ' + qDrainedFailed + ' failed + ' +
+        qDrainedExpired + ' expired + ' + qDrainedSkipped + ' skipped)' +
+        ' / queue right now (live): ' + pendingLive;
+      return '<span title="' + qTip.replace(/"/g, '&quot;') + '" ' +
+        'style="display:inline-block;margin-right:10px;font-size:12px;color:var(--muted);">' +
+        'queue <span style="color:var(--text);font-weight:600;">' + queue + '</span>' +
+        queueDeltaSuffix + '</span>';
+    };
+
     const tooltip = 'iterations: ' + iterations +
       ' / searches: ' + searches +
       ' / raw API results: ' + raw +
@@ -6585,7 +6748,8 @@ function renderResult(run) {
       ' / drafted: ' + drafted +
       (ripenIters ? ' / ripen survivors: ' + ripenSurvivors + '/' + ripenInput +
         (bestComp != null ? ' (best composite ' + bestComp.toFixed(1) + ')' : '') : '') +
-      ' / posted: ' + posted;
+      ' / posted: ' + posted +
+      (queue || pendingLive ? ' / queue (pending in DB): ' + queue : '');
     return (
       '<span title="' + tooltip.replace(/"/g, '&quot;') + '" style="display:inline-block;">' +
         pill('iterations', iterations, iterations > 0 ? 'var(--text)' : 'var(--muted)') +
@@ -6595,6 +6759,7 @@ function renderResult(run) {
         pill(preRipenLabel, preRipenCount, preRipenCount > 0 ? 'var(--text)' : 'var(--muted)') +
         renderRipenPills() +
         pill('posted', posted, posted > 0 ? '#22c55e' : 'var(--muted)') +
+        renderQueuePill() +
         renderFailedPill() +
       '</span>'
     );
