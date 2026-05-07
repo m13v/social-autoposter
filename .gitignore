@@ -64,8 +64,25 @@ scripts/context/
 # macOS metadata
 .DS_Store
 
-# SQLite databases (broaden *.db to also cover *.sqlite)
+# SQLite databases (broaden *.db to also cover *.sqlite and *.sqlite3)
 *.sqlite
+*.sqlite3
 
 # Local video mixer assets (raw clips + audio library, not source-of-truth)
 mixer/
+
+# Fiverr brief scratch (root-level)
+/fiverr-*
+
+# Scratch / tmp / backup directories under scripts/
+scripts/_tmp/
+scripts/backups/
+scripts/tmp/
+scripts/scratch/
+
+# Pre-cleanup config snapshots
+scripts/config.json.before-*.json
+
+# Lock files and stray scratch markdown
+scripts/*.lock
+scripts/instagram_creators.md
