@@ -892,21 +892,7 @@ def parse_post_decisions(output):
     return decisions
 
 
-def _plan_iteration(args, config, reddit_username, already_picked):
-    """Pick project → build prompt → run Claude → parse decisions. No browser.
-
-    Returns a dict {project_name, decisions, cost, error?} or None if no project
-    was eligible. Decisions list may be empty when Claude returns nothing usable.
-    """
-    if args.project:
-        project = None
-        for p in config.get("projects", []):
-            if p["name"].lower() == args.project.lower():
-                project = p
-                break
-        if not project:
-            print(f"[post_reddit] ERROR: project '{args.project}' not found")
-            return None
+def _discover_iteration(args, config, reddit_username, already_picked):
     else:
         project = pick_project("reddit", exclude=already_picked)
         if not project:
