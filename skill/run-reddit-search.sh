@@ -35,6 +35,23 @@ TOTAL_POSTED=0
 TOTAL_FAILED=0
 TOTAL_SKIPPED=0
 RUN_START=$(date +%s)
+FAILURE_REASONS=""
+
+# Add a reason:count pair to FAILURE_REASONS (same schema as Twitter pipeline).
+# Accumulates counts for duplicate keys (e.g. two thread_locked failures).
+add_reason() {
+    local key="$1" count="${2:-1}"
+    # Extract existing count for this key and add to it
+    local existing
+    existing=$(echo "$FAILURE_REASONS" | tr ',' '\n' | grep "^${key}:" | cut -d: -f2 | head -1)
+    if [ -n "$existing" ]; then
+        local new_count=$(( existing + count ))
+        FAILURE_REASONS=$(echo "$FAILURE_REASONS" | tr ',' '\n' | grep -v "^${key}:" | tr '\n' ',' | sed 's/,$//;s/^,//')
+        FAILURE_REASONS="${FAILURE_REASONS:+$FAILURE_REASONS,}${key}:${new_count}"
+    else
+        FAILURE_REASONS="${FAILURE_REASONS:+$FAILURE_REASONS,}${key}:${count}"
+    fi
+}
 
 for i in $(seq 1 "$ITERATIONS"); do
     log "--- Iteration $i/$ITERATIONS ---"
@@ -171,18 +188,31 @@ for i in $(seq 1 "$ITERATIONS"); do
         TOTAL_FAILED=$((TOTAL_FAILED + 1))
     fi
 
+    # Parse CDP failure reasons from post output and accumulate into FAILURE_REASONS.
+    # Mirrors Twitter's EXEC_REASONS pattern so the dashboard pill shows the breakdown.
+    while IFS= read -r line; do
+        cdp_key=$(echo "$line" | grep -oE '\[post_reddit\] CDP FAILED: [a-z_]+' | awk '{print $NF}')
+        case "$cdp_key" in
+            thread_locked)          add_reason reddit_locked ;;
+            thread_archived)        add_reason reddit_archived ;;
+            thread_not_found)       add_reason reddit_deleted ;;
+            account_blocked_in_sub) add_reason account_blocked ;;
+            not_logged_in)          add_reason reddit_logged_out ;;
+            all_attempts_failed)    add_reason cdp_no_response ;;
+            comment_box_not_found)  add_reason comment_box_missing ;;
+            "")                     : ;; # no match on this line
+            *)                      add_reason "cdp_${cdp_key}" ;;
+        esac
+    done <<< "$POST_OUT"
+
     rm -f "$DISCOVER_FILE" "$RIPEN_FILE" "$DRAFT_FILE"
 done
 
 ELAPSED=$(( $(date +%s) - RUN_START ))
 log "=== Run summary: posted=$TOTAL_POSTED failed=$TOTAL_FAILED skipped=$TOTAL_SKIPPED projects=[$EXCLUDE] elapsed=${ELAPSED}s ==="
 
-python3 "$REPO_DIR/scripts/log_run.py" \
-    --script "post_reddit" \
-    --posted "$TOTAL_POSTED" \
-    --skipped "$TOTAL_SKIPPED" \
-    --failed "$TOTAL_FAILED" \
-    --cost 0 \
-    --elapsed "$ELAPSED" || true
+LOG_ARGS=(--script "post_reddit" --posted "$TOTAL_POSTED" --skipped "$TOTAL_SKIPPED" --failed "$TOTAL_FAILED" --cost 0 --elapsed "$ELAPSED")
+[ -n "$FAILURE_REASONS" ] && LOG_ARGS+=(--failure-reasons "$FAILURE_REASONS")
+python3 "$REPO_DIR/scripts/log_run.py" "${LOG_ARGS[@]}" || true
 
 log "=== Done: $(date) ==="
