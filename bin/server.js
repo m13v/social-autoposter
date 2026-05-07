@@ -4276,8 +4276,8 @@ async function handleApi(req, res) {
     const rawPlatform = (url.searchParams.get('platform') || '').trim().toLowerCase();
     const platform = (rawPlatform === '' || rawPlatform === 'all') ? '' :
                      (rawPlatform === 'x' ? 'twitter' : rawPlatform);
-    if (platform && platform !== 'twitter' && platform !== 'linkedin') {
-      // Reddit/GitHub/etc have no search_attempts tables — return empty rather than error.
+    if (platform && platform !== 'twitter' && platform !== 'linkedin' && platform !== 'reddit') {
+      // GitHub etc have no search_attempts tables — return empty rather than error.
       return json(res, { days, rows: [], platform_supported: false });
     }
     const limit = Math.max(1, Math.min(5000, parseInt(url.searchParams.get('limit') || '5000', 10) || 5000));
@@ -4305,6 +4305,15 @@ async function handleApi(req, res) {
         "FROM linkedin_search_attempts " +
         "WHERE ran_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
           "AND query IS NOT NULL AND length(trim(query)) > 0 " +
+        "UNION ALL " +
+        // Reddit: use seed (the topic concept) as the query when set; rows without
+        // seed are old pre-backfill rows — include them under the literal query so
+        // they appear in the table even if they can't join to posts yet.
+        "SELECT 'reddit', COALESCE(NULLIF(seed,''), query), project_name, " +
+               "candidates_post_filter AS candidates_found, NULL::float8, ran_at " +
+        "FROM reddit_search_attempts " +
+        "WHERE ran_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
+          "AND query IS NOT NULL AND length(trim(query)) > 0 " +
       "), " +
       "cand AS ( " +
         "SELECT 'twitter'  AS platform, c.search_topic AS query, " +
@@ -4317,6 +4326,14 @@ async function handleApi(req, res) {
         "FROM linkedin_candidates c " +
         "WHERE c.discovered_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
           "AND c.search_query IS NOT NULL " +
+        "UNION ALL " +
+        // Reddit has no candidates table. Join directly from posts via search_topic
+        // (the seed concept), which matches reddit_search_attempts.seed.
+        "SELECT 'reddit', p.search_topic, COALESCE(p.project_name, '(none)'), p.id " +
+        "FROM posts p " +
+        "WHERE p.platform = 'reddit' " +
+          "AND p.posted_at >= NOW() - INTERVAL '" + windowHours + " hours' " +
+          "AND p.search_topic IS NOT NULL " +
       "), " +
       "posts_per_query AS ( " +
         "SELECT cand.platform, cand.query, cand.project_name, " +
@@ -5541,7 +5558,7 @@ const HTML = `<!DOCTYPE html>
   </details>
   <details class="style-stats-section" id="search-queries-stats" open>
     <summary>
-      <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="search-queries-stats-heading">Search Queries (last 24 hours)</span><span class="stat-card-info" data-tooltip="Per-query stats from twitter_search_attempts + linkedin_search_attempts. Reddit and GitHub don't log discovery queries today, so they're not represented. attempts = times the query was drafted and run. candidates_found = sum of tweets/posts the search returned. dud_rate = % of attempts that returned 0. posts_made = candidates from this query that we actually posted to. avg_engagement = comments\u00D73 + upvotes on those resulting posts (same formula as top_performers.py). Honors Window/Platform/Project filters above.">i</span></span>
+      <span class="style-stats-title"><span class="style-stats-caret">\u25B6</span><span id="search-queries-stats-heading">Search Queries (last 24 hours)</span><span class="stat-card-info" data-tooltip="Per-query stats from twitter_search_attempts + linkedin_search_attempts + reddit_search_attempts. GitHub isn\u2019t represented. Reddit rows show seed concepts (topic buckets) rather than literal search phrases. attempts = times the query was drafted and run. attempts = times the query was drafted and run. candidates_found = sum of tweets/posts the search returned. dud_rate = % of attempts that returned 0. posts_made = candidates from this query that we actually posted to. avg_engagement = comments\u00D73 + upvotes on those resulting posts (same formula as top_performers.py). Honors Window/Platform/Project filters above.">i</span></span>
       <span class="style-stats-total" id="search-queries-stats-total"></span>
     </summary>
     <div id="search-queries-stats-controls" style="padding:8px 16px 0;display:flex;gap:8px;align-items:center;">
@@ -9365,7 +9382,7 @@ function renderSearchQueriesStats(payload) {
   // empty-state explaining why instead of pretending we have data.
   if (payload && payload.platform_supported === false) {
     if (totalEl) totalEl.textContent = 'n/a';
-    body.innerHTML = '<div class="style-stats-empty">This platform doesn\u2019t log discovery queries (only Twitter and LinkedIn do).</div>';
+    body.innerHTML = '<div class="style-stats-empty">This platform doesn\u2019t log discovery queries (Twitter, LinkedIn, and Reddit do).</div>';
     return;
   }
   const rows = (payload && payload.rows) || [];
