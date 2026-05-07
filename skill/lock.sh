@@ -238,14 +238,56 @@ ensure_browser_healthy() {
     return 0
   fi
 
-  # 3. Wedged or absent. Kill live MCP + Chrome on this profile (we hold the
-  # lock, so this is exclusive). Lazy kill: SIGTERM, brief grace, SIGKILL.
-  echo "[ensure_browser_healthy] ${platform} CDP unreachable (port=${cdp_port:-none}); restarting MCP+Chrome"
-  pkill -TERM -f "${platform}-agent.json"          2>/dev/null || true
-  pkill -TERM -f "user-data-dir=${profile_dir}"    2>/dev/null || true
-  sleep 1
-  pkill -KILL -f "${platform}-agent.json"          2>/dev/null || true
-  pkill -KILL -f "user-data-dir=${profile_dir}"    2>/dev/null || true
+  # 3. CDP probe failed. Two reasons this can happen:
+  #   (a) No Chrome at all on this profile — fall through to the singleton
+  #       cleanup so launch_persistent_context starts fresh.
+  #   (b) Chrome IS running but isn't reachable via CDP port — most likely
+  #       a user-driven MCP session (linkedin-agent, twitter-agent, etc.)
+  #       that uses --remote-debugging-pipe instead of a port. KILLING this
+  #       Chrome destroys in-memory cookies (the disk copy can be 30-60s
+  #       stale) and triggers anti-bot fingerprints, especially on LinkedIn
+  #       (observed live 2026-05-06, Mediar account got authwalled).
+  #
+  # New behavior (was: kill immediately): when Chrome is running on the
+  # profile, WAIT up to BROWSER_WAIT_SEC for it to exit on its own. Only
+  # kill if it's still there after the wait. The lock is already held, so
+  # peer pipelines aren't the source — it's either a user MCP session
+  # (will close when they're done) or a stuck orphan (will need killing).
+  local has_chrome
+  has_chrome=$(ps -A -o command= 2>/dev/null \
+    | awk -v p="user-data-dir=$profile_dir" '
+        index($0,p)>0 && index($0,"--type=")==0 {found=1; exit}
+        END {print (found ? "yes" : "no")}' \
+    || echo "no")
+
+  if [ "$has_chrome" = "yes" ]; then
+    local browser_wait_sec="${BROWSER_WAIT_SEC:-60}"
+    echo "[ensure_browser_healthy] ${platform}: Chrome alive on profile but no reachable CDP port. Waiting up to ${browser_wait_sec}s for it to exit (likely user MCP session or slow-finishing prior run)."
+    local waited=0
+    while [ "$waited" -lt "$browser_wait_sec" ]; do
+      sleep 5
+      waited=$((waited + 5))
+      has_chrome=$(ps -A -o command= 2>/dev/null \
+        | awk -v p="user-data-dir=$profile_dir" '
+            index($0,p)>0 && index($0,"--type=")==0 {found=1; exit}
+            END {print (found ? "yes" : "no")}' \
+        || echo "no")
+      if [ "$has_chrome" = "no" ]; then
+        echo "[ensure_browser_healthy] ${platform}: Chrome exited cleanly after ${waited}s; safe to launch fresh."
+        break
+      fi
+    done
+
+    # Still here after the wait? Treat as a wedged orphan and force-kill.
+    if [ "$has_chrome" = "yes" ]; then
+      echo "[ensure_browser_healthy] ${platform}: Chrome still alive after ${browser_wait_sec}s — force-killing as wedged orphan."
+      pkill -TERM -f "${platform}-agent.json"          2>/dev/null || true
+      pkill -TERM -f "user-data-dir=${profile_dir}"    2>/dev/null || true
+      sleep 1
+      pkill -KILL -f "${platform}-agent.json"          2>/dev/null || true
+      pkill -KILL -f "user-data-dir=${profile_dir}"    2>/dev/null || true
+    fi
+  fi
 
   # 4. Clear singletons so launch_persistent_context can start fresh.
   rm -f "$profile_dir/SingletonLock" \
