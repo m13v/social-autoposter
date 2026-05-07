@@ -214,13 +214,23 @@ ensure_browser_healthy() {
   local profile_dir="$HOME/.claude/browser-profiles/$platform"
 
   # 1. Find Chrome on this profile, extract its remote-debugging-port.
+  # Skip renderer/gpu/utility subprocesses (those carry --type=...). They
+  # inherit --user-data-dir from the parent but get --remote-debugging-port=0,
+  # so without this filter we'd extract "0" from a renderer, fail the
+  # localhost:0 CDP probe, and (worse) the awk's `exit` mid-pipeline sends
+  # SIGPIPE to ps. With pipefail + set -e that propagates as exit 141 and
+  # silently kills the entire calling script before the scraper ever runs.
+  # `|| true` is the seatbelt against the SIGPIPE corner case in case ps
+  # races awk's exit on a future config change. Observed live 2026-05-06:
+  # stats-linkedin-comments fires at 19:56 + 20:15 + 20:17 all died here.
   local cdp_port
   cdp_port=$(ps -A -o command= 2>/dev/null \
-    | awk -v p="user-data-dir=$profile_dir" 'index($0,p)>0 {
-        if (match($0, /remote-debugging-port=[0-9]+/)) {
-          print substr($0, RSTART+22, RLENGTH-22); exit
-        }
-      }')
+    | awk -v p="user-data-dir=$profile_dir" '
+        index($0,p)>0 && index($0,"--type=")==0 {
+          if (match($0, /remote-debugging-port=[0-9]+/)) {
+            print substr($0, RSTART+22, RLENGTH-22); exit
+          }
+        }' || true)
 
   # 2. Probe CDP. Healthy → return immediately.
   if [ -n "$cdp_port" ] \
