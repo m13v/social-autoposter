@@ -955,6 +955,23 @@ def _plan_iteration(args, config, reddit_username, already_picked):
         for line in output.strip().split("\n")[-10:]:
             print(f"  {line}")
 
+    # Backfill seed on reddit_search_attempts for the Search Queries dashboard.
+    if decisions and plan_batch_id:
+        seed = (decisions[0].get("search_topic") or "").strip()
+        if seed:
+            try:
+                dbmod.load_env()
+                conn = dbmod.get_conn()
+                conn.execute(
+                    "UPDATE reddit_search_attempts SET seed = %s "
+                    "WHERE batch_id = %s AND seed IS NULL",
+                    [seed, plan_batch_id],
+                )
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print(f"[post_reddit] WARNING: seed backfill failed: {e}", file=sys.stderr)
+
     return {"project_name": project_name, "decisions": decisions,
             "cost": usage["cost_usd"], "session_id": usage.get("session_id")}
 
@@ -1020,6 +1037,25 @@ def _discover_iteration(args, config, reddit_username, already_picked):
         print(f"[post_reddit] No candidates in output (last 10 lines):")
         for line in output.strip().split("\n")[-10:]:
             print(f"  {line}")
+
+    # Backfill seed on reddit_search_attempts rows from this batch so the
+    # Search Queries dashboard can join attempts → posts via search_topic.
+    # Use the first candidate's search_topic — LIMIT=1 means one seed/batch.
+    if candidates and plan_batch_id:
+        seed = (candidates[0].get("search_topic") or "").strip()
+        if seed:
+            try:
+                dbmod.load_env()
+                conn = dbmod.get_conn()
+                conn.execute(
+                    "UPDATE reddit_search_attempts SET seed = %s "
+                    "WHERE batch_id = %s AND seed IS NULL",
+                    [seed, plan_batch_id],
+                )
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print(f"[post_reddit] WARNING: seed backfill failed: {e}", file=sys.stderr)
 
     return {"project_name": project_name, "decisions": candidates,
             "cost": usage["cost_usd"], "session_id": usage.get("session_id"),
