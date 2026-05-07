@@ -162,9 +162,12 @@ for i in $(seq 1 "$ITERATIONS"); do
     fi
 
     # Phase 2: Ripen — T0 snapshot, 5-min sleep, T1 re-poll, composite delta gate.
-    # composite = Δup + 4*Δcomments, floor > 1. Runs without browser lock.
+    # composite = Δup + 4*Δcomments, floor>=1. Runs without browser lock.
+    # Floor flipped from strict > to >= 2026-05-06: a +1 upvote in 5min is
+    # enough signal that the thread is still alive — strict > rejected those
+    # exact-floor cases as wholesale losses.
     RIPEN_FILE=$(mktemp -t post_reddit_ripened.XXXXXX.json)
-    log "Ripening candidates (5-min delta gate, floor>1, w_comments=4)..."
+    log "Ripening candidates (5-min delta gate, floor>=1, w_comments=4)..."
     set +e
     python3 "$REPO_DIR/scripts/ripen_reddit_plan.py" \
         --in "$DISCOVER_FILE" \
