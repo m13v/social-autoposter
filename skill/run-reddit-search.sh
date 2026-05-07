@@ -34,8 +34,35 @@ EXCLUDE=""
 TOTAL_POSTED=0
 TOTAL_FAILED=0
 TOTAL_SKIPPED=0
+TOTAL_SALVAGED=0  # how many iterations this cycle ran a salvaged candidate
+TOTAL_CANDIDATES=0  # total reddit_candidates rows touched (discovered + salvaged)
 RUN_START=$(date +%s)
 FAILURE_REASONS=""
+
+# Cycle-level batch_id, mirrors the Twitter cycle's twcycle-* convention.
+# Used by --phase phase0 / --phase salvage / --phase discover to attribute
+# rows in reddit_candidates and to drive the persistent retry queue.
+BATCH_ID="rdcycle-$(date +%Y%m%d-%H%M%S)"
+log "Cycle batch_id=$BATCH_ID"
+
+# --- Phase 0: hard-expire stale pending rows + salvage truly-orphaned rows ---
+# Pending rows from prior cycles fall into two buckets:
+#   - discovered_at older than FRESHNESS_HOURS (24h) -> hard-expire
+#   - still-fresh AND attempt_count < MAX_ATTEMPTS (3) AND last_attempt_at
+#     older than RETRY_BACKOFF (30m) -> re-assign to this batch so the loop
+#     below can pull them via --phase salvage.
+#
+# Mirrors run-twitter-cycle.sh's Phase 0 in shape, but with Reddit-tuned
+# windows (24h FRESHNESS vs Twitter 6h, since Reddit threads stay actionable
+# longer). All the SQL lives in post_reddit.py:_db_phase0_salvage() under a
+# pg_advisory_xact_lock so two concurrent Reddit cycles can't double-salvage.
+#
+# Output is `expired=N salvaged=M` on a single line; we parse it inline.
+PHASE0_OUT=$(python3 "$REPO_DIR/scripts/post_reddit.py" --phase phase0 --batch-id "$BATCH_ID" 2>&1 | tee -a "$LOG_FILE" | tail -1)
+PHASE0_EXPIRED=$(echo "$PHASE0_OUT" | grep -oE 'expired=[0-9]+' | cut -d= -f2 || echo 0)
+PHASE0_SALVAGED=$(echo "$PHASE0_OUT" | grep -oE 'salvaged=[0-9]+' | cut -d= -f2 || echo 0)
+[ "${PHASE0_EXPIRED:-0}" -gt 0 ] && log "Phase 0: hard-expired $PHASE0_EXPIRED pending rows older than 24h"
+[ "${PHASE0_SALVAGED:-0}" -gt 0 ] && log "Phase 0: salvaged $PHASE0_SALVAGED orphaned pending rows into $BATCH_ID"
 
 # Add a reason:count pair to FAILURE_REASONS (same schema as Twitter pipeline).
 # Accumulates counts for duplicate keys (e.g. two thread_locked failures).
@@ -56,55 +83,83 @@ add_reason() {
 for i in $(seq 1 "$ITERATIONS"); do
     log "--- Iteration $i/$ITERATIONS ---"
     DISCOVER_FILE=$(mktemp -t post_reddit_discover.XXXXXX.json)
+    ITER_SALVAGED=0  # 1 = this iteration is replaying a salvaged candidate
 
-    # Phase 1: Discover — search and select threads. No browser, no drafting.
+    # Salvage-first: try to pull a pending row that Phase 0 re-assigned to
+    # this batch BEFORE paying the discover cost. Salvaged rows skip the
+    # Claude discover spend entirely; ripen re-measures fresh deltas, draft
+    # reuses any persisted text (<60min old), and post retries the CDP step.
     set +e
     python3 "$REPO_DIR/scripts/post_reddit.py" \
-        --phase discover \
-        --out "$DISCOVER_FILE" \
-        --exclude "$EXCLUDE" \
-        --limit "$LIMIT" 2>&1 | tee -a "$LOG_FILE"
-    DISCOVER_RC=${PIPESTATUS[0]}
+        --phase salvage \
+        --batch-id "$BATCH_ID" \
+        --out "$DISCOVER_FILE" 2>&1 | tee -a "$LOG_FILE"
+    SALVAGE_RC=${PIPESTATUS[0]}
     set -e
 
-    case "$DISCOVER_RC" in
-        0)
-            : # discover succeeded with candidates
-            ;;
-        3)
-            log "Discover phase: rate-limited; ending run."
-            rm -f "$DISCOVER_FILE"
-            break
-            ;;
-        4)
-            log "Discover phase: no eligible project left; ending run."
-            rm -f "$DISCOVER_FILE"
-            break
-            ;;
-        5)
-            log "Discover phase: Claude failed; counting as failed and continuing."
-            TOTAL_FAILED=$((TOTAL_FAILED + 1))
-            rm -f "$DISCOVER_FILE"
-            continue
-            ;;
-        6)
-            log "Discover phase: no candidates found; counting as skipped and continuing."
-            TOTAL_SKIPPED=$((TOTAL_SKIPPED + 1))
-            PICKED=$(python3 -c "import json,sys;print(json.load(open('$DISCOVER_FILE')).get('project_name',''))" 2>/dev/null || echo "")
-            [ -n "$PICKED" ] && EXCLUDE="${EXCLUDE:+$EXCLUDE,}$PICKED"
-            rm -f "$DISCOVER_FILE"
-            continue
-            ;;
-        *)
-            log "Discover phase: unexpected exit code $DISCOVER_RC; counting as failed."
-            TOTAL_FAILED=$((TOTAL_FAILED + 1))
-            rm -f "$DISCOVER_FILE"
-            continue
-            ;;
-    esac
+    if [ "$SALVAGE_RC" = "0" ]; then
+        ITER_SALVAGED=1
+        TOTAL_SALVAGED=$((TOTAL_SALVAGED + 1))
+        TOTAL_CANDIDATES=$((TOTAL_CANDIDATES + 1))
+        # Salvaged iterations bypass the project-exclude mechanism: we're
+        # retrying a specific row, not picking a fresh project.
+        log "Iteration $i: replaying salvaged candidate."
+    else
+        # Phase 1: Discover — search and select threads. No browser, no drafting.
+        set +e
+        python3 "$REPO_DIR/scripts/post_reddit.py" \
+            --phase discover \
+            --batch-id "$BATCH_ID" \
+            --out "$DISCOVER_FILE" \
+            --exclude "$EXCLUDE" \
+            --limit "$LIMIT" 2>&1 | tee -a "$LOG_FILE"
+        DISCOVER_RC=${PIPESTATUS[0]}
+        set -e
 
-    PICKED=$(python3 -c "import json,sys;print(json.load(open('$DISCOVER_FILE')).get('project_name',''))" 2>/dev/null || echo "")
-    [ -n "$PICKED" ] && EXCLUDE="${EXCLUDE:+$EXCLUDE,}$PICKED"
+        case "$DISCOVER_RC" in
+            0)
+                : # discover succeeded with candidates
+                ;;
+            3)
+                log "Discover phase: rate-limited; ending run."
+                rm -f "$DISCOVER_FILE"
+                break
+                ;;
+            4)
+                log "Discover phase: no eligible project left; ending run."
+                rm -f "$DISCOVER_FILE"
+                break
+                ;;
+            5)
+                log "Discover phase: Claude failed; counting as failed and continuing."
+                TOTAL_FAILED=$((TOTAL_FAILED + 1))
+                rm -f "$DISCOVER_FILE"
+                continue
+                ;;
+            6)
+                log "Discover phase: no candidates found; counting as skipped and continuing."
+                TOTAL_SKIPPED=$((TOTAL_SKIPPED + 1))
+                PICKED=$(python3 -c "import json,sys;print(json.load(open('$DISCOVER_FILE')).get('project_name',''))" 2>/dev/null || echo "")
+                [ -n "$PICKED" ] && EXCLUDE="${EXCLUDE:+$EXCLUDE,}$PICKED"
+                rm -f "$DISCOVER_FILE"
+                continue
+                ;;
+            *)
+                log "Discover phase: unexpected exit code $DISCOVER_RC; counting as failed."
+                TOTAL_FAILED=$((TOTAL_FAILED + 1))
+                rm -f "$DISCOVER_FILE"
+                continue
+                ;;
+        esac
+
+        # Count freshly-discovered candidates so the dashboard's queue
+        # tooltip distinguishes new finds from salvaged retries.
+        DISCOVER_COUNT=$(python3 -c "import json;print(len(json.load(open('$DISCOVER_FILE')).get('decisions',[])))" 2>/dev/null || echo 0)
+        TOTAL_CANDIDATES=$((TOTAL_CANDIDATES + DISCOVER_COUNT))
+
+        PICKED=$(python3 -c "import json,sys;print(json.load(open('$DISCOVER_FILE')).get('project_name',''))" 2>/dev/null || echo "")
+        [ -n "$PICKED" ] && EXCLUDE="${EXCLUDE:+$EXCLUDE,}$PICKED"
+    fi
 
     # Phase 2: Ripen — T0 snapshot, 5-min sleep, T1 re-poll, composite delta gate.
     # composite = Δup + 4*Δcomments, floor > 1. Runs without browser lock.
