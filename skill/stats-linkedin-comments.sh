@@ -51,6 +51,10 @@ source "$(dirname "$0")/lock.sh"
 REPO_DIR="$HOME/social-autoposter"
 LOG_DIR="$REPO_DIR/skill/logs"
 PYTHON_BIN="/opt/homebrew/bin/python3"
+# /usr/bin/python3 is the only interpreter with playwright installed; this
+# matches engage-dm-replies.sh's call to linkedin_browser.py. The DB scripts
+# stay on homebrew python where psycopg2 is installed.
+SCRAPER_PYTHON_BIN="/usr/bin/python3"
 
 # Tunables.
 MAX_SCROLLS=40           # in-page scrolls; bumped from 15 to extend reach
@@ -85,19 +89,26 @@ SUMMARY_JSON=$(mktemp -t fazm-li-comments-summary.XXXXXX).json
 SCRAPER_STDOUT=$(mktemp -t fazm-li-comments-scrape.XXXXXX).json
 
 # 1. Acquire lock + ensure browser healthy (kills any stale MCP Chrome).
+# ensure_browser_healthy can return 141 (SIGPIPE) from its `ps | awk 'exit'`
+# pipeline when matching Chrome procs exist; relax set -e around it. This
+# matches the pattern run-linkedin.sh uses around its risky sections.
 acquire_lock "linkedin-browser" 1800
+set +e
 ensure_browser_healthy "linkedin"
+set -e
 
 # 2. Run the headed-Chromium scraper.
 log "Launching headed Chromium scraper..."
 SCRAPER_RC=0
+set +e
 SOCIAL_AUTOPOSTER_LINKEDIN_COMMENT_STATS=1 \
 /opt/homebrew/bin/gtimeout "$SCRAPER_TIMEOUT_SEC" \
-    "$PYTHON_BIN" "$REPO_DIR/scripts/scrape_linkedin_comment_stats.py" \
+    "$SCRAPER_PYTHON_BIN" "$REPO_DIR/scripts/scrape_linkedin_comment_stats.py" \
         --out "$FEED_JSON" \
         --max-scrolls "$MAX_SCROLLS" \
-    > "$SCRAPER_STDOUT" 2>&1 \
-    || SCRAPER_RC=$?
+    > "$SCRAPER_STDOUT" 2>&1
+SCRAPER_RC=$?
+set -e
 
 # Always release the browser lock; updater is DB-only and doesn't need it.
 release_lock "linkedin-browser"
