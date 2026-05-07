@@ -14,7 +14,8 @@ into the output JSON under `ripen_dropped_details`.
 
 Defaults match the design agreed on 2026-05-06:
     composite = Δup + 4*Δcomments
-    floor = composite > 5  (strict)
+    floor = composite >= 1  (any positive momentum passes; +1 upvote in 5min
+            is enough signal that the thread is still alive)
     sleep = 300s (5 min)
 
 Failure modes:
@@ -151,7 +152,9 @@ def main():
     p.add_argument("--in", dest="in_path", required=True, help="Input plan JSON path")
     p.add_argument("--out", required=True, help="Output filtered plan JSON path")
     p.add_argument("--floor", type=float, default=1.0,
-                   help="Composite delta must be STRICTLY greater than this (default: 1.0)")
+                   help="Composite delta must be GREATER THAN OR EQUAL to this "
+                        "(default: 1.0). composite = Δup + 4*Δcomments; +1 upvote in 5min "
+                        "is enough signal that the thread is still alive.")
     p.add_argument("--w-comments", type=float, default=4.0,
                    help="Comment weight in composite formula (default: 4.0)")
     p.add_argument("--sleep", type=int, default=300,
@@ -240,7 +243,7 @@ def main():
             "floor": args.floor,
             "w_comments": args.w_comments,
         }
-        if composite > args.floor:
+        if composite >= args.floor:
             survivors.append(d)
             # Persist T0/T1/delta for the survivor; do NOT bump attempt_count
             # — passing the floor isn't an "attempt" against the post budget.
@@ -252,7 +255,7 @@ def main():
         else:
             drops.append({
                 "url": url,
-                "reason": f"composite={composite:.1f} <= floor={args.floor}",
+                "reason": f"composite={composite:.1f} < floor={args.floor}",
                 "delta_up": d_up,
                 "delta_comments": d_co,
             })
@@ -340,7 +343,7 @@ def main():
         file=sys.stderr,
     )
     print(f"[ripen] done: {len(survivors)} survivors, {len(drops)} drops "
-          f"(floor>{args.floor}, w_comments={args.w_comments})",
+          f"(floor>={args.floor}, w_comments={args.w_comments})",
           file=sys.stderr)
     return 0
 
