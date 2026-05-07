@@ -338,8 +338,11 @@ For LinkedIn replies - use the OAuth API first:
    - From their_comment_url, extract the activity ID from the URL path.
 2. Post the reply via API:
    \`\`\`bash
-   python3 $REPO_DIR/scripts/linkedin_api.py reply ACTIVITY_ID "PARENT_COMMENT_URN" "YOUR REPLY TEXT"
+   python3 $REPO_DIR/scripts/linkedin_api.py reply ACTIVITY_ID "PARENT_COMMENT_URN" "YOUR REPLY TEXT" --project "RESOLVED_PROJECT_NAME" --reply-id REPLY_ID
    \`\`\`
+   Replace RESOLVED_PROJECT_NAME with the project from lookup_post.py (or the row's project_name if lookup returned null).
+   Replace REPLY_ID with the numeric id from the current reply row.
+   The API will automatically wrap any URLs in the reply text with short tracking links and backfill the reply_id after posting.
    This returns JSON with {ok, reply_urn, permalink}. Use permalink as the reply URL.
    On {"ok": true}: skip step 3 (browser fallback) and skip the browser-based
    verification in step 5 below — the API success response (with reply_urn) is
