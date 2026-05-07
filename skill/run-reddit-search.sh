@@ -166,12 +166,19 @@ for i in $(seq 1 "$ITERATIONS"); do
     # Floor flipped from strict > to >= 2026-05-06: a +1 upvote in 5min is
     # enough signal that the thread is still alive — strict > rejected those
     # exact-floor cases as wholesale losses.
+    # --top-k LIMIT (post 2026-05-06 refactor): the discover phase now emits
+    # ALL search results (no LLM selection), so ripen typically receives
+    # 20-50 candidates per iteration. Sort survivors by composite DESC and
+    # keep only the top LIMIT (default 1) so the draft phase only pays LLM
+    # cost for the most-momentum thread. Mirrors twitter_post_plan.py's
+    # `LIMIT 15` SQL cap.
     RIPEN_FILE=$(mktemp -t post_reddit_ripened.XXXXXX.json)
-    log "Ripening candidates (5-min delta gate, floor>=1, w_comments=4)..."
+    log "Ripening candidates (5-min delta gate, floor>=1, top-k=$LIMIT, w_comments=4)..."
     set +e
     python3 "$REPO_DIR/scripts/ripen_reddit_plan.py" \
         --in "$DISCOVER_FILE" \
-        --out "$RIPEN_FILE" 2>&1 | tee -a "$LOG_FILE"
+        --out "$RIPEN_FILE" \
+        --top-k "$LIMIT" 2>&1 | tee -a "$LOG_FILE"
     RIPEN_RC=${PIPESTATUS[0]}
     set -e
 
