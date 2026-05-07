@@ -3,7 +3,7 @@
 ripen_reddit_plan.py
 
 Reddit equivalent of Twitter's Phase 2a (T1 re-poll + delta gate). Reads a
-plan JSON written by `post_reddit.py --phase plan`, captures T0 score/comments
+plan JSON written by `post_reddit.py --phase discover`, captures T0 score/comments
 for each target_thread_url, sleeps SLEEP_SECONDS (default 300), re-polls T1,
 computes composite delta = Δupvotes + W_COMMENTS * Δcomments, and drops
 decisions whose composite <= FLOOR (default 5).
@@ -171,6 +171,37 @@ def main():
             })
             print(f"[ripen] DROP composite={composite:.1f} (Δup={d_up}, Δcomm={d_co}) "
                   f"{url}", file=sys.stderr)
+
+    # ---- HTML lock pre-flight for delta-gate survivors ----------------------
+    # cmd_repoll checks the JSON locked flag, but Reddit's AutoMod sometimes
+    # renders .locked-tagline without setting locked=true in the JSON API
+    # (observed on r/Entrepreneur). One unauthenticated GET per survivor (~1s).
+    # Failures in the lock check are non-fatal: we log a warning and keep the
+    # survivor rather than fail-closed on a network blip.
+    check_locked_bin = os.path.join(SCRIPTS_DIR, "reddit_tools.py")
+    if survivors:
+        print(f"[ripen] HTML lock pre-flight for {len(survivors)} survivor(s)...",
+              file=sys.stderr)
+        clean_survivors = []
+        for d in survivors:
+            url = (d.get("thread_url") or d.get("target_thread_url") or "").strip()
+            try:
+                proc = subprocess.run(
+                    ["python3", check_locked_bin, "check-locked", url],
+                    capture_output=True, text=True, timeout=20,
+                )
+                out = json.loads(proc.stdout.strip()) if proc.stdout.strip() else {}
+                state = out.get("state", "ok")
+                if state in ("locked", "archived"):
+                    print(f"[ripen] HTML-{state}: dropping survivor {url}",
+                          file=sys.stderr)
+                    drops.append({"url": url, "reason": f"html_{state}"})
+                    continue
+            except Exception as e:
+                print(f"[ripen] WARN: check-locked failed for {url}: {e}; keeping survivor",
+                      file=sys.stderr)
+            clean_survivors.append(d)
+        survivors = clean_survivors
 
     plan["decisions"] = survivors
     plan["ripen_summary"] = {
