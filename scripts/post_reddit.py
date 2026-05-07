@@ -102,11 +102,18 @@ def _subreddit_from_url(thread_url):
 def _db_upsert_discovered_candidate(candidate, batch_id, project_name):
     """INSERT a freshly-discovered candidate row.
 
-    Called by _discover_iteration after Claude returns. ON CONFLICT keeps the
-    existing row's status, attempt_count, and post linkage intact (so a row
-    that's already 'posted' or 'failed' isn't reset to 'pending' just because
-    Claude resurfaced it). batch_id is updated to the current cycle so the
-    dashboard's queue counts surface this run.
+    Called by _discover_iteration after Claude returns. The candidate dict
+    carries `score` and `num_comments` from the search response — those become
+    score_t0/comments_t0 (T0 captured at discover time, no extra HTTP call,
+    mirrors twitter_candidates likes_t0 capture in score_twitter_candidates).
+
+    ON CONFLICT keeps the existing row's status, attempt_count, post linkage,
+    AND original T0 intact, so:
+      - a row that's already 'posted' or 'failed' isn't reset to 'pending'
+      - a re-discovered row keeps the FIRST-SIGHTING T0 (cumulative delta
+        works automatically — same trick Twitter uses for salvage)
+    batch_id is updated to the current cycle so the dashboard's queue counts
+    surface this run.
     """
     thread_url = (candidate.get("thread_url") or "").strip()
     if not thread_url:
@@ -118,8 +125,8 @@ def _db_upsert_discovered_candidate(candidate, batch_id, project_name):
             "INSERT INTO reddit_candidates "
             "(thread_url, thread_author, thread_title, subreddit, "
             " matched_project, search_topic, status, batch_id, "
-            " draft_engagement_style) "
-            "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s) "
+            " draft_engagement_style, score_t0, comments_t0) "
+            "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s) "
             "ON CONFLICT (thread_url) DO UPDATE SET "
             "  batch_id        = EXCLUDED.batch_id, "
             "  matched_project = COALESCE(reddit_candidates.matched_project, EXCLUDED.matched_project), "
@@ -127,9 +134,11 @@ def _db_upsert_discovered_candidate(candidate, batch_id, project_name):
             "  thread_title    = COALESCE(reddit_candidates.thread_title, EXCLUDED.thread_title), "
             "  thread_author   = COALESCE(reddit_candidates.thread_author, EXCLUDED.thread_author), "
             "  subreddit       = COALESCE(reddit_candidates.subreddit, EXCLUDED.subreddit) "
-            # Critical: do NOT touch status, attempt_count, post_id, posted_at.
-            # Re-discovered rows that previously hit a permanent failure should
-            # stay 'failed'; ones that already posted should stay 'posted'.
+            # Critical: do NOT touch status, attempt_count, post_id, posted_at,
+            # or score_t0/comments_t0. Re-discovered rows that previously hit
+            # a permanent failure should stay 'failed'; ones that already
+            # posted should stay 'posted'; first-sighting T0 must persist so
+            # cumulative delta keeps working across cycles.
             ,
             [
                 thread_url,
@@ -140,6 +149,10 @@ def _db_upsert_discovered_candidate(candidate, batch_id, project_name):
                 candidate.get("search_topic"),
                 batch_id,
                 candidate.get("engagement_style"),
+                # score / num_comments come from the Reddit search response;
+                # tolerate either name and missing values (live T0 fallback).
+                int(candidate["score"]) if candidate.get("score") is not None else None,
+                int(candidate["num_comments"]) if candidate.get("num_comments") is not None else None,
             ],
         )
         conn.commit()
@@ -732,42 +745,50 @@ def build_discover_prompt(project, config, limit, top_report, recent_comments,
     if dud_queries_report and dud_queries_report.strip() not in ("[]", ""):
         dud_queries_ctx = f"\n## Dead queries (skip these exact phrasings):\n{dud_queries_report}\n"
 
-    return f"""Find {limit} Reddit thread(s) where someone with expertise in {project.get('name', 'general')} could add genuine value. DO NOT write any comment text yet — just identify the best candidate threads.
+    return f"""Generate Reddit search queries and emit EVERY thread from each search result as a candidate. DO NOT pick, rank, or filter threads. The downstream pipeline applies a numerical delta filter (cumulative engagement gain over time) to decide which threads are worth posting on.
 
 Topic area: {project_json}
 Content angle: {content_angle}
 {recent_ctx}{top_ctx}{top_topics_ctx}{dud_queries_ctx}
 ## Tools (via Bash)
-- Search: python3 {REDDIT_TOOLS} search "QUERY" --limit 15
+- Search: python3 {REDDIT_TOOLS} search "QUERY" --limit 25
 - Search by sub: python3 {REDDIT_TOOLS} search "QUERY" --subreddits AI_Agents,SaaS --time month
-- Check dedup: python3 {REDDIT_TOOLS} already-posted "THREAD_URL"
+- Search broader time: python3 {REDDIT_TOOLS} search "QUERY" --time month
 
 ## CRITICAL Bash rules
-- NEVER use run_in_background=true. All commands must run foreground.
-- Run ONE search at a time. Stop after 5 total searches.
+- NEVER use run_in_background=true. All commands run foreground.
+- Run AT MOST 2 searches total. Each search returns up to 25 threads.
 - If rate-limited, use whatever results you already have.
 
-## Thread selection criteria
-Each search result carries delta fields from a persistent snapshot table:
-  - sightings: how many cycles have surfaced this thread
-  - delta_score: upvote change since first_seen_at
-  - delta_comments: comment change since first_seen_at
-  - delta_window_min: minutes since first seen
-Prefer threads with positive and RECENT delta (still moving in the last 30-60 min).
-Skip threads with sightings>=2 and delta_score<=0 over 60+ min (going cold).
-Skip already_posted=true threads.
+## Mission (no selection!)
+Your job is to RUN SEARCHES and DUMP every result. Reddit's persistent
+snapshot table tracks engagement deltas across cycles, and a separate
+ripen step measures fresh 5-min T0/T1 deltas on the entire candidate
+batch BEFORE deciding which threads to actually post on. Picking a winner
+here would short-circuit that data-driven gate.
 
 ## Steps
-1. Pick 2 concepts from search_topics: {json.dumps(topics_list)}.
-   Rephrase into natural Reddit search terms (vernacular, pain points).
-2. Pick {limit} best candidate thread(s). Prefer high recent delta. Skip blocked subs.
-3. Output each as a JSON candidate object, then DONE.
+1. Pick 1-2 concepts from the project's search_topics: {json.dumps(topics_list)}.
+   Rephrase each into a natural Reddit search query (vernacular, pain points).
+   Avoid the dud queries listed above.
+2. Run the search(es). Each call returns a JSON array of threads with
+   `url`, `title`, `author`, `score`, `num_comments`, `subreddit`, and the
+   server-side `already_posted` flag (plus SKIP marker when truthy).
+3. For EACH thread in EACH search response, emit ONE candidate JSON line.
+   Include the raw `score` and `num_comments` from the search result so the
+   downstream ripen step can use them as T0 (no extra HTTP calls needed).
+   SKIP only:
+     - threads with already_posted=true (already commented in this thread)
+     - threads with the SKIP field set
+4. After every thread is emitted, output DONE on its own line.
 
-## OUTPUT FORMAT (no text field — just thread selection)
-One JSON per line:
-{{"action": "candidate", "thread_url": "https://old.reddit.com/r/sub/comments/abc/title/", "thread_title": "the thread title", "thread_author": "username", "search_topic": "the seed concept you used", "engagement_style": "critic"}}
+## OUTPUT FORMAT (one JSON per line; no commentary)
+{{"action": "candidate", "thread_url": "https://old.reddit.com/r/sub/comments/abc/title/", "thread_title": "the thread title", "thread_author": "username", "score": 42, "num_comments": 7, "search_topic": "the seed concept you used"}}
 
-Output DONE on its own line after all candidates. Do NOT describe what you are doing. Do NOT draft any comment text.
+Do NOT add a `text` field. Do NOT pre-rank or pre-score. Do NOT skip threads
+because they "look uninteresting" — emit them all. The post pipeline will
+discard low-momentum candidates downstream after measuring engagement
+velocity.
 """
 
 
